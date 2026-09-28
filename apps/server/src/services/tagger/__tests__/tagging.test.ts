@@ -230,11 +230,21 @@ describe('tagJob', () => {
     expect(msg).toContain('已让出');
   });
 
-  it('显卡卡死（子进程没崩，推理报 0x887A0006）→ 换 CPU 继续', async () => {
-    const hung = new Error('DML GPU readback failed with HRESULT 0x887A0006: N:\ort\dml_provider.cc');
-    const factory = vi.fn(async (o: TaggerStartOptions) => (o.device === 'dml' ? fakeClient('dml', hung) : fakeClient('cpu')));
+  const hung = () => new Error('DML GPU readback failed with HRESULT 0x887A0006: N:\ort\dml_provider.cc');
+
+  it('显卡卡死（推理报 0x887A0006）→ 先在显卡上改成一张一批', async () => {
+    const factory = vi.fn(async (o: TaggerStartOptions) => (o.batchSize > 1 ? fakeClient('dml', hung()) : { ...fakeClient('dml'), batchSize: 1 }));
     await runner(factory)(ctxOf());
-    expect(factory.mock.calls.map((c) => c[0].device)).toEqual(['dml', 'cpu']);
+    expect(factory.mock.calls.map((c) => [c[0].device, c[0].batchSize])).toEqual([['dml', 2], ['dml', 1]]);
+    expect(pending()).toBe(0);
+  });
+
+  it('一张一批还卡死 → 换 CPU 继续', async () => {
+    const factory = vi.fn(async (o: TaggerStartOptions) =>
+      o.device === 'cpu' ? fakeClient('cpu') : { ...fakeClient('dml', hung()), batchSize: o.batchSize },
+    );
+    await runner(factory)(ctxOf());
+    expect(factory.mock.calls.map((c) => c[0].device)).toEqual(['dml', 'dml', 'cpu']);
     expect(pending()).toBe(0);
   });
 

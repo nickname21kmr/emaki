@@ -104,6 +104,7 @@ const isGpuLost = (err: unknown) => err instanceof Error && GPU_LOST.test(err.me
 /** 显卡子进程崩溃或显卡卡死时换成 CPU 客户端重试一次；多个在途请求同时失败时靠「代数」只切换一次 */
 class ResilientTagger {
   private generation = 0;
+  private shrunk = false;
   private fellBack = false;
 
   constructor(
@@ -124,20 +125,24 @@ class ResilientTagger {
     try {
       return await this.client.tag(items, th);
     } catch (err) {
-      if (!(err instanceof TaggerCrashedError || isGpuLost(err))) throw err;
-      // 这个请求发出后没切换过、而且当时用的就是 CPU：CPU 也崩了，没救
-      if (this.client.device === 'cpu' && gen === this.generation) throw err;
-      if (gen === this.generation && !this.fellBack) {
-        this.fellBack = true;
-        this.switching = this.factory({ ...this.opts, device: 'cpu', batchSize: Math.min(this.opts.batchSize, 4) }).then((c) => {
+      const lost = isGpuLost(err);
+      if (!(err instanceof TaggerCrashedError || lost)) throw err;
+      if (gen === this.generation) {
+        // 这个请求发出后没切换过、而且当时用的就是 CPU：CPU 也崩了，没救
+        if (this.client.device === 'cpu' || this.fellBack) throw err;
+        // 显卡卡死多半是一批算得太久、超过了 Windows 的 2 秒看门狗：先在显卡上改成一张一批，还不行再换 CPU
+        const shrink = lost && !this.shrunk && this.client.batchSize > 1;
+        if (shrink) this.shrunk = true;
+        else this.fellBack = true;
+        const next = shrink ? { ...this.opts, batchSize: 1 } : { ...this.opts, device: 'cpu' as const, batchSize: Math.min(this.opts.batchSize, 4) };
+        this.switching = this.factory(next).then((c) => {
           this.client = c;
           this.generation++;
           this.onSwitch(c);
         });
       }
       await this.switching;
-      if (this.client.device !== 'cpu') throw err;
-      return this.client.tag(items, th);
+      return this.tag(items, th);
     }
   }
 }
