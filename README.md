@@ -92,7 +92,7 @@ flowchart LR
 
 用 Emaki 文件夹里 `tools` 目录下的 **「显卡诊断和修复.cmd」**：双击后它会列出每个程序正在用哪块显卡，确认后把 Emaki 设成用高性能显卡（和 Windows 设置 → 系统 → 屏幕 → 显示卡 里手动改是同一个开关）。改完关掉 Emaki 的黑色窗口，重新启动就生效。想改回去就双击「恢复显卡设置.cmd」。
 
-下载的是 0.1.0 免安装版、里面没有 `tools` 的话，到 [Releases](https://github.com/nickname21kmr/emaki/releases/tag/v0.1.0) 下载 `Emaki-显卡修复工具.zip`，解压到 Emaki 文件夹里（解压后是 `Emaki\tools\...`）再双击。
+下载的是 0.1.0 免安装版、里面没有 `tools` 的话，到 [Releases](https://github.com/nickname21kmr/emaki/releases/tag/v0.1.0) 下载 `Emaki-gpu-fix.zip`，解压到 Emaki 文件夹里（解压后是 `Emaki\tools\...`）再双击。
 
 **认不出来的图**
 
