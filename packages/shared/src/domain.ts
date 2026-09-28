@@ -263,6 +263,11 @@ export interface DuplicateGroup {
   /** 推荐保留的图片（分辨率最高 / 体积最大 / 最早入库） */
   suggestedKeepId: ID;
   resolved: boolean;
+  /**
+   * 可能和别的组是同一套图（差分 CG、连拍）：同一文件夹、尺寸相同、代表图两两相近。
+   * 同一个值的组在列表里挨着；只用来放在一起展示，不代表可以删。没有就是 null
+   */
+  setId: ID | null;
 }
 
 export type ExclusionKind = 'image' | 'folder' | 'tag' | 'character';

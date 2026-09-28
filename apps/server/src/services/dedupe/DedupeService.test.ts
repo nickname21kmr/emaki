@@ -1,9 +1,10 @@
-import { existsSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../../core/events.ts';
 import { SqliteDataSource } from '../../datasource/sqlite/SqliteDataSource.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
+import { SET_FOLDER_MAX } from '../../datasource/sqlite/duplicates.ts';
 import { buildGroups, MAX_COMPONENT, type DedupeRow } from './DedupeService.ts';
 
 const H = '3c3c3c3c3c3c3c3c'; // 32 位 1，信息量正常
@@ -15,7 +16,17 @@ const flip = (hex: string, bits: number) => {
 let seq = 0;
 const row = (o: Partial<DedupeRow> = {}): DedupeRow => {
   const id = ++seq;
-  return { id, sha256: `sha${id}`, dhash: null, width: 1000, height: 800, bytes: 1000, file_name: `${id}.png`, added_at: '2026-01-01T00:00:00.000Z', ...o };
+  return {
+    id,
+    sha256: `sha${id}`,
+    dhash: null,
+    width: 1000,
+    height: 800,
+    bytes: 1000,
+    file_name: `${id}.png`,
+    added_at: '2026-01-01T00:00:00.000Z',
+    ...o,
+  };
 };
 
 describe('buildGroups', () => {
@@ -52,11 +63,16 @@ describe('buildGroups', () => {
     expect(r.missingHash).toBe(1);
   });
 
-  it(`分量超过 ${MAX_COMPONENT} 张丢弃`, () => {
-    const rows = Array.from({ length: MAX_COMPONENT + 1 }, () => row({ sha256: 'z', dhash: H }));
-    const r = buildGroups(rows, 8);
+  it(`相似簇超过 ${MAX_COMPONENT} 张丢弃（多半是截图串成的链）；完全重复的不丢`, () => {
+    const chain = Array.from({ length: MAX_COMPONENT + 1 }, () => row({ dhash: H }));
+    const r = buildGroups(chain, 8);
     expect(r.groups).toEqual([]);
     expect(r.droppedLarge).toBe(1);
+
+    const same = Array.from({ length: MAX_COMPONENT + 1 }, () => row({ sha256: 'z', dhash: H }));
+    const e = buildGroups(same, 8);
+    expect(e.groups.map((g) => [g.kind, g.memberIds.length])).toEqual([['exact', MAX_COMPONENT + 1]]);
+    expect(e.droppedLarge).toBe(0);
   });
 });
 
@@ -67,6 +83,7 @@ describe('DedupeService + 接口（:memory:）', () => {
   const T = '2026-03-01T00:00:00.000Z';
 
   const addImage = (name: string, sha: string, dhash: string | null) => {
+    mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
     writeFileSync(path.join(dir, name), name);
     return Number(
       ds.ctx.db
@@ -83,7 +100,13 @@ describe('DedupeService + 接口（:memory:）', () => {
     dir = makeTmpDir('dedupe');
     const trashImpl = async (paths: string[]) => paths.forEach((p) => unlinkSync(p)); // 假回收站
     dataDir = makeTmpDir('dedupe-data');
-    ds = await SqliteDataSource.open(new EventBus(), dataDir, { memory: true, autoJobs: false, importDict: false, clock: () => Date.parse(T), trashImpl });
+    ds = await SqliteDataSource.open(new EventBus(), dataDir, {
+      memory: true,
+      autoJobs: false,
+      importDict: false,
+      clock: () => Date.parse(T),
+      trashImpl,
+    });
     ds.ctx.db.prepare('INSERT INTO library_roots (id, path) VALUES (1, ?)').run(dir.replace(/\\/g, '/'));
   });
   afterEach(async () => {
@@ -115,6 +138,47 @@ describe('DedupeService + 接口（:memory:）', () => {
     ds.ctx.db.prepare("UPDATE images SET dhash = 'f0f0aaaa0f0f5555' WHERE file_name = 'c.png'").run();
     expect(ds.dedupe.runOnce().reconcile.inserted).toBe(0);
     expect(await ds.listDuplicates({})).toEqual([]);
+  });
+
+  it('同一套：同文件夹、同尺寸、代表图两两相近的组挨着排、带同一个 setId；A 像 B、B 像 C 不会把 A、C 连起来', async () => {
+    // 每组两张 dHash 相同、sha 不同的图；组间距离 12（阈值 8 连不上，16 以内算同一套）
+    const pair = (dirName: string, tag: string, hash: string) => [
+      addImage(`${dirName}/${tag}1.png`, `${dirName}${tag}1`, hash),
+      addImage(`${dirName}/${tag}2.png`, `${dirName}${tag}2`, hash),
+    ];
+    pair('cg', 'a', H);
+    // 别的文件夹：和 a 也差 12 位（换一批位翻），不算
+    let other = BigInt(`0x${H}`);
+    for (let b = 0; b < 12; b++) other ^= 1n << BigInt(b * 5 + 3);
+    pair('other', 'x', other.toString(16).padStart(16, '0'));
+    pair('cg', 'b', flip(H, 12));
+    pair('cg', 'c', flip(H, 24)); // 和 b 近、和 a 远
+    ds.dedupe.runOnce();
+    const list = await ds.listDuplicates({});
+    const folderOf = (g: (typeof list)[number]) => g.images[0]!.relPath.split('/')[0];
+    const tagged = list.map((g) => [folderOf(g), g.images[0]!.relPath.split('/')[1]![0], g.setId]);
+    const sets = new Set(list.filter((g) => g.setId).map((g) => g.setId));
+    expect(sets.size).toBe(1);
+    const inSet = tagged
+      .filter((t) => t[2])
+      .map((t) => t[1])
+      .sort();
+    expect([
+      ['a', 'b'],
+      ['b', 'c'],
+    ]).toContainEqual(inSet);
+    expect(tagged.find((t) => t[0] === 'other')![2]).toBeNull();
+    // 同一套的挨着
+    const idx = list.flatMap((g, k) => (g.setId ? [k] : []));
+    expect(idx[1]! - idx[0]!).toBe(1);
+
+    // 文件夹超过 SET_FOLDER_MAX 张时不归套
+    const ins = ds.ctx.db.prepare(
+      `INSERT INTO images (root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at) VALUES (1, ?, ?, 10, 10, 1, 'png', ?, ?, ?)`,
+    );
+    for (let k = 0; k < SET_FOLDER_MAX; k++) ins.run(`cg/filler${k}.png`, `filler${k}.png`, `f${k}`, T, T);
+    ds.ctx.invalidate('all'); // 直接写库，手动让列表缓存失效（扫描时靠 library-changed 事件）
+    expect((await ds.listDuplicates({})).every((g) => g.setId === null)).toBe(true);
   });
 
   it('resolve：其余移到回收站，组标为已处理，不可撤销', async () => {

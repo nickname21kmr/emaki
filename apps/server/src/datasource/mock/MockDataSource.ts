@@ -1147,6 +1147,7 @@ export class MockDataSource implements DataSource {
         }),
         suggestedKeepId: d.suggestedKeepId,
         resolved: d.resolved,
+        setId: null,
       }))
       .filter((g) => g.images.length > (wantResolved ? 0 : 1));
   }

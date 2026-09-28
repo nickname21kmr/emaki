@@ -30,11 +30,14 @@ export function ResolveAllDialog({
   open,
   onOpenChange,
   plans,
+  skipped = 0,
   onDone,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   plans: ResolvePlan[];
+  /** 「可能是同一套」的组数：差分 / 连拍多半是有意留的，不跟着一键处理 */
+  skipped?: number;
   /** 处理成功的组 id（让页面先把它们藏起来，不用等刷新） */
   onDone: (ids: ID[]) => void;
 }) {
@@ -116,6 +119,11 @@ export function ResolveAllDialog({
         <Stat value={formatCount(totalTrash)} label="张移到回收站" />
         <Stat value={formatBytes(totalBytes)} label="可释放" />
       </div>
+      {skipped > 0 && (
+        <p className="mt-3 text-[12.5px] leading-relaxed text-fg-muted">
+          另有 {formatCount(skipped)} 组标着「可能是同一套」，多半是差分或连拍，不在这次处理里，请逐组确认。
+        </p>
+      )}
 
       <div className="mt-4 min-h-9">
         {running ? (

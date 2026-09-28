@@ -12,6 +12,7 @@ import { useHotkey } from '@/lib/hotkeys';
 import { useDuplicates, useMutate, useSettings, useStats } from '@/lib/queries';
 import { useLightbox, useOverlays } from '@/lib/stores';
 import { DuplicateGroupCard } from './components/DuplicateGroupCard';
+import { DuplicateSetFrame } from './components/DuplicateSetFrame';
 import { DuplicatesSkeleton } from './components/DuplicatesSkeleton';
 import { RescanButton, useDedupeJob } from './components/RescanButton';
 import { ResolveAllDialog, type ResolvePlan } from './components/ResolveAllDialog';
@@ -23,13 +24,23 @@ type View = 'pending' | 'resolved';
 
 /** 焦点在按钮 / 链接上时，Enter 留给它自己（否则会同时触发「处理当前组」） */
 const isInteractive = (target: EventTarget | null) =>
-  target instanceof Element &&
-  !!target.closest('button, a[href], [role="button"], [role="radio"], [role="checkbox"], [role="menuitem"]');
+  target instanceof Element && !!target.closest('button, a[href], [role="button"], [role="radio"], [role="checkbox"], [role="menuitem"]');
 
 /**
  * 重复 —— 逐组确认保留哪张，其余移到回收站。
  * 键盘：J / K 在组间移动，Enter 按当前选择（默认即推荐）处理当前组。
  */
+/** 挨着的、setId 相同的组归成一段，外面套一个「可能是同一套」的框；i 是全局序号（J / K、编号用） */
+function segments(groups: DuplicateGroup[]): { setId: ID | null; items: { g: DuplicateGroup; i: number }[] }[] {
+  const out: { setId: ID | null; items: { g: DuplicateGroup; i: number }[] }[] = [];
+  groups.forEach((g, i) => {
+    const last = out.at(-1);
+    if (g.setId && last?.setId === g.setId) last.items.push({ g, i });
+    else out.push({ setId: g.setId, items: [{ g, i }] });
+  });
+  return out;
+}
+
 export function DuplicatesPage() {
   const [params, setParams] = useSearchParams();
   const view: View = params.get('view') === 'resolved' ? 'resolved' : 'pending';
@@ -48,10 +59,7 @@ export function DuplicatesPage() {
   const resolvedQ = useDuplicates(true);
   const stats = useStats();
   const settings = useSettings();
-  const roots = useMemo(
-    () => new Map((settings.data?.libraryRoots ?? []).map((r) => [r.id, r] as const)),
-    [settings.data],
-  );
+  const roots = useMemo(() => new Map((settings.data?.libraryRoots ?? []).map((r) => [r.id, r] as const)), [settings.data]);
   const job = useDedupeJob();
 
   // 用户对每组「保留哪些」的调整；没动过的组用推荐
@@ -73,10 +81,7 @@ export function DuplicatesPage() {
     });
   }, [pendingQ.data]);
 
-  const groups = useMemo(
-    () => (pendingQ.data ?? []).filter((g) => !dismissed.has(g.id)),
-    [pendingQ.data, dismissed],
-  );
+  const groups = useMemo(() => (pendingQ.data ?? []).filter((g) => !dismissed.has(g.id)), [pendingQ.data, dismissed]);
   const groupsRef = useRef(groups);
   useEffect(() => {
     groupsRef.current = groups;
@@ -166,7 +171,9 @@ export function DuplicatesPage() {
   const keysOn = view === 'pending' && groups.length > 0 && !confirmOpen && !lightboxOpen && !overlayOpen;
 
   const [lensGroup, setLensGroup] = useState<ID | null>(null);
-  useHotkey('z', () => setLensGroup((cur) => (cur && cur === groups[activeIndex]?.id ? null : (groups[activeIndex]?.id ?? null))), { enabled: keysOn });
+  useHotkey('z', () => setLensGroup((cur) => (cur && cur === groups[activeIndex]?.id ? null : (groups[activeIndex]?.id ?? null))), {
+    enabled: keysOn,
+  });
   useHotkey('j', () => moveTo(activeIndex + 1), { enabled: keysOn });
   useHotkey('k', () => moveTo(activeIndex - 1), { enabled: keysOn });
   useHotkey(
@@ -181,18 +188,18 @@ export function DuplicatesPage() {
   );
 
   // ------------------------------------------------------------ 头部
-  const suggestedReclaim = useMemo(
-    () => groups.reduce((n, g) => n + reclaimBytes(g, [g.suggestedKeepId]), 0),
-    [groups],
-  );
+  const suggestedReclaim = useMemo(() => groups.reduce((n, g) => n + reclaimBytes(g, [g.suggestedKeepId]), 0), [groups]);
   // 打开确认框时把计划定格下来，处理过程中列表变化不影响弹窗里的数字
   const [plans, setPlans] = useState<ResolvePlan[]>([]);
   const openConfirm = () => {
+    // 「可能是同一套」的不跟着一键处理
     setPlans(
-      groups.map((g) => {
-        const keepIds = keepOf(g);
-        return { id: g.id, keepIds, trashCount: g.images.length - keepIds.length, bytes: reclaimBytes(g, keepIds) };
-      }),
+      groups
+        .filter((g) => !g.setId)
+        .map((g) => {
+          const keepIds = keepOf(g);
+          return { id: g.id, keepIds, trashCount: g.images.length - keepIds.length, bytes: reclaimBytes(g, keepIds) };
+        }),
     );
     setConfirmOpen(true);
   };
@@ -201,9 +208,7 @@ export function DuplicatesPage() {
   if (view === 'resolved') {
     subtitle = resolvedQ.data ? `已处理 ${formatCount(resolvedQ.data.length)} 组` : '正在加载…';
   } else if (pendingQ.data) {
-    subtitle = groups.length
-      ? `${formatCount(groups.length)} 组 · 可释放 ${formatBytes(suggestedReclaim)}`
-      : '没有待处理的重复';
+    subtitle = groups.length ? `${formatCount(groups.length)} 组 · 可释放 ${formatBytes(suggestedReclaim)}` : '没有待处理的重复';
   } else {
     subtitle = stats.data ? `${formatCount(stats.data.duplicateGroupCount)} 组` : '正在加载…';
   }
@@ -251,13 +256,7 @@ export function DuplicatesPage() {
             </div>
           )}
         </div>
-        {job && (
-          <Progress
-            value={job.total ? job.progress / job.total : null}
-            tone="shu"
-            className="mt-4 animate-fade-in"
-          />
-        )}
+        {job && <Progress value={job.total ? job.progress / job.total : null} tone="shu" className="mt-4 animate-fade-in" />}
       </PageHeader>
 
       <PageBody className="pt-2">
@@ -288,29 +287,40 @@ export function DuplicatesPage() {
           ) : (
             <div className="relative flex animate-fade-in flex-col gap-5">
               <AnimatePresence mode="popLayout" initial={false}>
-                {groups.slice(0, count).map((g, i) => (
-                  <DuplicateGroupCard
-                    key={g.id}
-                    group={g}
-                    index={i}
-                    keepIds={keepOf(g)}
-                    active={i === activeIndex}
-                    busy={busy.has(g.id)}
-                    roots={roots}
-                    onActivate={() => setActiveId(g.id)}
-                    onToggle={(imageId) => toggle(g, imageId)}
-                    onResolve={() => resolveGroup(g)}
-                    onIgnore={() => ignoreGroup(g)}
-                    lensOn={lensGroup === g.id}
-                    onToggleLens={() => setLensGroup((cur) => (cur === g.id ? null : g.id))}
-                    onOpen={(k) =>
-                      showLightbox(
-                        g.images.map((img) => img.id),
-                        k,
-                      )
-                    }
-                  />
-                ))}
+                {segments(groups.slice(0, count)).map((seg) => {
+                  const cards = seg.items.map(({ g, i }) => (
+                    <DuplicateGroupCard
+                      key={g.id}
+                      group={g}
+                      index={i}
+                      keepIds={keepOf(g)}
+                      active={i === activeIndex}
+                      busy={busy.has(g.id)}
+                      roots={roots}
+                      onActivate={() => setActiveId(g.id)}
+                      onToggle={(imageId) => toggle(g, imageId)}
+                      onResolve={() => resolveGroup(g)}
+                      onIgnore={() => ignoreGroup(g)}
+                      lensOn={lensGroup === g.id}
+                      onToggleLens={() => setLensGroup((cur) => (cur === g.id ? null : g.id))}
+                      onOpen={(k) =>
+                        showLightbox(
+                          g.images.map((img) => img.id),
+                          k,
+                        )
+                      }
+                    />
+                  ));
+                  return seg.setId ? (
+                    <DuplicateSetFrame key={`set-${seg.setId}`} count={seg.items.length}>
+                      <AnimatePresence mode="popLayout" initial={false}>
+                        {cards}
+                      </AnimatePresence>
+                    </DuplicateSetFrame>
+                  ) : (
+                    cards
+                  );
+                })}
               </AnimatePresence>
               {hasMore ? (
                 <div ref={sentinelRef} className="h-px" aria-hidden />
@@ -324,17 +334,19 @@ export function DuplicatesPage() {
         ) : resolvedQ.isError && !resolvedQ.data ? (
           <ErrorState error={resolvedQ.error} onRetry={() => void resolvedQ.refetch()} />
         ) : !resolvedQ.data?.length ? (
-          <EmptyState
-            glyph="迹"
-            title="还没有处理过的重复"
-            description="在「待处理」里保留或标记「不是重复」之后，会留在这里方便回看。"
-          />
+          <EmptyState glyph="迹" title="还没有处理过的重复" description="在「待处理」里保留或标记「不是重复」之后，会留在这里方便回看。" />
         ) : (
           <ResolvedGroups groups={resolvedQ.data} />
         )}
       </PageBody>
 
-      <ResolveAllDialog open={confirmOpen} onOpenChange={setConfirmOpen} plans={plans} onDone={dismiss} />
+      <ResolveAllDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        plans={plans}
+        skipped={groups.filter((g) => g.setId).length}
+        onDone={dismiss}
+      />
     </>
   );
 }

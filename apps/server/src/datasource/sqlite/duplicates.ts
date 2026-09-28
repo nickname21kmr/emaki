@@ -4,6 +4,7 @@
  */
 import type { DuplicateGroup, ID, ListDuplicatesQuery, MutationResult } from '@emaki/shared';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
+import { parseDHash, popcount32 } from '../../services/dedupe/hamming.ts';
 import { pickKeep } from '../../services/dedupe/pickKeep.ts';
 import { toAbs } from '../../services/fs/paths.ts';
 import { assertRecyclable } from '../../services/trash/driveType.ts';
@@ -22,6 +23,11 @@ interface GroupRow {
   ignored: number;
 }
 type MemberRow = ImageRow & { group_id: number; visible: number; root_path: string };
+
+/** 「同一套」：代表图两两距离不超过它（64 位 dHash） */
+export const SET_MAX_DISTANCE = 16;
+/** 超过这么多张的文件夹（手机备份根目录、QQ 缓存）里「同文件夹」说明不了什么，不归套 */
+export const SET_FOLDER_MAX = 500;
 
 export class DuplicateQueries {
   constructor(
@@ -69,16 +75,82 @@ export class DuplicateQueries {
       kept.push({ g, rows, keep: rows.some((m) => m.id === g.suggested_keep_id) ? g.suggested_keep_id! : pickKeep(rows).id });
     }
     // 所有组的图一次补全（T22：真实库 5000 多组，逐组补全是一万多条查询、1 秒多）
-    const items = hydrateImages(this.ctx.db, kept.flatMap((k) => k.rows));
+    const items = hydrateImages(
+      this.ctx.db,
+      kept.flatMap((k) => k.rows),
+    );
     let at = 0;
-    return kept.map(({ g, rows, keep }) => ({
+    const sets = resolved
+      ? new Map<number, number>()
+      : this.findSets(kept.map(({ g, rows, keep }) => ({ id: g.id, rep: rows.find((m) => m.id === keep)! })));
+    const out = kept.map(({ g, rows, keep }) => ({
       id: toId(g.id),
       kind: g.kind,
       similarity: g.similarity,
       images: items.slice(at, (at += rows.length)),
       suggestedKeepId: toId(keep),
       resolved: g.resolved_at !== null,
+      setId: sets.has(g.id) ? toId(sets.get(g.id)!) : null,
     }));
+    // 同一套的挪到一起，排在这套里最靠前的那组的位置
+    const bySet = new Map<string, DuplicateGroup[]>();
+    for (const d of out) if (d.setId) bySet.set(d.setId, [...(bySet.get(d.setId) ?? []), d]);
+    return out.flatMap((d) => (!d.setId ? [d] : d.id === bySet.get(d.setId)![0]!.id ? bySet.get(d.setId)! : []));
+  }
+
+  /**
+   * 组 id → 所在「套」的 id（这套里第一组的 id）。只看代表图：同一文件夹（且不超过 SET_FOLDER_MAX 张）、
+   * 宽高完全相同、和这套里已有的每一组都不超过 SET_MAX_DISTANCE。要求两两相近而不是连通，免得 A 像 B、B 像 C 把 A、C 连起来
+   */
+  private findSets(groups: { id: number; rep: MemberRow }[]): Map<number, number> {
+    const dirOf = (p: string) => p.slice(0, p.lastIndexOf('/') + 1);
+    const byKey = new Map<string, { id: number; rep: MemberRow }[]>();
+    for (const x of groups) {
+      const key = `${x.rep.root_id}:${dirOf(x.rep.rel_path)}|${x.rep.width}x${x.rep.height}`;
+      byKey.set(key, [...(byKey.get(key) ?? []), x]);
+    }
+    const candidates = [...byKey.values()].filter((l) => l.length > 1);
+    const out = new Map<number, number>();
+    if (!candidates.length) return out;
+    const hashes = new Map(
+      (
+        this.ctx.db
+          .prepare('SELECT id, dhash FROM images WHERE id IN (SELECT value FROM json_each(?)) AND dhash IS NOT NULL')
+          .all(JSON.stringify(candidates.flat().map((x) => x.rep.id))) as { id: number; dhash: string }[]
+      ).map((r) => [r.id, parseDHash(r.dhash)] as const),
+    );
+    const folderCount = this.ctx.db
+      .prepare(
+        `SELECT count(*) FROM images WHERE root_id = ? AND rel_path >= ? AND rel_path < ? || char(1114111)
+         AND instr(substr(rel_path, length(?) + 1), '/') = 0 AND trashed_at IS NULL`,
+      )
+      .pluck();
+    // 同一文件夹里不同尺寸各是一个候选，数量按文件夹缓存（手机备份根目录几万张，别数几十遍）
+    const counts = new Map<string, number>();
+    const bigFolder = (rootId: number, dir: string) => {
+      const k = `${rootId}:${dir}`;
+      if (!counts.has(k)) counts.set(k, folderCount.get(rootId, dir, dir, dir) as number);
+      return counts.get(k)! > SET_FOLDER_MAX;
+    };
+    const dist = (a: readonly [number, number], b: readonly [number, number]) =>
+      popcount32((a[0] ^ b[0]) >>> 0) + popcount32((a[1] ^ b[1]) >>> 0);
+    for (const list of candidates) {
+      const dir = dirOf(list[0]!.rep.rel_path);
+      if (bigFolder(list[0]!.rep.root_id, dir)) continue;
+      const sets: { id: number; h: (readonly [number, number])[] }[] = [];
+      for (const x of list) {
+        const h = hashes.get(x.rep.id);
+        if (!h) continue;
+        const s = sets.find((s) => s.h.every((y) => dist(h, y) <= SET_MAX_DISTANCE));
+        if (s) {
+          s.h.push(h);
+          out.set(x.id, s.id);
+        } else sets.push({ id: x.id, h: [h] });
+      }
+      // 只有一组的「套」不算
+      for (const s of sets) if (s.h.length > 1) out.set(s.id, s.id);
+    }
+    return out;
   }
 
   private group(idStr: ID): GroupRow {

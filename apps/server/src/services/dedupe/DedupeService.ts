@@ -23,7 +23,7 @@ export interface BuiltGroup {
 
 export interface BuildResult {
   groups: BuiltGroup[];
-  /** 超过 MAX_COMPONENT 被丢弃的分量数 */
+  /** 超过 MAX_COMPONENT 被丢弃的相似簇数 */
   droppedLarge: number;
   /** 没有 dHash 的代表数（还没算感知哈希） */
   missingHash: number;
@@ -93,7 +93,8 @@ export function buildGroups(rows: DedupeRow[], threshold: number, onProgress?: (
   for (const ks of comps.values()) {
     const members = ks.flatMap((k) => buckets[k]!);
     if (members.length < 2) continue;
-    if (members.length > MAX_COMPONENT) {
+    // 相似簇太大多半是截图、纯色图串成的链；完全相同的文件（ks 只有一个桶）再多也照样上报
+    if (ks.length > 1 && members.length > MAX_COMPONENT) {
       droppedLarge++;
       continue;
     }
