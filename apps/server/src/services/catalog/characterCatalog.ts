@@ -52,20 +52,25 @@ export class CharacterCatalog {
     return this.normalize(tag);
   }
 
-  /** normalizeTag → characters.danbooru_tag → danbooru_tag_redirects（合并重定向） */
+  /** normalizeTag → characters.danbooru_tag → danbooru_tag_redirects（合并重定向）；规范化后找不到时再按原标签找 */
   resolveCharacterId(tag: string): number | null {
     const t = this.normalize(tag);
-    if (this.cache.has(t)) return this.cache.get(t)!;
-    const row = this.s.resolve!.get({ tag: t }) as { id: number } | undefined;
+    return this.lookup(t) ?? (t !== tag ? this.lookup(tag) : null);
+  }
+
+  private lookup(tag: string): number | null {
+    if (this.cache.has(tag)) return this.cache.get(tag)!;
+    const row = this.s.resolve!.get({ tag }) as { id: number } | undefined;
     const id = row?.id ?? null;
-    this.cache.set(t, id);
+    this.cache.set(tag, id);
     return id;
   }
 
   /** 已存在就返回；否则新建 danbooru 角色（名字、别名、作品）。不写封面：封面由 derived 自动选，用户设的才存（T25.5） */
   ensureCharacter(rawTag: string, now: string): { id: number; created: boolean; createdWorkIds: number[] } {
     const tag = this.normalize(rawTag);
-    const existing = this.resolveCharacterId(tag);
+    // 按原标签查（内部会规范化一次）：规范化不一定一步到位，对 tag 再规范化可能变成别的名字，查不到已建的 tag 就会重复插入
+    const existing = this.resolveCharacterId(rawTag) ?? this.lookup(tag);
     if (existing !== null) {
       return { id: existing, created: false, createdWorkIds: [] };
     }
