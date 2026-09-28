@@ -94,7 +94,14 @@ function formatEta(sec: number): string {
   return `${(sec / 3600).toFixed(1)} 小时`;
 }
 
-/** DML 崩溃时换成 CPU 客户端重试一次；多个在途请求同时失败时靠「代数」只切换一次 */
+/**
+ * 显卡卡死 / 被系统重置（子进程没崩，但这次推理报错，显卡上的会话也废了）：
+ * DXGI_ERROR_DEVICE_REMOVED / HUNG / RESET（0x887A0005–7），DML 读回失败，WebGPU 设备丢失
+ */
+const GPU_LOST = /887A000[5-7]|readback failed|device (?:hung|removed|lost|reset)/i;
+const isGpuLost = (err: unknown) => err instanceof Error && GPU_LOST.test(err.message);
+
+/** 显卡子进程崩溃或显卡卡死时换成 CPU 客户端重试一次；多个在途请求同时失败时靠「代数」只切换一次 */
 class ResilientTagger {
   private generation = 0;
   private fellBack = false;
@@ -117,9 +124,9 @@ class ResilientTagger {
     try {
       return await this.client.tag(items, th);
     } catch (err) {
-      if (!(err instanceof TaggerCrashedError)) throw err;
+      if (!(err instanceof TaggerCrashedError || isGpuLost(err))) throw err;
       // 这个请求发出后没切换过、而且当时用的就是 CPU：CPU 也崩了，没救
-      if (this.client.device !== 'dml' && gen === this.generation) throw err;
+      if (this.client.device === 'cpu' && gen === this.generation) throw err;
       if (gen === this.generation && !this.fellBack) {
         this.fellBack = true;
         this.switching = this.factory({ ...this.opts, device: 'cpu', batchSize: Math.min(this.opts.batchSize, 4) }).then((c) => {

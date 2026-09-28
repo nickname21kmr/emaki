@@ -163,7 +163,7 @@ describe('tagJob', () => {
       tag: async (items) => {
         if (!crashed) {
           crashed = true;
-          throw new TaggerCrashedError('boom');
+          throw crashFirst instanceof Error ? crashFirst : new TaggerCrashedError('boom');
         }
         return items.map((i) => ok(i.id, [['mika_(blue_archive)', 0.95]]));
       },
@@ -228,6 +228,20 @@ describe('tagJob', () => {
     const msg = await runner(async () => fakeClient('dml'))(ctx);
     expect(ctx.requeue).toHaveBeenCalled();
     expect(msg).toContain('已让出');
+  });
+
+  it('显卡卡死（子进程没崩，推理报 0x887A0006）→ 换 CPU 继续', async () => {
+    const hung = new Error('DML GPU readback failed with HRESULT 0x887A0006: N:\ort\dml_provider.cc');
+    const factory = vi.fn(async (o: TaggerStartOptions) => (o.device === 'dml' ? fakeClient('dml', hung) : fakeClient('cpu')));
+    await runner(factory)(ctxOf());
+    expect(factory.mock.calls.map((c) => c[0].device)).toEqual(['dml', 'cpu']);
+    expect(pending()).toBe(0);
+  });
+
+  it('普通推理错误不换 CPU，照常报错', async () => {
+    const factory = vi.fn(async () => fakeClient('dml', new Error('Invalid input shape')));
+    await expect(runner(factory)(ctxOf())).rejects.toThrow('Invalid input shape');
+    expect(factory).toHaveBeenCalledTimes(1);
   });
 
   it('DML 崩溃 → 换 CPU 继续', async () => {
