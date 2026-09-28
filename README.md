@@ -51,6 +51,8 @@ npm run dev
 
 然后浏览器打开 <http://localhost:5173>。也可以双击 `start.bat`，它会装依赖、构建前端，然后打开 <http://127.0.0.1:5174>。
 
+想像桌面程序那样用：双击「创建桌面快捷方式.cmd」，桌面上会多一个「Emaki 絵巻」图标。从它打开是一个单独的窗口（没有地址栏），关掉窗口就退出。需要装有 Edge 或 Chrome。
+
 国内 `npm install` 慢的话，先运行 `npm config set registry https://registry.npmmirror.com`。
 
 从装 Node.js 开始的详细步骤（带截图）见 [docs/DEPLOY.md](docs/DEPLOY.md)。

@@ -1,6 +1,7 @@
 // 一键启动（T23）：检查 Node → 按需安装依赖 → 按需构建前端 → 启动后端（同时托管前端）→ 就绪后打开浏览器。
 // 已在运行时只打开浏览器。只用 Node 内置模块，不需要 tsx。
-// 用法：node scripts/start.mjs [--rebuild] [--mock] [--no-open]；Windows 上双击仓库根目录的 start.bat。
+// 用法：node scripts/start.mjs [--rebuild] [--mock] [--no-open] [--app]；Windows 上双击仓库根目录的 start.bat。
+// --app：用 Edge / Chrome 的应用窗口打开（像桌面程序，没有地址栏），关掉这个窗口后端也跟着退出。桌面快捷方式用的就是它。
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -32,8 +33,50 @@ function run(cmd, cmdArgs, env = process.env) {
   });
 }
 
+/** 应用窗口用的浏览器：Edge 优先（Windows 自带），其次 Chrome */
+function findAppBrowser() {
+  if (process.platform !== 'win32') return null;
+  const dirs = [process.env['ProgramFiles(x86)'], process.env.ProgramFiles, process.env.LOCALAPPDATA].filter(Boolean);
+  for (const rel of ['Microsoft/Edge/Application/msedge.exe', 'Google/Chrome/Application/chrome.exe']) {
+    for (const d of dirs) {
+      const p = path.join(d, rel);
+      if (existsSync(p)) return p;
+    }
+  }
+  return null;
+}
+
+/**
+ * 应用窗口：单独的浏览器配置目录（data/app-window），这样启动的就是一个独立的浏览器进程，
+ * 窗口关掉进程就结束，返回的 promise 随之完成。找不到 Edge / Chrome 时返回 null，调用方改用普通浏览器。
+ */
+function openAppWindow() {
+  const browser = findAppBrowser();
+  if (!browser) return null;
+  const child = spawn(
+    browser,
+    [
+      `--app=${url}`,
+      `--user-data-dir=${path.join(root, 'data', 'app-window')}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-background-mode',
+      '--window-size=1440,920',
+    ],
+    { stdio: 'ignore' },
+  );
+  return new Promise((resolve) => {
+    child.on('exit', resolve);
+    child.on('error', resolve);
+  });
+}
+
 function openBrowser() {
   if (args.has('--no-open')) return;
+  if (args.has('--app')) {
+    const closed = openAppWindow();
+    if (closed) return closed;
+  }
   // 不用 `start "" url`：网址里有 & 时会被 cmd 截断。explorer 的退出码是 1，忽略
   const [cmd, a] =
     process.platform === 'win32' ? ['explorer.exe', [url]] : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
@@ -121,15 +164,27 @@ const server = spawn(process.execPath, ['--import', 'tsx', path.join('apps', 'se
     UV_THREADPOOL_SIZE: process.env.UV_THREADPOOL_SIZE ?? '8',
   },
 });
-server.on('exit', (code) => process.exit(code ?? 1));
+// 应用窗口关掉后是我们主动结束的后端：正常退出（start.bat 遇到非 0 会停下来等按键）
+let closing = false;
+server.on('exit', (code) => process.exit(closing ? 0 : (code ?? 1)));
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => server.kill(sig));
 
 // 每 300ms 探测一次，最长 60 秒
 const deadline = Date.now() + 60_000;
 while (Date.now() < deadline) {
   if (await healthy()) {
-    log(`Emaki 已启动：${url}（关闭这个窗口即退出）`);
-    openBrowser();
+    const closed = openBrowser();
+    if (closed) {
+      log(`Emaki 已启动：${url}（关掉 Emaki 窗口即退出）`);
+      // 应用窗口关了：后端一起退出（识别等任务下次启动会接着做）
+      void closed.then(() => {
+        log('Emaki 窗口已关闭，正在退出…');
+        closing = true;
+        server.kill();
+      });
+    } else {
+      log(`Emaki 已启动：${url}（关闭这个窗口即退出）`);
+    }
     break;
   }
   await new Promise((r) => setTimeout(r, 300));
