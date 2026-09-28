@@ -154,7 +154,7 @@ describe('tagJob', () => {
       ...over,
     }) as never;
 
-  const fakeClient = (device: 'dml' | 'cpu', crashFirst = false): TaggerLike => {
+  const fakeClient = (device: 'dml' | 'cpu', crashFirst: boolean | Error = false): TaggerLike => {
     let crashed = !crashFirst;
     return {
       device,
