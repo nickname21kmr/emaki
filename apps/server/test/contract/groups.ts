@@ -64,6 +64,20 @@ export function settingsContract(make: ContractFactory, name: Name) {
       expect((await e.ds.getSettings()).ui.theme).toBe('dark');
     });
 
+    it('自定义画面：默认为空，整组替换', async () => {
+      const e = env();
+      expect((await e.ds.getSettings()).browse).toEqual({ customThemes: [] });
+      const a = { id: 'a', name: '丝袜', tags: ['thighhighs', 'pantyhose'] };
+      const b = { id: 'b', name: '眼镜', tags: ['glasses'] };
+      await e.ds.updateSettings({ browse: { customThemes: [a, b] } });
+      expect((await e.ds.getSettings()).browse.customThemes).toEqual([a, b]);
+      // 改别的段不影响
+      await e.ds.updateSettings({ ui: { density: 'compact' } });
+      expect((await e.ds.getSettings()).browse.customThemes).toEqual([a, b]);
+      await e.ds.updateSettings({ browse: { customThemes: [b] } });
+      expect((await e.ds.getSettings()).browse.customThemes).toEqual([b]);
+    });
+
     it('添加文件夹：规范化路径，重复添加报错', async () => {
       const e = env();
       // sqlite 会检查文件夹是否存在，所以用一个真实的临时目录
@@ -418,6 +432,26 @@ export function unrecognizedContract(make: ContractFactory, name: Name) {
       expect([stats.unrecognizedCount, stats.shelvedCount]).toEqual([7, 0]);
     });
 
+    it('归为原创：离开未识别、挂到「原创」作品；可撤销、可移出', async () => {
+      const e = env();
+      const i25 = e.id('image', 'i25');
+      const r = await e.ds.bulkImages({ ids: [i25], action: { type: 'original', value: true } });
+      expect(r.message).toBe('已把 1 张图归为原创，不再出现在未识别');
+      expect((await e.ds.getStats()).unrecognizedCount).toBe(6);
+      expect((await e.ds.unrecognizedSummary()).art.total).toBe(6);
+      expect((await e.ds.listImages({ status: 'unrecognized' })).total).toBe(6);
+      expect((await e.ds.getImage(i25))?.status).toBe('recognized');
+      const original = (await e.ds.listWorks({})).find((w) => w.name === '原创');
+      expect(original).toBeDefined();
+      expect((await e.ds.listImages({ workId: original!.id })).items.map((x) => e.back('image', x.id))).toContain('i25');
+      await e.ds.undo(r.undoToken!);
+      expect((await e.ds.getStats()).unrecognizedCount).toBe(7);
+      await e.ds.bulkImages({ ids: [i25], action: { type: 'original', value: true } });
+      await e.ds.bulkImages({ ids: [i25], action: { type: 'original', value: false } });
+      expect((await e.ds.getStats()).unrecognizedCount).toBe(7);
+      expect((await e.ds.listImages({ workId: original!.id })).items.map((x) => e.back('image', x.id))).not.toContain('i25');
+    });
+
     it('改类型后换大类；有建议里插画在漫画前（T34a）', async () => {
       const e = env();
       await e.ds.bulkImages({ ids: [e.id('image', 'i25')], action: { type: 'kind', value: 'photo' } });
@@ -553,6 +587,19 @@ export function searchContract(make: ContractFactory, name: Name) {
     it('空查询、全空白、只有符号 → 空', async () => {
       for (const q of ['', '  ', '_']) expect(await run(q)).toEqual([]);
     });
+
+    it('标签联想：只要一般标签，按张数；空查询 = 最常见的；被排除的不算', async () => {
+      const e = env();
+      const tags = async (q?: string, limit?: number) => (await e.ds.tagSuggestions({ q, limit })).map((t) => `${t.tag}=${t.count}`);
+      expect(await tags('thigh')).toEqual(['thighhighs=1']);
+      expect(await tags('')).toEqual(['1girl=32', 'thighhighs=1']);
+      expect(await tags(undefined, 1)).toEqual(['1girl=32']);
+      expect(await tags('comic')).toEqual([]);
+      // 角色标签不出现
+      expect(await tags('blue_archive')).toEqual([]);
+      const [s] = await e.ds.tagSuggestions({ q: 'thighhighs' });
+      expect(s?.name).toBeTruthy();
+    });
   });
 }
 export function imagesContract(make: ContractFactory, name: Name) {
@@ -590,6 +637,17 @@ export function imagesContract(make: ContractFactory, name: Name) {
       expect((await e.ds.listImages({ theme: 'kemono' })).total).toBe(0);
       expect((await e.ds.listImages({ theme: 'legs', status: 'recognized' })).total).toBe(0);
       expect((await e.ds.listImages({ theme: 'legs', workId: e.id('work', 'w2') })).total).toBe(1);
+    });
+
+    it('按标签筛选（自定义画面）：任一标签命中；未知标签 → 空', async () => {
+      const e = env();
+      expect(ids(e, (await e.ds.listImages({ tags: ['thighhighs'] })).items)).toEqual(['i25']);
+      expect(ids(e, (await e.ds.listImages({ tags: ['no_such_tag', 'thighhighs'] })).items)).toEqual(['i25']);
+      expect((await e.ds.listImages({ tags: ['no_such_tag'] })).total).toBe(0);
+      // comic 的两张都被排除了
+      expect((await e.ds.listImages({ tags: ['comic', 'thighhighs'] })).total).toBe(1);
+      expect(ids(e, (await e.ds.listImages({ tags: ['comic'], status: 'excluded' })).items).sort()).toEqual(['i33', 'i34']);
+      expect((await e.ds.listImages({ tags: ['thighhighs'], workId: e.id('work', 'w1') })).total).toBe(0);
     });
 
     it('getImage：标签与建议；不可见返回 null', async () => {

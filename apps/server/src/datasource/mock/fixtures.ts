@@ -76,6 +76,8 @@ export interface ImageRow {
   kindManual?: boolean;
   /** 「放下」的时间（T27 补充） */
   shelvedAt?: string | null;
+  /** 「归为原创」的时间 */
+  originalAt?: string | null;
   /** 所在合集和页码（T38c） */
   collectionId?: ID | null;
   pageNo?: number | null;
@@ -454,6 +456,7 @@ export function buildMockDb(now = Date.now()): MockDb {
     danbooru: { enabled: true, username: '', hasApiKey: false, lastSyncAt: new Date(now - 5 * DAY).toISOString() },
     dedupe: { hammingThreshold: 8, lastRunAt: new Date(now - 2 * 3600_000).toISOString() },
     ui: { theme: 'system', blurSensitive: true, density: 'comfortable' },
+    browse: { customThemes: [] },
   };
 
   // 随机生成的文件名可能撞车；真实库里 (文件夹, 路径) 唯一，这里也保证唯一（放在最后做，不影响随机序列）

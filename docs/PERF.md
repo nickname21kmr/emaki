@@ -8,7 +8,7 @@
 # 拷一份一致的快照（不挡正在写库的识别任务）
 node -e "new (require('better-sqlite3'))('data/emaki.sqlite',{readonly:true}).exec(\"VACUUM INTO 'data/perf/emaki.sqlite'\")"
 # 测速：每个场景预热 5 次、测 50 次；任一 p95 超预算时退出码 1
-node --expose-gc --import tsx apps/server/scripts/bench.ts F:/Claude/emaki/data/perf
+node --expose-gc --import tsx apps/server/scripts/bench.ts data/perf
 ```
 
 `bench.ts` 用 `app.inject` 请求（不走网络），不开后台任务；库会被迁移到最新版本，所以要对快照的副本跑。
@@ -68,3 +68,16 @@ node --expose-gc --import tsx apps/server/scripts/bench.ts F:/Claude/emaki/data/
   再往下要把派生缓存按「实体 / 计数 / 封面」拆开分别失效，或放进 worker 线程。
 - 搜索 q 的第一次（冷）约 235 ms：文件名要逐行算 `search_key`。可以在 images 上加 `name_key` 列（扫描时写入）。
 - 重复组接口一次返回全部；组数再多的话应改成分页，前端的「可释放空间」改由后端算。
+
+## 识别跑完后复测（2026-09-28 晚）
+
+库变大了：2523 个角色、约 4.5 万条图片-角色关联。复测时踩到两处查询计划问题，都已修：
+
+- `refreshPlannerStats` 原来用 `analysis_limit = 400` 限量采样，把「excluded_by IS NULL」估成两百行（实际八万），
+  图库首页又去走排除索引、整表排序（3 ms → 185 ms）。改成完整 `ANALYZE`（约 1.2 秒，只在行数大变时跑），
+  并在图片列表里写成 `+i.excluded_by IS NULL`，不再依赖统计信息。
+- 完整统计之后，SQLite 对「封面标签」和「排除规则预览」换了更差的计划（577 ms、每条规则 23 ms）。
+  两处都固定了索引（`INDEXED BY idx_image_tags_tag_score` / `idx_images_excluded`）。
+
+复测结果：列表类接口全部回到预算内（图库首页 p95 3.5 ms、画面筛选 9 ms、排除 0.4 ms），
+修改后第一次请求约 560–650 ms（派生缓存整份重建，随角色数增长），内存 rss 499 MB。

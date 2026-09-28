@@ -1,7 +1,7 @@
 import { cn } from '@/lib/cn';
 import { Thumb } from '@/components/media/Thumb';
 import type { ImageItem, UnrecognizedItem } from '@emaki/shared';
-import { Ban, ChevronLeft, ChevronRight, ExternalLink, Shapes } from 'lucide-react';
+import { Ban, ChevronLeft, ChevronRight, ExternalLink, Feather, Shapes } from 'lucide-react';
 import { KindMenu } from '@/components/media/KindMenu';
 import type { ReactNode, RefObject } from 'react';
 import { Badge, Kbd } from '@/components/ui';
@@ -46,6 +46,10 @@ export function DecisionPanel({
     <PanelShell
       footer={
         <>
+          {/* 都不是、是画师的原创角色：归到「原创」作品，离开未识别 */}
+          <div className="mb-2 grid">
+            <ActionKey icon={<Feather />} label="原创角色，归为原创" keys={['O']} onClick={triage.markOriginal} />
+          </div>
           <div className="grid grid-cols-4 gap-2">
             <ActionKey icon={<ChevronLeft />} label="上一张" keys={['K', '←']} onClick={triage.prev} disabled={triage.index <= 0} />
             <ActionKey icon={<ChevronRight />} label="跳过" keys={['J', '→']} onClick={triage.next} />

@@ -93,11 +93,12 @@ function Plate({ img, seed }: { img: ImageItem; seed: number }) {
       <button
         type="button"
         onClick={open}
-        className="relative animate-unroll cursor-zoom-in overflow-hidden rounded-[var(--radius-plate)] shadow-plate"
+        // 不加 overflow-hidden：键盘聚焦时的四角印框画在图版外面（SEL-15），圆角裁切交给 Thumb 自己
+        className="focus-frame animate-unroll cursor-zoom-in rounded-[var(--radius-plate)] shadow-plate"
         style={tall ? { height: 440, aspectRatio: ar } : { aspectRatio: ar, maxHeight: 460, width: '100%' }}
         aria-label="看大图"
       >
-        <Thumb image={img} width={960} eager className="size-full" />
+        <Thumb image={img} width={960} eager className="size-full rounded-[var(--radius-plate)]" />
       </button>
       <div className="min-w-0 pb-1">
         <div className="kicker">图版 · 第 {img.id} 号</div>

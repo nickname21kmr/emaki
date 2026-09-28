@@ -25,7 +25,7 @@ const SCOPE = 'gallery';
  * 筛选状态在 URL 里（见 useGalleryParams），多选状态在 useSelection（scope = gallery）。
  */
 export function GalleryPage() {
-  const { filters, query, update, hasFilters, clearFilters } = useGalleryParams();
+  const { filters, query, update, hasFilters, clearFilters, customThemes } = useGalleryParams();
   const { data: stats } = useStats();
   const rowHeight = usePrefs((s) => s.gridRowHeight);
   const list = useImagesInfinite(query);
@@ -145,7 +145,13 @@ export function GalleryPage() {
           onGallery={(k) => update({ kind: k === 'all' ? 'all' : ['illustration'] })}
         />
         <div className="mt-3">
-          <GalleryToolbar filters={filters} update={update} hasFilters={hasFilters} onClearFilters={clearFilters} />
+          <GalleryToolbar
+            filters={filters}
+            update={update}
+            hasFilters={hasFilters}
+            onClearFilters={clearFilters}
+            customThemes={customThemes}
+          />
         </div>
         {onlyIllust && <KindTip annex={annexTotal(stats?.kindCounts)} />}
       </PageHeader>

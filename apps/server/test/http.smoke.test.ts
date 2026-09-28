@@ -149,6 +149,14 @@ describe('统计、作品、角色、搜索（routes/library.ts）', () => {
     expect(json).toEqual([{ type: 'character', character: expect.objectContaining({ id: 'c1' }), workName: '蔚蓝档案' }]);
     expect((await call('GET', '/api/search?limit=99')).status).toBe(400);
   });
+
+  route('GET /api/tags', async () => {
+    const { status, json } = await call('GET', '/api/tags?q=thigh&limit=5');
+    expect(status).toBe(200);
+    expect(json).toEqual([{ tag: 'thighhighs', name: expect.any(String), count: 1 }]);
+    expect((await call('GET', '/api/tags')).json[0]).toMatchObject({ tag: '1girl' });
+    expect((await call('GET', '/api/tags?limit=99')).status).toBe(400);
+  });
 });
 
 describe('合集（routes/collections.ts）', () => {
@@ -202,6 +210,7 @@ describe('图片、未识别、重复、排除（routes/images.ts）', () => {
     expect(status).toBe(200);
     expect(json).toMatchObject(page);
     expect(json.items).toHaveLength(5);
+    expect((await call('GET', '/api/images?tags=thighhighs,glasses')).json.total).toBe(1);
     expect(json.items[0]).toMatchObject({ id: expect.any(String), relPath: expect.any(String), width: expect.any(Number) });
     expect((await call('GET', '/api/images?kind=bogus')).status).toBe(400);
     expect((await call('GET', '/api/images?limit=500')).status).toBe(400);
@@ -339,6 +348,10 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     expect(json).toMatchObject({ ui: { theme: 'dark' }, dedupe: { hammingThreshold: 10 } });
     expect((await call('PUT', '/api/settings', { dedupe: { hammingThreshold: 100 } })).status).toBe(400);
     expect((await call('PUT', '/api/settings', { tagger: { legacyBefore: '2024/03/01' } })).status).toBe(400);
+    const theme = { id: 't1', name: '丝袜', tags: ['thighhighs'] };
+    expect((await call('PUT', '/api/settings', { browse: { customThemes: [theme] } })).json.browse).toEqual({ customThemes: [theme] });
+    expect((await call('PUT', '/api/settings', { browse: { customThemes: [{ ...theme, tags: [] }] } })).status).toBe(400);
+    expect((await call('PUT', '/api/settings', { browse: { customThemes: [{ ...theme, name: '一二三四五六七八九十一二三' }] } })).status).toBe(400);
   });
 
   route('POST /api/library-roots', async () => {

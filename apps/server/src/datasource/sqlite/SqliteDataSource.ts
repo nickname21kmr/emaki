@@ -33,6 +33,8 @@ import type {
   Page,
   SearchHit,
   SearchQuery,
+  TagSuggestion,
+  TagSuggestionsQuery,
   Settings,
   ThumbWidth,
   TopCharactersQuery,
@@ -52,6 +54,7 @@ import { closeDatabase, openDatabase, type Db } from '../../db/connection.ts';
 import { migrate } from '../../db/migrate.ts';
 import { refreshPlannerStats } from '../../db/plannerStats.ts';
 import { SoftCache } from './softCache.ts';
+import { consolidateCharacterTags } from './consolidate.ts';
 import { BadRequestError, NotFoundError, NotImplementedError } from '../../http/errors.ts';
 import type { DataSource, FileResponse } from '../DataSource.ts';
 import { toAbs } from '../../services/fs/paths.ts';
@@ -155,6 +158,14 @@ export class SqliteDataSource implements DataSource {
     });
     ds.danbooru = danbooru;
     ds.makeCatalog = makeCatalog;
+    // 同一个角色被拆成好几个的收拢（换模型后的改名、服装变体归本体；用户 2026-09-28）。已经收拢过就什么也不做
+    const merged = consolidateCharacterTags(db, {
+      normalizeTag: (t) => danbooru.normalizeTag(t),
+      localizer,
+      merge: (from, to) => void ds.characters.merge(String(from), String(to)),
+      log: (m) => console.log(`[角色] ${m}`),
+    });
+    if (merged.merged || merged.renamed) console.log(`[角色] 收拢拆开的角色：合并 ${merged.merged} 个，改标签 ${merged.renamed} 个`);
     ds.pipeline.register({
       tag: createTagStage({
         db,
@@ -621,6 +632,10 @@ export class SqliteDataSource implements DataSource {
   }
 
   // T20 搜索
+  async tagSuggestions(query: TagSuggestionsQuery): Promise<TagSuggestion[]> {
+    return this.searchQueries.tagSuggestions(query);
+  }
+
   async search(query: SearchQuery): Promise<SearchHit[]> {
     return this.searchQueries.search(query);
   }

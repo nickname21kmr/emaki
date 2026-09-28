@@ -75,6 +75,7 @@ export function TriageBody({
   useHotkey(['k', 'arrowleft'], () => triage.prev(), { enabled: on });
   // 会改数据的键忽略按住不放的自动重复，免得一口气处理掉好几张
   useHotkey('e', (e) => !e.repeat && triage.exclude(), { enabled: on });
+  useHotkey('o', (e) => !e.repeat && triage.markOriginal(), { enabled: on });
   useHotkey('n', (e) => !e.repeat && triage.setKindMenuOpen(true), { enabled: on });
   useHotkey('x', (e) => !e.repeat && triage.toggleCurrent(), { enabled: on });
   useHotkey('a', (e) => !e.repeat && triage.selectSameTop(), { enabled: on && !batch });

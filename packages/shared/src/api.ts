@@ -172,6 +172,8 @@ export interface ListImagesQuery extends PageQuery {
   orientation?: 'portrait' | 'landscape' | 'square';
   /** 画面（多归属，只看识别过的图的标签） */
   theme?: BrowseTheme;
+  /** 自定义画面：有其中任一一般标签（分数达到 TAG_FILTER_MIN_SCORE）的图 */
+  tags?: string[];
   favorite?: boolean;
   /** 内容类型；不传或 'all' = 全部类型 */
   kind?: ContentKind[] | 'all';
@@ -210,7 +212,9 @@ export type BulkImageAction =
   /** 移到系统回收站（不是永久删除） */
   | { type: 'trash' }
   /** 放下：不找角色了，不再出现在未识别（T34a）；false = 放回 */
-  | { type: 'shelve'; value: boolean };
+  | { type: 'shelve'; value: boolean }
+  /** 归为原创（true）/ 移出原创（false）：挂到「原创」作品、离开未识别 */
+  | { type: 'original'; value: boolean };
 
 /** POST /api/images/bulk */
 export interface BulkImagesBody {
@@ -394,6 +398,28 @@ export interface SearchQuery {
   limit?: number;
 }
 export type SearchResponse = SearchHit[];
+
+// ---------------------------------------------------------------- 标签
+
+/** GET /api/tags?q=&limit=20 —— 一般标签联想（自定义画面用）；q 为空 = 最常见的 */
+export interface TagSuggestionsQuery {
+  q?: string;
+  limit?: number;
+}
+export interface TagSuggestion {
+  /** 原始标签名，如 `white_hair` */
+  tag: string;
+  /** 显示名：有中文用中文，否则把下划线换成空格 */
+  name: string;
+  /** 有这个标签的图数（分数达到 TAG_FILTER_MIN_SCORE 的） */
+  count: number;
+}
+export type TagSuggestionsResponse = TagSuggestion[];
+
+/** 自定义画面按标签筛图时的最低分数（和内置画面里最宽的一组一致） */
+export const TAG_FILTER_MIN_SCORE = 0.5;
+/** 自定义画面的数量 / 名字 / 标签上限 */
+export const CUSTOM_THEME_LIMITS = { themes: 30, name: 12, tags: 20 } as const;
 
 // ---------------------------------------------------------------- 设置
 

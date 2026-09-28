@@ -278,6 +278,16 @@ export function useTriage(bucket: 'suggested' | 'untagged') {
     bulkMut.mutateAsync({ ids, action: { type: 'exclude' } }).catch(() => unhide(ids));
   };
 
+  /** 归为原创：画师自己的原创角色，挂到「原创」作品，离开未识别 */
+  const markOriginal = () => {
+    const ids = targetIds();
+    if (!ids.length) return;
+    hide(ids);
+    if (batch) useSelection.getState().clear();
+    stampIt('原', batch ? `${ids.length} 张 · 原创` : '原创');
+    bulkMut.mutateAsync({ ids, action: { type: 'original', value: true } }).catch(() => unhide(ids));
+  };
+
   // ---------------------------------------------------------------- 导航
   const step = (delta: Direction) => {
     if (index < 0) return;
@@ -377,6 +387,7 @@ export function useTriage(bucket: 'suggested' | 'untagged') {
     selectSameTop,
     assign,
     exclude,
+    markOriginal,
     markKind,
     kindMenuOpen,
     setKindMenuOpen,

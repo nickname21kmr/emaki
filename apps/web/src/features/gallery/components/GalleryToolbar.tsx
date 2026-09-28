@@ -1,4 +1,4 @@
-import { BROWSE_THEMES } from '@emaki/shared';
+import { BROWSE_THEMES, type CustomTheme } from '@emaki/shared';
 import { THEME_META } from '@/features/unrecognized/themes';
 import {
   ArrowDownAZ,
@@ -10,10 +10,12 @@ import {
   HardDrive,
   Heart,
   Image as ImageIcon,
+  Pencil,
+  Plus,
   Shuffle,
   X,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   Button,
   Chip,
@@ -37,6 +39,7 @@ import {
   type Orientation,
   type SortOrder,
 } from '../useGalleryParams';
+import { CustomThemeDialog } from './CustomThemeDialog';
 import { GallerySearch } from './GallerySearch';
 
 /** 合集页序 'page' 不出现在图库的排序菜单里（RV-C-7） */
@@ -81,17 +84,33 @@ export function GalleryToolbar({
   update,
   hasFilters,
   onClearFilters,
+  customThemes,
 }: {
   filters: GalleryFilters;
   update: (patch: Partial<GalleryFilters>) => void;
   hasFilters: boolean;
   onClearFilters: () => void;
+  /** 用户自己加的画面（设置里的 browse.customThemes） */
+  customThemes: CustomTheme[];
 }) {
   const toggleRating = (r: GalleryFilters['rating'][number]) =>
     update({ rating: filters.rating.includes(r) ? filters.rating.filter((x) => x !== r) : [...filters.rating, r] });
+  // 自定义画面的对话框：null = 关着；theme 为空 = 新建
+  const [editing, setEditing] = useState<{ theme?: CustomTheme } | null>(null);
 
   return (
     <div className="flex items-center gap-3">
+      <CustomThemeDialog
+        open={editing !== null}
+        onOpenChange={(open) => !open && setEditing(null)}
+        theme={editing?.theme}
+        onSaved={(t) => {
+          if (!editing?.theme) update({ custom: t.id });
+        }}
+        onDeleted={(id) => {
+          if (filters.custom === id) update({ custom: undefined });
+        }}
+      />
       <GallerySearch value={filters.q} onCommit={(q) => update({ q })} className="w-[248px] shrink-0" />
 
       {/* 中间的筛选 chip：放不下时横向滚动，左右渐隐 */}
@@ -127,6 +146,20 @@ export function GalleryToolbar({
               {THEME_META[t].label}
             </Chip>
           ))}
+          {customThemes.map((t) => (
+            <CustomChip
+              key={t.id}
+              theme={t}
+              selected={filters.custom === t.id}
+              onClick={() => update({ custom: filters.custom === t.id ? undefined : t.id })}
+              onEdit={() => setEditing({ theme: t })}
+            />
+          ))}
+          <Tooltip content="用识别标签自己组一个">
+            <Chip size="sm" aria-label="新建画面" className="px-2 text-fg-muted" onClick={() => setEditing({})}>
+              <Plus className="size-3.5" />
+            </Chip>
+          </Tooltip>
 
           <Divider />
           <Chip size="sm" selected={filters.favorite} onClick={() => update({ favorite: !filters.favorite })}>
@@ -210,6 +243,50 @@ function RowHeightSlider() {
         </button>
       </div>
     </Tooltip>
+  );
+}
+
+/**
+ * 自定义画面的 chip：悬停时右上角出现小铅笔，右键也能编辑。
+ * 铅笔是 chip 外面的兄弟元素（button 里不能套 button）。
+ */
+function CustomChip({
+  theme,
+  selected,
+  onClick,
+  onEdit,
+}: {
+  theme: CustomTheme;
+  selected: boolean;
+  onClick: () => void;
+  onEdit: () => void;
+}) {
+  return (
+    <span className="group/custom relative inline-flex shrink-0">
+      <Chip
+        size="sm"
+        selected={selected}
+        onClick={onClick}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onEdit();
+        }}
+        title={`${theme.tags.join('、')}\n右键编辑`}
+      >
+        {theme.name}
+      </Chip>
+      <button
+        type="button"
+        aria-label={`编辑「${theme.name}」`}
+        onClick={onEdit}
+        className={cn(
+          'absolute -top-1 -right-1 flex size-4 items-center justify-center rounded-full bg-raised text-fg-muted shadow-[0_0_0_1px_var(--c-line-strong)]',
+          'opacity-0 transition-opacity duration-150 group-hover/custom:opacity-100 hover:text-fg focus-visible:opacity-100',
+        )}
+      >
+        <Pencil className="size-2.5" />
+      </button>
+    </span>
   );
 }
 

@@ -1,3 +1,4 @@
+import { ApiRequestError } from './lib/api';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MotionConfig } from 'motion/react';
 import { StrictMode } from 'react';
@@ -15,7 +16,9 @@ const queryClient = new QueryClient({
       // 本地后端，数据变化靠 SSE 通知，不需要频繁轮询
       staleTime: 30_000,
       refetchOnWindowFocus: false,
-      retry: 1,
+      // 后端重启（十几秒）期间连不上：读取类请求多重试几次（1、2、4、8、10、10 秒），其他错误只重试一次
+      retry: (count, err) => (err instanceof ApiRequestError && err.code === 'network' ? count < 6 : count < 1),
+      retryDelay: (count) => Math.min(1000 * 2 ** count, 10_000),
     },
   },
 });

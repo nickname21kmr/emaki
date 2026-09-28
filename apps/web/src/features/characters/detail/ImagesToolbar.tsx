@@ -3,7 +3,7 @@ import { ArrowDownUp, ArrowDownWideNarrow, ArrowUpNarrowWide, Shirt } from 'luci
 import { THEME_META } from '@/features/unrecognized/themes';
 import { motion } from 'motion/react';
 import type { ReactNode } from 'react';
-import { Button, Chip, IconButton, Menu, MenuLabel, MenuRadioGroup, MenuRadioItem, Segmented } from '@/components/ui';
+import { Button, Chip, IconButton, Menu, MenuLabel, MenuRadioGroup, MenuRadioItem, MenuSeparator, Segmented } from '@/components/ui';
 import { formatCount, RATING_LABEL } from '@/lib/format';
 import { RATINGS, SORT_OPTIONS, type ImageFilters } from './useImageFilters';
 import { EASE_OUT } from '@/lib/motion';
@@ -80,17 +80,36 @@ export function ImagesToolbar({
         <Menu
           width={168}
           trigger={
-            <Button variant="ghost" size="sm" icon={<Shirt className="size-3.5" />} className={filters.theme ? 'text-fg' : undefined}>
-              {filters.theme ? THEME_META[filters.theme].label : '画面'}
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<Shirt className="size-3.5" />}
+              className={filters.theme || filters.custom ? 'text-fg' : undefined}
+            >
+              {filters.theme ? THEME_META[filters.theme].label : (filters.custom?.name ?? '画面')}
             </Button>
           }
         >
           <MenuLabel>按画面筛选</MenuLabel>
-          <MenuRadioGroup value={filters.theme ?? ''} onValueChange={(v) => filters.setTheme((v || undefined) as BrowseTheme | undefined)}>
+          {/* 自定义画面的值加 custom: 前缀，和内置的区分开 */}
+          <MenuRadioGroup
+            value={filters.custom ? `custom:${filters.custom.id}` : (filters.theme ?? '')}
+            onValueChange={(v) => {
+              if (v.startsWith('custom:')) filters.setCustom(v.slice(7));
+              else if (v) filters.setTheme(v as BrowseTheme);
+              else filters.clearTheme();
+            }}
+          >
             <MenuRadioItem value="">全部</MenuRadioItem>
             {BROWSE_THEMES.map((t) => (
               <MenuRadioItem key={t} value={t}>
                 {THEME_META[t].label}
+              </MenuRadioItem>
+            ))}
+            {filters.customThemes.length > 0 && <MenuSeparator />}
+            {filters.customThemes.map((t) => (
+              <MenuRadioItem key={t.id} value={`custom:${t.id}`}>
+                {t.name}
               </MenuRadioItem>
             ))}
           </MenuRadioGroup>

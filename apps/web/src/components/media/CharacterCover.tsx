@@ -8,6 +8,11 @@ import { useBlurPrefs } from '@/lib/stores';
 import { useCoverMorph } from '@/lib/viewTransition';
 import { Thumb } from './Thumb';
 
+/** 张数：只出现在漫画、截图等里的角色（插画 0 张，书架末尾点「显示」才列出）写成「漫画等 N 张」，不写「0 张」 */
+export function countLabel(c: Pick<Character, 'imageCount' | 'otherCount'>) {
+  return c.imageCount === 0 && c.otherCount > 0 ? `漫画等 ${formatCount(c.otherCount)} 张` : `${formatCount(c.imageCount)} 张`;
+}
+
 /**
  * 角色封面卡，两种版式（MG-13 / SEL-4）：
  * - overlay（默认）：封面铺满 + 底部渐变，名字 / 作品 · 张数压在图上。Top、首页「收得最多」、作品页 Top 4 用它。
@@ -91,7 +96,7 @@ export function CharacterCover({
           <div className="truncate text-[14px] font-semibold tracking-tight">{character.name}</div>
           <div className="mt-0.5 truncate text-[12px] text-fg-muted tabular">
             {workName ? `${workName} · ` : ''}
-            {formatCount(character.imageCount)} 张
+            {countLabel(character)}
           </div>
         </div>
       </Link>
@@ -117,7 +122,7 @@ export function CharacterCover({
         <div className={cn('truncate font-semibold tracking-tight drop-shadow-sm', nameSize)}>{character.name}</div>
         <div className={cn('mt-0.5 truncate text-white/70 tabular', size === 'xl' ? 'text-[13px]' : 'text-[11.5px]')}>
           {workName ? `${workName} · ` : ''}
-          {formatCount(character.imageCount)} 张
+          {countLabel(character)}
         </div>
       </div>
     </Link>

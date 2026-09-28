@@ -8,7 +8,8 @@ const DRIFT = 1.5;
 /**
  * 查询计划靠 sqlite_stat1 估行数。`PRAGMA optimize` 只在表涨了 10 倍时才重新 ANALYZE，
  * 首次导入后的库（几千张时采的统计，现在 8 万张）会一直走错计划：首页先把全表排序一遍，慢 1000 倍（T22 实测）。
- * 这里在行数偏差超过 1.5 倍时限量采样重新 ANALYZE（8 万张图、240 万条标签约 0.1 秒）。返回是否重新采样了。
+ * 这里在行数偏差超过 1.5 倍时完整地重新 ANALYZE（8 万张图、240 万条标签约 1.2 秒，只在行数大变时跑）。
+ * 不用 analysis_limit 限量采样：实测会把「excluded_by IS NULL」估成两百行（实际八万），首页又去走排除索引、整表排序。返回是否重新统计了。
  */
 export function refreshPlannerStats(db: Db, opts: { force?: boolean } = {}): boolean {
   const recorded = new Map<string, number>();
@@ -29,8 +30,6 @@ export function refreshPlannerStats(db: Db, opts: { force?: boolean } = {}): boo
       return Math.max(a, b) / Math.min(a, b) > DRIFT && Math.abs(actual - was) > 1000;
     });
   if (!stale) return false;
-  db.pragma('analysis_limit = 400');
   db.exec('ANALYZE');
-  db.pragma('analysis_limit = 0');
   return true;
 }

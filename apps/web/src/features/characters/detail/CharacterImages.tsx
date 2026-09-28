@@ -42,6 +42,7 @@ export function CharacterImages({
     order: filters.order,
     rating: filters.rating.length ? filters.rating : undefined,
     theme: filters.theme,
+    tags: filters.custom?.tags,
   });
   const { fetchNextPage } = query;
   // cancelRefetch: false —— 已经在加载下一页时不要重复发请求
@@ -113,7 +114,7 @@ export function CharacterImages({
   } else if (query.isError) {
     body = <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
   } else if (images.length === 0) {
-    body = filters.rating.length || filters.theme ? (
+    body = filters.rating.length || filters.theme || filters.custom ? (
       <EmptyState
         glyph="筛"
         title="没有符合筛选的插画"

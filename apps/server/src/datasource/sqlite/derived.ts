@@ -454,7 +454,8 @@ export function loadCoverTags(db: SqliteContext['db'], iids: number[]): Map<numb
   // 按名字 JOIN tags、再限定候选图（T22 实测：先换成 tag_id 反而慢一倍，这些标签里有 solo、1girl 这种几乎每张都有的）
   for (const r of db
     .prepare(
-      `SELECT it.image_id AS iid, t.name, it.score FROM image_tags it JOIN tags t ON t.id = it.tag_id
+      // 固定成「先标签、再按 tag_id 扫覆盖索引、候选图只做成员检查」：统计信息一变，SQLite 会改成逐张图去查，慢二十倍（T22 复测）
+      `SELECT it.image_id AS iid, t.name, it.score FROM tags t CROSS JOIN image_tags it INDEXED BY idx_image_tags_tag_score ON it.tag_id = t.id
        WHERE t.name IN (SELECT value FROM json_each(@names))
          AND it.image_id IN (SELECT value FROM json_each(@ids))`,
     )

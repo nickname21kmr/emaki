@@ -32,6 +32,8 @@ import type {
   Page,
   SearchHit,
   SearchQuery,
+  TagSuggestion,
+  TagSuggestionsQuery,
   Settings,
   ThumbWidth,
   TopCharactersQuery,
@@ -117,6 +119,8 @@ export interface DataSource {
 
   // 搜索
   search(query: SearchQuery): Promise<SearchHit[]>;
+  /** 一般标签联想（自定义画面） */
+  tagSuggestions(query: TagSuggestionsQuery): Promise<TagSuggestion[]>;
 
   // 设置
   getSettings(): Promise<Settings>;

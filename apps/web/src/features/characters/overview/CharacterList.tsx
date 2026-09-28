@@ -100,6 +100,9 @@ function Row({ character: c, byId, now, index }: { character: Character; byId: W
       {/* 张数 + 新图 */}
       <span className="flex flex-col items-end">
         <span className="text-sm font-medium text-fg tabular">{formatCount(c.imageCount)}</span>
+        {c.imageCount === 0 && c.otherCount > 0 && (
+          <span className="mt-0.5 text-[11px] text-fg-subtle tabular">漫画等 {formatCount(c.otherCount)}</span>
+        )}
         {c.newCount > 0 && (
           <span className="mt-0.5 inline-flex items-center gap-1 text-[11px] font-semibold text-ok tabular">
             <span className="size-1.5 rounded-full bg-ok" />+{formatCount(c.newCount)}

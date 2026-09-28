@@ -92,12 +92,13 @@
   --animate-shimmer: shimmer 1.6s linear infinite;
   --animate-indeterminate: indeterminate 1.2s var(--ease-out-soft) infinite;
 
+  /* 展开到比元素大一圈为止：动画结束后仍保留 clip-path（fill both），inset(0) 会把投影和焦点印框裁掉 */
   @keyframes unroll {
     from {
-      clip-path: inset(0 100% 0 0);
+      clip-path: inset(-24px 100% -24px -24px);
     }
     to {
-      clip-path: inset(0);
+      clip-path: inset(-24px);
     }
   }
   @keyframes fade-in {

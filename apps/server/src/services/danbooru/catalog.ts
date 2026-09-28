@@ -48,6 +48,18 @@ const arr = (s: string | null): string[] => {
 
 /** 服装变体：mika_(swimsuit)_(blue_archive) → mika_(blue_archive) */
 const VARIANT = /^(.+)_\([^()]+\)_\(([^()]+)\)$/;
+/** 单层括号的服装变体：minato_aqua_(1st_costume) → minato_aqua（括号里是作品名时不算，那是区分同名角色的） */
+const SINGLE = /^(.+)_\(([^()]+)\)$/;
+
+/** 去掉括号后的名字（按下划线切词）里，本体的名字是不是连续出现在变体里：yuudachi_kai_ni_(kancolle) ⊃ yuudachi */
+export function sameLineage(variant: string, base: string): boolean {
+  const words = (t: string) => t.replace(/_\([^()]*\)/g, '').split('_').filter(Boolean);
+  const v = words(variant);
+  const b = words(base);
+  if (!b.length || b.length > v.length) return false;
+  for (let i = 0; i + b.length <= v.length; i++) if (b.every((w, k) => v[i + k] === w)) return true;
+  return false;
+}
 
 export class DanbooruCatalog implements CopyrightSource {
   private readonly s: Record<string, Statement>;
@@ -88,6 +100,7 @@ export class DanbooruCatalog implements CopyrightSource {
         )
         .pluck(),
       category: db.prepare('SELECT category FROM danbooru_tags WHERE name = ?').pluck(),
+      libraryCharacter: db.prepare('SELECT 1 FROM characters WHERE danbooru_tag = ?').pluck(),
     };
   }
 
@@ -181,19 +194,46 @@ export class DanbooruCatalog implements CopyrightSource {
 
   /** 服装变体 → 本体：先看在线 implication 里的角色，再用正则（本体确实存在时才采用） */
   baseCharacter(tag: string): string {
-    const fromImplies = this.impliesClosure(tag).find((t) => (this.s.category!.get(t) as number | undefined) === 4);
+    // implication 里的角色只在「名字里含本体名字」时才算变体（夕立改二 → 夕立）；Saber Alter → 阿尔托莉雅、
+    // 斯卡哈·斯卡蒂 → 斯卡哈 这类名字不同的，粉丝眼里是另一个角色，不归并（用户 2026-09-28）
+    const fromImplies = this.impliesClosure(tag).find(
+      (t) => (this.s.category!.get(t) as number | undefined) === 4 && sameLineage(tag, t),
+    );
     if (fromImplies) return fromImplies;
     const m = VARIANT.exec(tag);
     if (m) {
       const base = `${m[1]}_(${m[2]})`;
       if (this.s.isCharacter!.get({ t: base }) || this.offline.offline[base]) return base;
     }
+    // 单层括号：本体是已知角色、括号里又不是作品名时，才算服装变体（用户 2026-09-28 定：变体都归本体）
+    const one = SINGLE.exec(tag);
+    if (one && !this.isCopyright(one[2]!)) {
+      const base = one[1]!;
+      if (this.s.isCharacter!.get({ t: base }) || this.s.libraryCharacter!.get(base) || this.offline.offline[base]) return base;
+    }
     return tag;
+  }
+
+  /** 括号里的限定词是不是作品名（hoshino_ai_(oshi_no_ko) 的 oshi_no_ko） */
+  private isCopyright(qualifier: string): boolean {
+    return !!(
+      this.s.i18nCopyright!.get(qualifier) ??
+      this.s.keyCopyright!.get(searchKey(qualifier)) ??
+      this.s.dbCopyright!.get(qualifier)
+    );
   }
 
   /** 给 T10 CharacterCatalog 的 normalizeTag */
   normalizeTag(tag: string): string {
-    return this.baseCharacter(this.canonicalize(tag));
+    // 改名、变体归本体交替做到不再变化为止（本体本身也可能改过名，归完还能再归）：
+    // 结果必须幂等，调用方可能对已经规范化的标签再规范化一次（2026-09-28 的 UNIQUE 冲突）
+    let t = tag;
+    for (let i = 0; i < 4; i++) {
+      const next = this.canonicalize(this.baseCharacter(this.canonicalize(t)));
+      if (next === t) break;
+      t = next;
+    }
+    return t;
   }
 
   copyrights(characterTag: string): string[] {

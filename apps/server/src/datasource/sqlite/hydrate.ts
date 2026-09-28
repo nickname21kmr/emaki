@@ -31,12 +31,13 @@ export interface ImageRow {
   content_kind_evidence: string | null;
   content_kind_manual: number;
   page_no: number | null;
+  original_at: string | null;
 }
 
 export const IMAGE_COLS = `i.id, i.root_id, i.rel_path, i.file_name, i.width, i.height, i.bytes, i.format, i.sha256,
   i.dominant_color, i.rating, i.favorite, i.source_site, i.source_post_id, i.source_artist, i.source_url,
   i.added_at, i.modified_at, i.excluded_by, i.tagged_at,
-  i.content_kind, i.content_kind_source, i.content_kind_evidence, i.content_kind_manual, i.page_no`;
+  i.content_kind, i.content_kind_source, i.content_kind_evidence, i.content_kind_manual, i.page_no, i.original_at`;
 
 function groupPairs(rows: { image_id: number; other: number }[]): Map<number, number[]> {
   const m = new Map<number, number[]>();
@@ -86,7 +87,7 @@ export function hydrateImages(db: Db, rows: ImageRow[]): ImageItem[] {
       status:
         r.excluded_by != null
           ? 'excluded'
-          : c.length || (r.content_kind !== 'illustration' && r.content_kind !== 'comic')
+          : c.length || r.original_at || (r.content_kind !== 'illustration' && r.content_kind !== 'comic')
             ? 'recognized'
             : 'unrecognized',
       kind: r.content_kind,

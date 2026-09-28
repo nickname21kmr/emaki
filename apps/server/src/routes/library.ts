@@ -110,4 +110,9 @@ export function libraryRoutes(app: FastifyInstance, ds: DataSource): void {
     const q = parse(z.object({ q: z.string().default(''), limit: qNumber.min(1).max(50).optional() }), req.query);
     return ds.search(q);
   });
+
+  app.get('/api/tags', (req) => {
+    const q = parse(z.object({ q: z.string().max(100).default(''), limit: qNumber.min(1).max(50).optional() }), req.query);
+    return ds.tagSuggestions(q);
+  });
 }

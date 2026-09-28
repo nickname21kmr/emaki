@@ -1,4 +1,4 @@
-import type { ListTaggerModelsResponse, PickFolderResponse, ServerEvent } from '@emaki/shared';
+import { CUSTOM_THEME_LIMITS, type ListTaggerModelsResponse, type PickFolderResponse, type ServerEvent } from '@emaki/shared';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.ts';
@@ -61,6 +61,20 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
             theme: z.enum(['system', 'light', 'dark']),
             blurSensitive: z.boolean(),
             density: z.enum(['comfortable', 'compact']),
+          })
+          .partial()
+          .optional(),
+        browse: z
+          .object({
+            customThemes: z
+              .array(
+                z.object({
+                  id: z.string().min(1).max(64),
+                  name: z.string().trim().min(1).max(CUSTOM_THEME_LIMITS.name),
+                  tags: z.array(z.string().trim().min(1).max(100)).min(1).max(CUSTOM_THEME_LIMITS.tags),
+                }),
+              )
+              .max(CUSTOM_THEME_LIMITS.themes),
           })
           .partial()
           .optional(),

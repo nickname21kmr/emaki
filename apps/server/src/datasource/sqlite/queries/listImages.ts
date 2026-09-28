@@ -4,11 +4,11 @@
  *
  * 用 keyset 游标而不是 offset：扫描期间不断插入新图，offset 分页会让无限滚动出现重复或漏图。
  */
-import { searchKey, type ImageItem, type ImageSort, type ListImagesQuery, type Page } from '@emaki/shared';
+import { searchKey, TAG_FILTER_MIN_SCORE, type ImageItem, type ImageSort, type ListImagesQuery, type Page } from '@emaki/shared';
 import type { Db } from '../../../db/connection.ts';
 import { hydrateImages, IMAGE_COLS, type ImageRow } from '../hydrate.ts';
 import { THEME_FILTERS } from '../../../services/classify/theme.ts';
-import { ART_KINDS_SQL, decodeCursor, encodeCursor, IMAGE_IN_WORK, LIVE_IMAGES, parseId } from '../sql.ts';
+import { ART_KINDS_SQL, UNRECOGNIZED, decodeCursor, encodeCursor, IMAGE_IN_WORK, LIVE_IMAGES, parseId } from '../sql.ts';
 
 const EMPTY_PAGE: Page<ImageItem> = { items: [], nextCursor: null, total: 0 };
 
@@ -50,7 +50,8 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
 
   switch (q.status) {
     case undefined:
-      both('i.excluded_by IS NULL');
+      // 加号：不让 SQLite 拿 excluded_by 的索引驱动查询（几乎全是 NULL，走它就得整表排序；T22 复测踩到过）
+      both('+i.excluded_by IS NULL');
       break;
     case 'excluded':
       both('i.excluded_by IS NOT NULL');
@@ -58,12 +59,12 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
     // 与 hydrate 的 status 同一口径：别册里的图算 recognized；unrecognized 含放下的（T27 补充、BI-9）
     case 'recognized':
       both(
-        'i.excluded_by IS NULL',
-        `(EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id) OR NOT (${ART_KINDS_SQL}))`,
+        '+i.excluded_by IS NULL',
+        `(EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id) OR i.original_at IS NOT NULL OR NOT (${ART_KINDS_SQL}))`,
       );
       break;
     case 'unrecognized':
-      both('i.excluded_by IS NULL', ART_KINDS_SQL, 'NOT EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id)');
+      both('+i.excluded_by IS NULL', ART_KINDS_SQL, UNRECOGNIZED);
       break;
   }
   if (q.characterId) {
@@ -121,6 +122,19 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
     });
     where.push(groups.length ? `EXISTS (SELECT 1 FROM image_tags it WHERE it.image_id = i.id AND (${groups.join(' OR ')}))` : '0');
     countWhere.push(groups.length ? `i.id IN (SELECT it.image_id FROM image_tags it WHERE ${groups.join(' OR ')})` : '0');
+  }
+  if (q.tags?.length) {
+    // 自定义画面：有任一一般标签、分数够。和 theme 一样先把名字换成 id
+    const ids = db
+      .prepare("SELECT id FROM tags WHERE category = 'general' AND name IN (SELECT value FROM json_each(?))")
+      .pluck()
+      .all(JSON.stringify(q.tags)) as number[];
+    if (!ids.length) return EMPTY_PAGE;
+    p.ctags = JSON.stringify(ids);
+    p.ctagMin = TAG_FILTER_MIN_SCORE;
+    const cond = 'it.tag_id IN (SELECT value FROM json_each(@ctags)) AND it.score >= @ctagMin';
+    where.push(`EXISTS (SELECT 1 FROM image_tags it WHERE it.image_id = i.id AND ${cond})`);
+    countWhere.push(`i.id IN (SELECT it.image_id FROM image_tags it WHERE ${cond})`);
   }
   if (q.orientation === 'landscape') both('i.width > i.height * 1.05');
   if (q.orientation === 'portrait') both('i.width < i.height * 0.95');

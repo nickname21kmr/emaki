@@ -51,7 +51,7 @@ export function AnnexPage() {
 }
 
 function AnnexView({ kind, count }: { kind: ContentKind | null; count: number | undefined }) {
-  const { filters, query: base, update, hasFilters, clearFilters } = useGalleryParams();
+  const { filters, query: base, update, hasFilters, clearFilters, customThemes } = useGalleryParams();
   // 漫画分「成册 | 散页」（T38f）：成册看本子书架，散页只看不在合集里的漫画
   const [params, setParams] = useSearchParams();
   const comicView = kind === 'comic' ? (params.get('view') === 'pages' ? 'pages' : 'books') : null;
@@ -156,7 +156,13 @@ function AnnexView({ kind, count }: { kind: ContentKind | null; count: number | 
         <KindIndex current={kind} />
         {comicView !== 'books' && (
           <div className="mt-3">
-            <GalleryToolbar filters={filters} update={update} hasFilters={hasFilters} onClearFilters={clearFilters} />
+            <GalleryToolbar
+              filters={filters}
+              update={update}
+              hasFilters={hasFilters}
+              onClearFilters={clearFilters}
+              customThemes={customThemes}
+            />
           </div>
         )}
       </PageHeader>

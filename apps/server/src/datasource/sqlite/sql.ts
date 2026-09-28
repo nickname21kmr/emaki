@@ -68,7 +68,7 @@ export const MIME: Record<ImageFormat, string> = {
 export const DEFAULT_DOMINANT = '#d9d4cc';
 
 /** 未识别（没有任何角色关联）。i 是 v_counted_images 的别名 */
-export const UNRECOGNIZED = 'NOT EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id)';
+export const UNRECOGNIZED = '(NOT EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id) AND i.original_at IS NULL)';
 /** 插画和漫画：要找角色的图（T27 补充） */
 export const ART_KINDS_SQL = `i.content_kind IN ('illustration','comic')`;
 /** 别册：既不是插画也不是漫画 */

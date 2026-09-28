@@ -107,6 +107,26 @@ export class BulkOps {
           return { message: a.value ? `已放下 ${n} 张图，不再出现在未识别` : `已把 ${n} 张图放回未识别` };
         });
       }
+      case 'original': {
+        const now = iso(this.ctx.clock());
+        // 「原创」作品（标签 original）没有就建；手动挂的关联 score 为 NULL，移出时只删手动挂的（识别器认出的保留）
+        return this.ctx.mutate((u) => {
+          let wid = db.prepare("SELECT id FROM works WHERE danbooru_tag = 'original'").pluck().get() as number | undefined;
+          if (wid === undefined) {
+            wid = Number(db.prepare("INSERT INTO works (name, danbooru_tag, created_at) VALUES ('原创', 'original', ?)").run(now).lastInsertRowid);
+            u.inserted('works', wid);
+          }
+          u.columns('images', ['original_at'], ids);
+          u.set('image_copyrights', 'work_id = ? AND image_id IN (SELECT value FROM json_each(?))', [wid, json]);
+          db.prepare('UPDATE images SET original_at = ? WHERE id IN (SELECT value FROM json_each(?))').run(a.value ? now : null, json);
+          if (a.value) {
+            db.prepare('INSERT OR IGNORE INTO image_copyrights (image_id, work_id, score) SELECT value, ?, NULL FROM json_each(?)').run(wid, json);
+          } else {
+            db.prepare('DELETE FROM image_copyrights WHERE work_id = ? AND score IS NULL AND image_id IN (SELECT value FROM json_each(?))').run(wid, json);
+          }
+          return { message: a.value ? `已把 ${n} 张图归为原创，不再出现在未识别` : `已把 ${n} 张图移出原创` };
+        });
+      }
       case 'rating':
         return this.ctx.mutate((u) => {
           u.columns('images', ['rating', 'rating_manual'], ids);

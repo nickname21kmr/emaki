@@ -52,7 +52,8 @@ export class TagResultWriter {
       insImageTag: db.prepare('INSERT OR REPLACE INTO image_tags (image_id, tag_id, score) VALUES (?, ?, ?)'),
       delSuggestions: db.prepare('DELETE FROM character_suggestions WHERE image_id = ?'),
       insSuggestion: db.prepare('INSERT OR REPLACE INTO character_suggestions (image_id, danbooru_tag, score) VALUES (?, ?, ?)'),
-      delImageCopyrights: db.prepare('DELETE FROM image_copyrights WHERE image_id = ?'),
+      // 只删识别器写的（score 非空）；用户「归为原创」手动挂的 score 为 NULL，重打标签不能删
+      delImageCopyrights: db.prepare('DELETE FROM image_copyrights WHERE image_id = ? AND score IS NOT NULL'),
       insImageCopyright: db.prepare(`INSERT INTO image_copyrights (image_id, work_id, score) VALUES (@imageId, @workId, @score)
         ON CONFLICT(image_id, work_id) DO UPDATE SET score = MAX(score, excluded.score)`),
       workByTag: db.prepare('SELECT id FROM works WHERE danbooru_tag = ?'),

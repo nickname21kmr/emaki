@@ -36,7 +36,8 @@ export function AnnexIndex() {
               to={`/annex/${k}`}
               aria-disabled={n === 0 || undefined}
               className={cn(
-                'px-[18px] pt-4 pb-[18px] transition-colors hover:bg-hover',
+                // 键盘聚焦：四角印框（SEL-15）
+                'focus-frame px-[18px] pt-4 pb-[18px] transition-colors hover:bg-hover',
                 i > 0 && 'border-l border-line',
                 n === 0 && 'pointer-events-none opacity-40',
               )}

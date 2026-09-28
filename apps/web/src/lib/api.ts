@@ -45,6 +45,7 @@ import type {
   ListWorksResponse,
   MutationResult,
   SearchResponse,
+  TagSuggestionsResponse,
   Settings,
   TopCharactersQuery,
   TopCharactersResponse,
@@ -90,7 +91,11 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
-    throw new ApiRequestError(0, 'network', '连不上后端，确认 `npm run dev` 正在运行');
+    throw new ApiRequestError(0, 'network', '连不上后端：可能正在重启，过几秒再试；一直这样的话，看看后端窗口是不是关了');
+  }
+  // 开发模式下 vite 代理连不上后端时回 502 / 503 / 504（后端重启要十几秒）：按「连不上」处理，查询会自动重试
+  if (res.status === 502 || res.status === 503 || res.status === 504) {
+    throw new ApiRequestError(res.status, 'network', '后端暂时连不上（可能正在重启），过几秒再试一次');
   }
   const text = await res.text();
   const data = text ? (JSON.parse(text) as unknown) : undefined;
@@ -162,6 +167,8 @@ export const api = {
   deleteExclusion: (id: ID) => del<MutationResult>(`/exclusions/${encodeURIComponent(id)}`),
 
   search: (q: string, limit = 20) => get<SearchResponse>('/search', { q, limit }),
+  /** 一般标签联想（自定义画面）；q 为空 = 最常见的 */
+  tags: (q: string, limit = 20) => get<TagSuggestionsResponse>('/tags', { q, limit }),
 
   settings: () => get<GetSettingsResponse>('/settings'),
   /** 可选的识别模型（设置页下拉框） */

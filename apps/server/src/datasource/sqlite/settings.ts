@@ -1,7 +1,7 @@
 /**
  * 设置的默认值、读写和图库路径工具。其他任务直接 import 这里的模块级函数（第一个参数是 db）。
  */
-import type { Settings } from '@emaki/shared';
+import type { CustomTheme, Settings } from '@emaki/shared';
 import path from 'node:path';
 import type { Db } from '../../db/connection.ts';
 import { BadRequestError } from '../../http/errors.ts';
@@ -11,10 +11,11 @@ export const SETTINGS_KEYS = {
   danbooru: 'danbooru',
   dedupe: 'dedupe',
   ui: 'ui',
+  browse: 'browse',
   danbooruApiKey: 'secret.danbooruApiKey',
 } as const;
 
-export type SettingsSection = 'tagger' | 'danbooru' | 'dedupe' | 'ui';
+export type SettingsSection = 'tagger' | 'danbooru' | 'dedupe' | 'ui' | 'browse';
 
 export const DEFAULT_SETTINGS = {
   tagger: {
@@ -34,9 +35,10 @@ export const DEFAULT_SETTINGS = {
   danbooru: { enabled: false, username: '', lastSyncAt: null as string | null },
   dedupe: { hammingThreshold: 8, lastRunAt: null as string | null },
   ui: { theme: 'system', blurSensitive: true, density: 'comfortable' },
+  browse: { customThemes: [] as CustomTheme[] },
 } as const;
 
-const SECTIONS: SettingsSection[] = ['tagger', 'danbooru', 'dedupe', 'ui'];
+const SECTIONS: SettingsSection[] = ['tagger', 'danbooru', 'dedupe', 'ui', 'browse'];
 
 function readRaw(db: Db): Map<string, string> {
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];

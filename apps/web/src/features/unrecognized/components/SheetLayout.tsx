@@ -63,6 +63,7 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
   const once = (fn: () => void) => (e: KeyboardEvent) => !e.repeat && fn();
   useHotkey('mod+a', () => sheet.selectLoaded(), { enabled: keysOn && items.length > 0 });
   useHotkey('h', once(() => sheet.shelve(mode !== 'shelved')), { enabled: edit && mode !== 'annex' });
+  useHotkey('o', once(() => sheet.markOriginal(true)), { enabled: edit && mode !== 'annex' });
   useHotkey('c', once(() => setKindOpen(true)), { enabled: edit });
   useHotkey('r', once(() => setRatingOpen(true)), { enabled: edit });
   useHotkey('e', once(() => sheet.exclude()), { enabled: edit });
@@ -254,7 +255,7 @@ function GroupNotePanel({
           </li>
           {mode !== 'annex' && (
             <li>
-              原创、不认识的 · 选中后放下 <Kbd>H</Kbd>
+              原创角色 · 选中后归为原创 <Kbd>O</Kbd>；不认识的 · 放下 <Kbd>H</Kbd>
             </li>
           )}
           <li>

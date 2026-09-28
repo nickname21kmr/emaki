@@ -35,6 +35,7 @@ function applyPatch(prev: Settings, body: UpdateSettingsBody): Settings {
     },
     dedupe: { ...prev.dedupe, ...rest.dedupe },
     ui: { ...prev.ui, ...rest.ui },
+    browse: { ...prev.browse, ...rest.browse },
   };
 }
 

@@ -2,7 +2,7 @@
  * T22 测速：在一个库目录上（真实库的快照，见 docs/PERF.md）用 app.inject 请求各个接口，
  * 每个场景预热 5 次、测 50 次，打印 p50 / p95 / max / 预算；任一 p95 超预算时退出码 1。
  *
- *   npx tsx apps/server/scripts/bench.ts F:/Claude/emaki/data/perf [--runs 50] [--only images]
+ *   npx tsx apps/server/scripts/bench.ts data/perf [--runs 50] [--only images]
  *
  * 不走网络、不开后台任务（autoJobs: false），库目录里的数据库会被迁移到最新版本。
  */

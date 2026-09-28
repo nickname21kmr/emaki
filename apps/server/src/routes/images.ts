@@ -1,4 +1,4 @@
-import { BROWSE_THEMES, THUMB_WIDTHS, UNRECOGNIZED_ANNEX_KINDS, UNRECOGNIZED_AREAS, UNRECOGNIZED_BUCKETS, UNRECOGNIZED_THEMES, type ThumbWidth } from '@emaki/shared';
+import { BROWSE_THEMES, CUSTOM_THEME_LIMITS, THUMB_WIDTHS, UNRECOGNIZED_ANNEX_KINDS, UNRECOGNIZED_AREAS, UNRECOGNIZED_BUCKETS, UNRECOGNIZED_THEMES, type ThumbWidth } from '@emaki/shared';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { z } from 'zod';
@@ -18,6 +18,9 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
         q: z.string().optional(),
         orientation: z.enum(['portrait', 'landscape', 'square']).optional(),
         theme: z.enum(BROWSE_THEMES).optional(),
+        tags: qList(z.string().min(1).max(100))
+          .refine((a) => a.length <= CUSTOM_THEME_LIMITS.tags, '标签太多')
+          .optional(),
         favorite: qBool.optional(),
         kind: qKinds.optional(),
         rated: qBool.optional(),
@@ -44,6 +47,7 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
           z.object({ type: z.literal('restore') }),
           z.object({ type: z.literal('favorite'), value: z.boolean() }),
           z.object({ type: z.literal('shelve'), value: z.boolean() }),
+          z.object({ type: z.literal('original'), value: z.boolean() }),
           z.object({ type: z.literal('rating'), value: ratingSchema }),
           z.object({ type: z.literal('kind'), value: z.union([kindSchema, z.literal('auto')]) }),
           z.object({ type: z.literal('trash') }),

@@ -1,6 +1,7 @@
 import { BROWSE_THEMES, CONTENT_KINDS, type BrowseTheme, type ContentKind, type ImageSort, type ListImagesQuery, type Rating } from '@emaki/shared';
 import { useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
+import { useCustomThemes } from '@/lib/queries';
 import { usePrefs } from '@/lib/stores';
 
 /**
@@ -24,6 +25,8 @@ export interface GalleryFilters {
   orientation: Orientation | undefined;
   /** 画面：腿·足、泳装…（?theme=） */
   theme: BrowseTheme | undefined;
+  /** 自定义画面的 id（?custom=）；和 theme 互斥 */
+  custom: string | undefined;
   favorite: boolean;
   sort: GallerySort;
   order: SortOrder;
@@ -56,6 +59,7 @@ function parse(params: URLSearchParams, kindFallback: ContentKind[] | 'all'): Ga
     rating: RATINGS.filter((r) => ratingSet.has(r)),
     orientation: ORIENTATIONS.includes(orient as Orientation) ? (orient as Orientation) : undefined,
     theme: (BROWSE_THEMES as readonly string[]).includes(params.get('theme') ?? '') ? (params.get('theme') as BrowseTheme) : undefined,
+    custom: params.get('custom') || undefined,
     favorite: params.get('fav') === '1',
     sort,
     order: orderParam === 'asc' || orderParam === 'desc' ? orderParam : defaultOrder(sort),
@@ -75,6 +79,9 @@ export function useGalleryParams() {
           const next = new URLSearchParams(prev);
           const cur = parse(prev, kindPref);
           const merged = { ...cur, ...patch };
+          // 内置画面和自定义画面只能选一个
+          if (patch.theme) merged.custom = undefined;
+          if (patch.custom) merged.theme = undefined;
           const set = (key: string, value: string | undefined) => {
             if (value) next.set(key, value);
             else next.delete(key);
@@ -86,6 +93,7 @@ export function useGalleryParams() {
           set('rating', merged.rating.length ? RATINGS.filter((r) => merged.rating.includes(r)).join(',') : undefined);
           set('orient', merged.orientation);
           set('theme', merged.theme);
+          set('custom', merged.custom);
           set('fav', merged.favorite ? '1' : undefined);
           set('sort', merged.sort === 'addedAt' ? undefined : merged.sort);
           // 换排序时回到该排序的默认方向；方向等于默认值时不写进 URL
@@ -99,6 +107,11 @@ export function useGalleryParams() {
     [setParams, kindPref, setKindPref],
   );
 
+  // 自定义画面换成它的标签；id 找不到（被删了、设置还没加载）就当没选
+  const customThemes = useCustomThemes();
+  const customTheme = filters.custom ? customThemes.find((t) => t.id === filters.custom) : undefined;
+  const customTags = customTheme?.tags;
+
   const query = useMemo<Omit<ListImagesQuery, 'cursor'>>(
     () => ({
       q: filters.q || undefined,
@@ -106,19 +119,20 @@ export function useGalleryParams() {
       rating: filters.rating.length ? filters.rating : undefined,
       orientation: filters.orientation,
       theme: filters.theme,
+      tags: customTags,
       favorite: filters.favorite || undefined,
       sort: filters.sort,
       order: filters.sort === 'random' ? undefined : filters.order,
     }),
-    [filters],
+    [filters, customTags],
   );
 
-  const hasFilters = !!(filters.q || filters.rating.length || filters.orientation || filters.theme || filters.favorite);
+  const hasFilters = !!(filters.q || filters.rating.length || filters.orientation || filters.theme || customTheme || filters.favorite);
 
   const clearFilters = useCallback(
-    () => update({ q: '', rating: [], orientation: undefined, theme: undefined, favorite: false }),
+    () => update({ q: '', rating: [], orientation: undefined, theme: undefined, custom: undefined, favorite: false }),
     [update],
   );
 
-  return { filters, query, update, hasFilters, clearFilters };
+  return { filters, query, update, hasFilters, clearFilters, customThemes };
 }

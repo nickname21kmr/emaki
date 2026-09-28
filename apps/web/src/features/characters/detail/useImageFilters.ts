@@ -1,6 +1,7 @@
-import { BROWSE_THEMES, type BrowseTheme, type ImageSort, type Rating } from '@emaki/shared';
+import { BROWSE_THEMES, type BrowseTheme, type CustomTheme, type ImageSort, type Rating } from '@emaki/shared';
 import { useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
+import { useCustomThemes } from '@/lib/queries';
 
 export const SORT_OPTIONS: { value: ImageSort; label: string }[] = [
   { value: 'addedAt', label: '最近添加' },
@@ -24,6 +25,10 @@ export interface ImageFilters {
   allKinds: boolean;
   /** 画面（?theme=） */
   theme: BrowseTheme | undefined;
+  /** 自定义画面（?custom=，和 theme 互斥）；id 找不到时为 undefined */
+  custom: CustomTheme | undefined;
+  /** 全部自定义画面，给菜单列出来 */
+  customThemes: CustomTheme[];
   /** 是否是默认视图（最近添加 · 降序 · 不筛分级），用来判断「新」角标是否可信 */
   isDefault: boolean;
   setSort: (sort: ImageSort) => void;
@@ -31,6 +36,9 @@ export interface ImageFilters {
   toggleRating: (r: Rating) => void;
   clearRating: () => void;
   setTheme: (t: BrowseTheme | undefined) => void;
+  setCustom: (id: string | undefined) => void;
+  /** 内置和自定义画面都清掉 */
+  clearTheme: () => void;
   /** 分级和画面一起清掉 */
   clearFilters: () => void;
   setAllKinds: (v: boolean) => void;
@@ -49,6 +57,9 @@ export function useImageFilters(): ImageFilters {
   const allKinds = params.get('kinds') === 'all';
   const themeParam = params.get('theme') ?? '';
   const theme = (BROWSE_THEMES as readonly string[]).includes(themeParam) ? (themeParam as BrowseTheme) : undefined;
+  const customThemes = useCustomThemes();
+  const customParam = params.get('custom');
+  const custom = customParam ? customThemes.find((t) => t.id === customParam) : undefined;
   const ratingParam = params.get('rating') ?? '';
   const rating = useMemo(
     () => RATINGS.filter((r) => ratingParam.split(',').includes(r)),
@@ -77,7 +88,9 @@ export function useImageFilters(): ImageFilters {
     rating,
     allKinds,
     theme,
-    isDefault: sort === 'addedAt' && order === 'desc' && rating.length === 0 && !allKinds && !theme,
+    custom,
+    customThemes,
+    isDefault: sort === 'addedAt' && order === 'desc' && rating.length === 0 && !allKinds && !theme && !custom,
     setSort: (s) => patch({ sort: s === 'addedAt' ? null : s }),
     toggleOrder: () => patch({ order: order === 'desc' ? 'asc' : null }),
     toggleRating: (r) => {
@@ -86,8 +99,10 @@ export function useImageFilters(): ImageFilters {
       patch({ rating: next.length === RATINGS.length ? null : next.join(',') });
     },
     clearRating: () => patch({ rating: null }),
-    setTheme: (t) => patch({ theme: t ?? null }),
-    clearFilters: () => patch({ rating: null, theme: null }),
+    setTheme: (t) => patch({ theme: t ?? null, ...(t ? { custom: null } : {}) }),
+    setCustom: (id) => patch({ custom: id ?? null, ...(id ? { theme: null } : {}) }),
+    clearTheme: () => patch({ theme: null, custom: null }),
+    clearFilters: () => patch({ rating: null, theme: null, custom: null }),
     setAllKinds: (v) => patch({ kinds: v ? 'all' : null }),
   };
 }

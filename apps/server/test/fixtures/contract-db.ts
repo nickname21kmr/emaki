@@ -230,6 +230,7 @@ export function buildContractDb(now: number): MockDb {
     danbooru: { enabled: false, username: '', hasApiKey: false, lastSyncAt: null },
     dedupe: { hammingThreshold: 8, lastRunAt: null },
     ui: { theme: 'system', blurSensitive: true, density: 'comfortable' },
+    browse: { customThemes: [] },
   };
 
   return { works, characters, images, duplicates, exclusions, settings, collections: new Map() };

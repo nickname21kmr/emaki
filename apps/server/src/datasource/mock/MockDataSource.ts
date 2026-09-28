@@ -44,6 +44,9 @@ import {
   type Rating,
   type SearchHit,
   type SearchQuery,
+  type TagSuggestion,
+  type TagSuggestionsQuery,
+  TAG_FILTER_MIN_SCORE,
   type Settings,
   type ThumbWidth,
   type TopCharactersQuery,
@@ -159,12 +162,20 @@ export class MockDataSource implements DataSource {
   private status(img: ImageRow): ImageStatus {
     if (img.excludedBy) return 'excluded';
     // 有角色，或不是插画 / 漫画 → recognized；放下的仍是 unrecognized（与 sqlite 的 hydrate 同口径）
-    return img.characterIds.length || !isArt(img) ? 'recognized' : 'unrecognized';
+    return img.characterIds.length || img.originalAt || !isArt(img) ? 'recognized' : 'unrecognized';
+  }
+
+  /** 「原创」作品（标签 original）；没有就现建（sqlite 同样） */
+  private originalWorkId(): ID {
+    for (const w of this.db.works.values()) if (w.danbooruTag === 'original') return w.id;
+    const w = { id: 'w-original', name: '原创', danbooruTag: 'original', aliases: ['原创', 'original'], hue: 30 };
+    this.db.works.set(w.id, w);
+    return w.id;
   }
 
   /** 逐张未识别队列（sql.ts 的 QUEUE）：计入张数、插画或漫画、没放下、没角色 */
   private inQueue(img: ImageRow): boolean {
-    return !img.excludedBy && isArt(img) && !img.shelvedAt && !img.characterIds.length && !img.collectionId;
+    return !img.excludedBy && isArt(img) && !img.shelvedAt && !img.originalAt && !img.characterIds.length && !img.collectionId;
   }
 
   private imageWorkIds(img: ImageRow): ID[] {
@@ -440,7 +451,7 @@ export class MockDataSource implements DataSource {
         excluded++;
         continue; // 体积和 7 天新增只算「计入张数」的图
       }
-      if (!img.excludedBy && isArt(img) && img.shelvedAt && !img.characterIds.length && !img.collectionId) shelved++;
+      if (!img.excludedBy && isArt(img) && img.shelvedAt && !img.originalAt && !img.characterIds.length && !img.collectionId) shelved++;
       if (this.inQueue(img)) {
         unrecognized++;
         if (!img.tagged && kindOf(img) !== 'comic') untagged++;
@@ -739,6 +750,8 @@ export class MockDataSource implements DataSource {
       if (query.collectionId === 'none' && img.collectionId) return false;
       if (query.collectionId !== undefined && query.collectionId !== 'none' && img.collectionId !== query.collectionId) return false;
       if (query.theme && !(img.tagged && matchesBrowseTheme(query.theme, img.tags.filter((t) => t.category === 'general')))) return false;
+      if (query.tags?.length && !(img.tagged && img.tags.some((t) => t.category === 'general' && t.score >= TAG_FILTER_MIN_SCORE && query.tags!.includes(t.tag))))
+        return false;
       if (query.orientation) {
         const ratio = img.width / img.height;
         const o = ratio > 1.05 ? 'landscape' : ratio < 0.95 ? 'portrait' : 'square';
@@ -874,6 +887,8 @@ export class MockDataSource implements DataSource {
       kindEvidence: r.kindEvidence,
       kindManual: r.kindManual,
       shelvedAt: r.shelvedAt,
+      originalAt: r.originalAt,
+      copyrightWorkIds: [...r.copyrightWorkIds],
     }));
     const exclusionsBefore = [...this.db.exclusions];
     const n = rows.length;
@@ -928,6 +943,17 @@ export class MockDataSource implements DataSource {
         message = action.value ? `已放下 ${n} 张图，不再出现在未识别` : `已把 ${n} 张图放回未识别`;
         break;
       }
+      case 'original': {
+        const at = new Date(this.now).toISOString();
+        const wid = this.originalWorkId();
+        for (const r of rows) {
+          r.originalAt = action.value ? at : null;
+          const rest = r.copyrightWorkIds.filter((w) => w !== wid);
+          r.copyrightWorkIds = action.value ? [...rest, wid] : rest;
+        }
+        message = action.value ? `已把 ${n} 张图归为原创，不再出现在未识别` : `已把 ${n} 张图移出原创`;
+        break;
+      }
       case 'rating':
         for (const r of rows) r.rating = action.value;
         message = `已把 ${n} 张图设为「${RATING_LABEL[action.value]}」`;
@@ -955,6 +981,8 @@ export class MockDataSource implements DataSource {
         s.row.kindEvidence = s.kindEvidence;
         s.row.kindManual = s.kindManual;
         s.row.shelvedAt = s.shelvedAt;
+        s.row.originalAt = s.originalAt;
+        s.row.copyrightWorkIds = s.copyrightWorkIds;
       }
       this.db.exclusions = exclusionsBefore;
     });
@@ -1013,7 +1041,7 @@ export class MockDataSource implements DataSource {
 
   /** 插画和漫画：没有角色、不在合集里；照片、文字等：没有角色 */
   private unrecRows() {
-    const base = this.idx.visible.filter((img) => !img.excludedBy && !img.characterIds.length);
+    const base = this.idx.visible.filter((img) => !img.excludedBy && !img.characterIds.length && !img.originalAt);
     return {
       art: base.filter((img) => isArt(img) && !img.collectionId).map((img) => this.unrecRow(img)),
       annex: base.filter((img) => !isArt(img)).map((img) => this.unrecRow(img)),
@@ -1247,6 +1275,24 @@ export class MockDataSource implements DataSource {
     return [...chars, ...works, ...tags].slice(0, limit);
   }
 
+  /** 一般标签联想：和 sqlite 同口径（张数只算分数达到 TAG_FILTER_MIN_SCORE 的；完全匹配排最前，其余按张数） */
+  async tagSuggestions(query: TagSuggestionsQuery): Promise<TagSuggestion[]> {
+    const limit = query.limit ?? 20;
+    const k = searchKey(query.q?.trim() ?? '');
+    const counts = new Map<string, number>();
+    for (const img of this.idx.visible) {
+      if (img.excludedBy) continue;
+      for (const t of img.tags) {
+        if (t.category === 'general' && t.score >= TAG_FILTER_MIN_SCORE) counts.set(t.tag, (counts.get(t.tag) ?? 0) + 1);
+      }
+    }
+    return [...counts.entries()]
+      .filter(([tag]) => !k || searchKey(tag).includes(k))
+      .sort((a, b) => Number(searchKey(b[0]) === k) - Number(searchKey(a[0]) === k) || b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, limit)
+      .map(([tag, count]) => ({ tag, name: tag.replace(/_/g, ' '), count }));
+  }
+
   // ------------------------------------------------------------ 设置
 
   async getSettings(): Promise<Settings> {
@@ -1279,6 +1325,7 @@ export class MockDataSource implements DataSource {
     if (rest.danbooru) Object.assign(s.danbooru, rest.danbooru);
     if (rest.dedupe) Object.assign(s.dedupe, rest.dedupe);
     if (rest.ui) Object.assign(s.ui, rest.ui);
+    if (rest.browse?.customThemes) s.browse.customThemes = structuredClone(rest.browse.customThemes);
     if (danbooruApiKey !== undefined) s.danbooru.hasApiKey = danbooruApiKey.length > 0;
     this.touch();
     return this.getSettings();

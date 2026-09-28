@@ -7,6 +7,7 @@
 import { showResultToast, undoViaToast } from '@/components/ui/Toast';
 import type {
   Character,
+  CustomTheme,
   GetCharacterResponse,
   ID,
   Job,
@@ -53,6 +54,7 @@ export const qk = {
   duplicates: (resolved: boolean) => ['duplicates', resolved] as const,
   exclusions: ['exclusions'] as const,
   search: (q: string) => ['search', q] as const,
+  tags: (q: string) => ['tags', q] as const,
   settings: ['settings'] as const,
   taggerModels: ['tagger-models'] as const,
   jobs: ['jobs'] as const,
@@ -180,6 +182,23 @@ export const useSearch = (q: string) =>
   });
 
 export const useSettings = () => useQuery({ queryKey: qk.settings, queryFn: api.settings });
+
+/** 一般标签联想（自定义画面的对话框）；空查询也发，给出最常见的 */
+export const useTagSuggestions = (q: string, enabled = true) =>
+  useQuery({
+    queryKey: qk.tags(q.trim()),
+    queryFn: () => api.tags(q.trim()),
+    enabled,
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+  });
+
+const NO_THEMES: CustomTheme[] = [];
+/** 用户自己加的「画面」筛选（设置里的 browse.customThemes）；旧后端没有这一段时为空 */
+export function useCustomThemes(): CustomTheme[] {
+  const { data } = useSettings();
+  return data?.browse?.customThemes ?? NO_THEMES;
+}
 
 /** 识别模型列表（设置页下拉框） */
 export const useTaggerModels = () => useQuery({ queryKey: qk.taggerModels, queryFn: api.taggerModels });

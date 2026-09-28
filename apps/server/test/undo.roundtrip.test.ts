@@ -60,6 +60,7 @@ const OPS: Op[] = [
   { name: 'bulk 收藏', run: () => ds.bulkImages({ ids: img('i1', 'i2', 'i3'), action: { type: 'favorite', value: true } }) },
   { name: 'bulk 取消收藏', run: () => ds.bulkImages({ ids: img('i1'), action: { type: 'favorite', value: false } }) },
   { name: 'bulk 放下', run: () => ds.bulkImages({ ids: img('i26', 'i28'), action: { type: 'shelve', value: true } }) },
+  { name: 'bulk 归为原创', run: () => ds.bulkImages({ ids: img('i26', 'i28'), action: { type: 'original', value: true } }) },
   {
     name: 'bulk 放回未识别',
     setup: () => ds.bulkImages({ ids: img('i26'), action: { type: 'shelve', value: true } }),

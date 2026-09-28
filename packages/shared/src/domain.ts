@@ -325,6 +325,15 @@ export interface LibraryStats {
 }
 
 export type ThemePreference = 'system' | 'light' | 'dark';
+
+/** 自定义「画面」筛选：用户拿识别标签自己拼的一组，图有任一标签（分数够）就算 */
+export interface CustomTheme {
+  id: string;
+  /** 1–12 字 */
+  name: string;
+  /** danbooru 风格的一般标签名，1–20 个 */
+  tags: string[];
+}
 export type TaggerDevice = 'cpu' | 'dml';
 
 export interface Settings {
@@ -372,6 +381,10 @@ export interface Settings {
     blurSensitive: boolean;
     /** 网格密度 */
     density: 'comfortable' | 'compact';
+  };
+  browse: {
+    /** 自定义画面筛选，最多 30 个，顺序即显示顺序 */
+    customThemes: CustomTheme[];
   };
 }
 

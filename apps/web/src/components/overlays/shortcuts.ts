@@ -98,6 +98,7 @@ export const SHORTCUT_GROUPS: Record<ShortcutGroupId, ShortcutGroup> = {
       { label: '选中同建议的图', keys: [['A']] },
       { label: '全选这一组已加载的图', keys: [[MOD, 'A']] },
       { label: '放下选中（不再出现在未识别）', keys: [['H']] },
+      { label: '归为原创（挂到「原创」作品）', keys: [['O']] },
       { label: '改类型', keys: [['C']] },
       { label: '设分级', keys: [['R']] },
       { label: '上一组 / 下一组', keys: [['['], [']']] },

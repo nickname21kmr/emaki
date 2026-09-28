@@ -1,5 +1,5 @@
 import type { Rating } from '@emaki/shared';
-import { Archive, Ban, Shapes, ShieldHalf } from 'lucide-react';
+import { Archive, Ban, Feather, Shapes, ShieldHalf } from 'lucide-react';
 import type { RefObject } from 'react';
 import { KindMenu } from '@/components/media/KindMenu';
 import { Thumb } from '@/components/media/Thumb';
@@ -49,6 +49,7 @@ export function SheetBatchPanel({
                 onClick={() => sheet.shelve(mode !== 'shelved')}
               />
             )}
+            {mode !== 'annex' && <ActionKey icon={<Feather />} label="归为原创" keys={['O']} onClick={() => sheet.markOriginal(true)} />}
             <KindMenu
               align="start"
               label={`把 ${formatCount(n)} 张改成`}

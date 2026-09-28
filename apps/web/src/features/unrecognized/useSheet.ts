@@ -103,6 +103,11 @@ export function useSheet(params: UnrecognizedParams, enabled: boolean) {
     const n = selectedItems.length;
     run({ type: 'shelve', value }, { hide: true, stamp: value ? ['放', `放下 ${n} 张`, 'muted'] : ['回', `放回 ${n} 张`] });
   };
+  /** 归为原创（true）/ 移出原创（false） */
+  const markOriginal = (value: boolean) => {
+    const n = selectedItems.length;
+    run({ type: 'original', value }, { hide: true, stamp: value ? ['原', `${n} 张 · 原创`] : ['回', `移出原创 ${n} 张`] });
+  };
   const setKind = (k: ContentKind | 'auto') => {
     const art = params.area === 'art';
     const comicGroup = params.theme === 'comic';
@@ -147,6 +152,7 @@ export function useSheet(params: UnrecognizedParams, enabled: boolean) {
     doneCount,
     assign,
     shelve,
+    markOriginal,
     setKind,
     setRating,
     exclude,

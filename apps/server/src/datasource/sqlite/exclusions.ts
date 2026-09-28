@@ -146,7 +146,14 @@ export class ExclusionQueries {
          FROM exclusions e ORDER BY e.created_at DESC, e.id DESC`,
       )
       .all() as { id: number; kind: ExclusionKind; target: string; label: string; created_at: string; image_count: number }[];
-    const preview = this.ctx.stmt('SELECT id FROM v_images WHERE excluded_by = ? ORDER BY added_at DESC, id DESC LIMIT 4').pluck();
+    // 指定排除索引：统计里 excluded_by 每个值被估成几万行（NULL 占绝大多数），SQLite 会改走时间索引扫全表（T22 复测）
+    const preview = this.ctx
+      .stmt(
+        `SELECT i.id FROM images i INDEXED BY idx_images_excluded JOIN library_roots r ON r.id = i.root_id
+         WHERE i.excluded_by = ? AND r.enabled = 1 AND r.removed_at IS NULL AND i.trashed_at IS NULL AND i.missing = 0
+         ORDER BY i.added_at DESC, i.id DESC LIMIT 4`,
+      )
+      .pluck();
     return rows.map((r) => ({
       id: toId(r.id),
       kind: r.kind,

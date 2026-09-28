@@ -31,6 +31,7 @@ export function WorkImages({ workId, gridKey, dialogOpen = false }: { workId: ID
     order: filters.order,
     rating: filters.rating.length ? filters.rating : undefined,
     theme: filters.theme,
+    tags: filters.custom?.tags,
   });
   const { fetchNextPage } = query;
   const loadMore = useCallback(() => void fetchNextPage({ cancelRefetch: false }), [fetchNextPage]);
@@ -78,7 +79,7 @@ export function WorkImages({ workId, gridKey, dialogOpen = false }: { workId: ID
   } else if (query.isError) {
     body = <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
   } else if (images.length === 0) {
-    body = filters.rating.length || filters.theme ? (
+    body = filters.rating.length || filters.theme || filters.custom ? (
       <EmptyState
         glyph="筛"
         title="没有符合筛选的插画"
