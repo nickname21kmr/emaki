@@ -1,0 +1,28 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+# 运行时数据：数据库、缩略图缓存、模型文件——永远不要提交
+data/
+.emaki/
+models/
+*.onnx
+*.sqlite
+*.sqlite-*
+.env
+.env.*
+!.env.example
+
+# 截图脚本的临时浏览器配置
+chrome-cdp-*/
+
+# 临时调试脚本
+*.tmp.ts
+
+# 免安装版打包输出
+release/
+
+# 只在本机用的：设计过程文档（含个人图库信息）、npm 缓存位置
+docs/design/
+.npmrc

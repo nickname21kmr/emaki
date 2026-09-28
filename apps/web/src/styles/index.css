@@ -1,0 +1,734 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/noto-serif-sc';
+@import '@fontsource/instrument-serif/400.css';
+@import '@fontsource/instrument-serif/400-italic.css';
+
+/*
+ * Emaki 设计系统
+ * ------------------------------------------------------------------
+ * 概念：「画卷」—— 安静的纸色画布 + 墨色文字，让彩色插画成为唯一的主角。
+ *   · 朱（shu）：唯一的强调色，像印章一样少量使用（当前导航、角标、焦点）。
+ *   · 墨（ink）：主按钮、选中的 chip，和截图里黑色「总览」一致。
+ *   · 数字用 Instrument Serif 斜体，给排行榜 / 统计一点编辑部杂志的气质。
+ *
+ * 规则：组件里只用下面的语义 token（bg-canvas / text-fg-muted / border-line…），
+ * 不要直接写色值，这样暗色模式自动成立。
+ *
+ * 字体：H1、kicker、章节标题用 Noto Serif SC（画册感）；卡片上的名字一律无衬线（D8）。
+ */
+
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/* 语义颜色用 inline：工具类直接引用 var(--c-*)，所以任何子树写 data-theme="light|dark" 都能局部换肤（设置页的主题预览就靠这个） */
+@theme inline {
+  --color-canvas: var(--c-canvas);
+  --color-sheet: var(--c-sheet);
+  --color-raised: var(--c-raised);
+  --color-sunken: var(--c-sunken);
+  --color-hover: var(--c-hover);
+  --color-line: var(--c-line);
+  --color-line-strong: var(--c-line-strong);
+  --color-fg: var(--c-fg);
+  --color-fg-muted: var(--c-fg-muted);
+  --color-fg-subtle: var(--c-fg-subtle);
+  --color-fg-inverse: var(--c-fg-inverse);
+  --color-ink: var(--c-ink);
+  --color-ink-hover: var(--c-ink-hover);
+  --color-shu: var(--c-shu);
+  --color-brand: var(--c-brand);
+  --color-shu-soft: var(--c-shu-soft);
+  --color-shu-fg: var(--c-shu-fg);
+  --color-ok: var(--c-ok);
+  --color-ok-soft: var(--c-ok-soft);
+  --color-warn: var(--c-warn);
+  --color-warn-soft: var(--c-warn-soft);
+  --color-danger: var(--c-danger);
+  --color-danger-soft: var(--c-danger-soft);
+  --color-scrim: var(--c-scrim);
+  --color-rule: var(--c-rule);
+  --color-seal: var(--c-seal);
+  --color-stage: var(--c-stage);
+}
+
+@theme {
+  --font-sans: 'Inter Variable', 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei',
+    'Noto Sans CJK SC', system-ui, sans-serif;
+  --font-display: 'Instrument Serif', 'Songti SC', 'Noto Serif CJK SC', serif;
+  /* 系统自带的 Noto Serif SC（Win11）排第一，命中就不下载 woff2 */
+  --font-serif-cjk: 'Noto Serif SC', 'Noto Serif SC Variable', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius-sheet: 20px;
+  /* 封面类（Top 卡、扇形卡、plate 图版）统一 12px；网格缩略图 6px（M5 原则 1） */
+  --radius-plate: 12px;
+  --radius-plate-sm: 6px;
+  /* 书（合集）：书脊侧直、切口侧圆——原则 1「封面 12px」的例外（T38d） */
+  --radius-book: 3px 8px 8px 3px;
+
+  --shadow-card: 0 1px 2px rgb(20 16 10 / 0.04), 0 2px 8px rgb(20 16 10 / 0.04);
+  --shadow-lift: 0 2px 6px rgb(20 16 10 / 0.06), 0 12px 32px -8px rgb(20 16 10 / 0.18);
+  --shadow-pop: 0 4px 12px rgb(20 16 10 / 0.08), 0 24px 64px -12px rgb(20 16 10 / 0.28);
+  --shadow-fan: 0 16px 28px -14px rgb(20 16 10 / 0.35), 0 3px 8px rgb(20 16 10 / 0.08);
+  --shadow-fan-hover: 0 24px 36px -16px rgb(20 16 10 / 0.42), 0 4px 10px rgb(20 16 10 / 0.1);
+  --shadow-plate: var(--c-shadow-plate);
+  --shadow-sheet: 0 0 0 1px var(--c-line), 0 1px 3px rgb(20 16 10 / 0.04), 0 8px 40px -16px rgb(20 16 10 / 0.12);
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* 扇形叠卡展开：约 3% 过冲，比 spring 克制（lib/motion.ts 的 EASE_FAN） */
+  --ease-fan: cubic-bezier(0.3, 1.25, 0.5, 1);
+
+  --animate-fade-in: fade-in 0.4s var(--ease-out-soft) both;
+  --animate-unroll: unroll 0.9s var(--ease-out-soft) both;
+  --animate-rise: rise 0.5s var(--ease-out-soft) both;
+  /* 竖排大名像一笔写下来：自上而下展开（SEL-8） */
+  --animate-brush: brush 0.9s var(--ease-out-soft) both;
+  --animate-shimmer: shimmer 1.6s linear infinite;
+  --animate-indeterminate: indeterminate 1.2s var(--ease-out-soft) infinite;
+
+  @keyframes unroll {
+    from {
+      clip-path: inset(0 100% 0 0);
+    }
+    to {
+      clip-path: inset(0);
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes brush {
+    from {
+      clip-path: inset(0 0 100% 0);
+      opacity: 0.4;
+    }
+    to {
+      clip-path: inset(0 0 0 0);
+      opacity: 1;
+    }
+  }
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+  }
+  @keyframes shimmer {
+    from {
+      background-position: -200% 0;
+    }
+    to {
+      background-position: 200% 0;
+    }
+  }
+  @keyframes indeterminate {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(300%);
+    }
+  }
+}
+
+/* SEL-10 / SEL-11 的关键帧放在 @theme 外面：@theme 里的只有被 class 引用才会输出，Toast 的引信是行内 animation */
+/* 引信（SEL-11）：从满格烧到零 */
+@keyframes fuse {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+/* 对勾描出来 */
+@keyframes draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+/* 勾选圈转进来、涟漪（SEL-10） */
+@keyframes check-in {
+  from {
+    scale: 0.4;
+    rotate: -25deg;
+  }
+}
+@keyframes ripple {
+  to {
+    scale: 2.3;
+    opacity: 0;
+  }
+}
+
+/* ---------------------------------------------------------------- 亮色 */
+:root,
+[data-theme='light'] {
+  color-scheme: light;
+  --c-canvas: #ece8e0; /* 画卷外的桌面：暖灰纸色 */
+  --c-sheet: #faf8f4; /* 主内容区的「纸」 */
+  --c-raised: #fffefb; /* 卡片、弹层 */
+  --c-sunken: #ede9e2; /* 输入框、次级面 */
+  --c-hover: rgb(28 24 18 / 0.05);
+  --c-line: rgb(40 30 20 / 0.09);
+  --c-line-strong: rgb(40 30 20 / 0.16);
+  --c-fg: #1c1a17;
+  --c-fg-muted: #6b655b;
+  --c-fg-subtle: #a0998d;
+  --c-fg-inverse: #fbfaf8;
+  --c-ink: #1f1d19;
+  --c-ink-hover: #3a372f;
+  --c-shu: #d9442a; /* 朱 */
+  --c-brand: #c73a27; /* 徽记和卷首：米纸底是朱色，其他底色见下面的 data-palette */
+  --c-shu-soft: #fbe6e0;
+  --c-shu-fg: #b8321b;
+  --c-ok: #2f8f5b;
+  --c-ok-soft: #e0f1e6;
+  --c-warn: #c77d12;
+  --c-warn-soft: #fbefd9;
+  --c-danger: #cf3030;
+  --c-danger-soft: #fbe3e1;
+  --c-scrim: rgb(14 12 10 / 0.72);
+  --c-rule: rgb(40 30 20 / 0.22); /* 章节细线、双线 */
+  --c-seal: #c73a27; /* 白文印底 */
+  --c-stage: #0d0c0b; /* 看图器暗房 */
+  --c-shadow-plate: 0 1px 0 rgb(40 30 20 / 0.05), 0 12px 28px -16px rgb(40 30 20 / 0.35);
+  --focus-halo: color-mix(in oklab, var(--c-shu) 28%, transparent);
+  --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .16 0 0 0 0 .12 0 0 0 0 .08 0 0 0 .06 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  /* 圆头像的「卡纸框」：引用 --c-raised，要在各自的主题块里求值 */
+  --c-shadow-avatar: 0 0 0 3px var(--c-raised), 0 10px 18px -12px rgb(40 30 20 / 0.5);
+  --c-shadow-avatar-hover: 0 0 0 3px var(--c-raised), 0 14px 22px -12px rgb(40 30 20 / 0.55);
+}
+
+/* ---------------------------------------------------------------- 暗色 */
+[data-theme='dark'] {
+  color-scheme: dark;
+  --c-canvas: #0d0c0b;
+  --c-sheet: #161412;
+  --c-raised: #1e1b18;
+  --c-sunken: #12100e;
+  --c-hover: rgb(255 244 228 / 0.06);
+  --c-line: rgb(255 244 228 / 0.08);
+  --c-line-strong: rgb(255 244 228 / 0.15);
+  --c-fg: #ece6dc;
+  --c-fg-muted: #a39a8e;
+  --c-fg-subtle: #6f675d;
+  --c-fg-inverse: #161412;
+  --c-ink: #ece6dc;
+  --c-ink-hover: #ffffff;
+  --c-shu: #ee6242;
+  --c-brand: #ee6242;
+  --c-shu-soft: rgb(255 106 77 / 0.14);
+  --c-shu-fg: #ff8a73;
+  --c-ok: #4cc281;
+  --c-ok-soft: rgb(76 194 129 / 0.14);
+  --c-warn: #f0a83a;
+  --c-warn-soft: rgb(240 168 58 / 0.14);
+  --c-danger: #ff5f5f;
+  --c-danger-soft: rgb(255 95 95 / 0.14);
+  --c-scrim: rgb(0 0 0 / 0.82);
+  --c-rule: rgb(255 244 228 / 0.2);
+  --c-seal: #d5503a;
+  --c-stage: #0d0c0b;
+  --c-shadow-plate: 0 0 0 1px rgb(255 244 228 / 0.06), 0 14px 30px -14px rgb(0 0 0 / 0.7);
+  --focus-halo: color-mix(in oklab, var(--c-shu) 38%, transparent);
+  --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 .96 0 0 0 0 .9 0 0 0 .03 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  --c-shadow-avatar: 0 0 0 3px var(--c-raised), 0 10px 20px -12px rgb(0 0 0 / 0.75);
+  --c-shadow-avatar-hover: 0 0 0 3px var(--c-raised), 0 14px 24px -12px rgb(0 0 0 / 0.8);
+}
+
+/* ---------------------------------------------------------------- 底色（设置 → 外观 → 底色）
+ * 和浅色 / 深色正交：<html data-palette> 选底色，<html data-theme> 选明暗。米纸 = 上面的默认值，不需要覆盖。
+ * 只换纸面、线、文字和投影的色调；朱色、成功 / 警告 / 危险色、看图器暗房都不变。
+ */
+[data-palette='mono']:not([data-theme='dark']) {
+  --c-brand: #15171b;
+  --c-canvas: #eceef1;
+  --c-sheet: #ffffff;
+  --c-raised: #ffffff;
+  --c-sunken: #f2f3f5;
+  --c-hover: rgb(15 18 25 / 0.045);
+  --c-line: rgb(15 18 25 / 0.09);
+  --c-line-strong: rgb(15 18 25 / 0.16);
+  --c-rule: rgb(15 18 25 / 0.22);
+  --c-fg: #15171b;
+  --c-fg-muted: #5d626b;
+  --c-fg-subtle: #9aa0a8;
+  --c-fg-inverse: #fbfbfb;
+  --c-ink: #15171b;
+  --c-ink-hover: #33363d;
+  --c-shadow-plate: 0 1px 0 rgb(15 18 25 / 0.05), 0 12px 28px -16px rgb(15 18 25 / 0.35);
+  --c-shadow-avatar: 0 0 0 3px var(--c-raised), 0 10px 18px -12px rgb(15 18 25 / 0.5);
+  --c-shadow-avatar-hover: 0 0 0 3px var(--c-raised), 0 14px 22px -12px rgb(15 18 25 / 0.55);
+  --paper-grain: none;
+}
+
+[data-palette='mono'][data-theme='dark'] {
+  --c-brand: #ededed;
+  --c-canvas: #000000;
+  --c-sheet: #060606;
+  --c-raised: #121212;
+  --c-sunken: #0b0b0b;
+  --c-hover: rgb(255 255 255 / 0.06);
+  --c-line: rgb(255 255 255 / 0.08);
+  --c-line-strong: rgb(255 255 255 / 0.15);
+  --c-rule: rgb(255 255 255 / 0.2);
+  --c-fg: #ededed;
+  --c-fg-muted: #a3a3a3;
+  --c-fg-subtle: #6a6a6a;
+  --c-fg-inverse: #060606;
+  --c-ink: #ededed;
+  --c-ink-hover: #ffffff;
+  --c-shadow-plate: 0 0 0 1px rgb(255 255 255 / 0.06), 0 14px 30px -14px rgb(0 0 0 / 0.7);
+  --c-shadow-avatar: 0 0 0 3px var(--c-raised), 0 10px 20px -12px rgb(0 0 0 / 0.75);
+  --c-shadow-avatar-hover: 0 0 0 3px var(--c-raised), 0 14px 24px -12px rgb(0 0 0 / 0.8);
+  --paper-grain: none;
+}
+
+[data-palette='mint']:not([data-theme='dark']) {
+  /* 强调色跟底色走（朱色只留给米纸和黑白） */
+  --c-shu: #2e8a62;
+  --c-shu-soft: #dcf0e5;
+  --c-shu-fg: #22714f;
+  --c-seal: #2e7d5b;
+  --focus-halo: color-mix(in oklab, #2e8a62 30%, transparent);
+  --c-brand: #2e7d5b;
+  --c-canvas: #dcebe4;
+  --c-sheet: #f3faf6;
+  --c-raised: #fbfefc;
+  --c-sunken: #e2eee8;
+  --c-hover: rgb(20 60 45 / 0.045);
+  --c-line: rgb(20 60 45 / 0.09);
+  --c-line-strong: rgb(20 60 45 / 0.16);
+  --c-rule: rgb(20 60 45 / 0.22);
+  --c-fg: #16201c;
+  --c-fg-muted: #586a62;
+  --c-fg-subtle: #92a49b;
+  --c-fg-inverse: #fbfbfb;
+  --c-ink: #16201c;
+  --c-ink-hover: #2c3a34;
+  --c-shadow-plate: 0 1px 0 rgb(20 60 45 / 0.05), 0 12px 28px -16px rgb(20 60 45 / 0.35);
+  --c-shadow-avatar: 0 0 0 3px var(--c-raised), 0 10px 18px -12px rgb(20 60 45 / 0.5);
+  --c-shadow-avatar-hover: 0 0 0 3px var(--c-raised), 0 14px 22px -12px rgb(20 60 45 / 0.55);
+}
+
+[data-palette='mint'][data-theme='dark'] {
+  /* 强调色跟底色走（朱色只留给米纸和黑白） */
+  --c-shu: #5fc796;
+  --c-shu-soft: rgb(95 199 150 / 0.14);
+  --c-shu-fg: #86dcb2;
+  --c-seal: #3f9a70;
+  --focus-halo: color-mix(in oklab, #5fc796 30%, transparent);
+  --c-brand: #7fd1a8;
+  --c-canvas: #08110e;
+  --c-sheet: #0e1814;
+  --c-raised: #15221d;
+  --c-sunken: #0a1411;
+  --c-hover: rgb(220 255 240 / 0.06);
+  --c-line: rgb(220 255 240 / 0.08);
+  --c-line-strong: rgb(220 255 240 / 0.15);
+  --c-rule: rgb(220 255 240 / 0.2);
+  --c-fg: #e3efe9;
+  --c-fg-muted: #98ada4;
+  --c-fg-subtle: #61736b;
+  --c-fg-inverse: #0e1814;
+  --c-ink: #e3efe9;
+  --c-ink-hover: #ffffff;
+  --c-shadow-plate: 0 0 0 1px rgb(220 255 240 / 0.06), 0 14px 30px -14px rgb(0 0 0 / 0.7);
+  --c-shadow-avatar: 0 0 0 3px var(--c-raised), 0 10px 20px -12px rgb(0 0 0 / 0.75);
+  --c-shadow-avatar-hover: 0 0 0 3px var(--c-raised), 0 14px 24px -12px rgb(0 0 0 / 0.8);
+}
+
+[data-palette='sky']:not([data-theme='dark']) {
+  /* 强调色跟底色走（朱色只留给米纸和黑白） */
+  --c-shu: #2f76b8;
+  --c-shu-soft: #dde9f6;
+  --c-shu-fg: #235f98;
+  --c-seal: #2f6fa8;
+  --focus-halo: color-mix(in oklab, #2f76b8 30%, transparent);
+  --c-brand: #2f6fa8;
+  --c-canvas: #dbe6f0;
+  --c-sheet: #f2f7fc;
+  --c-raised: #fbfdff;
+  --c-sunken: #e1eaf3;
+  --c-hover: rgb(20 45 75 / 0.045);
+  --c-line: rgb(20 45 75 / 0.09);
+  --c-line-strong: rgb(20 45 75 / 0.16);
+  --c-rule: rgb(20 45 75 / 0.22);
+  --c-fg: #151b23;
+  --c-fg-muted: #596575;
+  --c-fg-subtle: #939fad;
+  --c-fg-inverse: #fbfbfb;
+  --c-ink: #151b23;
+  --c-ink-hover: #2b3441;
+  --c-shadow-plate: 0 1px 0 rgb(20 45 75 / 0.05), 0 12px 28px -16px rgb(20 45 75 / 0.35);
+  --c-shadow-avatar: 0 0 0 3px var(--c-raised), 0 10px 18px -12px rgb(20 45 75 / 0.5);
+  --c-shadow-avatar-hover: 0 0 0 3px var(--c-raised), 0 14px 22px -12px rgb(20 45 75 / 0.55);
+}
+
+[data-palette='sky'][data-theme='dark'] {
+  /* 强调色跟底色走（朱色只留给米纸和黑白） */
+  --c-shu: #6fb0ea;
+  --c-shu-soft: rgb(111 176 234 / 0.14);
+  --c-shu-fg: #9cc9f2;
+  --c-seal: #3f7fb8;
+  --focus-halo: color-mix(in oklab, #6fb0ea 30%, transparent);
+  --c-brand: #8cc1ee;
+  --c-canvas: #080d14;
+  --c-sheet: #0e151f;
+  --c-raised: #151f2d;
+  --c-sunken: #0a1119;
+  --c-hover: rgb(220 235 255 / 0.06);
+  --c-line: rgb(220 235 255 / 0.08);
+  --c-line-strong: rgb(220 235 255 / 0.15);
+  --c-rule: rgb(220 235 255 / 0.2);
+  --c-fg: #e3eaf3;
+  --c-fg-muted: #99a6b6;
+  --c-fg-subtle: #617082;
+  --c-fg-inverse: #0e151f;
+  --c-ink: #e3eaf3;
+  --c-ink-hover: #ffffff;
+  --c-shadow-plate: 0 0 0 1px rgb(220 235 255 / 0.06), 0 14px 30px -14px rgb(0 0 0 / 0.7);
+  --c-shadow-avatar: 0 0 0 3px var(--c-raised), 0 10px 20px -12px rgb(0 0 0 / 0.75);
+  --c-shadow-avatar-hover: 0 0 0 3px var(--c-raised), 0 14px 24px -12px rgb(0 0 0 / 0.8);
+}
+
+[data-palette='lilac']:not([data-theme='dark']) {
+  /* 强调色跟底色走（朱色只留给米纸和黑白） */
+  --c-shu: #7058b8;
+  --c-shu-soft: #e8e2f6;
+  --c-shu-fg: #5a4598;
+  --c-seal: #6b54a8;
+  --focus-halo: color-mix(in oklab, #7058b8 30%, transparent);
+  --c-brand: #6b54a8;
+  --c-canvas: #e6e1ef;
+  --c-sheet: #f8f6fc;
+  --c-raised: #fdfcff;
+  --c-sunken: #ebe6f3;
+  --c-hover: rgb(50 35 80 / 0.045);
+  --c-line: rgb(50 35 80 / 0.09);
+  --c-line-strong: rgb(50 35 80 / 0.16);
+  --c-rule: rgb(50 35 80 / 0.22);
+  --c-fg: #1b1922;
+  --c-fg-muted: #645e72;
+  --c-fg-subtle: #9e98ab;
+  --c-fg-inverse: #fbfbfb;
+  --c-ink: #1b1922;
+  --c-ink-hover: #35313f;
+  --c-shadow-plate: 0 1px 0 rgb(50 35 80 / 0.05), 0 12px 28px -16px rgb(50 35 80 / 0.35);
+  --c-shadow-avatar: 0 0 0 3px var(--c-raised), 0 10px 18px -12px rgb(50 35 80 / 0.5);
+  --c-shadow-avatar-hover: 0 0 0 3px var(--c-raised), 0 14px 22px -12px rgb(50 35 80 / 0.55);
+}
+
+[data-palette='lilac'][data-theme='dark'] {
+  /* 强调色跟底色走（朱色只留给米纸和黑白） */
+  --c-shu: #a893ea;
+  --c-shu-soft: rgb(168 147 234 / 0.14);
+  --c-shu-fg: #c4b5f3;
+  --c-seal: #7d66c2;
+  --focus-halo: color-mix(in oklab, #a893ea 30%, transparent);
+  --c-brand: #b9a6ef;
+  --c-canvas: #0e0c13;
+  --c-sheet: #15121c;
+  --c-raised: #1d1926;
+  --c-sunken: #100e16;
+  --c-hover: rgb(240 230 255 / 0.06);
+  --c-line: rgb(240 230 255 / 0.08);
+  --c-line-strong: rgb(240 230 255 / 0.15);
+  --c-rule: rgb(240 230 255 / 0.2);
+  --c-fg: #ebe6f2;
+  --c-fg-muted: #a59eb1;
+  --c-fg-subtle: #6d667a;
+  --c-fg-inverse: #15121c;
+  --c-ink: #ebe6f2;
+  --c-ink-hover: #ffffff;
+  --c-shadow-plate: 0 0 0 1px rgb(240 230 255 / 0.06), 0 14px 30px -14px rgb(0 0 0 / 0.7);
+  --c-shadow-avatar: 0 0 0 3px var(--c-raised), 0 10px 20px -12px rgb(0 0 0 / 0.75);
+  --c-shadow-avatar-hover: 0 0 0 3px var(--c-raised), 0 14px 24px -12px rgb(0 0 0 / 0.8);
+}
+
+/* ---------------------------------------------------------------- 基础 */
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background: var(--c-canvas);
+    color: var(--c-fg);
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv11', 'ss01', 'ss03'; /* Inter：单层 a、平头 1 */
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: var(--c-shu-soft);
+    color: var(--c-shu-fg);
+  }
+  /* 控件焦点从外往里收紧一下（SEL-15）：平时是一圈透明的 5px 外框，聚焦时变朱色并收到 2px */
+  button,
+  a,
+  [role='button'],
+  [tabindex] {
+    outline: 2px solid transparent;
+    outline-offset: 5px;
+    transition:
+      outline-offset 160ms var(--ease-out-soft),
+      outline-color 120ms;
+  }
+  :focus-visible {
+    outline: 2px solid var(--c-shu);
+    outline-offset: 2px;
+  }
+  button,
+  [role='button'] {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: default;
+  }
+  img {
+    -webkit-user-drag: none;
+  }
+  /* Input 组件自带清除按钮，隐藏 Chromium 原生的那个，避免出现两个 X */
+  input[type='search']::-webkit-search-cancel-button {
+    appearance: none;
+    display: none;
+  }
+}
+
+/* ---------------------------------------------------------------- 工具类 */
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 大号斜体衬线数字：排行、统计 */
+@utility numeral {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  line-height: 0.9;
+}
+
+/* 画册语汇（T29b-1） */
+@utility font-serif-cjk {
+  font-family: var(--font-serif-cjk);
+}
+@utility display-title {
+  font-family: var(--font-serif-cjk);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+/* 竖排（扉页大名、读音） */
+@utility tategaki {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+@utility kicker {
+  font-family: var(--font-serif-cjk);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  line-height: 1.4;
+  color: var(--c-fg-muted);
+}
+@utility rule-double {
+  height: 4px;
+  border-top: 1px solid var(--c-rule);
+  border-bottom: 1px solid var(--c-line);
+}
+/* 纸纹：local 让纹理画进滚动内容层，滚动容器仍能走合成滚动（RV-A-4） */
+@utility paper {
+  background-image: var(--paper-grain);
+  background-size: 160px;
+  background-attachment: local;
+}
+@utility chapter-scope {
+  counter-reset: chapter;
+}
+@utility chapter-no {
+  &::before {
+    counter-increment: chapter;
+    content: counter(chapter, decimal-leading-zero);
+  }
+}
+
+/* 细滚动条 */
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-line-strong) transparent;
+}
+
+@utility scrollbar-none {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* 横向滚动条左右渐隐（chip 行） */
+@utility fade-x {
+  mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 32px), transparent 100%);
+}
+
+/* 骨架屏 */
+@utility skeleton {
+  background: linear-gradient(90deg, var(--c-sunken) 0%, var(--c-hover) 50%, var(--c-sunken) 100%);
+  background-size: 200% 100%;
+  animation: var(--animate-shimmer);
+}
+
+/* 图片底部的渐变遮罩，保证白字可读 */
+@utility scrim-bottom {
+  background: linear-gradient(to top, rgb(10 8 6 / 0.72) 0%, rgb(10 8 6 / 0.35) 38%, transparent 70%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* 引信是计时器，不是装饰：减少动效时照常烧（SEL-11） */
+  *:not(.fuse),
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* toast 进出场用纸的缓动（T29b-5，02「应用点」） */
+[data-sonner-toast] {
+  transition:
+    transform 420ms var(--ease-out-soft),
+    opacity 320ms var(--ease-out-soft),
+    height 320ms var(--ease-out-soft);
+}
+
+/* 引信末端的火星：一颗 3px 的朱点，不加光晕 */
+.fuse {
+  position: relative;
+}
+.fuse::after {
+  content: '';
+  position: absolute;
+  right: -1.5px;
+  top: -0.5px;
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--c-shu);
+}
+path[pathLength] {
+  stroke-dasharray: 1;
+}
+
+/*
+ * 印框焦点（SEL-15）：键盘聚焦到图版时，四角朱框从外往里收紧落下，像盖印。
+ * focus-frame 用在宿主自己身上；图版本身 overflow-hidden 时，在它外面包一层 focus-frame-target，
+ * 由最近的可聚焦祖先（Link / button）的 :focus-visible 点亮。宿主不能 overflow-hidden。
+ */
+.focus-frame,
+.focus-frame-target {
+  position: relative;
+}
+.focus-frame:focus-visible,
+:focus-visible:has(> .focus-frame-target) {
+  outline-color: transparent;
+}
+.focus-frame::after,
+.focus-frame-target::after {
+  --s: 22px;
+  content: '';
+  position: absolute;
+  inset: -11px;
+  border: 2px solid var(--c-shu);
+  border-radius: calc(var(--radius-plate) + 6px);
+  opacity: 0;
+  pointer-events: none;
+  mask: conic-gradient(at var(--s) var(--s), #0000 75%, #000 0) 0 0 / calc(100% - var(--s)) calc(100% - var(--s));
+  transition:
+    inset 200ms var(--ease-out-soft),
+    opacity 160ms;
+}
+.focus-frame:focus-visible::after,
+:focus-visible > .focus-frame-target::after {
+  opacity: 1;
+  inset: -5px;
+}
+
+/* 封面长成扉页（SEL-14）：封面组走 460ms 变形，其余页面淡出淡入 */
+::view-transition-group(emaki-cover) {
+  animation-duration: 460ms;
+  animation-timing-function: var(--ease-out-soft);
+  border-radius: var(--radius-plate);
+  overflow: clip;
+}
+::view-transition-old(emaki-cover),
+::view-transition-new(emaki-cover) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+::view-transition-old(root) {
+  animation: 180ms cubic-bezier(0.4, 0, 1, 1) both vt-fade-out;
+}
+::view-transition-new(root) {
+  animation: 280ms 80ms var(--ease-out-soft) both vt-fade-in;
+}
+@keyframes vt-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes vt-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}
+
+/* 进度条扫光（SEL-19）：长任务里一道亮光一直在走，看得出程序在干活 */
+.glint {
+  position: relative;
+  overflow: hidden;
+}
+.glint::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -48px;
+  width: 48px;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.55), transparent);
+  animation: glint 2.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+:root[data-theme='dark'] .glint::after {
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.35), transparent);
+}
+@keyframes glint {
+  to {
+    left: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .glint::after {
+    display: none;
+  }
+}

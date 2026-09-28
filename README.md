@@ -1,0 +1,125 @@
+# Emaki 絵巻
+
+一个在自己电脑上跑的插画整理工具。把存了几万张的二次元图文件夹丢进来，它会认出每张图画的是哪个角色、属于哪部作品，然后按角色 / 作品帮你归好类。漫画、截图、照片、表情包会自动分出去，重复的图也能找出来。
+
+图片不会上传，识别模型在本机跑。
+
+![角色页](docs/screenshots/real-characters.webp)
+
+| | |
+| --- | --- |
+| ![首页](docs/screenshots/real-home.webp) 首页，导入进度和统计 | ![角色页](docs/screenshots/real-character.webp) 单个角色 |
+| ![作品](docs/screenshots/real-works.webp) 按作品看 | ![Fate 系列](docs/screenshots/real-characters-fate.webp) 一部作品下的全部角色 |
+| ![图库](docs/screenshots/real-gallery.webp) 图库 | ![未识别](docs/screenshots/real-unrecognized.webp) 没认出来的图，按数字键归类 |
+| ![合集](docs/screenshots/real-collections.webp) 本子、画集按页读 | ![设置](docs/screenshots/real-settings.webp) 识别设置 |
+
+<sub>以上是一个 8.4 万张图的真实图库。想先看看界面、又不想导入自己的图，可以用 `npm run dev:mock` 打开演示数据。</sub>
+
+## 电脑要求
+
+| | 要求 | 说明 |
+| --- | --- | --- |
+| 系统 | Windows 10 / 11 | 目前只在 Windows 11 上测过 |
+| Node.js | 22 或更新，推荐 24 | |
+| 显卡 | 推荐有独立显卡，驱动更新到较新的版本 | 实测 RTX 3070 Laptop（8 GB 显存）：默认模型约 **1.2 秒一张**，1 万张大约 3.5 小时。N 卡、A 卡、Intel 显卡都走 WebGPU / DirectML，不用装 CUDA。默认模型要用 WebGPU，驱动太旧会用不了显卡。没有可用显卡时会自动改用 CPU，能跑但很慢，大约十几秒一张 |
+| 硬盘 | 模型约 2.2 GB，另加缩略图和数据库 | 参考：8.4 万张图的缩略图 4.4 GB、数据库 240 MB。都放在项目目录的 `data/` 里，建议装在非系统盘 |
+
+识别一次跑完之后就不用再跑了，之后新加进来的图只识别新的。图多的话建议晚上挂着跑，设置里可以打开「运行时防止电脑休眠」。
+
+## 安装
+
+### 免安装版（推荐，不用装任何东西）
+
+1. 到 [Releases](https://github.com/nickname21kmr/emaki/releases/latest) 下载 `Emaki-x.x.x-win-x64.zip`（约 100 MB）。
+2. 解压到一个空间够的盘，比如 `D:\Emaki`。建议不要放在 C 盘，缩略图和模型会占好几 GB。
+3. 双击里面的 **「启动 Emaki.cmd」**，浏览器会自动打开。第一次打开会让你选图片文件夹。
+
+压缩包里自带了 Node.js 和所有依赖，不用自己装。用的时候那个黑色窗口要一直开着，关掉它 Emaki 就退出了。
+
+升级：下载新版解压到新文件夹，把旧版里的 `data` 文件夹整个复制过去。
+
+### 从源码运行（开发者）
+
+需要 Node.js 22 或更新的版本。
+
+```bash
+git clone https://github.com/nickname21kmr/emaki.git
+cd emaki
+npm install
+npm run dev
+```
+
+然后浏览器打开 <http://localhost:5173>。也可以双击 `start.bat`，它会装依赖、构建前端，然后打开 <http://127.0.0.1:5174>。
+
+国内 `npm install` 慢的话，先运行 `npm config set registry https://registry.npmmirror.com`。
+
+从装 Node.js 开始的详细步骤（带截图）见 [docs/DEPLOY.md](docs/DEPLOY.md)。
+
+## 识别模型
+
+不用手动装，第一次点「开始识别角色」时会自动下载。流程是这样的：
+
+```mermaid
+flowchart LR
+  A[点「开始识别角色」] --> B{模型在不在<br/>data/models 里}
+  B -- 在 --> E[开始识别]
+  B -- 不在 --> C[同时测 huggingface.co<br/>和 hf-mirror.com<br/>选快的那个下载]
+  C --> D[校验 sha256]
+  D --> E
+  E --> F{显卡能用吗}
+  F -- 能 --> G[显卡识别]
+  F -- 不能 --> H[自动改用 CPU]
+```
+
+默认会下两个模型：
+
+| 模型 | 大小 | 用在哪 |
+| --- | --- | --- |
+| PixAI Tagger v1.0 fp16 | 0.98 GB | 默认。能认 8,300 多个角色，数据到 2026 年 5 月，鸣潮、绝区零、星铁 3.x 这些新角色都认得 |
+| WD EVA02-Large v3 | 1.26 GB | 2024 年 3 月以前的旧图用它，对老图更稳 |
+
+设置里还能换成其他几个 WD 模型（更小、更快，但认得少一些），CPU 跑的话推荐 WD SwinV2。
+
+**下载不动怎么办**
+
+- 用代理的话，在项目目录新建 `.env`，写一行 `EMAKI_HTTP_PROXY=http://127.0.0.1:7890`（端口换成你自己的），重启。
+- 只想走国内镜像：`.env` 里写 `HF_ENDPOINT=https://hf-mirror.com`。
+- 也可以自己下载好放进去：把文件放到 `data/models/<仓库名>/`，仓库名里的 `/` 换成 `__`。比如 `A1yCE/pixai-tagger-v1.0-onnx-fp16` 就放到 `data/models/A1yCE__pixai-tagger-v1.0-onnx-fp16/`。放好后会先校验，文件不对会重新下载。
+
+**认不出来的图**
+
+太新、太冷门的角色，还有原创角色，模型认不出来。这些图会进「未识别」，你可以手动归到某个角色，或者新建一个「自建角色」。模型拿不准的图也会放进「未识别」，旁边会给出建议，按数字键就能采纳。
+
+## 数据放在哪
+
+| 内容 | 位置 |
+| --- | --- |
+| 数据库（你做的所有整理） | `data/emaki.sqlite` |
+| 缩略图 | `data/thumbs/` |
+| 模型 | `data/models/` |
+| 你的图片 | 原来在哪还在哪，Emaki 不会移动或改名 |
+
+`data/` 不会被提交到 Git。备份的话复制 `data/emaki.sqlite` 就行，缩略图和模型都能重新生成、重新下载。想换位置可以在 `.env` 里改 `EMAKI_DATA_DIR`，其他配置见 [.env.example](.env.example)。
+
+## 更新
+
+免安装版：见上面「升级」。源码版：
+
+```bash
+git pull
+npm install
+npm run dev
+```
+
+数据库结构变了会自动升级，升级前会在 `data/` 里留一份备份。
+
+## 开发
+
+```bash
+npm run dev:mock    # 用演示数据跑，不碰真实数据
+npm run typecheck
+npm test
+node scripts/pack-portable.mjs   # 打免安装版 zip（只能在 Windows x64 上打）
+```
+
+前端是 React + Vite + Tailwind，后端是 Node.js + Fastify + SQLite，识别用 onnxruntime-node。架构和各页面的设计说明在 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 和 [docs/FRONTEND.md](docs/FRONTEND.md)，开发任务清单在 [docs/TASKS.md](docs/TASKS.md)。

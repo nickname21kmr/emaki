@@ -1,0 +1,138 @@
+import type {
+  AddLibraryRootBody,
+  BulkCollectionsBody,
+  BulkImagesBody,
+  CollectionSummary,
+  CreateCollectionBody,
+  GetCollectionResponse,
+  ListCollectionsQuery,
+  UpdateCollectionBody,
+  Character,
+  ContentKindSummary,
+  CoverCandidatesResponse,
+  CreateCharacterBody,
+  CreateExclusionBody,
+  DuplicateGroup,
+  Exclusion,
+  GetCharacterResponse,
+  ID,
+  ImageDetail,
+  ImageItem,
+  Job,
+  JobKind,
+  LibraryStats,
+  ListCharactersQuery,
+  ListCharactersResponse,
+  ListDuplicatesQuery,
+  ListImagesQuery,
+  ListUnrecognizedQuery,
+  ListUnrecognizedResponse,
+  ListWorksQuery,
+  MutationResult,
+  Page,
+  SearchHit,
+  SearchQuery,
+  Settings,
+  ThumbWidth,
+  TopCharactersQuery,
+  UnrecognizedItem,
+  UnrecognizedSummary,
+  UpdateCharacterBody,
+  UpdateImageBody,
+  UpdateSettingsBody,
+  Work,
+} from '@emaki/shared';
+
+/** 图片文件响应：要么直接给内容（mock 的 SVG），要么给磁盘路径让 fastify 流式发送。 */
+export type FileResponse =
+  | { kind: 'buffer'; contentType: string; body: Buffer | string; etag?: string; cacheControl?: string }
+  | { kind: 'path'; contentType: string; filePath: string; etag?: string; cacheControl?: string };
+
+/**
+ * 数据层接口 —— 后端架构的核心接缝。
+ *
+ * routes/ 只依赖这个接口，不关心数据从哪来：
+ * - MockDataSource（datasource/mock）：内存假数据，前端开发和演示用，已完整实现。
+ * - SqliteDataSource（datasource/sqlite）：真实实现，读写 SQLite + 文件系统，逐项实现见 docs/TASKS.md。
+ *
+ * 约定：
+ * - 找不到资源时 get* 返回 null，其余方法抛 NotFoundError。
+ * - 所有修改方法返回 MutationResult，可撤销的带 undoToken（用 UndoStack.result）。
+ * - 修改后要 emit `library-changed`，让前端刷新。
+ */
+export interface DataSource {
+  // 统计
+  getStats(): Promise<LibraryStats>;
+  /** 别册首页：每一类的张数、最近张数和预览（T27） */
+  listContentKinds(): Promise<ContentKindSummary[]>;
+
+  // 作品
+  listWorks(query: ListWorksQuery): Promise<Work[]>;
+  getWork(id: ID): Promise<Work | null>;
+
+  // 角色
+  listCharacters(query: ListCharactersQuery): Promise<ListCharactersResponse>;
+  topCharacters(query: TopCharactersQuery): Promise<Character[]>;
+  getCharacter(id: ID): Promise<GetCharacterResponse | null>;
+  createCharacter(body: CreateCharacterBody): Promise<MutationResult & { character: Character }>;
+  updateCharacter(id: ID, body: UpdateCharacterBody): Promise<MutationResult>;
+  markCharacterSeen(id: ID): Promise<void>;
+  mergeCharacter(id: ID, targetId: ID): Promise<MutationResult>;
+  /** 「换封面」候选（CB-7）：自动封面的排序，前 limit 张；角色不存在抛 NotFoundError */
+  listCoverCandidates(id: ID, limit: number): Promise<CoverCandidatesResponse>;
+
+  // 合集（T38c）
+  listCollections(query: ListCollectionsQuery): Promise<CollectionSummary[]>;
+  getCollection(id: ID): Promise<GetCollectionResponse | null>;
+  createCollection(body: CreateCollectionBody): Promise<MutationResult & { collection: CollectionSummary }>;
+  updateCollection(id: ID, body: UpdateCollectionBody): Promise<MutationResult>;
+  /** 不成册 */
+  deleteCollection(id: ID): Promise<MutationResult>;
+  bulkCollections(body: BulkCollectionsBody): Promise<MutationResult>;
+
+  // 图片
+  listImages(query: ListImagesQuery): Promise<Page<ImageItem>>;
+  getImage(id: ID): Promise<ImageDetail | null>;
+  updateImage(id: ID, body: UpdateImageBody): Promise<MutationResult>;
+  bulkImages(body: BulkImagesBody): Promise<MutationResult>;
+  getThumbnail(id: ID, width: ThumbWidth): Promise<FileResponse | null>;
+  getOriginal(id: ID): Promise<FileResponse | null>;
+  revealImage(id: ID): Promise<void>;
+
+  // 未识别
+  listUnrecognized(query: ListUnrecognizedQuery): Promise<ListUnrecognizedResponse>;
+  /** 未识别两个大类、四个分段、各主题 / 各类的张数（T34a） */
+  unrecognizedSummary(): Promise<UnrecognizedSummary>;
+  acceptSuggestion(imageId: ID, danbooruTag: string): Promise<MutationResult>;
+
+  // 重复
+  listDuplicates(query: ListDuplicatesQuery): Promise<DuplicateGroup[]>;
+  resolveDuplicate(id: ID, keepIds: ID[]): Promise<MutationResult>;
+  ignoreDuplicate(id: ID): Promise<MutationResult>;
+
+  // 排除
+  listExclusions(): Promise<Exclusion[]>;
+  createExclusion(body: CreateExclusionBody): Promise<MutationResult>;
+  deleteExclusion(id: ID): Promise<MutationResult>;
+
+  // 搜索
+  search(query: SearchQuery): Promise<SearchHit[]>;
+
+  // 设置
+  getSettings(): Promise<Settings>;
+  updateSettings(body: UpdateSettingsBody): Promise<Settings>;
+  addLibraryRoot(body: AddLibraryRootBody): Promise<MutationResult>;
+  updateLibraryRoot(id: ID, enabled: boolean): Promise<MutationResult>;
+  removeLibraryRoot(id: ID): Promise<MutationResult>;
+
+  // 后台任务
+  listJobs(): Promise<Job[]>;
+  startJob(kind: JobKind): Promise<Job>;
+  cancelJob(id: ID): Promise<void>;
+
+  // 撤销
+  undo(token: string): Promise<MutationResult>;
+
+  /** 关闭数据库等资源（进程退出时调用） */
+  close?(): Promise<void>;
+}

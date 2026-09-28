@@ -1,0 +1,38 @@
+# T24 第 10 步：Windows 上跑类型检查和全部测试。
+# 需要模型 / GPU / 外网的测试在测试文件里用 skipIf 跳过（CI 上没有 data/models，也不连 Danbooru）。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      # 仓库的 .npmrc 把 npm 缓存指到本机 F 盘，CI 上没有这个盘：用环境变量改到 runner 的临时目录（环境变量优先于项目 .npmrc）
+      - name: npm 缓存目录
+        shell: pwsh
+        run: |
+          "npm_config_cache=$env:RUNNER_TEMP\npm-cache" >> $env:GITHUB_ENV
+          "EMAKI_TEST_TMP=$env:RUNNER_TEMP\emaki-tests" >> $env:GITHUB_ENV
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm test
