@@ -86,6 +86,14 @@ flowchart LR
 - 只想走国内镜像：`.env` 里写 `HF_ENDPOINT=https://hf-mirror.com`。
 - 也可以自己下载好放进去：把文件放到 `data/models/<仓库名>/`，仓库名里的 `/` 换成 `__`。比如 `A1yCE/pixai-tagger-v1.0-onnx-fp16` 就放到 `data/models/A1yCE__pixai-tagger-v1.0-onnx-fp16/`。放好后会先校验，文件不对会重新下载。
 
+**笔记本识别时用的是核显、独显闲着**
+
+有核显 + 独显的笔记本，Windows 可能把 Emaki 分到核显上，识别会慢很多（任务管理器里能看到核显占满、独显几乎不动）。
+
+用 Emaki 文件夹里 `tools` 目录下的 **「显卡诊断和修复.cmd」**：双击后它会列出每个程序正在用哪块显卡，确认后把 Emaki 设成用高性能显卡（和 Windows 设置 → 系统 → 屏幕 → 显示卡 里手动改是同一个开关）。改完关掉 Emaki 的黑色窗口，重新启动就生效。想改回去就双击「恢复显卡设置.cmd」。
+
+下载的是 0.1.0 免安装版、里面没有 `tools` 的话，到 [Releases](https://github.com/nickname21kmr/emaki/releases/tag/v0.1.0) 下载 `Emaki-显卡修复工具.zip`，解压到 Emaki 文件夹里（解压后是 `Emaki\tools\...`）再双击。
+
 **认不出来的图**
 
 太新、太冷门的角色，还有原创角色，模型认不出来。这些图会进「未识别」，你可以手动归到某个角色，或者新建一个「自建角色」。模型拿不准的图也会放进「未识别」，旁边会给出建议，按数字键就能采纳。
