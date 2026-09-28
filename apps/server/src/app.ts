@@ -7,6 +7,7 @@ import { config } from './config.ts';
 import type { EventBus } from './core/events.ts';
 import type { DataSource } from './datasource/DataSource.ts';
 import { toApiError } from './http/errors.ts';
+import { keepAwakeStatus } from './services/system/keepAwake.ts';
 import { collectionRoutes } from './routes/collections.ts';
 import { imageRoutes } from './routes/images.ts';
 import { libraryRoutes } from './routes/library.ts';
@@ -48,7 +49,16 @@ export async function buildApp(ds: DataSource, bus: EventBus) {
   imageRoutes(app, ds);
   systemRoutes(app, ds, bus);
 
-  app.get('/api/health', (): HealthResponse => ({ ok: true, dataSource: config.dataSource, version: config.appVersion, dataDir: config.dataDir }));
+  app.get(
+    '/api/health',
+    (): HealthResponse => ({
+      ok: true,
+      dataSource: config.dataSource,
+      version: config.appVersion,
+      dataDir: config.dataDir,
+      ...(config.dataSource === 'sqlite' ? { keepAwake: keepAwakeStatus() } : {}),
+    }),
+  );
 
   // 生产模式：托管前端构建产物，前端路由全部回落到 index.html
   if (existsSync(config.webDist)) {

@@ -497,6 +497,16 @@ export interface JobItemEvent {
 
 // ---------------------------------------------------------------- 系统
 
+/**
+ * 防休眠的当前状态（设置 → 识别里显示）：off 设置里关着；idle 开着但没有任务在跑；active 正在阻止休眠
+ * （screenOn：现代待机的电脑上屏幕也保持亮着）；failed 没生效（detail 是原因）；unsupported 这个系统不支持。
+ */
+export interface KeepAwakeStatus {
+  state: 'off' | 'idle' | 'active' | 'failed' | 'unsupported';
+  screenOn: boolean;
+  detail: string | null;
+}
+
 /** GET /api/health */
 export interface HealthResponse {
   ok: true;
@@ -505,6 +515,8 @@ export interface HealthResponse {
   version: string;
   /** 数据目录的绝对路径（只监听本机，返回路径没有问题） */
   dataDir: string;
+  /** 防休眠状态；演示数据下没有 */
+  keepAwake?: KeepAwakeStatus;
 }
 
 /** POST /api/system/pick-folder —— 由后端弹出系统「选择文件夹」对话框；取消时 path 为 null */

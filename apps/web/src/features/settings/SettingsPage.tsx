@@ -64,7 +64,7 @@ export function SettingsPage() {
             <SettingsToc active={active} onJump={onJump} />
             <div className="max-w-[760px] min-w-0 flex-1 space-y-10">
               <LibrarySection roots={settings.data.libraryRoots} />
-              <TaggerSection tagger={settings.data.tagger} unrecognizedCount={stats?.unrecognizedCount} />
+              <TaggerSection tagger={settings.data.tagger} unrecognizedCount={stats?.unrecognizedCount} untaggedCount={stats?.untaggedCount} />
               <DanbooruSection danbooru={settings.data.danbooru} />
               <DedupeSection dedupe={settings.data.dedupe} groupCount={stats?.duplicateGroupCount} />
               <AppearanceSection ui={settings.data.ui} />

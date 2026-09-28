@@ -1,7 +1,9 @@
 import type { Job, JobKind } from '@emaki/shared';
 import { X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { toast } from 'sonner';
+import { useLiveJobs } from '@/lib/events';
 import { Button, IconButton, Progress, type ButtonProps } from '@/components/ui';
 import { formatCount } from '@/lib/format';
 import { useActiveJob, useCancelJob, useStartJob } from '../hooks';
@@ -34,6 +36,21 @@ export function JobAction({
 }) {
   const job = useActiveJob(kind);
   const start = useStartJob();
+  // 点过之后等这类任务结束，把结果弹出来：「没有需要识别的图片」这种几秒就结束的，以前看起来像没反应
+  const [clickedAt, setClickedAt] = useState<number | null>(null);
+  const finished = useLiveJobs((st) =>
+    clickedAt === null
+      ? null
+      : (Object.values(st.jobs).find(
+          (j) => j.kind === kind && j.status !== 'running' && j.status !== 'queued' && j.finishedAt && Date.parse(j.finishedAt) >= clickedAt - 2000,
+        ) ?? null),
+  );
+  useEffect(() => {
+    if (!finished) return;
+    setClickedAt(null);
+    if (finished.status === 'failed') toast.error(finished.message);
+    else if (finished.status === 'done') toast(finished.message);
+  }, [finished]);
   return (
     <AnimatePresence mode="wait" initial={false}>
       {job ? (
@@ -47,7 +64,10 @@ export function JobAction({
             icon={icon}
             loading={start.isPending}
             disabled={disabled}
-            onClick={() => start.mutate(kind)}
+            onClick={() => {
+              setClickedAt(Date.now());
+              start.mutate(kind);
+            }}
           >
             {children}
           </Button>

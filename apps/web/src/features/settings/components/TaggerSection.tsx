@@ -1,7 +1,10 @@
 import type { Settings } from '@emaki/shared';
 import { Cpu, ScanFace, Zap } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Button, Field, Segmented, Switch } from '@/components/ui';
+import { api } from '@/lib/api';
+import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import { useSaveSettings } from '../hooks';
 import { CommitSlider } from './CommitSlider';
@@ -22,9 +25,12 @@ const LEGACY_MODEL = 'SmilingWolf/wd-eva02-large-tagger-v3';
 export function TaggerSection({
   tagger,
   unrecognizedCount,
+  untaggedCount,
 }: {
   tagger: Settings['tagger'];
   unrecognizedCount?: number;
+  /** 还没跑过识别的（不含跳过的相机照片）；没归到角色的里面，只有这些点「运行识别」才会处理 */
+  untaggedCount?: number;
 }) {
   const save = useSaveSettings();
   // 两个角色阈值拖动中的实时值，让下面的分段条跟着动
@@ -156,7 +162,15 @@ export function TaggerSection({
           />
         </Field>
 
-        <Field label="运行时防止电脑休眠" hint="扫描、识别等后台任务在跑时不让电脑进入睡眠，全部结束 1 分钟后恢复；屏幕照常可以关。整夜识别时建议打开。">
+        <Field
+          label="运行时防止电脑休眠"
+          hint={
+            <>
+              扫描、识别等后台任务在跑时不让电脑进入睡眠，全部结束 1 分钟后恢复。合上笔记本盖子仍会睡眠。
+              <KeepAwakeState />
+            </>
+          }
+        >
           <Switch
             checked={tagger.keepAwake}
             onCheckedChange={(v) => save({ tagger: { keepAwake: v } })}
@@ -169,9 +183,11 @@ export function TaggerSection({
           hint={
             unrecognizedCount === undefined
               ? '识别在后台进行，可以继续做别的事。'
-              : unrecognizedCount > 0
-                ? `还有 ${formatCount(unrecognizedCount)} 张没有归到角色。识别在后台进行，可以继续做别的事。`
-                : '目前没有未识别的图片。'
+              : unrecognizedCount === 0
+                ? '目前没有未识别的图片。'
+                : untaggedCount
+                  ? `还有 ${formatCount(unrecognizedCount)} 张没有归到角色，其中 ${formatCount(untaggedCount)} 张还没识别过。识别在后台进行，可以继续做别的事。`
+                  : `还有 ${formatCount(unrecognizedCount)} 张没有归到角色，但都已经识别过：模型没认出来（原创、冷门或看不清的角色），再跑也一样。到「未识别」里手动归类；想让新模型把旧图再认一遍，先打开上面「WD 没认出的旧图，用主模型再认一遍」。`
           }
         >
           <JobAction kind="tag" icon={<ScanFace />} disabled={unrecognizedCount === 0}>
@@ -181,4 +197,25 @@ export function TaggerSection({
       </SettingsCard>
     </SettingsSection>
   );
+}
+
+/** 防休眠现在的状态（从 /api/health 读，10 秒刷新一次）：让人一眼看出生效没有 */
+function KeepAwakeState() {
+  const { data } = useQuery({ queryKey: ['health', 'keep-awake'], queryFn: api.health, refetchInterval: 10_000 });
+  const k = data?.keepAwake;
+  if (!k) return null;
+  const text =
+    k.state === 'active'
+      ? k.screenOn
+        ? '现在：正在阻止休眠。这台电脑是现代待机，任务跑着时屏幕会保持亮着（屏幕一灭就会进待机）。'
+        : '现在：正在阻止休眠。'
+      : k.state === 'idle'
+        ? '现在：没有后台任务，电脑可以正常睡眠。'
+        : k.state === 'failed'
+          ? `现在：没生效（${k.detail ?? '未知原因'}）。`
+          : k.state === 'unsupported'
+            ? '现在：这个系统不支持。'
+            : null;
+  if (!text) return null;
+  return <span className={cn('mt-1 block', k.state === 'failed' ? 'text-danger' : k.state === 'active' ? 'text-ok' : undefined)}>{text}</span>;
 }

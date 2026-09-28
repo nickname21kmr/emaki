@@ -322,7 +322,9 @@ describe('图片、未识别、重复、排除（routes/images.ts）', () => {
 describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts）', () => {
   route('GET /api/health', async () => {
     const { status, json } = await call('GET', '/api/health');
-    expect([status, json]).toEqual([200, { ok: true, dataSource: expect.any(String), version: expect.any(String), dataDir: expect.any(String) }]);
+    expect(status).toBe(200);
+    // keepAwake 只在 sqlite 下有（防休眠状态）
+    expect(json).toMatchObject({ ok: true, dataSource: expect.any(String), version: expect.any(String), dataDir: expect.any(String) });
   });
 
   route('POST /api/system/pick-folder', async () => {
