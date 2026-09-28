@@ -135,7 +135,8 @@ describe('RateLimiter', () => {
       await lim.wait();
       starts.push(performance.now());
     }
-    for (let i = 1; i < starts.length; i++) expect(starts[i]! - starts[i - 1]!).toBeGreaterThanOrEqual(50);
+    // setTimeout 按整毫秒计时，performance.now() 是亚毫秒，CI 上偶尔差出 49.97ms 这种；留 2ms 余量
+    for (let i = 1; i < starts.length; i++) expect(starts[i]! - starts[i - 1]!).toBeGreaterThanOrEqual(48);
   });
 });
 
