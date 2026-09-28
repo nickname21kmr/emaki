@@ -1,11 +1,12 @@
 import type { Settings } from '@emaki/shared';
 import { Cpu, ScanFace, Zap } from 'lucide-react';
 import { useState } from 'react';
-import { Field, Segmented, Switch } from '@/components/ui';
+import { Button, Field, Segmented, Switch } from '@/components/ui';
 import { formatCount } from '@/lib/format';
 import { useSaveSettings } from '../hooks';
 import { CommitSlider } from './CommitSlider';
 import { JobAction } from './JobAction';
+import { ModelPicker } from './ModelPicker';
 import { SettingsCard, SettingsSection } from './SettingsSection';
 import { ThresholdMap } from './ThresholdMap';
 
@@ -13,6 +14,10 @@ const f2 = (v: number) => v.toFixed(2);
 
 // 批大小给常用的 2 的幂；当前值不在其中（手改过配置）时也放进去，免得没有选中项
 const BATCH_PRESETS = [1, 2, 4, 8, 16, 32];
+
+// 默认方案：主模型 PixAI，旧图用 WD EVA02，WD 没认出的旧图不重跑（和后端 DEFAULT_SETTINGS 一致）
+const DEFAULT_MODEL = 'A1yCE/pixai-tagger-v1.0-onnx-fp16';
+const LEGACY_MODEL = 'SmilingWolf/wd-eva02-large-tagger-v3';
 
 export function TaggerSection({
   tagger,
@@ -30,24 +35,72 @@ export function TaggerSection({
   const character = live.character ?? tagger.characterThreshold;
   const auto = live.auto ?? tagger.autoAcceptThreshold;
 
+  const legacyAvailable = tagger.model !== LEGACY_MODEL;
+  const legacyOn = legacyAvailable && tagger.legacyModel !== null && tagger.legacyBefore !== null;
+  const before = tagger.legacyBefore ?? '2024-03-01';
+  const isDefaultPlan = tagger.model === DEFAULT_MODEL && tagger.legacyModel === LEGACY_MODEL && !tagger.retryOld;
+
   const batches = [...new Set([...BATCH_PRESETS, tagger.batchSize])].sort((a, b) => a - b);
 
   return (
     <SettingsSection id="tagger" description="用本机的 tagger 模型给图片打标签、认出角色。分数越高越确定。">
       <SettingsCard>
-        <Field label="模型" hint="在这台电脑上本地运行，图片不会上传。">
-          <code className="block max-w-72 truncate rounded-md bg-sunken px-2.5 py-1.5 font-mono text-xs text-fg-muted" title={tagger.model}>
-            {tagger.model}
-          </code>
+        <Field
+          label="识别模型"
+          hint={
+            <>
+              在这台电脑上本地运行，图片不会上传。
+              {!isDefaultPlan && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-1 h-auto px-1 py-0 text-[12.5px] text-shu-fg"
+                  onClick={() => save({ tagger: { model: DEFAULT_MODEL, legacyModel: LEGACY_MODEL, retryOld: false } })}
+                >
+                  恢复默认方案
+                </Button>
+              )}
+            </>
+          }
+        >
+          <ModelPicker value={tagger.model} onChange={(model) => save({ tagger: { model } })} />
         </Field>
 
-        <Field label="运行设备" hint="GPU 通过 DirectML 加速，NVIDIA、AMD、Intel 显卡都可以。">
+        <Field
+          label="旧图用 WD EVA02 识别"
+          hint={
+            legacyAvailable
+              ? `文件时间早于 ${before} 的图先用 WD EVA02 认，它对老图更稳，也更快。关掉就全部用上面的主模型。`
+              : '主模型已经是 WD EVA02，不需要再分新旧。'
+          }
+        >
+          <Switch
+            checked={legacyOn}
+            disabled={!legacyAvailable}
+            onCheckedChange={(v) => save({ tagger: { legacyModel: v ? LEGACY_MODEL : null } })}
+            label="旧图用 WD EVA02 识别"
+          />
+        </Field>
+
+        <Field
+          label="WD 没认出的旧图，用主模型再认一遍"
+          hint="WD 认不出的老图（比如新角色的同人图）再交给主模型试一次。会多花一些时间。"
+        >
+          <Switch
+            checked={tagger.retryOld}
+            disabled={!legacyOn}
+            onCheckedChange={(v) => save({ tagger: { retryOld: v } })}
+            label="WD 没认出的旧图，用主模型再认一遍"
+          />
+        </Field>
+
+        <Field label="运行设备" hint="有显卡就选 GPU，NVIDIA、AMD、Intel 都可以：PixAI 走 WebGPU，WD 走 DirectML。显卡用不了时会自动改用 CPU。">
           <Segmented
             value={tagger.device}
             onChange={(device) => save({ tagger: { device } })}
             options={[
               { value: 'cpu', label: 'CPU', icon: <Cpu /> },
-              { value: 'dml', label: 'GPU (DirectML)', icon: <Zap /> },
+              { value: 'dml', label: 'GPU', icon: <Zap /> },
             ]}
           />
         </Field>

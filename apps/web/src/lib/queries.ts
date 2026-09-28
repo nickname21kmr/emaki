@@ -54,6 +54,7 @@ export const qk = {
   exclusions: ['exclusions'] as const,
   search: (q: string) => ['search', q] as const,
   settings: ['settings'] as const,
+  taggerModels: ['tagger-models'] as const,
   jobs: ['jobs'] as const,
   health: ['health'] as const,
 };
@@ -179,6 +180,9 @@ export const useSearch = (q: string) =>
   });
 
 export const useSettings = () => useQuery({ queryKey: qk.settings, queryFn: api.settings });
+
+/** 识别模型列表（设置页下拉框） */
+export const useTaggerModels = () => useQuery({ queryKey: qk.taggerModels, queryFn: api.taggerModels });
 
 export const useJobs = () => useQuery({ queryKey: qk.jobs, queryFn: api.jobs });
 

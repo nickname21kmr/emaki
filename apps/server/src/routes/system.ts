@@ -1,9 +1,13 @@
-import type { PickFolderResponse, ServerEvent } from '@emaki/shared';
+import type { ListTaggerModelsResponse, PickFolderResponse, ServerEvent } from '@emaki/shared';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { config } from '../config.ts';
 import type { EventBus } from '../core/events.ts';
 import type { DataSource } from '../datasource/DataSource.ts';
+import { BadRequestError } from '../http/errors.ts';
 import { idParam, parse } from '../http/validate.ts';
+import { isModelReady } from '../services/tagger/download.ts';
+import { DEFAULT_TAGGER_MODEL, findModel, MODEL_NOTES, modelDownloadSize, TAGGER_MODELS } from '../services/tagger/models.ts';
 import { pickFolder } from '../system/pickFolder.ts';
 
 /** 设置、图库文件夹、后台任务、SSE、撤销 */
@@ -14,6 +18,22 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
   app.post('/api/system/pick-folder', async (): Promise<PickFolderResponse> => ({ path: await pickFolder() }));
 
   app.get('/api/settings', () => ds.getSettings());
+
+  app.get(
+    '/api/tagger/models',
+    (): ListTaggerModelsResponse =>
+      TAGGER_MODELS.map((spec) => ({
+        repo: spec.repo,
+        label: spec.label,
+        sizeBytes: modelDownloadSize(spec),
+        characterCount: MODEL_NOTES[spec.repo]?.characterCount ?? 0,
+        dataUntil: MODEL_NOTES[spec.repo]?.dataUntil ?? '',
+        gpu: spec.gpu,
+        note: MODEL_NOTES[spec.repo]?.note ?? '',
+        isDefault: spec.repo === DEFAULT_TAGGER_MODEL,
+        downloaded: isModelReady(spec, config.modelsDir),
+      })),
+  );
 
   app.put('/api/settings', (req) => {
     const body = parse(
@@ -48,6 +68,10 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
       }),
       req.body,
     );
+    // 模型名必须是注册表里有的，否则要到识别时才报错
+    for (const repo of [body.tagger?.model, body.tagger?.legacyModel]) {
+      if (repo && !findModel(repo)) throw new BadRequestError(`不认识的识别模型：${repo}`);
+    }
     return ds.updateSettings(body);
   });
 

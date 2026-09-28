@@ -35,6 +35,7 @@ import type {
   ListImagesQuery,
   ListImagesResponse,
   ListJobsResponse,
+  ListTaggerModelsResponse,
   ListUnrecognizedQuery,
   ListUnrecognizedResponse,
   UnrecognizedSummary,
@@ -163,6 +164,8 @@ export const api = {
   search: (q: string, limit = 20) => get<SearchResponse>('/search', { q, limit }),
 
   settings: () => get<GetSettingsResponse>('/settings'),
+  /** 可选的识别模型（设置页下拉框） */
+  taggerModels: () => get<ListTaggerModelsResponse>('/tagger/models'),
   updateSettings: (body: UpdateSettingsBody) => put<Settings>('/settings', body),
   addLibraryRoot: (body: AddLibraryRootBody) => post<MutationResult>('/library-roots', body),
   updateLibraryRoot: (id: ID, enabled: boolean) =>

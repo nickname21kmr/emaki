@@ -126,6 +126,43 @@ export const TAGGER_MODELS: TaggerModelSpec[] = [
 
 export const DEFAULT_TAGGER_MODEL = TAGGER_MODELS[0]!.repo;
 
+/** 给设置页看的说明（角色数来自各自的标签表：PixAI v1 character 8,308 个，WD v3 character 2,751 个） */
+export const MODEL_NOTES: Record<string, { characterCount: number; dataUntil: string; note: string }> = {
+  'A1yCE/pixai-tagger-v1.0-onnx-fp16': {
+    characterCount: 8308,
+    dataUntil: '2026-05',
+    note: '推荐。认得的角色最多，新角色也认得。用显卡时走 WebGPU，需要较新的显卡驱动',
+  },
+  'noaione/pixai-tagger-v1.0-onnx': {
+    characterCount: 8308,
+    dataUntil: '2026-05',
+    note: '和上面同一个模型的完整精度版，结果一样，体积大一倍、更慢，一般不用选',
+  },
+  'SmilingWolf/wd-eva02-large-tagger-v3': {
+    characterCount: 2751,
+    dataUntil: '2024-02',
+    note: '显卡驱动较旧、用不了 WebGPU 时选它，走 DirectML。认不出 2024 年以后的新角色',
+  },
+  'SmilingWolf/wd-vit-large-tagger-v3': {
+    characterCount: 2751,
+    dataUntil: '2024-02',
+    note: '和 EVA02 一样大，但准确率略低，一般不用选',
+  },
+  'SmilingWolf/wd-swinv2-tagger-v3': {
+    characterCount: 2751,
+    dataUntil: '2024-02',
+    note: '只有 CPU、没有可用显卡时推荐：体积小，速度快',
+  },
+  'SmilingWolf/wd-vit-tagger-v3': {
+    characterCount: 2751,
+    dataUntil: '2024-02',
+    note: '最小最快，准确率最低，电脑很旧时再考虑',
+  },
+};
+
+export const modelDownloadSize = (spec: TaggerModelSpec) =>
+  spec.files.model.size + spec.files.labels.size + (spec.files.data?.size ?? 0);
+
 export function findModel(repo: string): TaggerModelSpec | null {
   return TAGGER_MODELS.find((m) => m.repo === repo) ?? null;
 }

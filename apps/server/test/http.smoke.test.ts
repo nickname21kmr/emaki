@@ -321,6 +321,12 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     expect([status, json]).toEqual([200, { path: 'D:/Picked' }]);
   });
 
+  route('GET /api/tagger/models', async () => {
+    const { status, json } = await call('GET', '/api/tagger/models');
+    expect(status).toBe(200);
+    expect(json).toEqual(expect.arrayContaining([expect.objectContaining({ repo: expect.any(String), isDefault: true })]));
+  });
+
   route('GET /api/settings', async () => {
     const { status, json } = await call('GET', '/api/settings');
     expect(status).toBe(200);

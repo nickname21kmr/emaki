@@ -406,6 +406,27 @@ export type UpdateSettingsBody = DeepPartial<Omit<Settings, 'libraryRoots'>> & {
   danbooruApiKey?: string;
 };
 
+/** GET /api/tagger/models —— 可选的识别模型，给设置页的下拉框用 */
+export interface TaggerModelInfo {
+  /** = Settings.tagger.model 的取值 */
+  repo: string;
+  label: string;
+  /** 要下载的文件总大小 */
+  sizeBytes: number;
+  /** 能认的角色标签数 */
+  characterCount: number;
+  /** 训练数据截止（YYYY-MM），之后出的角色认不出 */
+  dataUntil: string;
+  /** 选 GPU 时走哪个后端 */
+  gpu: 'dml' | 'webgpu';
+  /** 一句话：什么情况下选它 */
+  note: string;
+  isDefault: boolean;
+  /** 模型文件已经在本机、校验过 */
+  downloaded: boolean;
+}
+export type ListTaggerModelsResponse = TaggerModelInfo[];
+
 /** POST /api/library-roots { path } / DELETE /api/library-roots/:id / PATCH { enabled } */
 export interface AddLibraryRootBody {
   path: string;
