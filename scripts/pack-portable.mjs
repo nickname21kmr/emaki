@@ -17,8 +17,6 @@ const name = `Emaki-${pkg.version}-win-x64`;
 const stage = path.join(outDir, name);
 const zip = path.join(outDir, `${name}.zip`);
 const log = (m) => console.log(`[pack] ${m}`);
-// 用 Windows 自带的 bsdtar 解包：Git Bash 的 GNU tar 会把「F:」当成远程主机
-const TAR = path.join(process.env.SystemRoot ?? 'C:/Windows', 'System32', 'tar.exe');
 
 if (process.platform !== 'win32' || process.arch !== 'x64') {
   console.error('只能在 Windows x64 上打包（原生依赖是平台相关的）');
@@ -39,10 +37,12 @@ if (!skipInstall) {
   // 1. 取出已提交的代码（不含 data/、node_modules、未提交的改动）
   rmSync(stage, { recursive: true, force: true });
   mkdirSync(stage, { recursive: true });
-  const tar = path.join(outDir, `${name}.src.tar`);
-  execFileSync('git', ['archive', '--format=tar', '-o', tar, 'HEAD'], { cwd: root });
-  execFileSync(TAR, ['-xf', tar, '-C', stage]);
-  rmSync(tar);
+  // 用 zip + .NET 解包：Windows 自带的 tar 解不了 git archive 里的中文文件名（tools/*.cmd）
+  const src = path.join(outDir, `${name}.src.zip`);
+  execFileSync('git', ['archive', '--format=zip', '-o', src, 'HEAD'], { cwd: root });
+  const unzip = `Add-Type -AssemblyName System.IO.Compression.FileSystem; [IO.Compression.ZipFile]::ExtractToDirectory('${src.replace(/'/g, "''")}', '${stage.replace(/'/g, "''")}')`;
+  execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', unzip], { stdio: 'inherit' });
+  rmSync(src);
   log(`已取出 HEAD（${execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root }).toString().trim()}）`);
 
   // 2. 安装依赖、构建前端、删掉开发依赖
