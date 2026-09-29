@@ -154,7 +154,7 @@ describe('tagJob', () => {
       ...over,
     }) as never;
 
-  const fakeClient = (device: 'dml' | 'cpu', crashFirst: boolean | Error = false): TaggerLike => {
+  const fakeClient = (device: 'dml' | 'webgpu' | 'cpu', crashFirst: boolean | Error = false): TaggerLike => {
     let crashed = !crashFirst;
     return {
       device,
@@ -170,12 +170,12 @@ describe('tagJob', () => {
     };
   };
 
-  const runner = (factory: (o: TaggerStartOptions) => Promise<TaggerLike>, bus = new EventBus()) =>
+  const runner = (factory: (o: TaggerStartOptions) => Promise<TaggerLike>, bus = new EventBus(), model = REPO) =>
     createTagJobRunner({
       db,
       bus,
       modelsDir: 'X:/models',
-      getTaggerSettings: () => ({ model: REPO, device: 'dml', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true }),
+      getTaggerSettings: () => ({ model, device: 'dml', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true }),
       makeCatalog: () => {
         const copyrights = new CopyrightResolver(db, OFFLINE);
         return { catalog: new CharacterCatalog(db, { copyrights }), copyrights };
@@ -245,6 +245,24 @@ describe('tagJob', () => {
     );
     await runner(factory)(ctxOf());
     expect(factory.mock.calls.map((c) => c[0].device)).toEqual(['dml', 'dml', 'cpu']);
+    expect(pending()).toBe(0);
+  });
+
+  it('PixAI：DirectML 上卡死 → 换 WebGPU；WebGPU 也卡死 → 换 CPU', async () => {
+    const PIXAI = 'A1yCE/pixai-tagger-v1.0-onnx-fp16';
+    // PixAI 只能一张一批，没有「缩小批」这一步
+    const one = (c: TaggerLike): TaggerLike => ({ ...c, batchSize: 1 });
+    const toWebgpu = vi.fn(async (o: TaggerStartOptions) => one(o.noDml ? fakeClient('webgpu') : fakeClient('dml', hung())));
+    await runner(toWebgpu, new EventBus(), PIXAI)(ctxOf());
+    expect(toWebgpu.mock.calls.map((c) => [c[0].device, !!c[0].noDml])).toEqual([['dml', false], ['dml', true]]);
+    expect(pending()).toBe(0);
+
+    freshDb(5);
+    const toCpu = vi.fn(async (o: TaggerStartOptions) =>
+      one(o.device === 'cpu' ? fakeClient('cpu') : o.noDml ? fakeClient('webgpu', hung()) : fakeClient('dml', hung())),
+    );
+    await runner(toCpu, new EventBus(), PIXAI)(ctxOf());
+    expect(toCpu.mock.calls.map((c) => [c[0].device, !!c[0].noDml])).toEqual([['dml', false], ['dml', true], ['cpu', false]]);
     expect(pending()).toBe(0);
   });
 

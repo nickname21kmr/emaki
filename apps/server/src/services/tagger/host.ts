@@ -9,6 +9,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import type * as Ort from 'onnxruntime-node';
+import { clearReshapeAllowzero } from './dmlPatch.ts';
 import { parseLabels, type Labels } from './labels.ts';
 import { findModel, type TaggerModelSpec } from './models.ts';
 import { decodeRow } from './postprocess.ts';
@@ -87,25 +88,24 @@ async function init(msg: InitMsg): Promise<void> {
   let batchSize = m.batchSize;
   let fixedBatch = m.fixedBatch;
 
-  if (m.device !== 'cpu' && spec.gpu === 'webgpu') {
-    try {
-      session = await ort.InferenceSession.create(m.modelPath, {
-        executionProviders: ['webgpu'],
-        graphOptimizationLevel: 'all',
-        logSeverityLevel: 3,
-      } as Ort.InferenceSession.SessionOptions);
-      device = 'webgpu';
-    } catch (err) {
-      fallbackReason = `WebGPU 不可用（${(err as Error).message.split('\n')[0]}）`;
+  // 先 DirectML（按模型配置），不行再 WebGPU（PixAI 这类能两边跑的），都不行最后 CPU
+  const reasons: string[] = [];
+  if (m.device !== 'cpu' && spec.gpu === 'dml' && !m.noDml) {
+    // 要打补丁的模型读进内存改好再交给 ORT；每个适配器共用这一份
+    let source: string | Uint8Array = m.modelPath;
+    if (spec.dmlPatch === 'reshape-allowzero') {
+      const buf = await readFile(m.modelPath);
+      clearReshapeAllowzero(buf);
+      source = buf;
     }
-  } else if (m.device === 'dml') {
     // 适配器 0 不一定是独显（混合显卡笔记本、虚拟显示适配器），探测模式下逐个试，留最快的
     const ids = m.dmlDeviceId === 'probe' ? [0, 1, 2, 3] : [m.dmlDeviceId];
     const errors: string[] = [];
     let best: { id: number; s: Ort.InferenceSession; ms: number } | null = null;
     for (const id of ids) {
       try {
-        const s = await ort.InferenceSession.create(m.modelPath, sessionOptions(spec, 'dml', id, batchSize, fixedBatch));
+        const opts = sessionOptions(spec, 'dml', id, batchSize, fixedBatch);
+        const s = typeof source === 'string' ? await ort.InferenceSession.create(source, opts) : await ort.InferenceSession.create(source, opts);
         const outName = spec.outputName ?? s.outputNames[0]!;
         await runZeros(spec, s, batchSize, outName); // 首次会编译 DML 着色器
         let ms = 0;
@@ -128,9 +128,22 @@ async function init(msg: InitMsg): Promise<void> {
       device = 'dml';
       dmlDeviceId = best.id;
     } else {
-      fallbackReason = `DirectML 不可用（${errors.join('；')}）`;
+      reasons.push(`DirectML 不可用（${errors.join('；')}）`);
     }
   }
+  if (!session && m.device !== 'cpu' && (spec.gpu === 'webgpu' || spec.webgpuFallback)) {
+    try {
+      session = await ort.InferenceSession.create(m.modelPath, {
+        executionProviders: ['webgpu'],
+        graphOptimizationLevel: 'all',
+        logSeverityLevel: 3,
+      } as Ort.InferenceSession.SessionOptions);
+      device = 'webgpu';
+    } catch (err) {
+      reasons.push(`WebGPU 不可用（${(err as Error).message.split('\n')[0]}）`);
+    }
+  }
+  if (reasons.length) fallbackReason = reasons.join('；');
   if (!session) {
     batchSize = Math.min(batchSize, 4); // CPU 上大 batch 没有收益
     fixedBatch = false;

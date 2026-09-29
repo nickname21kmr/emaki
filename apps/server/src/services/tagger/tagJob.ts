@@ -107,6 +107,7 @@ const isGpuLost = (err: unknown) => err instanceof Error && GPU_LOST.test(err.me
 class ResilientTagger {
   private generation = 0;
   private shrunk = false;
+  private toWebgpu = false;
   private fellBack = false;
 
   constructor(
@@ -132,11 +133,21 @@ class ResilientTagger {
       if (gen === this.generation) {
         // 这个请求发出后没切换过、而且当时用的就是 CPU：CPU 也崩了，没救
         if (this.client.device === 'cpu' || this.fellBack) throw err;
-        // 显卡卡死多半是一批算得太久、超过了 Windows 的 2 秒看门狗：先在显卡上改成一张一批，还不行再换 CPU
+        // 显卡卡死多半是一批算得太久、超过了 Windows 的 2 秒看门狗：先在显卡上改成一张一批；
+        // 还不行、而且模型能走 WebGPU（PixAI）就换 WebGPU；最后才换 CPU
         const shrink = lost && !this.shrunk && this.client.batchSize > 1;
-        if (shrink) this.shrunk = true;
-        else this.fellBack = true;
-        const next = shrink ? { ...this.opts, batchSize: 1 } : { ...this.opts, device: 'cpu' as const, batchSize: Math.min(this.opts.batchSize, 4) };
+        const webgpu = !shrink && !this.toWebgpu && this.client.device === 'dml' && !!findModel(this.opts.repo)?.webgpuFallback;
+        let next: TaggerStartOptions;
+        if (shrink) {
+          this.shrunk = true;
+          next = { ...this.opts, batchSize: 1 };
+        } else if (webgpu) {
+          this.toWebgpu = true;
+          next = { ...this.opts, noDml: true };
+        } else {
+          this.fellBack = true;
+          next = { ...this.opts, device: 'cpu', batchSize: Math.min(this.opts.batchSize, 4) };
+        }
         this.switching = this.factory(next).then((c) => {
           this.client = c;
           this.generation++;
@@ -230,8 +241,9 @@ export function createTagJobRunner(deps: TagJobDeps): JobRunner {
     let fallbackNote = '';
     const describe = (c: TaggerLike) => {
       deviceLabel = c.device === 'dml' ? `GPU·DirectML#${c.info.dmlDeviceId}` : c.device === 'webgpu' ? 'GPU·WebGPU' : 'CPU';
-      if (c.info.fallbackReason || c.device === 'cpu' && t.device === 'dml') {
-        fallbackNote = spec.gpu === 'webgpu' ? 'WebGPU 不可用，已改用 CPU（很慢）' : 'DirectML 不可用，已改用 CPU（较慢，可在设置里换 SwinV2 模型）';
+      if (c.device === 'webgpu' && spec.gpu === 'dml') fallbackNote = 'DirectML 不可用，已改用 WebGPU（慢一些）';
+      else if (c.info.fallbackReason || (c.device === 'cpu' && t.device === 'dml')) {
+        fallbackNote = spec.webgpuFallback || spec.gpu === 'webgpu' ? '显卡用不了，已改用 CPU（很慢）' : 'DirectML 不可用，已改用 CPU（较慢，可在设置里换 SwinV2 模型）';
       }
       log(`tagger 子进程 pid=${c.info.pid} device=${c.device}${c.info.fallbackReason ? `（${c.info.fallbackReason}）` : ''}`);
     };

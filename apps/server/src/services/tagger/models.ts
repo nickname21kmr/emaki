@@ -49,8 +49,15 @@ export interface TaggerModelSpec {
   labelsFormat: 'csv' | 'pixai-json';
   /** 输出是 logits（要自己过 Sigmoid）还是已经是概率 */
   logits: boolean;
-  /** 设置里选 GPU 时用哪个后端：WD 系列用 DirectML；PixAI v1 在 DirectML 上加载不了，用 WebGPU（RTX 3070 约 1.6 秒/张） */
+  /**
+   * 设置里选 GPU 时用哪个后端。DirectML 能用上 Tensor Core，快得多：PixAI v1 fp16 在 RTX 3070 Laptop 上
+   * DirectML 约 0.45 秒/张，WebGPU 约 1.1 秒/张。PixAI v1 fp32 的权重在外部文件里，没法打 dmlPatch，只能走 WebGPU
+   */
   gpu: 'dml' | 'webgpu';
+  /** DirectML 用不了（加载失败、子进程崩溃、显卡卡死）时先改用 WebGPU，再不行才用 CPU */
+  webgpuFallback?: boolean;
+  /** DirectML 加载前要在内存里打的补丁（见 dmlPatch.ts）；只对单文件模型有效 */
+  dmlPatch?: 'reshape-allowzero';
   /** data = ONNX 外部权重文件（和 model.onnx 同目录） */
   files: { model: ModelFile; labels: ModelFile; data?: ModelFile };
   /** ModelScope 上的同内容镜像（第三方 fork，靠 sha256 保证一致） */
@@ -103,12 +110,18 @@ const PIXAI_V1: TaggerModelSpec = {
   modelscopeRepo: null,
 };
 
-/** 同一模型的 fp16 版（A1yCE/pixai-tagger-v1.0-onnx-fp16）：0.98 GB，RTX 3070 上约 1.2 秒/张（fp32 约 1.6 秒），准确率相同 */
+/**
+ * 同一模型的 fp16 版（A1yCE/pixai-tagger-v1.0-onnx-fp16）：0.98 GB，准确率相同。
+ * RTX 3070 Laptop：DirectML（打补丁后）约 0.45 秒/张，WebGPU 约 1.1 秒/张；和 CPU 上跑 fp32 的结果比，DirectML 还更接近
+ */
 const PIXAI_V1_FP16: TaggerModelSpec = {
   ...PIXAI_V1,
   repo: 'A1yCE/pixai-tagger-v1.0-onnx-fp16',
   label: 'PixAI Tagger v1.0 fp16（默认，更快）',
   revision: 'main',
+  gpu: 'dml',
+  webgpuFallback: true,
+  dmlPatch: 'reshape-allowzero',
   files: {
     model: { name: 'model.onnx', size: 980020396, sha256: 'c5157c2037e71022a04e4a217af77400183dac34b7da1587727f3e089c087123' },
     labels: PIXAI_V1.files.labels,
@@ -131,7 +144,7 @@ export const MODEL_NOTES: Record<string, { characterCount: number; dataUntil: st
   'A1yCE/pixai-tagger-v1.0-onnx-fp16': {
     characterCount: 8308,
     dataUntil: '2026-05',
-    note: '推荐。认得的角色最多，新角色也认得。用显卡时走 WebGPU，需要较新的显卡驱动',
+    note: '推荐。认得的角色最多，新角色也认得。N 卡、A 卡、Intel 显卡都能加速',
   },
   'noaione/pixai-tagger-v1.0-onnx': {
     characterCount: 8308,
@@ -141,7 +154,7 @@ export const MODEL_NOTES: Record<string, { characterCount: number; dataUntil: st
   'SmilingWolf/wd-eva02-large-tagger-v3': {
     characterCount: 2751,
     dataUntil: '2024-02',
-    note: '显卡驱动较旧、用不了 WebGPU 时选它，走 DirectML。认不出 2024 年以后的新角色',
+    note: '旧默认模型，默认方案里用来认 2024 年以前的旧图。认不出 2024 年以后的新角色',
   },
   'SmilingWolf/wd-vit-large-tagger-v3': {
     characterCount: 2751,

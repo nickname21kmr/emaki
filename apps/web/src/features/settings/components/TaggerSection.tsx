@@ -100,7 +100,7 @@ export function TaggerSection({
           />
         </Field>
 
-        <Field label="运行设备" hint="有显卡就选 GPU，NVIDIA、AMD、Intel 都可以：PixAI 走 WebGPU，WD 走 DirectML。显卡用不了时会自动改用 CPU。">
+        <Field label="运行设备" hint="有显卡就选 GPU，NVIDIA、AMD、Intel 都可以，走 DirectML。DirectML 用不了时会自动改用 WebGPU，再不行用 CPU。">
           <Segmented
             value={tagger.device}
             onChange={(device) => save({ tagger: { device } })}

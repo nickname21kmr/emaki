@@ -96,7 +96,7 @@ try {
   if ($rows) { $rows | Select-Object -First 10 | Format-Table -AutoSize | Out-String | Write-Host } else { Write-Host '  现在没有程序在明显使用显卡。' }
   $nodeRows = @($rows | Where-Object { $_.程序 -eq 'node' })
   if ($nodeRows.Count -eq 0) {
-    Write-Host '  提示：Emaki（node）现在没在用显卡。可能是还在下载模型 / 生成缩略图，识别还没开始；也可能是显卡加速没成功、退回了 CPU（看 Emaki 黑色窗口里有没有「WebGPU 不可用」）。' -ForegroundColor Yellow
+    Write-Host '  提示：Emaki（node）现在没在用显卡。可能是还在下载模型 / 生成缩略图，识别还没开始；也可能是显卡加速没成功、退回了 CPU（看 Emaki 黑色窗口里有没有「DirectML 不可用」「WebGPU 不可用」）。' -ForegroundColor Yellow
   }
 } catch {
   Write-Host "  读取显卡占用失败：$($_.Exception.Message)" -ForegroundColor Yellow
@@ -128,15 +128,15 @@ $ans = Read-Host "`n要把上面的 node.exe 设成「高性能（独显）」�
 if ($ans -notmatch '^[Yy]') { Write-Host '已取消，什么都没改。'; Read-Host "`n按回车关闭"; exit 0 }
 if (-not (Test-Path $PrefKey)) { New-Item $PrefKey -Force | Out-Null }
 foreach ($n in $nodes) { New-ItemProperty $PrefKey -Name $n -Value 'GpuPreference=2;' -PropertyType String -Force | Out-Null }
-Write-Host "`n已设置为高性能显卡（对新模型 PixAI / WebGPU 生效）。" -ForegroundColor Green
+Write-Host "`n已设置为高性能显卡（DirectML 用不了、改用 WebGPU 时靠这个选显卡）。" -ForegroundColor Green
 
-# 旧图用的 WD 模型走 DirectML，不看上面的系统偏好：它第一次运行时自己挑最快的显卡，结果缓存在这里。
+# DirectML 不看上面的系统偏好：第一次运行时自己挑最快的显卡，结果缓存在这里。
 # 删掉缓存，下次识别会重新挑一次。
 $modelsDir = if ($env:EMAKI_MODELS_DIR) { $env:EMAKI_MODELS_DIR } else { Join-Path $here 'data\models' }
 $dmlCache = Join-Path $modelsDir 'dml-device.json'
 if (Test-Path $dmlCache) {
   Remove-Item $dmlCache -Force
-  Write-Host '已删除显卡探测缓存（旧图模型 WD / DirectML 下次会重新挑最快的显卡）。' -ForegroundColor Green
+  Write-Host '已删除显卡探测缓存（下次识别会重新挑最快的显卡）。' -ForegroundColor Green
 }
 Write-Host '接下来：关掉 Emaki 的黑色窗口，重新双击「启动 Emaki.cmd」，识别开始后再运行一次这个工具，确认 node 用的是独显。'
 Write-Host '想撤销的话，双击「恢复显卡设置.cmd」。'

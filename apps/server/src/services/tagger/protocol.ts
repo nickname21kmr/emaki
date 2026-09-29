@@ -20,6 +20,8 @@ export interface InitMsg {
   dmlDeviceId: number | 'probe';
   batchSize: number;
   fixedBatch: boolean;
+  /** 不试 DirectML，直接走 WebGPU（DirectML 上崩过 / 卡死过之后重开用） */
+  noDml?: boolean;
 }
 
 export interface TagMsg {

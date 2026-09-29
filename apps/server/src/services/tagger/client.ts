@@ -6,6 +6,7 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../config.ts';
+import { findModel } from './models.ts';
 import type { ChildMsg, HostItemResult, HostThresholds, InitMsg, ReadyMsg } from './protocol.ts';
 
 export class TaggerCrashedError extends Error {}
@@ -18,6 +19,8 @@ export interface TaggerStartOptions {
   batchSize: number;
   modelsDir: string;
   fixedBatch?: boolean;
+  /** 见 InitMsg.noDml */
+  noDml?: boolean;
 }
 
 export interface TaggerLike {
@@ -101,6 +104,7 @@ export class TaggerClient implements TaggerLike {
         dmlDeviceId: o.dmlDeviceId,
         batchSize: o.batchSize,
         fixedBatch: o.fixedBatch ?? o.device === 'dml',
+        noDml: o.noDml,
       };
       child.send(init);
     });
@@ -170,10 +174,11 @@ export async function startTagger(o: TaggerStartOptions): Promise<TaggerClient> 
     client = await TaggerClient.spawn({ ...o, dmlDeviceId: id });
   } catch (err) {
     if (!(err instanceof TaggerCrashedError)) throw err;
-    // DML 在 ready 之前原生崩溃：用 CPU 再起一次
-    const cpu = await TaggerClient.spawn({ ...o, device: 'cpu', dmlDeviceId: 0 });
-    cpu.info.fallbackReason = `DirectML 子进程崩溃：${err.message}`;
-    return cpu;
+    // DML 在 ready 之前原生崩溃：能走 WebGPU 的模型先试 WebGPU，否则用 CPU 再起一次
+    const retry = findModel(o.repo)?.webgpuFallback && !o.noDml ? { ...o, noDml: true } : { ...o, device: 'cpu' as const };
+    const c = await TaggerClient.spawn({ ...retry, dmlDeviceId: 0 });
+    c.info.fallbackReason = `DirectML 子进程崩溃：${err.message}`;
+    return c;
   }
   if (client.info.device === 'dml' && id === 'probe' && client.info.dmlDeviceId !== null) {
     writeFileSync(dmlCacheFile(o.modelsDir), JSON.stringify({ deviceId: client.info.dmlDeviceId }));
@@ -191,7 +196,7 @@ let idleTimer: NodeJS.Timeout | null = null;
 export function acquireTagger(o: TaggerStartOptions): Promise<TaggerClient> {
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = null;
-  const key = `${o.repo}|${o.device}|${o.batchSize}`;
+  const key = `${o.repo}|${o.device}|${o.batchSize}|${o.noDml ? 'nodml' : ''}`;
   if (current && current.key !== key) void shutdownTagger();
   if (!current) {
     const client = startTagger(o);
