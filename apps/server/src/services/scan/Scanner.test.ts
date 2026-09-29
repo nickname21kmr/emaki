@@ -116,6 +116,9 @@ describe('Scanner', () => {
   });
 
   it('刚写入的文件延后处理', async () => {
+    // 刚写的文件修改时间偶尔会比 Date.now() 晚几毫秒（文件系统取整），会被当成「时钟不同步」不延后；固定成 1 秒前
+    const t = new Date(Date.now() - 1000);
+    for (const rel of ['a/one.png', 'a/two.png', 'b/three.png']) await utimes(path.join(root, rel), t, t);
     const s = await scan(60_000);
     expect(s.deferred).toBe(3);
     expect(s.added).toBe(0);
