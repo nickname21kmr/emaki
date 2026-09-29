@@ -236,7 +236,12 @@ export class DanbooruCatalog implements CopyrightSource {
     return t;
   }
 
+  /** 角色所属的作品标签，按改名表换成现在的名字（旧名建出来的作品会和新名的重复） */
   copyrights(characterTag: string): string[] {
+    return [...new Set(this.rawCopyrights(characterTag).map((c) => this.canonicalize(c)))];
+  }
+
+  private rawCopyrights(characterTag: string): string[] {
     const t = this.canonicalize(characterTag);
     const cached = this.get(t);
     if (cached?.relatedFetchedAt && cached.copyrights?.length) return cached.copyrights;

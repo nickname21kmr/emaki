@@ -68,3 +68,66 @@ export function consolidateCharacterTags(
   }
   return { merged, renamed };
 }
+
+/**
+ * 作品也一样（用户 2026-09-29）：Danbooru 改过名的版权标签（alice_in_wonderland → alice's_adventures_in_wonderland），
+ * 旧模型按旧名、新模型按新名各建了一部作品，旧的那部通常没有角色，只挂着几张图，看起来像空文件夹。
+ * 新名已经有作品就把旧的并过去（角色、图、合集、手动别名都搬走，然后删掉旧作品），没有就直接改成新名。
+ */
+export function consolidateWorkTags(
+  db: Db,
+  deps: {
+    /** 只做改名（tag_renames），不做角色的变体归本体 */
+    canonicalize: (tag: string) => string;
+    localizer: Localizer;
+  },
+): { merged: number; renamed: number } {
+  let merged = 0;
+  let renamed = 0;
+  const rows = db.prepare('SELECT id, name, danbooru_tag AS tag FROM works WHERE danbooru_tag IS NOT NULL ORDER BY id').all() as {
+    id: number;
+    name: string;
+    tag: string;
+  }[];
+  const byTag = db.prepare('SELECT id FROM works WHERE danbooru_tag = ?').pluck();
+  const s = {
+    chars: db.prepare(`INSERT OR IGNORE INTO character_works (character_id, work_id, position)
+      SELECT character_id, @to, position FROM character_works WHERE work_id = @from`),
+    // 同一张图两边都挂着时：手动挂的（score 为 NULL）优先，否则取高分（SQLite 的 MAX 遇到 NULL 返回 NULL）
+    images: db.prepare(`INSERT INTO image_copyrights (image_id, work_id, score)
+      SELECT image_id, @to, score FROM image_copyrights WHERE work_id = @from
+      ON CONFLICT(image_id, work_id) DO UPDATE SET score = MAX(score, excluded.score)`),
+    collections: db.prepare(`INSERT OR IGNORE INTO collection_works (collection_id, work_id, added_at)
+      SELECT collection_id, @to, added_at FROM collection_works WHERE work_id = @from`),
+    aliases: db.prepare(`INSERT OR IGNORE INTO aliases (owner_type, owner_id, alias, search_key, origin, visible, position)
+      SELECT owner_type, @to, alias, search_key, origin, visible, position FROM aliases
+      WHERE owner_type = 'work' AND owner_id = @from AND origin = 'user'`),
+    dropAliases: db.prepare("DELETE FROM aliases WHERE owner_type = 'work' AND owner_id = ?"),
+    drop: db.prepare('DELETE FROM works WHERE id = ?'),
+    rename: db.prepare('UPDATE works SET danbooru_tag = ?, name = ? WHERE id = ?'),
+  };
+  for (const r of rows) {
+    const target = deps.canonicalize(r.tag);
+    if (target === r.tag) continue;
+    const to = byTag.get(target) as number | undefined;
+    db.transaction(() => {
+      if (to !== undefined) {
+        const p = { from: r.id, to };
+        s.chars.run(p);
+        s.images.run(p);
+        s.collections.run(p);
+        s.aliases.run(p);
+        s.dropAliases.run(r.id);
+        s.drop.run(r.id); // character_works / image_copyrights / collection_works 随外键级联删除
+        merged++;
+      } else {
+        const oldAuto = deps.localizer.workName(r.tag).name;
+        const name = r.name === oldAuto ? deps.localizer.workName(target).name : r.name;
+        s.rename.run(target, name, r.id);
+        replaceAutoAliases(db, 'work', r.id, deps.localizer.aliasesFor(target, 'work', name));
+        renamed++;
+      }
+    })();
+  }
+  return { merged, renamed };
+}

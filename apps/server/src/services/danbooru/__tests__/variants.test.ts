@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase, type Db } from '../../../db/connection.ts';
 import { migrate } from '../../../db/migrate.ts';
-import { consolidateCharacterTags } from '../../../datasource/sqlite/consolidate.ts';
+import { consolidateCharacterTags, consolidateWorkTags } from '../../../datasource/sqlite/consolidate.ts';
 import { CopyrightResolver } from '../../catalog/copyrights.ts';
 import { HumanizeLocalizer } from '../../i18n/localizer.ts';
 import { DanbooruCatalog, sameLineage } from '../catalog.ts';
@@ -76,5 +76,52 @@ describe('consolidateCharacterTags', () => {
     // 旧写法留一条重定向：以后再碰到旧写法也落到这个角色
     expect(db.prepare('SELECT character_id FROM danbooru_tag_redirects WHERE tag = ?').pluck().get('hoshino_ai_(oshi_no_ko)')).toBe(renamedId);
     expect(consolidateCharacterTags(db, deps)).toEqual({ merged: 0, renamed: 0 });
+  });
+});
+
+describe('consolidateWorkTags', () => {
+  const OLD = 'alice_in_wonderland';
+  const NEW = "alice's_adventures_in_wonderland";
+  beforeEach(() => {
+    const rename = db.prepare("INSERT INTO tag_renames (old_name, new_name, source) VALUES (?, ?, 'danbooru')");
+    rename.run(OLD, NEW);
+    rename.run('yuru_yuri', 'yuruyuri');
+  });
+
+  it('改过名的作品：新名已有就并过去（图、手动别名搬走，旧的删掉），没有就改名；再跑一次什么也不做', () => {
+    const work = db.prepare("INSERT INTO works (name, danbooru_tag, created_at) VALUES (?, ?, '2026-09-28')");
+    const oldId = Number(work.run('爱丽丝梦游仙境', OLD).lastInsertRowid);
+    const newId = Number(work.run('爱丽丝梦游仙境', NEW).lastInsertRowid);
+    const lonely = Number(work.run('Yuru Yuri', 'yuru_yuri').lastInsertRowid);
+    db.prepare("INSERT INTO library_roots (id, path) VALUES (1, 'D:/lib')").run();
+    const img = db.prepare(
+      "INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at) VALUES (?, 1, ?, ?, 1, 1, 1, 'png', ?, 'x', 'x')",
+    );
+    img.run(1, '1.png', '1.png', 's1');
+    img.run(2, '2.png', '2.png', 's2');
+    const ic = db.prepare('INSERT INTO image_copyrights (image_id, work_id, score) VALUES (?, ?, ?)');
+    ic.run(1, oldId, 0.6);
+    ic.run(2, oldId, 0.4);
+    ic.run(2, newId, null); // 手动挂的：合并后仍是手动
+    db.prepare(
+      "INSERT INTO aliases (owner_type, owner_id, alias, search_key, origin, visible, position) VALUES ('work', ?, '梦游仙境', '梦游仙境', 'user', 1, 50)",
+    ).run(oldId);
+
+    const c = catalog();
+    const deps = { canonicalize: (t: string) => c.canonicalize(t), localizer: new HumanizeLocalizer() };
+    expect(consolidateWorkTags(db, deps)).toEqual({ merged: 1, renamed: 1 });
+    expect(db.prepare('SELECT id FROM works WHERE id = ?').get(oldId)).toBeUndefined();
+    expect(db.prepare('SELECT image_id, score FROM image_copyrights WHERE work_id = ? ORDER BY image_id').all(newId)).toEqual([
+      { image_id: 1, score: 0.6 },
+      { image_id: 2, score: null },
+    ]);
+    expect(db.prepare("SELECT alias FROM aliases WHERE owner_type = 'work' AND owner_id = ?").pluck().all(newId)).toContain('梦游仙境');
+    expect(db.prepare('SELECT danbooru_tag FROM works WHERE id = ?').pluck().get(lonely)).toBe('yuruyuri');
+    expect(consolidateWorkTags(db, deps)).toEqual({ merged: 0, renamed: 0 });
+  });
+
+  it('角色所属的作品按改名表换成新名，不会再按旧名建作品', () => {
+    const c = new DanbooruCatalog(db, new CopyrightResolver(db, { 'alice_(alice_in_wonderland)': [OLD] }));
+    expect(c.copyrights('alice_(alice_in_wonderland)')).toEqual([NEW]);
   });
 });

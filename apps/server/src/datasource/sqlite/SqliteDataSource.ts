@@ -55,7 +55,7 @@ import { closeDatabase, openDatabase, type Db } from '../../db/connection.ts';
 import { migrate } from '../../db/migrate.ts';
 import { refreshPlannerStats } from '../../db/plannerStats.ts';
 import { SoftCache } from './softCache.ts';
-import { consolidateCharacterTags } from './consolidate.ts';
+import { consolidateCharacterTags, consolidateWorkTags } from './consolidate.ts';
 import { BadRequestError, NotFoundError, NotImplementedError } from '../../http/errors.ts';
 import type { DataSource, FileResponse } from '../DataSource.ts';
 import { toAbs } from '../../services/fs/paths.ts';
@@ -167,6 +167,9 @@ export class SqliteDataSource implements DataSource {
       log: (m) => console.log(`[角色] ${m}`),
     });
     if (merged.merged || merged.renamed) console.log(`[角色] 收拢拆开的角色：合并 ${merged.merged} 个，改标签 ${merged.renamed} 个`);
+    // 作品同理：Danbooru 改过名的版权标签，新旧两个名字各建了一部（用户 2026-09-29）
+    const works = consolidateWorkTags(db, { canonicalize: (t) => danbooru.canonicalize(t), localizer });
+    if (works.merged || works.renamed) console.log(`[作品] 收拢改过名的作品：合并 ${works.merged} 部，改标签 ${works.renamed} 部`);
     ds.pipeline.register({
       tag: createTagStage({
         db,
