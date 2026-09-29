@@ -452,6 +452,20 @@ export function unrecognizedContract(make: ContractFactory, name: Name) {
       expect((await e.ds.listImages({ workId: original!.id })).items.map((x) => e.back('image', x.id))).not.toContain('i25');
     });
 
+    it('重新识别：范围是识别过、没认出的插画（不含没识别过的、放下的、原创），并启动识别任务', async () => {
+      const e = env();
+      expect((await e.ds.unrecognizedSummary()).art.retaggable).toBe(6);
+      await e.ds.bulkImages({ ids: [e.id('image', 'i25')], action: { type: 'shelve', value: true } });
+      await e.ds.bulkImages({ ids: [e.id('image', 'i24')], action: { type: 'original', value: true } });
+      expect((await e.ds.getImage(e.id('image', 'i24')))?.original).toBe(true);
+      expect((await e.ds.getImage(e.id('image', 'i26')))?.original).toBe(false);
+      expect((await e.ds.unrecognizedSummary()).art.retaggable).toBe(4);
+      const r = await e.ds.retagUnrecognized();
+      expect(r.marked).toBe(4);
+      expect(r.job?.kind).toBe('tag');
+      await e.ds.cancelJob(r.job!.id); // 测试里不真的跑模型
+    });
+
     it('改类型后换大类；有建议里插画在漫画前（T34a）', async () => {
       const e = env();
       await e.ds.bulkImages({ ids: [e.id('image', 'i25')], action: { type: 'kind', value: 'photo' } });

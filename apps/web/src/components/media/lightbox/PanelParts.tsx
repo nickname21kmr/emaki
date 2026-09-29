@@ -25,7 +25,7 @@ export function Section({
   );
 }
 
-/** 面板顶部的四宫格操作：图标 + 两字标签 */
+/** 面板顶部的一排操作：图标 + 短标签 */
 export function ActionTile({
   icon,
   label,

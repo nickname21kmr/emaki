@@ -6,6 +6,7 @@ import { useStats, useUnrecognizedSummary } from '@/lib/queries';
 import { AreaTabs } from './components/AreaTabs';
 import { BucketTabs } from './components/BucketTabs';
 import { PendingCollections } from './components/PendingCollections';
+import { RetagButton } from './components/RetagButton';
 import { RunTaggerButton } from './components/RunTaggerButton';
 import { SheetLayout } from './components/SheetLayout';
 import { TriageBody } from './components/TriageBody';
@@ -35,7 +36,12 @@ export function UnrecognizedPage() {
 
   return (
     <div className="flex h-full min-h-[620px] flex-col">
-      <PageHeader title="未识别" subtitle={<Subtitle />} actions={<RunTaggerButton />} className="shrink-0">
+      <PageHeader title="未识别" subtitle={<Subtitle />} actions={
+          <div className="flex items-center gap-2">
+            <RetagButton />
+            <RunTaggerButton />
+          </div>
+        } className="shrink-0">
         <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
           <AreaTabs value={p.area} summary={summary.data} onChange={p.setArea} />
           {p.area === 'art' && p.bucket && <BucketTabs value={p.bucket} summary={summary.data} pendingBooks={pendingBooks} onChange={p.setBucket} />}

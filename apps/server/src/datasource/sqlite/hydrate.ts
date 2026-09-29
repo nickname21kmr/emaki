@@ -104,6 +104,7 @@ export function hydrateImages(db: Db, rows: ImageRow[]): ImageItem[] {
           }
         : null,
       favorite: r.favorite === 1,
+      original: r.original_at !== null,
     };
   });
 }

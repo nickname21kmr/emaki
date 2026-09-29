@@ -348,4 +348,18 @@ describe('tagJob 分流（旧文件用旧模型、新文件用新模型、相机
     expect(seen[REPO]).toBeUndefined();
     expect(seen[PIXAI]!.sort()).toEqual([1, 2, 3, 4, 6]);
   });
+
+  it('retag：主模型自己认过的也再认一遍（不管文件新旧），写完清掉标记；再跑不重复', async () => {
+    const tagged = db.prepare("UPDATE images SET tagged_at = '2025-06-01', tagger_model = ?, retag = ? WHERE id = ?");
+    for (const id of [1, 2, 3, 4]) tagged.run(PIXAI, 0, id);
+    tagged.run(PIXAI, 1, 3); // 新文件，主模型认过
+    tagged.run(PIXAI, 1, 1); // 旧文件，主模型认过（不走旧模型那一轮）
+    const { seen, go } = run();
+    await go();
+    expect(seen[REPO]).toBeUndefined();
+    expect(seen[PIXAI]!.sort()).toEqual([1, 3]);
+    expect(count('SELECT count(*) FROM images WHERE retag = 1')).toBe(0);
+    const again = run();
+    expect(await again.go()).toBe('没有需要识别的图片');
+  });
 });

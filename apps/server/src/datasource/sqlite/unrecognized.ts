@@ -20,7 +20,7 @@ import { insertDanbooruCharacter } from './characters.ts';
 import type { SqliteContext } from './context.ts';
 import { applyExclusionRules } from './exclusions.ts';
 import { loadImageItems } from './hydrate.ts';
-import { ANNEX_KINDS_SQL, ART_KINDS_SQL, decodeCursor, encodeCursor, iso, parseId, THEME_EXPR, UNRECOGNIZED } from './sql.ts';
+import { ANNEX_KINDS_SQL, ART_KINDS_SQL, decodeCursor, encodeCursor, iso, parseId, QUEUE, THEME_EXPR, UNRECOGNIZED } from './sql.ts';
 import { loadSuggestions } from './suggestions.ts';
 
 /**
@@ -34,6 +34,8 @@ const COLS = `i.id, i.added_at AS a, i.tagged_at AS tg, i.shelved_at AS sh, (i.c
 const ROW_ART = `SELECT ${COLS} FROM v_counted_images i WHERE ${ART_KINDS_SQL} AND ${UNRECOGNIZED} AND i.collection_id IS NULL`;
 /** 照片、文字等：没有角色的别册图 */
 const ROW_ANNEX = `SELECT ${COLS} FROM v_counted_images i WHERE ${ANNEX_KINDS_SQL} AND ${UNRECOGNIZED}`;
+/** 「用主模型重新识别」的范围：队列里识别过、没认出角色的插画（漫画按本处理，放下的是用户自己的决定，都不动） */
+const RETAGGABLE = `FROM v_counted_images i WHERE ${QUEUE} AND i.tagged_at IS NOT NULL AND i.content_kind = 'illustration'`;
 
 /** 分段条件（作用在 ROW 结果上）。漫画不等识别，直接算「没认出」（RV-T-1 ②） */
 const BUCKET_WHERE = {
@@ -133,12 +135,18 @@ export class UnrecognizedQueries {
     const kinds = zeros(UNRECOGNIZED_ANNEX_KINDS);
     for (const k of UNRECOGNIZED_ANNEX_KINDS) kinds[k] = n(k);
     const unsure = UNRECOGNIZED_THEMES.reduce((sum, t) => sum + themes[t], 0);
-    const art = { suggested: n('suggested'), unsure, untagged: n('untagged'), shelved: n('shelved'), themes };
+    const retaggable = (this.ctx.stmt(`SELECT COUNT(*) AS n ${RETAGGABLE}`).get() as { n: number }).n;
+    const art = { suggested: n('suggested'), unsure, untagged: n('untagged'), shelved: n('shelved'), themes, retaggable };
     this.cached = {
       art: { total: art.suggested + art.unsure + art.untagged, ...art },
       annex: { total: UNRECOGNIZED_ANNEX_KINDS.reduce((sum, k) => sum + kinds[k], 0), kinds },
     };
     return this.cached;
+  }
+
+  /** 把「用主模型重新识别」范围里的图标记为 retag = 1，返回张数；识别任务写库时清零 */
+  markRetag(): number {
+    return this.ctx.stmt(`UPDATE images SET retag = 1 WHERE id IN (SELECT i.id ${RETAGGABLE}) AND retag = 0`).run().changes;
   }
 
   list(q: ListUnrecognizedQuery): ListUnrecognizedResponse {

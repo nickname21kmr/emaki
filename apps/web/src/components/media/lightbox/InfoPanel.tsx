@@ -1,5 +1,5 @@
 import type { ImageDetail, ImageItem, ImageSource, Rating } from '@emaki/shared';
-import { Ban, ExternalLink, FolderOpen, Heart, Trash2 } from 'lucide-react';
+import { Ban, ExternalLink, FolderOpen, Heart, Sparkles, Trash2 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { toast } from 'sonner';
 import { Badge, Button, Seal, Segmented, Skeleton, Tooltip } from '@/components/ui';
@@ -59,7 +59,7 @@ export function InfoPanel({
       <div key={base?.id} className="min-h-0 flex-1 animate-fade-in overflow-y-auto overscroll-contain scrollbar-thin">
         <Header base={base} />
 
-        <div className="grid grid-cols-4 gap-1 px-3 pb-4">
+        <div className="grid grid-cols-5 gap-1 px-3 pb-4">
           <ActionTile
             icon={<Heart />}
             label={actions.favorite ? '已收藏' : '收藏'}
@@ -68,6 +68,15 @@ export function InfoPanel({
             active={actions.favorite}
             disabled={!base}
             onClick={actions.toggleFavorite}
+          />
+          <ActionTile
+            icon={<Sparkles />}
+            label={actions.original ? '已归原创' : '归为原创'}
+            tooltip={actions.original ? '移出原创' : '归为原创：画师自己的原创角色，不再出现在未识别'}
+            shortcut="O"
+            active={actions.original}
+            disabled={!base || (base.kind !== 'illustration' && base.kind !== 'comic')}
+            onClick={actions.toggleOriginal}
           />
           <ActionTile
             icon={<FolderOpen />}
@@ -209,9 +218,17 @@ function Header({ base }: { base: ImageItem | undefined }) {
         </div>
       ) : (
         <div>
-          <h2 className="text-[16px] leading-snug font-semibold tracking-tight">{art ? '未识别' : KIND_LABEL[base.kind]}</h2>
+          <h2 className="text-[16px] leading-snug font-semibold tracking-tight">
+            {base.original ? '原创' : art ? '未识别' : KIND_LABEL[base.kind]}
+          </h2>
           <div className="mt-0.5 text-xs text-fg-subtle">
-            {art ? '可以在下方添加角色或采纳识别建议' : artist ? `画师 ${artist}` : '别册里的图，不参与角色识别'}
+            {base.original
+              ? '画师自己的原创角色，不在未识别里'
+              : art
+                ? '可以在下方添加角色或采纳识别建议'
+                : artist
+                  ? `画师 ${artist}`
+                  : '别册里的图，不参与角色识别'}
           </div>
         </div>
       )}

@@ -130,7 +130,7 @@ function LightboxView({
   const [revealed, setRevealed] = useState<ReadonlySet<ID>>(() => new Set());
   const zoomApi = useZoomPan(id);
   const actions = useImageActions(
-    base ? { id, favorite: base.favorite, rating: base.rating, kind: base.kind, characterIds: base.characterIds } : undefined,
+    base ? { id, favorite: base.favorite, original: !!base.original, rating: base.rating, kind: base.kind, characterIds: base.characterIds } : undefined,
   );
 
   // 记录切换方向，给入场动画用
@@ -162,6 +162,7 @@ function LightboxView({
   useHotkey('i', guard(togglePanel));
   useHotkey('f', guard(actions.toggleFavorite));
   useHotkey('e', guard(actions.exclude));
+  useHotkey('o', guard(actions.toggleOriginal));
   const [kindOpen, setKindOpen] = useState(false);
   useHotkey('c', guard(() => setKindOpen(true)), { enabled: !!base && !kindOpen });
   useHotkey('space', guard(() => setPaused((p) => !p)), { enabled: slideshow });

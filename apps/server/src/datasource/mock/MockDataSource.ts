@@ -40,6 +40,7 @@ import {
   type ListUnrecognizedResponse,
   type ListWorksQuery,
   type MutationResult,
+  type RetagResult,
   type Page,
   type Rating,
   type SearchHit,
@@ -393,6 +394,7 @@ export class MockDataSource implements DataSource {
       dominantColor: mockDominantColor(row.hue, row.id),
       source: row.source,
       favorite: row.favorite,
+      original: !!row.originalAt,
     };
   }
 
@@ -1058,10 +1060,17 @@ export class MockDataSource implements DataSource {
       if (r.bucket === 'unsure') themes[r.th]++;
     }
     for (const r of annex) kinds[kindOf(r.img) as UnrecognizedAnnexKind]++;
+    const retaggable = art.filter((r) => !r.sh && r.img.tagged && kindOf(r.img) === 'illustration').length;
     return {
-      art: { total: n.suggested + n.unsure + n.untagged, ...n, themes },
+      art: { total: n.suggested + n.unsure + n.untagged, ...n, themes, retaggable },
       annex: { total: annex.length, kinds },
     };
+  }
+
+  /** mock：不改数据，只报张数并启动（模拟的）识别任务 */
+  async retagUnrecognized(): Promise<RetagResult> {
+    const { art } = await this.unrecognizedSummary();
+    return { marked: art.retaggable, job: art.retaggable ? await this.startJob('tag') : null };
   }
 
   async listUnrecognized(query: ListUnrecognizedQuery): Promise<ListUnrecognizedResponse> {

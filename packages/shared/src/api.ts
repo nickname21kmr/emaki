@@ -320,8 +320,22 @@ export interface ListUnrecognizedQuery extends PageQuery {
 
 /** GET /api/unrecognized/summary —— art.total = suggested + unsure + untagged（不含放下的）；themes 只统计 unsure */
 export interface UnrecognizedSummary {
-  art: { total: number; suggested: number; unsure: number; untagged: number; shelved: number; themes: Record<UnrecognizedTheme, number> };
+  art: {
+    total: number;
+    suggested: number;
+    unsure: number;
+    untagged: number;
+    shelved: number;
+    themes: Record<UnrecognizedTheme, number>;
+    /** 识别过、没认出角色、没放下的插画：「用主模型重新识别」会把它们再认一遍 */
+    retaggable: number;
+  };
   annex: { total: number; kinds: Record<UnrecognizedAnnexKind, number> };
+}
+/** POST /api/unrecognized/retag：标记了多少张、启动（或已在跑）的识别任务 */
+export interface RetagResult {
+  marked: number;
+  job: Job | null;
 }
 export type ListUnrecognizedResponse = Page<UnrecognizedItem> & {
   /** 未识别图里 tagger 给出过建议的张数（整个队列，不只是这一页） */

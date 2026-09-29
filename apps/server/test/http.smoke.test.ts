@@ -270,6 +270,12 @@ describe('图片、未识别、重复、排除（routes/images.ts）', () => {
     expect(json).toMatchObject({ art: { total: expect.any(Number), themes: expect.any(Object) }, annex: { total: expect.any(Number), kinds: expect.any(Object) } });
   });
 
+  route('POST /api/unrecognized/retag', async () => {
+    const { status, json } = await call('POST', '/api/unrecognized/retag');
+    expect(status).toBe(200);
+    expect(json).toMatchObject({ marked: expect.any(Number) });
+  });
+
   route('POST /api/unrecognized/:id/accept', async () => {
     const { status, json } = await call('POST', '/api/unrecognized/i26/accept', { danbooruTag: 'mika_(blue_archive)' });
     expect([status, json]).toEqual([200, withUndo]);

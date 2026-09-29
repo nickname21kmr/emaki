@@ -121,6 +121,8 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
 
   app.get('/api/unrecognized/summary', () => ds.unrecognizedSummary());
 
+  app.post('/api/unrecognized/retag', () => ds.retagUnrecognized());
+
   app.post('/api/unrecognized/:id/accept', (req) => {
     const { id } = parse(idParam, req.params);
     const { danbooruTag } = parse(z.object({ danbooruTag: z.string().min(1) }), req.body);

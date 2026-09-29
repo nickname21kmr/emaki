@@ -156,6 +156,8 @@ export interface ImageItem {
   source: ImageSource | null;
   /** 收藏 / 喜欢 */
   favorite: boolean;
+  /** 用户归为原创了（画师原创角色，不算未识别） */
+  original?: boolean;
 }
 
 /** 图片详情 = 列表项 + 全部标签。 */

@@ -61,7 +61,7 @@ export class TagResultWriter {
       insImageChar: db.prepare(`INSERT INTO image_characters (image_id, character_id, origin, score, added_at)
         VALUES (@imageId, @characterId, 'tagger', @score, @now) ON CONFLICT(image_id, character_id) DO NOTHING`),
       updRating: db.prepare('UPDATE images SET rating = ? WHERE id = ? AND rating_manual = 0'),
-      markTagged: db.prepare('UPDATE images SET tagged_at = ?, tagger_model = ? WHERE id = ?'),
+      markTagged: db.prepare('UPDATE images SET tagged_at = ?, tagger_model = ?, retag = 0 WHERE id = ?'),
       // 只提升插画和漫画上的建议：别册里的未知角色永远只是建议（BI-15 ①）
       promotable: db.prepare(`SELECT cs.image_id AS imageId, cs.danbooru_tag AS tag, cs.score AS score
         FROM character_suggestions cs JOIN images i ON i.id = cs.image_id

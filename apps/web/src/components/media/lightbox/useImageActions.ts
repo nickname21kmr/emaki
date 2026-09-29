@@ -8,6 +8,8 @@ import { useLightbox } from '@/lib/stores';
 export interface CurrentImage {
   id: ID;
   favorite: boolean;
+  /** 归为原创了 */
+  original: boolean;
   rating: Rating;
   kind?: ContentKind;
   characterIds: ID[];
@@ -21,6 +23,9 @@ function dropFromLightbox(id: ID) {
 
 export function useImageActions(current: CurrentImage | undefined) {
   const favorite = useMutate((v: { id: ID; value: boolean }) => api.updateImage(v.id, { favorite: v.value }));
+  const original = useMutate((v: { id: ID; value: boolean }) =>
+    api.bulkImages({ ids: [v.id], action: { type: 'original', value: v.value } }),
+  );
   const rating = useMutate((v: { id: ID; value: Rating }) => api.updateImage(v.id, { rating: v.value }));
   const kind = useMutate((v: { id: ID; value: ContentKind | 'auto' }) => api.updateImage(v.id, { kind: v.value }));
   const characters = useMutate((v: { id: ID; characterIds: ID[] }) =>
@@ -42,6 +47,7 @@ export function useImageActions(current: CurrentImage | undefined) {
 
   // 乐观显示：请求还没回来时按目标值画，心形 / 分级不会慢半拍
   const favoriteValue = pendingFor(favorite)?.value ?? current?.favorite ?? false;
+  const originalValue = pendingFor(original)?.value ?? current?.original ?? false;
   const ratingValue = pendingFor(rating)?.value ?? current?.rating;
   const kindPending = pendingFor(kind)?.value;
   const kindValue = kindPending && kindPending !== 'auto' ? kindPending : current?.kind;
@@ -49,6 +55,7 @@ export function useImageActions(current: CurrentImage | undefined) {
 
   return {
     favorite: favoriteValue,
+    original: originalValue,
     rating: ratingValue,
     kind: kindValue,
     kindBusy: kind.isPending,
@@ -60,6 +67,10 @@ export function useImageActions(current: CurrentImage | undefined) {
     },
     toggleFavorite: () => {
       if (current && !favorite.isPending) favorite.mutate({ id: current.id, value: !favoriteValue });
+    },
+    /** 归为原创 / 移出原创（可撤销）；留在当前这张，方便接着往后翻 */
+    toggleOriginal: () => {
+      if (current && !original.isPending) original.mutate({ id: current.id, value: !originalValue });
     },
     /** 改类型（T32a）；'auto' = 恢复自动判断 */
     setKind: (value: ContentKind | 'auto') => {

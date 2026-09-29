@@ -31,6 +31,7 @@ import type {
   ListWorksQuery,
   MutationResult,
   Page,
+  RetagResult,
   SearchHit,
   SearchQuery,
   TagSuggestion,
@@ -607,6 +608,12 @@ export class SqliteDataSource implements DataSource {
   }
   async acceptSuggestion(imageId: ID, danbooruTag: string): Promise<MutationResult> {
     return this.unrecognized.accept(imageId, danbooruTag);
+  }
+  async retagUnrecognized(): Promise<RetagResult> {
+    this.unrecognized.markRetag();
+    // 之前标过、还没跑完的也算：只要有等着重新识别的，就启动识别任务
+    const pending = this.ctx.stmt('SELECT COUNT(*) AS n FROM images WHERE retag = 1').get() as { n: number };
+    return { marked: pending.n, job: pending.n ? await this.startJob('tag') : null };
   }
 
   // T16 查重

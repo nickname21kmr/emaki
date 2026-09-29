@@ -38,6 +38,7 @@ import type {
   ListTaggerModelsResponse,
   ListUnrecognizedQuery,
   ListUnrecognizedResponse,
+  RetagResult,
   UnrecognizedSummary,
   HealthResponse,
   PickFolderResponse,
@@ -154,6 +155,7 @@ export const api = {
 
   unrecognized: (q: ListUnrecognizedQuery = {}) => get<ListUnrecognizedResponse>('/unrecognized', q),
   unrecognizedSummary: () => get<UnrecognizedSummary>('/unrecognized/summary'),
+  retagUnrecognized: () => post<RetagResult>('/unrecognized/retag'),
   acceptSuggestion: (imageId: ID, body: AcceptSuggestionBody) =>
     post<MutationResult>(`/unrecognized/${encodeURIComponent(imageId)}/accept`, body),
 
