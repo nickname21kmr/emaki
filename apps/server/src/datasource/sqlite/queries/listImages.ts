@@ -34,6 +34,36 @@ const isKeyset = (x: unknown): x is [string | number, number] =>
   Array.isArray(x) && x.length === 2 && (typeof x[0] === 'string' || typeof x[0] === 'number') && typeof x[1] === 'number';
 const isOffset = (x: unknown): x is number => typeof x === 'number' && Number.isInteger(x) && x >= 0;
 
+/** 图库文字搜索命中的标签、角色、作品 id（qk 已经是 searchKey） */
+function matchText(db: Db, qk: string): { tagIds: number[]; characterIds: number[]; workIds: number[] } {
+  const tagIds = db
+    .prepare(
+      `SELECT id FROM tags WHERE instr(search_key(name), @qk) > 0
+       UNION SELECT t.id FROM tag_name_keys k JOIN tags t ON t.name = k.tag WHERE k.kind = 'zh' AND instr(k.search_key, @qk) > 0`,
+    )
+    .pluck()
+    .all({ qk }) as number[];
+  const owners = (type: 'character' | 'work', table: 'characters' | 'works') =>
+    db
+      .prepare(
+        `SELECT id FROM ${table} WHERE instr(search_key(name), @qk) > 0 OR instr(search_key(COALESCE(danbooru_tag, '')), @qk) > 0
+         UNION SELECT owner_id FROM aliases WHERE owner_type = '${type}' AND instr(search_key, @qk) > 0`,
+      )
+      .pluck()
+      .all({ qk }) as number[];
+  const workIds = owners('work', 'works');
+  const characterIds = [
+    ...new Set([
+      ...owners('character', 'characters'),
+      ...(db
+        .prepare('SELECT character_id FROM character_works WHERE work_id IN (SELECT value FROM json_each(?))')
+        .pluck()
+        .all(JSON.stringify(workIds)) as number[]),
+    ]),
+  ];
+  return { tagIds, characterIds, workIds };
+}
+
 /** 总数缓存（T22）：key 是去掉分页和排序的查询条件；不传就每次现算 */
 export type CountCache = (key: string, compute: () => number) => number;
 
@@ -142,11 +172,21 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
   if (q.orientation === 'square') both('i.width <= i.height * 1.05 AND i.width >= i.height * 0.95');
   const qk = q.q ? searchKey(q.q) : '';
   if (qk) {
-    where.push(`(instr(search_key(i.file_name), @qk) > 0 OR EXISTS (SELECT 1 FROM image_tags it WHERE it.image_id = i.id
-      AND it.tag_id IN (SELECT t.id FROM tags t WHERE instr(search_key(t.name), @qk) > 0)))`);
-    countWhere.push(`(instr(search_key(i.file_name), @qk) > 0 OR i.id IN (SELECT it.image_id FROM image_tags it
-      WHERE it.tag_id IN (SELECT t.id FROM tags t WHERE instr(search_key(t.name), @qk) > 0)))`);
+    // 文件名、标签（英文名或中文名）、角色（名字、别名、日文名）、作品（名字、别名；作品下的角色也算）。
+    // 以前只看文件名和英文标签，「ミカ」「未花」「蔚蓝档案」都搜不到（用户 2026-09-29）
+    const m = matchText(db, qk);
     p.qk = qk;
+    p.qtags = JSON.stringify(m.tagIds);
+    p.qchars = JSON.stringify(m.characterIds);
+    p.qworks = JSON.stringify(m.workIds);
+    where.push(`(instr(search_key(i.file_name), @qk) > 0
+      OR EXISTS (SELECT 1 FROM image_tags it WHERE it.image_id = i.id AND it.tag_id IN (SELECT value FROM json_each(@qtags)))
+      OR EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id AND ic.character_id IN (SELECT value FROM json_each(@qchars)))
+      OR EXISTS (SELECT 1 FROM image_copyrights x WHERE x.image_id = i.id AND x.work_id IN (SELECT value FROM json_each(@qworks))))`);
+    countWhere.push(`(instr(search_key(i.file_name), @qk) > 0
+      OR i.id IN (SELECT it.image_id FROM image_tags it WHERE it.tag_id IN (SELECT value FROM json_each(@qtags)))
+      OR i.id IN (SELECT ic.image_id FROM image_characters ic WHERE ic.character_id IN (SELECT value FROM json_each(@qchars)))
+      OR i.id IN (SELECT x.image_id FROM image_copyrights x WHERE x.work_id IN (SELECT value FROM json_each(@qworks))))`);
   }
 
   const from = 'FROM images i';

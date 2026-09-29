@@ -210,6 +210,16 @@ export function charactersContract(make: ContractFactory, name: Name) {
       expect(ids(e, (await e.ds.listCharacters({ q: 'ブルーアーカイブ' })).items)).toEqual(['c3', 'c1', 'c2', 'c6']);
     });
 
+    it('图库文字搜索也认角色的别名、日文名和作品名（不只是文件名和英文标签）', async () => {
+      const e = env();
+      const all = async (q: Parameters<typeof e.ds.listImages>[0]) => ids(e, (await e.ds.listImages({ ...q, limit: 200 })).items).sort();
+      const mika = await all({ characterId: e.id('character', 'c1') });
+      expect(mika.length).toBeGreaterThan(0);
+      expect(await all({ q: 'ミカ' })).toEqual(expect.arrayContaining(mika));
+      expect(await all({ q: 'みか' })).toEqual(expect.arrayContaining(mika));
+      expect(await all({ q: 'ブルーアーカイブ' })).toEqual(expect.arrayContaining(await all({ workId: e.id('work', 'w1') })));
+    });
+
     it('按作品 / 最近 / 来源筛选', async () => {
       const e = env();
       expect(ids(e, (await e.ds.listCharacters({ workId: e.id('work', 'w2') })).items)).toEqual(['c4', 'c5', 'c6']);

@@ -65,8 +65,8 @@ export function GallerySearch({
           }
         }
       }}
-      placeholder="搜索文件名或标签"
-      aria-label="搜索文件名或标签"
+      placeholder="搜索角色、作品、标签或文件名"
+      aria-label="搜索角色、作品、标签或文件名"
       // 隐藏浏览器自带的清除叉，只留 Input 自己的
       className={cn('rounded-full! [&_input::-webkit-search-cancel-button]:appearance-none', className)}
     />

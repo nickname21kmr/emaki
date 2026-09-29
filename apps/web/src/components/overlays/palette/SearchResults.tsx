@@ -69,7 +69,7 @@ export function SearchResults({
           <span className="text-fg-muted">在图库里搜索</span>「{query}」
         </>
       }
-      subtitle="按文件名和标签匹配"
+      subtitle="按角色、作品、标签和文件名匹配"
     />
   );
 

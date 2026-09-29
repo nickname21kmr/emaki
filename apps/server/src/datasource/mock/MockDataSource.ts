@@ -179,6 +179,19 @@ export class MockDataSource implements DataSource {
     return !img.excludedBy && isArt(img) && !img.shelvedAt && !img.originalAt && !img.characterIds.length && !img.collectionId;
   }
 
+  /** 图库文字搜索用：这张图的角色（名字、标签、别名）和作品（名字、标签、别名），同 sqlite 的 matchText */
+  private nameKeysOf(img: ImageRow): (string | null)[] {
+    const chars = img.characterIds.flatMap((cid) => {
+      const c = this.db.characters.get(cid);
+      return c ? [c.name, c.danbooruTag, ...c.aliases] : [];
+    });
+    const works = this.imageWorkIds(img).flatMap((wid) => {
+      const w = this.db.works.get(wid);
+      return w ? [w.name, w.danbooruTag, ...w.aliases] : [];
+    });
+    return [...chars, ...works];
+  }
+
   private imageWorkIds(img: ImageRow): ID[] {
     const ids = new Set<ID>(img.copyrightWorkIds);
     for (const cid of img.characterIds) for (const wid of this.db.characters.get(cid)?.workIds ?? []) ids.add(wid);
@@ -769,7 +782,7 @@ export class MockDataSource implements DataSource {
         const o = ratio > 1.05 ? 'landscape' : ratio < 0.95 ? 'portrait' : 'square';
         if (o !== query.orientation) return false;
       }
-      if (query.q && !matchesQuery(query.q, [img.fileName, ...img.tags.map((t) => t.tag)])) return false;
+      if (query.q && !matchesQuery(query.q, [img.fileName, ...img.tags.map((t) => t.tag), ...this.nameKeysOf(img)])) return false;
       return true;
     });
 
