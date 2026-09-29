@@ -52,13 +52,21 @@ export async function* walkImages(rootPath: string, o: WalkOptions = {}): AsyncG
         files.push(child);
       }
     }
+    let statFailed = false;
     for (let i = 0; i < files.length; i += STAT_BATCH) {
       const chunk = files.slice(i, i + STAT_BATCH);
       const stats = await Promise.allSettled(chunk.map((r) => stat(toAbs(rootPath, r))));
       for (let k = 0; k < chunk.length; k++) {
         const s = stats[k]!;
-        if (s.status === 'fulfilled' && s.value.isFile() && s.value.size > 0) {
-          yield { relPath: chunk[k]!, bytes: s.value.size, mtimeMs: s.value.mtimeMs, birthtimeMs: s.value.birthtimeMs };
+        if (s.status === 'fulfilled') {
+          if (s.value.isFile() && s.value.size > 0) {
+            yield { relPath: chunk[k]!, bytes: s.value.size, mtimeMs: s.value.mtimeMs, birthtimeMs: s.value.birthtimeMs };
+          }
+        } else if (!statFailed) {
+          // 列出来了却读不到信息：移动硬盘中途断开 / 休眠、文件被占用。不能当成文件没了（2026-09-29 一次扫描
+          // 把 5 万张标成了丢失），这个目录按读失败报给调用方，它下面的行这次都不判丢失
+          statFailed = true;
+          o.onDirError?.(rel, s.reason as NodeJS.ErrnoException);
         }
       }
     }

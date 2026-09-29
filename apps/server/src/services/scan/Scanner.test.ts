@@ -7,6 +7,7 @@ import { EventBus } from '../../core/events.ts';
 import type { JobContext } from '../../core/jobs.ts';
 import { openDatabase, type Db } from '../../db/connection.ts';
 import { migrate } from '../../db/migrate.ts';
+import { walkImages } from '../fs/walk.ts';
 import { sharp } from '../image/sharpConfig.ts';
 import { Scanner, type ScanSummary } from './Scanner.ts';
 import { ScanRequests } from './ScanRequests.ts';
@@ -100,6 +101,19 @@ describe('Scanner', () => {
     await writeFile(path.join(root, 'b/three.png'), buf);
     await scan();
     expect(row('three.png')?.missing).toBe(0);
+  });
+
+  it('遍历时漏掉了、其实还在的文件（移动硬盘中途断开又接上）不标丢失；真删掉的照常标', async () => {
+    await scan();
+    await rm(path.join(root, 'b/three.png'));
+    // 遍历时 one.png 读不到（没有报目录错误），实际文件还在
+    const flaky: typeof walkImages = async function* (rootPath, o) {
+      for await (const e of walkImages(rootPath, o)) if (!e.relPath.endsWith('one.png')) yield e;
+    };
+    const s = await new Scanner({ db, bus: new EventBus(), dataDir: data, requests, settleMs: 0, walk: flaky }).scan(ctx());
+    expect(s.missing).toBe(1);
+    expect(row('one.png')?.missing).toBe(0);
+    expect(row('three.png')?.missing).toBe(1);
   });
 
   it('改内容后 id 不变但 sha 变了', async () => {

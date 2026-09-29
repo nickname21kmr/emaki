@@ -134,10 +134,38 @@ export class Scanner {
       /** 「刚修改过、可能还在写入」的判定窗口，默认 2000 ms；单元测试传 0 */
       settleMs?: number;
       now?: () => number;
+      /** 测试注入：替换遍历（模拟读取失败）；默认 walkImages */
+      walk?: typeof walkImages;
     },
   ) {
     this.settleMs = d.settleMs ?? 2000;
     this.now = d.now ?? Date.now;
+  }
+
+  /** 从 goneIds 里去掉其实还在、或者这时判断不了的（根不可访问、读出错但不是 ENOENT） */
+  private async confirmGone(goneIds: Set<number>, rows: DbRow[], rootById: Map<number, RootRow>): Promise<void> {
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const rootOk = new Map<number, boolean>();
+    const ids = [...goneIds];
+    for (let i = 0; i < ids.length; i += 32) {
+      await Promise.all(
+        ids.slice(i, i + 32).map(async (id) => {
+          const row = byId.get(id);
+          const root = row && rootById.get(row.root_id);
+          if (!row || !root) return;
+          if (!rootOk.has(root.id)) rootOk.set(root.id, await stat(root.path).then((x) => x.isDirectory(), () => false));
+          if (!rootOk.get(root.id)) {
+            goneIds.delete(id);
+            return;
+          }
+          const gone = await stat(toAbs(root.path, row.rel_path)).then(
+            () => false,
+            (err: NodeJS.ErrnoException) => err.code === 'ENOENT' || err.code === 'ENOTDIR',
+          );
+          if (!gone) goneIds.delete(id);
+        }),
+      );
+    }
   }
 
   async scan(ctx: JobContext): Promise<ScanSummary> {
@@ -185,7 +213,7 @@ export class Scanner {
         ...(dataDirNorm ? [dataDirNorm] : []),
         ...roots.filter((o) => o.id !== root.id && pathKey(o.path).startsWith(rootKey + '/')).map((o) => o.path),
       ];
-      for await (const e of walkImages(root.path, {
+      for await (const e of (this.d.walk ?? walkImages)(root.path, {
         startRel: scope.relDir,
         recursive: scope.recursive,
         skipAbs,
@@ -437,6 +465,12 @@ export class Scanner {
     await flush();
 
     // ---- 阶段 7 / 8：丢失、恢复
+    // 标丢失之前再确认一遍：根还能访问、文件确实不在了（ENOENT）才算。遍历时读不到的文件（移动硬盘中途断开又接上）
+    // 这里一般能读到，就留到下次扫描，不标丢失
+    if (!ctx.signal.aborted && goneIds.size) {
+      ctx.setMessage(`正在确认 ${goneIds.size} 个找不到的文件…`);
+      await this.confirmGone(goneIds, c.gone, rootById);
+    }
     const aborted = ctx.signal.aborted;
     db.transaction(() => {
       if (!aborted && goneIds.size) {
