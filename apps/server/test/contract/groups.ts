@@ -139,6 +139,8 @@ export function statsContract(make: ContractFactory, name: Name) {
         pendingTagCount: 1,
         collectionCounts: { doujin: 0, artbook: 0 },
         pendingCollectionCount: 0,
+        originalWorkId: null,
+        originalCount: 0,
       });
     });
   });
@@ -444,6 +446,10 @@ export function unrecognizedContract(make: ContractFactory, name: Name) {
       const original = (await e.ds.listWorks({})).find((w) => w.name === '原创');
       expect(original).toBeDefined();
       expect((await e.ds.listImages({ workId: original!.id })).items.map((x) => e.back('image', x.id))).toContain('i25');
+      const stats = await e.ds.getStats();
+      expect([stats.originalWorkId, stats.originalCount]).toEqual([original!.id, 1]);
+      expect((await e.ds.listImages({ workId: original!.id, original: true })).items.map((x) => e.back('image', x.id))).toEqual(['i25']);
+      expect((await e.ds.listImages({ workId: original!.id, original: false })).items.map((x) => e.back('image', x.id))).not.toContain('i25');
       await e.ds.undo(r.undoToken!);
       expect((await e.ds.getStats()).unrecognizedCount).toBe(7);
       await e.ds.bulkImages({ ids: [i25], action: { type: 'original', value: true } });

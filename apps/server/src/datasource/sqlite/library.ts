@@ -100,6 +100,7 @@ export class LibraryQueries {
           COALESCE(SUM(i.excluded_by IS NULL AND i.tagged_at IS NULL), 0) AS pending_tag_count,
           COALESCE(SUM(i.excluded_by IS NULL AND ${ART_KINDS_SQL} AND ${UNRECOGNIZED} AND i.collection_id IS NULL
              AND i.shelved_at IS NOT NULL), 0) AS shelved_count,
+          COALESCE(SUM(i.excluded_by IS NULL AND i.original_at IS NOT NULL), 0) AS original_count,
           ${kindSums}
          FROM images i INDEXED BY idx_images_live_stats WHERE ${LIVE_IMAGES}`,
       )
@@ -114,6 +115,7 @@ export class LibraryQueries {
       last_added_at: string | null;
       pending_tag_count: number;
       shelved_count: number;
+      original_count: number;
     };
     const kindCounts = Object.fromEntries(CONTENT_KINDS.map((k) => [k, 0])) as Record<ContentKind, number>;
     for (const k of CONTENT_KINDS) kindCounts[k] = row[`k_${k}`];
@@ -143,6 +145,7 @@ export class LibraryQueries {
       .get({ since }) as { at: string | null; count: number };
 
     const data = this.derived.get();
+    const originalWork = db.prepare("SELECT id FROM works WHERE danbooru_tag = 'original'").pluck().get() as number | undefined;
     return {
       imageCount: row.image_count,
       characterCount: [...data.characters.values()].filter((c) => c.imageCount > 0).length,
@@ -161,6 +164,8 @@ export class LibraryQueries {
       kindCounts,
       pendingTagCount: row.pending_tag_count,
       ...this.collectionStats(),
+      originalWorkId: originalWork === undefined ? null : toId(originalWork),
+      originalCount: row.original_count,
     };
   }
 

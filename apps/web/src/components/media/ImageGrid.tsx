@@ -336,9 +336,11 @@ function Tile({
           >
             {image.characterNames.length
               ? image.characterNames.slice(0, 2).join('、') + (image.characterNames.length > 2 ? ` 等 ${image.characterNames.length} 位` : '')
-              : image.kind === 'illustration' || image.kind === 'comic'
-                ? '未识别'
-                : ''}
+              : image.original
+                ? '原创'
+                : image.kind === 'illustration' || image.kind === 'comic'
+                  ? '未识别'
+                  : ''}
           </span>
         </div>
       )}

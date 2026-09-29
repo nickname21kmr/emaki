@@ -175,6 +175,8 @@ export interface ListImagesQuery extends PageQuery {
   /** 自定义画面：有其中任一一般标签（分数达到 TAG_FILTER_MIN_SCORE）的图 */
   tags?: string[];
   favorite?: boolean;
+  /** true = 用户归为原创的图；false = 没归为原创的 */
+  original?: boolean;
   /** 内容类型；不传或 'all' = 全部类型 */
   kind?: ContentKind[] | 'all';
   /** true = 分级可信（识别过，或手动设过分级） */

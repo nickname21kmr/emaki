@@ -22,6 +22,7 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
           .refine((a) => a.length <= CUSTOM_THEME_LIMITS.tags, '标签太多')
           .optional(),
         favorite: qBool.optional(),
+        original: qBool.optional(),
         kind: qKinds.optional(),
         rated: qBool.optional(),
         seed: qNumber.min(0).max(1073741823).optional(),

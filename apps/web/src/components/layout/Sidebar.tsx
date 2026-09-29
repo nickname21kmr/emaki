@@ -1,5 +1,5 @@
 import type { Job } from '@emaki/shared';
-import { Ban, BookCopy, LibraryBig, CircleHelp, Copy, House, Images, Settings, UsersRound, type LucideIcon } from 'lucide-react';
+import { Ban, BookCopy, LibraryBig, CircleHelp, Copy, House, Images, Settings, Sparkles, UsersRound, type LucideIcon } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { NavLink } from 'react-router';
 import { cn } from '@/lib/cn';
@@ -41,6 +41,17 @@ export function Sidebar() {
     },
     { to: '/gallery', label: '图库', icon: Images },
     { to: '/characters', label: '角色', icon: UsersRound },
+    // 原创（用户 2026-09-29）：直达「原创」作品页；还没有原创作品时不显示
+    ...(stats?.originalWorkId
+      ? [
+          {
+            to: `/works/${stats.originalWorkId}`,
+            label: '原创',
+            icon: Sparkles,
+            hint: stats.originalCount ? `你归为原创的 ${formatCount(stats.originalCount)} 张，和原创角色的图` : '原创角色的图',
+          },
+        ]
+      : []),
     // 合集（T38d）：本子与画集，不显示数量
     { to: '/collections', label: '合集', icon: LibraryBig },
     // 别册：截图、漫画等不打扰插画的图（T32b），只显示总数

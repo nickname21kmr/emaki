@@ -1,7 +1,7 @@
 import type { ID, Work } from '@emaki/shared';
 import { Link } from 'react-router';
 import { CoverFan } from '@/components/media/CoverFan';
-import { Skeleton } from '@/components/ui';
+import { Seal, Skeleton } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 
@@ -29,7 +29,15 @@ export function WorkFanCard({ work, index, onPick }: { work: Work; index: number
       <div className={FAN_BOX}>
         <CoverFan covers={work.covers} tint={work.color} label={work.name} />
       </div>
-      <div className="mt-2.5 truncate px-2 text-center text-[15px] font-semibold tracking-tight">{work.name}</div>
+      {work.danbooruTag === 'original' ? (
+        // 「原创」是你自己归的图，和别的作品不一样：盖一枚印、标题用朱色，一眼能找到
+        <div className="mt-2.5 flex items-center justify-center gap-1.5 px-2 text-[15px] font-semibold tracking-tight text-shu">
+          <Seal glyph="原" size={20} />
+          <span className="truncate">{work.name}</span>
+        </div>
+      ) : (
+        <div className="mt-2.5 truncate px-2 text-center text-[15px] font-semibold tracking-tight">{work.name}</div>
+      )}
       <span aria-hidden className="mx-auto mt-[7px] block h-px w-4 bg-rule" />
       <div className="mt-1.5 text-center text-[12px] text-fg-muted tabular">
         {formatCount(work.characterCount)} 位 · {formatCount(work.imageCount)} 张

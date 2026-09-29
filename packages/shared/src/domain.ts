@@ -329,6 +329,10 @@ export interface LibraryStats {
   collectionCounts: Record<CollectionKind, number>;
   /** 待整理的合集条目数（同一系列算一条） */
   pendingCollectionCount: number;
+  /** 「原创」作品（标签 original）的 id，还没有时为 null：侧栏「原创」入口用 */
+  originalWorkId: ID | null;
+  /** 用户归为原创的计入张数 */
+  originalCount: number;
 }
 
 export type ThemePreference = 'system' | 'light' | 'dark';

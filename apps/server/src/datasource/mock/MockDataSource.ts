@@ -494,6 +494,8 @@ export class MockDataSource implements DataSource {
       kindCounts,
       pendingTagCount: pendingTag,
       ...this.collections.stats(),
+      originalWorkId: [...this.db.works.values()].find((w) => w.danbooruTag === 'original')?.id ?? null,
+      originalCount: idx.visible.filter((img) => !img.excludedBy && img.originalAt).length,
     };
   }
 
@@ -747,6 +749,7 @@ export class MockDataSource implements DataSource {
       if (query.workId && !this.imageWorkIds(img).includes(query.workId)) return false;
       if (query.rating?.length && !query.rating.includes(img.rating)) return false;
       if (query.favorite !== undefined && img.favorite !== query.favorite) return false;
+      if (query.original !== undefined && !!img.originalAt !== query.original) return false;
       if (Array.isArray(query.kind) && query.kind.length && !query.kind.includes(kindOf(img))) return false;
       if (query.rated && !img.tagged) return false;
       if (query.collectionId === 'none' && img.collectionId) return false;

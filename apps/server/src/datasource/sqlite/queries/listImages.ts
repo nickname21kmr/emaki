@@ -109,6 +109,7 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
     both('i.favorite = @fav');
     p.fav = q.favorite ? 1 : 0;
   }
+  if (q.original !== undefined) both(q.original ? 'i.original_at IS NOT NULL' : 'i.original_at IS NULL');
   if (q.theme) {
     // 任一组标签达到阈值（THEME_FILTERS）。先把标签名换成 id，SQL 里不再联 tags 表；
     // 按 image_id 走 image_tags 主键，每张只看自己的几十个标签
