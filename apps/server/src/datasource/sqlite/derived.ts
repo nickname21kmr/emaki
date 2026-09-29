@@ -20,6 +20,8 @@ export interface CharacterRec {
   coverImageId: number | null;
   coverFocus: FocusPoint | null;
   pinned: boolean;
+  /** 名字锁定了：用户手动新建或改过名（识别器自动建的是 false） */
+  nameLocked: boolean;
   lastSeenAt: string | null;
   createdAt: string;
   imageCount: number;
@@ -102,7 +104,7 @@ export class Derived {
     // A 基础行
     const charRows = db
       .prepare(
-        'SELECT id, name, danbooru_tag, source, cover_image_id, cover_manual, cover_focus_x, cover_focus_y, pinned, last_seen_at, created_at FROM characters ORDER BY id',
+        'SELECT id, name, danbooru_tag, source, cover_image_id, cover_manual, cover_focus_x, cover_focus_y, pinned, name_locked, last_seen_at, created_at FROM characters ORDER BY id',
       )
       .all() as {
       id: number;
@@ -114,6 +116,7 @@ export class Derived {
       cover_focus_x: number | null;
       cover_focus_y: number | null;
       pinned: number;
+      name_locked: number;
       last_seen_at: string | null;
       created_at: string;
     }[];
@@ -313,6 +316,7 @@ export class Derived {
               : null
             : (autoFocus.get(c.id) ?? null),
         pinned: !!c.pinned,
+        nameLocked: c.name_locked === 1,
         lastSeenAt: c.last_seen_at,
         createdAt: c.created_at,
         imageCount: st?.image_count ?? 0,

@@ -222,6 +222,18 @@ export function charactersContract(make: ContractFactory, name: Name) {
       expect(ids(e, (await e.ds.listCharacters({ sort: 'name' })).items)).toEqual(['c3', 'c4', 'c6', 'c5', 'c1', 'c7', 'c2']);
     });
 
+    it('识别器建的角色图都取消了就不再列出（撤销后回来）；自建的 0 张照常显示', async () => {
+      const e = env();
+      const img = (x: string) => e.id('image', x);
+      const r = await e.ds.bulkImages({ ids: [img('i21'), img('i22')], action: { type: 'unassign', characterId: e.id('character', 'c6') } });
+      await e.ds.bulkImages({ ids: [img('i23')], action: { type: 'unassign', characterId: e.id('character', 'c7') } });
+      const listed = ids(e, (await e.ds.listCharacters({})).items);
+      expect(listed).not.toContain('c6');
+      expect(listed).toContain('c7');
+      await e.ds.undo(r.undoToken!);
+      expect(ids(e, (await e.ds.listCharacters({})).items)).toContain('c6');
+    });
+
     it('分页', async () => {
       const e = env();
       const p1 = await e.ds.listCharacters({ limit: 3 });

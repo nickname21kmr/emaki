@@ -64,6 +64,9 @@ export function toWork(w: WorkRec): Work {
   };
 }
 
+/** 识别器自动建、用户没动过、现在一张图（含漫画等）都没有的角色 */
+const emptyAuto = (c: CharacterRec) => c.imageCount === 0 && c.otherCount === 0 && c.source === 'danbooru' && !c.nameLocked && !c.pinned;
+
 /** 按 id 升序排好（之后用稳定排序，并列就保持 id 顺序） */
 const byId = <T extends { id: number }>(xs: Iterable<T>) => [...xs].sort((a, b) => a.id - b.id);
 
@@ -271,7 +274,9 @@ export class LibraryQueries {
 
   listCharacters(query: ListCharactersQuery): ListCharactersResponse {
     // 「插画 0 张、但有其他类型」的角色默认隐藏（BI-2：0 张图的新建角色照常显示）
-    const matched = this.filterCharacters(query);
+    // 识别器自动建的角色一张图都不剩了（最后一张被取消、排除或删掉）也不再显示；手动新建、改过名、置顶的照常显示。
+    // 只是不列出来，角色还在，之后又有图归进来就会回来
+    const matched = this.filterCharacters(query).filter((c) => !emptyAuto(c));
     const otherOnly = (c: CharacterRec) => c.imageCount === 0 && c.otherCount > 0;
     const all = query.includeOther ? matched : matched.filter((c) => !otherOnly(c));
     const sort = query.sort ?? 'imageCount';

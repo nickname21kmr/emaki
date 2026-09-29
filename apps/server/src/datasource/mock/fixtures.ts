@@ -38,6 +38,8 @@ export interface CharacterRow {
   coverManual?: boolean;
   coverFocus: FocusPoint | null;
   pinned: boolean;
+  /** 用户手动新建或改过名（同 sqlite 的 name_locked） */
+  nameLocked?: boolean;
 }
 
 export interface ImageRow {

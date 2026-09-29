@@ -608,8 +608,11 @@ export class MockDataSource implements DataSource {
   }
 
   async listCharacters(query: ListCharactersQuery): Promise<ListCharactersResponse> {
-    // 「插画 0 张、但有其他类型」的角色默认隐藏（BI-2）
-    const matched = this.filterCharacters(query);
+    // 「插画 0 张、但有其他类型」的角色默认隐藏（BI-2）；识别器自动建、一张图都不剩的也不显示（同 sqlite）
+    const matched = this.filterCharacters(query).filter((c) => {
+      const row = this.db.characters.get(c.id);
+      return !(c.imageCount === 0 && c.otherCount === 0 && row?.source === 'danbooru' && !row.nameLocked && !row.pinned);
+    });
     const all = query.includeOther ? matched : matched.filter((c) => !(c.imageCount === 0 && c.otherCount > 0));
     const sort = query.sort ?? 'imageCount';
     all.sort((a, b) => {
@@ -680,6 +683,7 @@ export class MockDataSource implements DataSource {
       coverImageId: null,
       coverFocus: null,
       pinned: false,
+      nameLocked: true,
     };
     this.db.characters.set(row.id, row);
     const result = this.withUndo(`已新建角色「${row.name}」`, () => {
@@ -691,7 +695,10 @@ export class MockDataSource implements DataSource {
   async updateCharacter(id: ID, body: UpdateCharacterBody): Promise<MutationResult> {
     const row = this.requireCharacter(id);
     const before = structuredClone(row);
-    if (body.name !== undefined) row.name = body.name.trim() || row.name;
+    if (body.name !== undefined) {
+      row.name = body.name.trim() || row.name;
+      row.nameLocked = true;
+    }
     if (body.aliases !== undefined) row.aliases = body.aliases;
     if (body.danbooruTag) this.assertTagFree(body.danbooruTag, row.id);
     if (body.danbooruTag !== undefined) {
