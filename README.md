@@ -119,6 +119,16 @@ flowchart LR
 
 `data/` 不会被提交到 Git。备份的话复制 `data/emaki.sqlite` 就行，缩略图和模型都能重新生成、重新下载。想换位置可以在 `.env` 里改 `EMAKI_DATA_DIR`，其他配置见 [.env.example](.env.example)。
 
+## 个人喜好分析
+
+仓库里带了一个给 [Claude Code](https://claude.com/claude-code) 用的技能（`.claude/skills/taste-profile/`）。在仓库目录里打开 Claude Code，说「分析我的收图喜好」，它会读你的图库，生成一份报告：喜欢的发色、角色性格、镜头、口味怎么变，以及和 Danbooru 同时期、中文圈画师、同几部作品比起来多了什么少了什么。
+
+- 报告和中间文件都在 `data/profile/`，只在本机打开，不会上传，也不会被提交。
+- 要和 Danbooru 对照的话会下载约 400 MB 的样本图来打标签，用完就删。
+- 尺度、部位这类私密的部分默认不算，要明确说了才加。
+
+做法和每一步的命令见 [SKILL.md](.claude/skills/taste-profile/SKILL.md)。
+
 ## 更新
 
 免安装版：见上面「升级」。源码版：

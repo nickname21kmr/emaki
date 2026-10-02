@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>个人喜好分析</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --raised: #ffffff;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --ring: rgba(11, 11, 11, 0.1);
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --s8: #e34948;
+    --seq-0: #f0efec; --seq-1: #cde2fb; --seq-2: #9ec5f4; --seq-3: #6da7ec; --seq-4: #3987e5; --seq-5: #256abf; --seq-6: #184f95; --seq-7: #0d366b;
+    --up: #006300; --down: #b3261e;
+    --accent: #c73a27;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme='light'])) {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19; --raised: #222221; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --axis: #383835; --ring: rgba(255, 255, 255, 0.1);
+      --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+      --seq-0: #262625; --seq-1: #0d366b; --seq-2: #104281; --seq-3: #184f95; --seq-4: #1c5cab; --seq-5: #2a78d6; --seq-6: #5598e7; --seq-7: #9ec5f4;
+      --up: #0ca30c; --down: #e66767;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.7 system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif; }
+  main { max-width: 1080px; margin: 0 auto; padding: 48px 20px 96px; }
+  h1 { font-size: 34px; line-height: 1.25; margin: 0 0 8px; letter-spacing: -0.01em; }
+  h2 { font-size: 22px; margin: 64px 0 6px; }
+  h2 .no { color: var(--accent); font-size: 15px; margin-right: 10px; font-weight: 600; }
+  h3 { font-size: 15px; margin: 24px 0 8px; color: var(--ink-2); font-weight: 600; }
+  p { margin: 8px 0; color: var(--ink-2); }
+  .lead { font-size: 17px; color: var(--ink); max-width: 760px; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .card { background: var(--surface); border: 1px solid var(--ring); border-radius: 14px; padding: 20px; margin-top: 16px; }
+  .grid { display: grid; gap: 16px; }
+  .g2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .g3 { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .tiles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-top: 20px; }
+  .tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 14px 16px; }
+  .tile .v { font-size: 26px; font-weight: 600; line-height: 1.2; }
+  .tile .l { font-size: 13px; color: var(--muted); }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+  .chip { border: 1px solid var(--ring); background: var(--raised); border-radius: 999px; padding: 4px 12px; font-size: 13.5px; }
+  .chip b { color: var(--accent); font-weight: 600; margin-right: 4px; }
+  .hero { background: var(--surface); border: 1px solid var(--ring); border-radius: 18px; padding: 28px; margin-top: 28px; }
+  .hero .who { font-size: 20px; font-weight: 600; line-height: 1.6; color: var(--ink); }
+  .note { font-size: 13px; color: var(--muted); border-left: 2px solid var(--axis); padding-left: 10px; margin-top: 12px; }
+  details { margin-top: 12px; }
+  summary { cursor: pointer; color: var(--ink-2); font-size: 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); }
+  th { color: var(--muted); font-weight: 500; }
+  td.n { text-align: right; }
+  svg text { fill: var(--muted); font-size: 11.5px; font-family: inherit; }
+  svg .lab { fill: var(--ink-2); font-size: 12.5px; }
+  svg .val { fill: var(--ink); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .era { display: grid; grid-template-columns: 110px 1fr; gap: 16px; padding: 14px 0; border-top: 1px solid var(--grid); }
+  .era:first-child { border-top: 0; }
+  .era .when { font-weight: 600; }
+  .era .when span { display: block; font-weight: 400; color: var(--muted); font-size: 12.5px; }
+  .era .what { color: var(--ink-2); }
+  .era .what b { color: var(--ink); }
+  .chars { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; margin-top: 16px; }
+  .char { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; overflow: hidden; }
+  .char .img { aspect-ratio: 3 / 4; background: var(--seq-0) center / cover no-repeat; }
+  .char .body { padding: 10px 12px 12px; }
+  .char .nm { font-weight: 600; font-size: 14px; line-height: 1.3; }
+  .char .wk { font-size: 12px; color: var(--muted); }
+  .char .ct { font-size: 12.5px; color: var(--ink-2); margin-top: 4px; }
+  .tip { position: fixed; pointer-events: none; background: var(--raised); color: var(--ink); border: 1px solid var(--ring); border-radius: 8px; padding: 6px 10px; font-size: 12.5px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15); opacity: 0; transition: opacity 0.1s; z-index: 9; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--ink-2); margin: 4px 0 8px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  ul.points { padding-left: 18px; margin: 8px 0; color: var(--ink-2); }
+  ul.points li { margin: 6px 0; }
+  ul.points b { color: var(--ink); }
+  .finds { display: grid; gap: 12px; margin-top: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .find { display: flex; gap: 12px; background: var(--surface); border: 1px solid var(--ring); border-radius: 14px; padding: 16px; }
+  .find .fn { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 600; font-size: 14px; display: grid; place-items: center; }
+  .find .fh { font-weight: 600; font-size: 15.5px; margin-bottom: 4px; }
+  .find .fb { font-size: 13.5px; color: var(--ink-2); line-height: 1.65; }
+  .find .fb b { color: var(--ink); }
+  .g2w { grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); }
+  @media (max-width: 640px) { .finds, .g2w { grid-template-columns: 1fr; } }
+  @media (max-width: 640px) { .era { grid-template-columns: 1fr; gap: 4px; } h1 { font-size: 28px; } }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<div class="tip" id="tip"></div>
+<script>
+const D = /*DATA*/ null;
+const S = /*STORY*/ null;
+</script>
+<script>
+const $ = (h) => { const t = document.createElement('template'); t.innerHTML = h.trim(); return t.content.firstChild; };
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const fmt = (n) => Math.round(n).toLocaleString('zh-CN');
+const pct = (x, d = 1) => (x * 100).toFixed(d) + '%';
+const tip = document.getElementById('tip');
+const showTip = (e, html) => { tip.innerHTML = html; tip.style.opacity = 1; const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8); tip.style.left = x + 'px'; tip.style.top = e.clientY + 14 + 'px'; };
+const hideTip = () => (tip.style.opacity = 0);
+document.addEventListener('mousemove', (e) => { const t = e.target.closest('[data-tip]'); t ? showTip(e, t.dataset.tip) : hideTip(); });
+const SER = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6', '--s7', '--s8'].map((v) => `var(${v})`);
+
+/** 横向条形：[{label, value, sub?, tip?}]，value 已是比例或数量；fmtv 格式化 */
+function hbars(rows, { width = 460, fmtv = (v) => pct(v), max, color = 'var(--s1)', labelW = 118 } = {}) {
+  const rowH = 26, barH = 14, w = width - labelW - 64;
+  const m = max ?? Math.max(...rows.map((r) => r.value), 1e-9);
+  const h = rows.length * rowH + 4;
+  let g = '';
+  rows.forEach((r, i) => {
+    const y = i * rowH + 4, bw = Math.max(2, (r.value / m) * w);
+    g += `<g data-tip="${esc(r.tip ?? `${r.label}：${fmtv(r.value)}`)}">
+      <rect x="0" y="${y - 2}" width="${width}" height="${rowH}" fill="transparent"/>
+      <text class="lab" x="${labelW - 8}" y="${y + barH - 2}" text-anchor="end">${esc(r.label)}</text>
+      <path d="M${labelW},${y} h${bw - 4} a4,4 0 0 1 4,4 v${barH - 8} a4,4 0 0 1 -4,4 h${-(bw - 4)} z" fill="${r.color ?? color}"/>
+      <text class="val" x="${labelW + bw + 6}" y="${y + barH - 2}">${esc(fmtv(r.value))}</text></g>`;
+  });
+  return `<svg viewBox="0 0 ${width} ${h}" width="100%" role="img">${g}</svg>`;
+}
+
+/** 按月的柱子 */
+function columns(entries, { width = 1000, height = 200, color = 'var(--s1)' } = {}) {
+  const pad = { l: 40, r: 8, t: 10, b: 26 };
+  const w = width - pad.l - pad.r, h = height - pad.t - pad.b;
+  const max = Math.max(...entries.map((e) => e[1]));
+  const top = Math.ceil(max / 500) * 500;
+  const step = w / entries.length, bw = Math.min(14, step - 2);
+  let g = '';
+  for (let v = 0; v <= top; v += 500) { const y = pad.t + h - (v / top) * h; g += `<line x1="${pad.l}" x2="${width - pad.r}" y1="${y}" y2="${y}" stroke="var(--grid)"/><text x="${pad.l - 6}" y="${y + 4}" text-anchor="end">${fmt(v)}</text>`; }
+  entries.forEach(([k, v], i) => {
+    const x = pad.l + i * step + (step - bw) / 2, bh = (v / top) * h, y = pad.t + h - bh;
+    g += `<g data-tip="${k}：${fmt(v)} 张"><rect x="${pad.l + i * step}" y="${pad.t}" width="${step}" height="${h}" fill="transparent"/><path d="M${x},${y + bh} v${-(bh - 3)} a3,3 0 0 1 3,-3 h${bw - 6} a3,3 0 0 1 3,3 v${bh - 3} z" fill="${color}"/></g>`;
+    if (k.endsWith('-01')) g += `<text x="${x + bw / 2}" y="${height - 6}" text-anchor="middle">${k.slice(0, 4)}</text>`;
+  });
+  g += `<line x1="${pad.l}" x2="${width - pad.r}" y1="${pad.t + h}" y2="${pad.t + h}" stroke="var(--axis)"/>`;
+  return `<svg viewBox="0 0 ${width} ${height}" width="100%" role="img">${g}</svg>`;
+}
+
+/** 一天 24 小时 */
+function hours(arr, { width = 480, height = 170 } = {}) {
+  const pad = { l: 8, r: 8, t: 10, b: 24 };
+  const w = width - pad.l - pad.r, h = height - pad.t - pad.b;
+  const tot = arr.reduce((a, b) => a + b, 0), max = Math.max(...arr);
+  const step = w / 24, bw = Math.min(14, step - 3);
+  let g = '';
+  arr.forEach((v, i) => {
+    const x = pad.l + i * step + (step - bw) / 2, bh = (v / max) * h, y = pad.t + h - bh;
+    const night = i <= 4 || i >= 23;
+    g += `<g data-tip="${i}:00–${i + 1}:00：${pct(v / tot)}"><rect x="${pad.l + i * step}" y="${pad.t}" width="${step}" height="${h}" fill="transparent"/><path d="M${x},${y + bh} v${-(bh - 3)} a3,3 0 0 1 3,-3 h${bw - 6} a3,3 0 0 1 3,3 v${bh - 3} z" fill="${night ? 'var(--s7)' : 'var(--s1)'}"/></g>`;
+    if (i % 3 === 0) g += `<text x="${x + bw / 2}" y="${height - 6}" text-anchor="middle">${i}时</text>`;
+  });
+  return `<svg viewBox="0 0 ${width} ${height}" width="100%" role="img">${g}</svg>`;
+}
+
+/** 行 × 时期 的热力格：rows=[{label, values[]}]，values 是比例 */
+function heat(rows, periods, { width = 1000, labelW = 130, fmtv = (v) => pct(v, 0) } = {}) {
+  const cellH = 26, cw = (width - labelW) / periods.length;
+  const max = Math.max(...rows.flatMap((r) => r.values));
+  const step = (v) => { if (v <= 0) return 'var(--seq-0)'; const k = Math.min(7, 1 + Math.floor((v / max) * 6.999)); return `var(--seq-${k})`; };
+  let g = '';
+  periods.forEach((p, j) => (g += `<text x="${labelW + j * cw + cw / 2}" y="14" text-anchor="middle">${esc(p)}</text>`));
+  rows.forEach((r, i) => {
+    const y = 22 + i * cellH;
+    g += `<text class="lab" x="${labelW - 8}" y="${y + 17}" text-anchor="end">${esc(r.label)}</text>`;
+    r.values.forEach((v, j) => {
+      const dark = v / max > 0.55;
+      g += `<g data-tip="${esc(r.label)} · ${esc(periods[j])}：${fmtv(v)}"><rect x="${labelW + j * cw + 1}" y="${y + 1}" width="${cw - 2}" height="${cellH - 2}" rx="4" fill="${step(v)}"/>${v >= max * 0.2 ? `<text x="${labelW + j * cw + cw / 2}" y="${y + 17}" text-anchor="middle" style="fill:${dark ? '#fff' : 'var(--ink-2)'};font-size:11px">${fmtv(v)}</text>` : ''}</g>`;
+    });
+  });
+  return `<svg viewBox="0 0 ${width} ${22 + rows.length * cellH + 4}" width="100%" role="img">${g}</svg>`;
+}
+
+/** 百分比堆叠横条：每个时期一条，segs=[{key,label,color}] */
+function stack100(periods, data, segs, { width = 1000, labelW = 80 } = {}) {
+  const rowH = 26, barH = 16, w = width - labelW - 10;
+  let g = '';
+  periods.forEach((p, i) => {
+    const d = data[p]; if (!d) return;
+    const tot = segs.reduce((a, s) => a + (d[s.key] ?? 0), 0);
+    const y = i * rowH + 4;
+    let x = labelW;
+    g += `<text class="lab" x="${labelW - 8}" y="${y + barH - 3}" text-anchor="end">${esc(p)}</text>`;
+    segs.forEach((s) => {
+      const v = (d[s.key] ?? 0) / tot, sw = v * w;
+      if (sw <= 0) return;
+      g += `<g data-tip="${esc(p)} · ${esc(s.label)}：${pct(v)}"><rect x="${x}" y="${y}" width="${Math.max(0, sw - 2)}" height="${barH}" rx="3" fill="${s.color}"/>${sw > 44 ? `<text x="${x + 6}" y="${y + barH - 4}" style="fill:#fff;font-size:11px">${pct(v, 0)}</text>` : ''}</g>`;
+      x += sw;
+    });
+  });
+  return `<svg viewBox="0 0 ${width} ${periods.length * rowH + 8}" width="100%" role="img">${g}</svg>`;
+}
+
+/** 两个时点的对比（早期 → 近期）：[{label, a, b}] */
+function slope(rows, { width = 460, labelW = 118, aLabel = '早期', bLabel = '近期' } = {}) {
+  const rowH = 26, w = width - labelW - 70;
+  const max = Math.max(...rows.flatMap((r) => [r.a, r.b]));
+  let g = `<text x="${labelW}" y="12">0</text><text x="${labelW + w}" y="12" text-anchor="end">${pct(max, 0)}</text>`;
+  rows.forEach((r, i) => {
+    const y = 26 + i * rowH, xa = labelW + (r.a / max) * w, xb = labelW + (r.b / max) * w;
+    const up = r.b > r.a;
+    g += `<g data-tip="${esc(r.label)}：${bLabel === '近期' ? '早期' : aLabel} ${pct(r.a)} → ${bLabel} ${pct(r.b)}">
+      <rect x="0" y="${y - 12}" width="${width}" height="${rowH}" fill="transparent"/>
+      <text class="lab" x="${labelW - 8}" y="${y + 4}" text-anchor="end">${esc(r.label)}</text>
+      <line x1="${labelW}" x2="${labelW + w}" y1="${y}" y2="${y}" stroke="var(--grid)"/>
+      <line x1="${xa}" x2="${xb}" y1="${y}" y2="${y}" stroke="${up ? 'var(--up)' : 'var(--down)'}" stroke-width="2"/>
+      <circle cx="${xa}" cy="${y}" r="4" fill="var(--axis)" stroke="var(--surface)" stroke-width="2"/>
+      <circle cx="${xb}" cy="${y}" r="5" fill="${up ? 'var(--up)' : 'var(--down)'}" stroke="var(--surface)" stroke-width="2"/>
+      <text class="val" x="${Math.max(xa, xb) + 10}" y="${y + 4}">${pct(r.b)}</text></g>`;
+  });
+  return `<svg viewBox="0 0 ${width} ${26 + rows.length * rowH}" width="100%" role="img">${g}</svg>`;
+}
+
+/** 小折线：一行里放在角色卡上 */
+function spark(values, { width = 126, height = 28 } = {}) {
+  const max = Math.max(...values, 1), n = values.length;
+  const pts = values.map((v, i) => `${(i / (n - 1)) * (width - 6) + 3},${height - 3 - (v / max) * (height - 6)}`).join(' ');
+  return `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}"><polyline points="${pts}" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+
+// ---------------------------------------------------------------- 新图表
+/** 偏爱指数的双向条（对数刻度，×1 为中线） */
+function divbars(rows, { width = 460, labelW = 118 } = {}) {
+  const rowH = 24, barH = 12, lo = Math.log2(0.18), hi = Math.log2(8.5), w = width - labelW - 52;
+  const x0 = labelW + (w * -lo) / (hi - lo);
+  const X = (v) => labelW + (w * (Math.log2(Math.max(0.18, Math.min(8.5, v))) - lo)) / (hi - lo);
+  let g = '';
+  [0.25, 0.5, 2, 4, 8].forEach((t) => (g += `<line x1="${X(t)}" x2="${X(t)}" y1="14" y2="${16 + rows.length * rowH}" stroke="var(--grid)"/><text x="${X(t)}" y="10" text-anchor="middle">×${t}</text>`));
+  g += `<text x="${x0}" y="10" text-anchor="middle" style="fill:var(--ink-2)">×1</text>`;
+  rows.forEach((r, i) => {
+    const y = 18 + i * rowH, x = X(r.lift), up = r.lift >= 1;
+    const a = Math.min(x, x0), bw = Math.max(2, Math.abs(x - x0));
+    g += `<g data-tip="${esc(r.tip ?? `${r.label}：×${r.lift.toFixed(2)}${r.share != null ? `，占 ${pct(r.share)}` : ''}`)}">
+      <rect x="0" y="${y - 4}" width="${width}" height="${rowH}" fill="transparent"/>
+      <text class="lab" x="${labelW - 8}" y="${y + barH - 2}" text-anchor="end">${esc(r.label)}</text>
+      <rect x="${a}" y="${y}" width="${bw}" height="${barH}" rx="3" fill="${up ? 'var(--s1)' : 'var(--s2)'}"/>
+      <text class="val" x="${up ? x + 6 : x0 + 6}" y="${y + barH - 2}">×${r.lift.toFixed(r.lift < 1 ? 2 : 1)}</text></g>`;
+  });
+  g += `<line x1="${x0}" x2="${x0}" y1="14" y2="${16 + rows.length * rowH}" stroke="var(--axis)" stroke-width="1.5"/>`;
+  return `<svg viewBox="0 0 ${width} ${20 + rows.length * rowH}" width="100%" role="img">${g}</svg>`;
+}
+
+/** 两条并排 */
+function dual(rows, { width = 460, labelW = 110, aName = '日常图', bName = '私密图' } = {}) {
+  const rowH = 34, w = width - labelW - 56;
+  const max = Math.max(...rows.flatMap((r) => [r.a, r.b]));
+  let g = '';
+  rows.forEach((r, i) => {
+    const y = i * rowH + 4, wa = (r.a / max) * w, wb = (r.b / max) * w;
+    g += `<g data-tip="${esc(r.label)}：${aName} ${pct(r.a)} · ${bName} ${pct(r.b)}">
+      <rect x="0" y="${y - 2}" width="${width}" height="${rowH}" fill="transparent"/>
+      <text class="lab" x="${labelW - 8}" y="${y + 17}" text-anchor="end">${esc(r.label)}</text>
+      <rect x="${labelW}" y="${y + 2}" width="${Math.max(2, wa)}" height="10" rx="3" fill="var(--s3)"/>
+      <text class="val" x="${labelW + wa + 6}" y="${y + 11}">${pct(r.a, 0)}</text>
+      <rect x="${labelW}" y="${y + 15}" width="${Math.max(2, wb)}" height="10" rx="3" fill="var(--s8)"/>
+      <text class="val" x="${labelW + wb + 6}" y="${y + 24}">${pct(r.b, 0)}</text></g>`;
+  });
+  return `<svg viewBox="0 0 ${width} ${rows.length * rowH + 6}" width="100%" role="img">${g}</svg>`;
+}
+
+/** 点图：每行几种对照下的倍数（对数轴） */
+function dotplot(rows, series, { width = 1000, labelW = 90, lo = 0.35, hi = 3 } = {}) {
+  const rowH = 28, w = width - labelW - 20;
+  const L = Math.log(lo), H = Math.log(hi);
+  const X = (v) => labelW + (w * (Math.log(Math.max(lo, Math.min(hi, v))) - L)) / (H - L);
+  let g = '';
+  [0.5, 0.75, 1, 1.5, 2].forEach((t) => (g += `<line x1="${X(t)}" x2="${X(t)}" y1="16" y2="${20 + rows.length * rowH}" stroke="${t === 1 ? 'var(--axis)' : 'var(--grid)'}" stroke-width="${t === 1 ? 1.5 : 1}"/><text x="${X(t)}" y="11" text-anchor="middle">×${t}</text>`));
+  rows.forEach((r, i) => {
+    const y = 30 + i * rowH;
+    const vs = series.map((s) => r.vals[s.key]).filter((v) => v != null && isFinite(v));
+    g += `<text class="lab" x="${labelW - 8}" y="${y + 4}" text-anchor="end">${esc(r.label)}</text>`;
+    if (vs.length) g += `<line x1="${X(Math.min(...vs))}" x2="${X(Math.max(...vs))}" y1="${y}" y2="${y}" stroke="var(--grid)" stroke-width="6" stroke-linecap="round"/>`;
+    series.forEach((s) => {
+      const v = r.vals[s.key];
+      if (v == null || !isFinite(v)) return;
+      g += `<circle cx="${X(v)}" cy="${y}" r="${s.big ? 7 : 5.5}" fill="${s.color}" stroke="var(--surface)" stroke-width="2" data-tip="${esc(`${r.label} · ${s.label}：×${v.toFixed(2)}`)}"/>`;
+    });
+  });
+  return `<svg viewBox="0 0 ${width} ${36 + rows.length * rowH}" width="100%" role="img">${g}</svg>`;
+}
+
+/** 分组横条：每行几组对照的比例 */
+function groupbars(rows, series, { width = 460, labelW = 150 } = {}) {
+  const bh = 7, gap = 2, rowH = series.length * (bh + gap) + 12, w = width - labelW - 50;
+  const max = Math.max(...rows.flatMap((r) => series.map((s) => r.vals[s.key] ?? 0)));
+  let g = '';
+  rows.forEach((r, i) => {
+    const y0 = i * rowH + 4;
+    g += `<text class="lab" x="${labelW - 8}" y="${y0 + (series.length * (bh + gap)) / 2 + 4}" text-anchor="end">${esc(r.label)}</text>`;
+    series.forEach((s, k) => {
+      const v = r.vals[s.key] ?? 0, bw = Math.max(1.5, (v / max) * w), y = y0 + k * (bh + gap);
+      g += `<g data-tip="${esc(`${r.label} · ${s.label}：${pct(v)}`)}"><rect x="${labelW}" y="${y}" width="${bw}" height="${bh}" rx="2" fill="${s.color}"/>${k === 0 ? `<text class="val" x="${labelW + bw + 5}" y="${y + bh}">${pct(v, 1)}</text>` : ''}</g>`;
+    });
+  });
+  return `<svg viewBox="0 0 ${width} ${rows.length * rowH + 6}" width="100%" role="img">${g}</svg>`;
+}
+
+/** 带区间的倍数条 */
+function cibars(rows, { width = 460, labelW = 96, lo = 0.4, hi = 2.6 } = {}) {
+  const rowH = 30, w = width - labelW - 60;
+  const L = Math.log(lo), H = Math.log(hi);
+  const X = (v) => labelW + (w * (Math.log(Math.max(lo, Math.min(hi, v))) - L)) / (H - L);
+  let g = '';
+  [0.5, 1, 2].forEach((t) => (g += `<line x1="${X(t)}" x2="${X(t)}" y1="14" y2="${18 + rows.length * rowH}" stroke="${t === 1 ? 'var(--axis)' : 'var(--grid)'}" stroke-width="${t === 1 ? 1.5 : 1}"/><text x="${X(t)}" y="10" text-anchor="middle">×${t}</text>`));
+  rows.forEach((r, i) => {
+    const y = 30 + i * rowH, sig = r.lo > 1 || r.hi < 1;
+    const col = !sig ? 'var(--muted)' : r.ratio > 1 ? 'var(--s1)' : 'var(--s2)';
+    g += `<g data-tip="${esc(r.tip ?? `${r.label}：×${r.ratio.toFixed(2)}（区间 ${r.lo.toFixed(2)}–${r.hi.toFixed(2)}）`)}"><rect x="0" y="${y - 12}" width="${width}" height="${rowH}" fill="transparent"/>
+      <text class="lab" x="${labelW - 8}" y="${y + 4}" text-anchor="end">${esc(r.label)}</text>
+      <line x1="${X(r.lo)}" x2="${X(r.hi)}" y1="${y}" y2="${y}" stroke="${col}" stroke-width="2"/>
+      <line x1="${X(r.lo)}" x2="${X(r.lo)}" y1="${y - 5}" y2="${y + 5}" stroke="${col}" stroke-width="2"/><line x1="${X(r.hi)}" x2="${X(r.hi)}" y1="${y - 5}" y2="${y + 5}" stroke="${col}" stroke-width="2"/>
+      <circle cx="${X(r.ratio)}" cy="${y}" r="6" fill="${col}" stroke="var(--surface)" stroke-width="2"/>
+      <text class="val" x="${X(r.hi) + 8}" y="${y + 4}">×${r.ratio.toFixed(2)}</text></g>`;
+  });
+  return `<svg viewBox="0 0 ${width} ${36 + rows.length * rowH}" width="100%" role="img">${g}</svg>`;
+}
+
+/** 入坑时间线：入坑 → 高峰 */
+function timeline(rows, { width = 1000, labelW = 110, from = '2022-01-01', to = '2026-05-01' } = {}) {
+  const rowH = 22, w = width - labelW - 60, t0 = +new Date(from), t1 = +new Date(to);
+  const X = (d) => labelW + ((+new Date(d) - t0) / (t1 - t0)) * w;
+  let g = '';
+  for (let y = 2022; y <= 2026; y++) g += `<line x1="${X(`${y}-01-01`)}" x2="${X(`${y}-01-01`)}" y1="14" y2="${18 + rows.length * rowH}" stroke="var(--grid)"/><text x="${X(`${y}-01-01`)}" y="10" text-anchor="middle">${y}</text>`;
+  rows.forEach((r, i) => {
+    const y = 26 + i * rowH, slow = r.toPeak >= 180;
+    g += `<g data-tip="${esc(`${r.name}：${r.start} 入坑 → ${r.peak} 高峰（${r.toPeak} 天），高峰那 30 天占她全部的 ${pct(r.peakShare, 0)}，半年后仍有 ${pct(r.tail, 0)}`)}">
+      <rect x="0" y="${y - 10}" width="${width}" height="${rowH}" fill="transparent"/>
+      <text class="lab" x="${labelW - 8}" y="${y + 4}" text-anchor="end">${esc(r.name)}</text>
+      <line x1="${X(r.start)}" x2="${X(r.peak)}" y1="${y}" y2="${y}" stroke="${slow ? 'var(--s7)' : 'var(--s3)'}" stroke-width="3" stroke-linecap="round"/>
+      <circle cx="${X(r.start)}" cy="${y}" r="3.5" fill="var(--axis)"/>
+      <circle cx="${X(r.peak)}" cy="${y}" r="6" fill="${slow ? 'var(--s7)' : 'var(--s3)'}" stroke="var(--surface)" stroke-width="2"/>
+      <text class="val" x="${X(r.peak) + 10}" y="${y + 4}">${r.toPeak} 天</text></g>`;
+  });
+  return `<svg viewBox="0 0 ${width} ${30 + rows.length * rowH}" width="100%" role="img">${g}</svg>`;
+}
+
+
+// ---------------------------------------------------------------- 组装（data.json → 图表；story.json → 文字，可缺）
+const app = document.getElementById('app');
+const P = D.periods;
+const add = (h) => app.appendChild($(h));
+const bullets = (arr) => (arr?.length ? `<ul class="points">${arr.map((x) => `<li>${x}</li>`).join('')}</ul>` : '');
+const sec = (k) => (S.sections ?? {})[k] ?? {};
+const intro = (k) => (sec(k).text ? `<p>${sec(k).text}</p>` : '');
+const note = (k) => (sec(k).note ? `<p class="note">${sec(k).note}</p>` : '');
+const cover = (id) => (id ? `url(http://127.0.0.1:5174/api/images/${id}/thumb?w=480)` : 'none');
+let no = 0;
+const H = (t, id = '') => `<h2${id ? ` id="${id}"` : ''}><span class="no">${String(++no).padStart(2, '0')}</span>${t}</h2>`;
+const BASE = [
+  { key: 'recent', label: 'Danbooru 同时期', color: 'var(--s4)' },
+  { key: 'cn', label: '中文圈画师', color: 'var(--s8)', big: true },
+  { key: 'works', label: '同几部作品', color: 'var(--s3)' },
+].filter((b) => D.baselines?.[b.key]);
+const GS = [{ key: '你', label: '你', color: 'var(--s1)' }, ...BASE];
+const hasBase = BASE.length > 0;
+const fmtDate = (t) => (t && isFinite(t) ? new Date(t).toISOString().slice(0, 10) : '—');
+
+// 开头
+add(`<header><div class="meta">Emaki 絵巻 · 个人喜好分析 · ${esc(S.date ?? D.generatedAt.slice(0, 10))}</div><h1>${esc(S.title ?? '你的收图画像')}</h1>${S.lead ? `<p class="lead">${S.lead}</p>` : ''}</header>`);
+if (S.persona || S.tags?.length)
+  add(`<section class="hero">${S.persona ? `<div class="who">${S.persona}</div>` : ''}${S.tags?.length ? `<div class="chips">${S.tags.map(([k, v]) => `<span class="chip"><b>${esc(k)}</b>${esc(v)}</span>`).join('')}</div>` : ''}</section>`);
+const O = D.overview;
+add(`<div class="tiles">${[
+  [fmt(O.images), '图库总数'],
+  [fmt(O.illustrations), '插画'],
+  [fmt(O.characters), '出现过的角色'],
+  [fmt(O.works), '作品'],
+  [fmt(O.activeDays), '有存图的天数'],
+  [String(O.medianPerDay ?? '—'), '存图那天的中位张数'],
+]
+  .map(([v, l]) => `<div class="tile"><div class="v">${esc(v)}</div><div class="l">${esc(l)}</div></div>`)
+  .join('')}</div>`);
+if (S.findings?.length)
+  add(`<section>${H('意料之外的发现')}<div class="finds">${S.findings.map((f, i) => `<article class="find"><div class="fn">${i + 1}</div><div><div class="fh">${f.h}</div><div class="fb">${f.b}</div></div></article>`).join('')}</div></section>`);
+
+// 口径
+const rowsM = [
+  ['时间范围', `${fmtDate(O.first)} – ${fmtDate(O.last)}`, '文件名里的时间戳优先，没有就用文件修改时间；时间不可信的归「更早」'],
+  ['标签口径', D.sampled ? 'WD 统一口径' : D.mixedModels ? '模型混用' : '单一模型', D.sampled ? '换模型之后的图抽样用 WD 重打、按量加权，整条时间线可比' : D.mixedModels ? '没有 WD 抽样：时期之间的变化可能来自换模型，不全是口味变化' : '只有一个识别模型'],
+  ...(D.uncovered && Object.keys(D.uncovered).length ? [['未抽样的时期', Object.keys(D.uncovered).join('、'), '这些时期用的是图片自己的标签']] : []),
+  ['对照组', hasBase ? BASE.map((b) => `${b.label} ${fmt(D.baselines[b.key])}`).join(' · ') : 'Danbooru 全站帖子数', hasBase ? '用同一个 WD 模型打的标签，只比画女性角色的图；外观和镜头只比全年龄 / 轻微' : '全站二十年的人工标签和模型标签习惯不同，只能看相对高低'],
+  ['排除', `${pct(D.minorShare)}`, '带儿童相关标签的图整张不参与统计；不分析角色年龄'],
+];
+add(`<section>${H('这次怎么比的')}<div class="card"><table><tbody>${rowsM.map((r) => `<tr><td>${r[0]}</td><td>${esc(r[1])}</td><td>${r[2]}</td></tr>`).join('')}</tbody></table></div>${note('method')}</section>`);
+
+// 节奏
+const months = Object.entries(D.rhythm.monthly).sort((a, b) => a[0].localeCompare(b[0]));
+const R = D.rhythm;
+add(`<section>${H('收图的节奏')}${intro('rhythm')}
+  ${months.length > 3 ? `<div class="card"><h3>每月存下的插画</h3>${columns(months)}</div>` : ''}
+  ${R.exactCount > 200 ? `<div class="grid g2"><div class="card"><h3>一天里什么时候存图（紫色 = 23 点到凌晨 5 点）</h3>${hours(R.hour)}</div>
+  <div class="card"><h3>每个小时存的图里，较敏感 / 限制级的比例</h3>${hbars(R.hour.map((n, h) => ({ label: `${h} 时`, value: n ? R.hourNsfw[h] / n : 0 })).filter((_, h) => h % 2 === 0), { labelW: 50, max: 0.4 })}</div></div>` : ''}
+  ${bullets(sec('rhythm').points)}</section>`);
+
+// 作品与角色
+add(`<section>${H('作品和核心角色')}${intro('works')}
+  <div class="card"><h3>各作品在每个时期所占比例</h3>${heat(D.works.slice(0, 14).map((w) => ({ label: w.name, values: w.per })), P)}</div>
+  <div class="chars">${D.characters.slice(0, 12).map((c) => `<div class="char"><div class="img" style="background-image:${cover(c.cover)}"></div><div class="body"><div class="nm">${esc(c.name)}</div><div class="wk">${esc(c.work ?? '')}</div><div class="ct">${fmt(c.n)} 张</div>${spark(c.per)}</div></div>`).join('')}</div>
+  <p class="note">封面从本机的 Emaki 读取（只用全年龄的图），Emaki 没开时是空的。</p>
+  ${bullets(sec('works').points)}</section>`);
+
+// 外貌
+const hairRows = D.looks.hair.filter((h) => h.vs && Object.keys(h.vs).length > 1);
+add(`<section id="looks">${H('发色、瞳色、发型')}${intro('looks')}
+  ${hasBase && hairRows.length ? `<div class="card"><h3>单人女性角色、只有一种发色、全年龄 / 轻微的图里，你比对照组多几倍</h3><div class="legend">${BASE.map((s) => `<span><i style="background:${s.color}"></i>比 ${s.label}</span>`).join('')}</div>
+    ${dotplot(hairRows.filter((h) => h.vs.你 > 0).map((h) => ({ label: h.zh, vals: Object.fromEntries(BASE.map((s) => [s.key, h.vs[s.key] ? h.vs.你 / h.vs[s.key] : null])) })), BASE)}</div>` : ''}
+  <div class="grid g2">
+    <div class="card"><h3>发色（和 Danbooru 全站比）</h3>${divbars(D.looks.hair.filter((t) => t.lift).sort((a, b) => b.lift - a.lift).map((t) => ({ label: t.zh, lift: t.lift, share: t.share })))}</div>
+    <div class="card"><h3>瞳色</h3>${divbars(D.looks.eyes.filter((t) => t.lift).sort((a, b) => b.lift - a.lift).map((t) => ({ label: t.zh, lift: t.lift, share: t.share })))}</div>
+    <div class="card"><h3>发型</h3>${divbars(D.looks.style.filter((t) => t.lift).sort((a, b) => b.lift - a.lift).map((t) => ({ label: t.zh, lift: t.lift, share: t.share })))}</div>
+    <div class="card"><h3>按角色算：每个角色只算一次</h3>${hbars(D.hairByCharacter.slice(0, 10).map((h) => ({ label: h.zh, value: h.share, tip: `${h.zh}：${h.chars} 个角色，存到 20 张以上的占 ${pct(h.conv, 0)}` })), { labelW: 70 })}
+      <h3>出现过的角色里，存到 20 张以上的比例</h3>${hbars(D.hairByCharacter.filter((h) => h.chars >= 15).sort((a, b) => b.conv - a.conv).map((h) => ({ label: h.zh, value: h.conv })), { labelW: 70 })}</div>
+    <div class="card"><h3>表情（和 Danbooru 全站比）</h3>${divbars(D.looks.expressions.filter((t) => t.lift).sort((a, b) => b.lift - a.lift).map((t) => ({ label: t.zh, lift: t.lift, share: t.share })))}</div>
+  </div>
+  ${bullets(sec('looks').points)}${note('looks')}</section>`);
+
+// 性格（扣人气）
+const PO = D.popularity;
+if (PO.archetypes.length || PO.hidden.length)
+  add(`<section id="persona">${H('角色：扣掉人气之后')}${intro('persona')}
+  ${PO.archetypes.length ? `<div class="card"><h3>按性格原型：实际张数 ÷ 按 Danbooru 人气应得的张数（在同一部作品里分配）</h3>${cibars(PO.archetypes.map((a) => ({ label: a.key, ratio: a.ratio, lo: a.lo, hi: a.hi, tip: `${a.key}（${a.desc}）：×${a.ratio.toFixed(2)}，区间 ${a.lo.toFixed(2)}–${a.hi.toFixed(2)}，${a.chars} 个角色。超配：${a.over.join('、')}；欠配：${a.under.join('、')}` })), { width: 1000, labelW: 110 })}
+    <p class="note">蓝 = 区间整体在 ×1 右边（确实偏爱），灰 = 跨过 ×1（和人气持平）。性格原型是人工对照表（archetypes.json），只覆盖常见角色。</p></div>` : ''}
+  <div class="grid g2">
+    <div class="card"><h3>扣掉人气后超配最多的角色</h3><table><thead><tr><th>角色</th><th class="n">存了</th><th class="n">应得</th><th class="n">倍数</th></tr></thead><tbody>${PO.hidden.slice(0, 12).map((h) => `<tr><td>${esc(h.name)}<span class="meta"> · ${esc(h.work ?? '')}</span></td><td class="n">${h.n}</td><td class="n">${Math.round(h.exp)}</td><td class="n"><b>×${h.ratio.toFixed(1)}</b></td></tr>`).join('')}</tbody></table></div>
+    <div class="card"><h3>很火、你却几乎跳过的</h3><table><thead><tr><th>角色</th><th class="n">存了</th><th class="n">应得</th><th class="n">倍数</th></tr></thead><tbody>${PO.skipped.slice(0, 12).map((h) => `<tr><td>${esc(h.name)}<span class="meta"> · ${esc(h.work ?? '')}</span></td><td class="n">${h.n}</td><td class="n">${Math.round(h.exp)}</td><td class="n">×${h.ratio.toFixed(2)}</td></tr>`).join('')}</tbody></table></div>
+  </div>
+  ${PO.hair.length ? `<div class="card"><h3>按发色：扣掉人气后的倍数</h3>${cibars(PO.hair.map((a) => ({ label: a.zh ?? a.key, ratio: a.ratio, lo: a.lo, hi: a.hi })), { width: 1000, labelW: 110 })}</div>` : ''}
+  ${bullets(sec('persona').points)}${note('persona')}</section>`);
+
+// 镜头
+const CAMS = Object.keys(D.camera);
+add(`<section id="camera">${H('镜头：你从哪里看她')}${intro('camera')}
+  <div class="legend" style="margin-top:16px">${GS.map((s) => `<span><i style="background:${s.color}"></i>${s.label}</span>`).join('')}</div>
+  <div class="grid g2w">${CAMS.map((d) => `<div class="card"><h3>${d}</h3>${groupbars(D.camera[d].filter((r) => !/^(未标注|平视|正面|普通|旁观)$/.test(r.label)).map((r) => ({ label: r.label, vals: r })), GS, { labelW: 130 })}</div>`).join('')}</div>
+  <div class="card"><h3>尺度变大时镜头怎么移动（全年龄 / 轻微 → 较敏感 / 限制级）</h3>${dual(['视线', '朝向', '景别', '俯仰'].flatMap((d) => D.cameraByRating[d].filter((r) => !/^(未标注|平视|正面|远景)$/.test(r.label)).map((r) => ({ label: r.label, a: r.sfw, b: r.nsfw }))), { labelW: 100, width: 1000 })}</div>
+  ${bullets(sec('camera').points)}${note('camera')}</section>`);
+
+// 偏爱 / 避开
+add(`<section>${H('比一般人更偏爱的')}${intro('loves')}
+  <div class="grid g2"><div class="card"><h3>偏爱指数最高（×1 = 和 Danbooru 一样常见）</h3>${hbars(D.loves.slice(0, 22).map((t) => ({ label: t.zh, value: t.lift, tip: `${t.zh}（${t.name}）：×${t.lift.toFixed(1)}，占 ${pct(t.share)}` })), { fmtv: (v) => '×' + v.toFixed(1), labelW: 150 })}</div>
+  <div class="card"><h3>明显避开的</h3>${hbars(D.avoids.slice(0, 16).map((t) => ({ label: t.zh, value: t.lift, color: 'var(--s2)' })), { fmtv: (v) => '×' + v.toFixed(2), labelW: 150, max: 1 })}</div></div>
+  ${bullets(sec('loves').points)}</section>`);
+
+// 和中文圈比
+if (D.vsCn)
+  add(`<section id="cn">${H('和中文圈画师比')}${intro('cn')}
+  <div class="grid g2"><div class="card"><h3>你比中文圈画师多的</h3>${divbars(D.vsCn.more.slice(0, 18).map((r) => ({ label: r.zh.replace(/（.*）/, ''), lift: r.ratio, tip: `${r.zh}：你 ${pct(r.you)} · 中文圈 ${pct(r.cn)}` })), { labelW: 120 })}</div>
+  <div class="card"><h3>你比中文圈画师少的</h3>${divbars(D.vsCn.less.slice(0, 18).map((r) => ({ label: r.zh.replace(/（.*）/, ''), lift: r.ratio, tip: `${r.zh}：你 ${pct(r.you)} · 中文圈 ${pct(r.cn)}` })), { labelW: 120 })}</div></div>
+  ${bullets(sec('cn').points)}${note('cn')}</section>`);
+
+// 变化
+add(`<section>${H('口味是怎么变的')}${intro('shift')}
+  <div class="grid g2"><div class="card"><h3>升温最多（${esc(D.shift.early.join('、'))} → ${esc(D.shift.late.join('、'))}）</h3>${slope(D.shift.rising.slice(0, 12).map((t) => ({ label: t.zh, a: t.early, b: t.late })))}</div>
+  <div class="card"><h3>降温最多</h3>${slope(D.shift.falling.slice(0, 12).map((t) => ({ label: t.zh, a: t.early, b: t.late })))}</div></div>
+  <div class="card"><h3>分级构成</h3><div class="legend"><span><i style="background:var(--s3)"></i>全年龄</span><span><i style="background:var(--s1)"></i>轻微</span><span><i style="background:var(--s4)"></i>较敏感</span><span><i style="background:var(--s8)"></i>限制级</span></div>
+  ${stack100(P, D.ratingByPer, [{ key: 'general', label: '全年龄', color: 'var(--s3)' }, { key: 'sensitive', label: '轻微', color: 'var(--s1)' }, { key: 'questionable', label: '较敏感', color: 'var(--s4)' }, { key: 'explicit', label: '限制级', color: 'var(--s8)' }])}</div>
+  ${bullets(sec('shift').points)}${note('shift')}</section>`);
+
+// 怎么爱上一个角色
+const AR = D.arcs, RS = D.resave;
+if (AR.n || RS.n)
+  add(`<section>${H('你怎么爱上一个角色')}${intro('arcs')}
+  ${AR.n ? `<div class="card"><h3>从入坑（30 天内第一次存到 3 张）到存得最多的 30 天（紫色 = 超过半年才到高峰）</h3>${timeline(AR.list.slice(0, 26).sort((a, b) => a.start.localeCompare(b.start)), { from: `${AR.list.reduce((m, a) => (a.start < m ? a.start : m), '9999').slice(0, 4)}-01-01`, to: new Date(D.overview.last + 90 * 86400000).toISOString().slice(0, 10) })}</div>` : ''}
+  <div class="tiles">${[
+    AR.n ? [`${AR.toPeak} 天`, '入坑到高峰（中位数）'] : null,
+    AR.n ? [`${AR.slow} / ${AR.n}`, '超过半年才到高峰的角色'] : null,
+    AR.n ? [pct(AR.tail, 0), '高峰半年后还在存的比例'] : null,
+    RS.n ? [fmt(RS.n), `隔很久又存了一次的图（中位间隔 ${Math.round(RS.medGap)} 天）`] : null,
+  ]
+    .filter(Boolean)
+    .map(([v, l]) => `<div class="tile"><div class="v">${esc(v)}</div><div class="l">${esc(l)}</div></div>`)
+    .join('')}</div>
+  ${RS.up.length ? `<div class="card"><h3>隔了很久又存一次的图，比其它图多出来的</h3>${divbars(RS.up.slice(0, 12).map((t) => ({ label: t.zh, lift: t.lift, tip: `${t.zh}：其它图 ${pct(t.base)} → 反复保存的 ${pct(t.re)}` })), { width: 1000, labelW: 160 })}</div>` : ''}
+  ${bullets(sec('arcs').points)}</section>`);
+
+// 最像你的图
+if (D.mostYou.length)
+  add(`<section>${H('最像你的几张图')}${intro('most')}<div class="chars">${(S.mostIds ?? D.mostYou.slice(0, 8).map((m) => m.id)).map((id) => `<div class="char"><div class="img" style="background-image:${cover(id)}"></div></div>`).join('')}</div>
+  <p class="note">按每张图的标签在你这里比对照组多出多少打分，取全年龄的单人插画。图从本机 Emaki 读取。</p></section>`);
+
+// 私密
+const X = D.private;
+if (X) {
+  const ORI = ['独自一人', '多名女性（无互动）', '女女', '与男性'];
+  const ladSegs = X.levels.map((k, i) => ({ key: k, label: k, color: ['var(--s3)', 'var(--s1)', 'var(--s7)', 'var(--s4)', 'var(--s5)', 'var(--s2)', 'var(--s8)'][i] }));
+  add(`<section id="private">${H('私密：画面关系、尺度、部位')}${intro('private')}
+  <div class="grid g2">
+    <div class="card"><h3>画面里的关系：全部 vs 较敏感 / 限制级</h3>${dual(ORI.map((k) => ({ label: k, a: X.orientation.all[k] ?? 0, b: X.orientation.nsfw[k] ?? 0 })), { aName: '全部', bName: '较敏感/限制级', labelW: 130 })}</div>
+    <div class="card"><h3>尺度阶梯（每张图按最高一级算）</h3>${hbars(X.ladder.map((l, i) => ({ label: l.name, value: l.share, color: ladSegs[i].color })), { labelW: 100 })}</div>
+    <div class="card"><h3>画面在强调哪里：日常图 vs 私密图</h3>${dual(X.parts.map((p) => ({ label: p.name, a: p.sfw, b: p.nsfw })))}</div>
+    <div class="card"><h3>服装（和 Danbooru 全站比）</h3>${divbars(X.wear.slice(0, 18).map((t) => ({ label: t.zh.replace(/（.*）/, ''), lift: t.lift, share: t.share })), { labelW: 120 })}</div>
+  </div>
+  <div class="card"><h3>姿势</h3>${divbars(X.poses.map((t) => ({ label: t.zh.replace(/（.*）/, ''), lift: t.lift, share: t.share })), { width: 1000, labelW: 120 })}</div>
+  <div class="card"><h3>尺度阶梯在各时期的构成</h3><div class="legend">${ladSegs.map((s) => `<span><i style="background:${s.color}"></i>${s.label}</span>`).join('')}</div>${stack100(P, X.ladderPer, ladSegs)}</div>
+  ${bullets(sec('private').points)}${note('private')}</section>`);
+}
+
+if (S.summary?.length) add(`<section>${H('画像总结')}${S.summary.map((x) => `<div class="card">${x}</div>`).join('')}</section>`);
+add(`<footer class="meta" style="margin-top:48px">${S.footer ?? `生成于 ${D.generatedAt.slice(0, 10)}，数据来自本机 Emaki 图库的只读快照。这个页面只在本机打开。`}</footer>`);
+
+</script>
+</body>
+</html>
