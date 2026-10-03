@@ -100,7 +100,7 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
   });
 
   app.post('/api/library-roots', (req) => {
-    const body = parse(z.object({ path: z.string().min(1) }), req.body);
+    const body = parse(z.object({ path: z.string().min(1), merge: z.boolean().optional() }), req.body);
     return ds.addLibraryRoot(body);
   });
 

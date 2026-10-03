@@ -61,7 +61,8 @@ export interface ApiError {
   ok: false;
   error: string;
   /** 机器可读的错误码 */
-  code: 'not_found' | 'bad_request' | 'conflict' | 'not_implemented' | 'internal';
+  /** needs_confirm：要用户确认，error 是要问的问题（例如添加父文件夹时合并已有文件夹） */
+  code: 'not_found' | 'bad_request' | 'conflict' | 'needs_confirm' | 'not_implemented' | 'internal';
 }
 
 // ---------------------------------------------------------------- 统计
@@ -222,6 +223,19 @@ export type BulkImageAction =
 export interface BulkImagesBody {
   ids: ID[];
   action: BulkImageAction;
+}
+
+/**
+ * POST /api/images/move —— 把图移到图库里的某个文件夹（磁盘上真的移动），识别和整理结果都保留，可撤销。
+ * 合集（本子、画集）里的页不移动；重名的自动改成「a (1).jpg」。
+ */
+export interface MoveImagesBody {
+  /** 二选一：选中的图，或某个角色的全部图 */
+  ids?: ID[];
+  characterId?: ID;
+  /** 目标：图库文件夹 + 里面的子目录（'' = 图库文件夹本身），不存在会新建 */
+  rootId: ID;
+  dir: string;
 }
 
 /**
@@ -472,6 +486,8 @@ export type ListTaggerModelsResponse = TaggerModelInfo[];
 /** POST /api/library-roots { path } / DELETE /api/library-roots/:id / PATCH { enabled } */
 export interface AddLibraryRootBody {
   path: string;
+  /** 新文件夹包含图库里已有的文件夹时，确认合并成一个（不传则返回 needs_confirm） */
+  merge?: boolean;
 }
 
 // ---------------------------------------------------------------- 后台任务

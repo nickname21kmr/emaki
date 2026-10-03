@@ -29,6 +29,7 @@ import type {
   ListUnrecognizedQuery,
   ListUnrecognizedResponse,
   ListWorksQuery,
+  MoveImagesBody,
   MutationResult,
   Page,
   RetagResult,
@@ -46,7 +47,7 @@ import type {
   UpdateSettingsBody,
   Work,
 } from '@emaki/shared';
-import { access, mkdir, stat } from 'node:fs/promises';
+import { access, mkdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { EventBus } from '../../core/events.ts';
 import { JobQueue } from '../../core/jobs.ts';
@@ -56,7 +57,7 @@ import { migrate } from '../../db/migrate.ts';
 import { refreshPlannerStats } from '../../db/plannerStats.ts';
 import { SoftCache } from './softCache.ts';
 import { consolidateCharacterTags, consolidateWorkTags } from './consolidate.ts';
-import { BadRequestError, NotFoundError, NotImplementedError } from '../../http/errors.ts';
+import { BadRequestError, ConflictError, NeedsConfirmError, NotFoundError, NotImplementedError } from '../../http/errors.ts';
 import type { DataSource, FileResponse } from '../DataSource.ts';
 import { toAbs } from '../../services/fs/paths.ts';
 import { revealInFileManager } from '../../services/fs/reveal.ts';
@@ -96,6 +97,8 @@ import { Derived } from './derived.ts';
 import { applyExclusionRules, ExclusionQueries } from './exclusions.ts';
 import { LibraryQueries } from './library.ts';
 import { TagResultWriter } from '../../services/tagger/writer.ts';
+import { moveBack, moveImageFiles, normalizeSubdir, type MoveRow } from './move.ts';
+import { mergeChildRoots, type ChildRoot } from './roots.ts';
 import { applySettingsPatch, getDanbooruApiKey, isInside, normalizeRootPath, patchSettingsInternal, readSettings, samePath } from './settings.ts';
 import { iso, MIME, parseId, toId, VISIBLE } from './sql.ts';
 
@@ -601,6 +604,63 @@ export class SqliteDataSource implements DataSource {
     return this.bulk.run(body);
   }
 
+  async moveImages(body: MoveImagesBody): Promise<MutationResult> {
+    const root = this.requireRoot(body.rootId);
+    if (!root.enabled) throw new BadRequestError('这个图库文件夹停用了，先启用再移动');
+    const dir = normalizeSubdir(body.dir);
+    const cols = `i.id, i.root_id, i.rel_path, i.file_name, i.collection_id, i.tagged_at, i.retag, r.path AS root_path`;
+    let rows: (MoveRow & { tagged_at: string | null; retag: number })[];
+    if (body.characterId !== undefined) {
+      const c = this.requireCharacterId(body.characterId);
+      rows = this.ctx
+        .stmt(
+          `SELECT ${cols} FROM v_counted_images i JOIN library_roots r ON r.id = i.root_id
+           WHERE EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id AND ic.character_id = ?) ORDER BY i.id`,
+        )
+        .all(c) as typeof rows;
+    } else {
+      const ids = this.requireVisibleImages(body.ids ?? []);
+      rows = this.ctx
+        .stmt(`SELECT ${cols} FROM images i JOIN library_roots r ON r.id = i.root_id WHERE i.id IN (SELECT value FROM json_each(?)) ORDER BY i.id`)
+        .all(JSON.stringify(ids)) as typeof rows;
+    }
+    if (!rows.length) throw new BadRequestError('没有可以移动的图');
+
+    // 扫描、识别正在读这些文件时不能移（扫描会把移走的图当成丢失）
+    const running = (await this.ctx.jobs.list()).filter((j) => j.status === 'running').map((j) => j.kind);
+    if (running.includes('scan')) throw new ConflictError('正在扫描图库，等扫描结束再移动');
+    if (running.includes('tag') && rows.some((r) => r.tagged_at === null || r.retag)) {
+      throw new ConflictError('正在识别，选中的图里有还没识别完的，等识别结束再移动');
+    }
+
+    const dest = { rootId: root.id, rootPath: root.path, dir };
+    const out = moveImageFiles(this.ctx.db, rows, dest);
+    const ids = out.moved.map((m) => m.id);
+    // 移进了被排除的文件夹：照规则排除
+    if (ids.length) this.ctx.db.transaction(() => applyExclusionRules(this.ctx, { imageIds: ids }))();
+    this.ctx.touch();
+
+    const where = dir ? toAbs(root.path, dir).replace(/\\/g, '/') : root.path;
+    const notes = [
+      out.alreadyThere && `${out.alreadyThere} 张本来就在这里`,
+      out.inCollection && `合集里的 ${out.inCollection} 张没动`,
+      out.failed.length && `${out.failed.length} 张移动失败：${out.failed.slice(0, 3).join('、')}${out.failed.length > 3 ? ' 等' : ''}`,
+    ].filter(Boolean);
+    const message = `已移动 ${out.moved.length} 张到 ${where}${notes.length ? `（${notes.join('；')}）` : ''}`;
+    if (!out.moved.length) {
+      if (out.failed.length) throw new ConflictError(message);
+      return done(message);
+    }
+    return this.ctx.undo.result(message, async () => {
+      if ((await this.ctx.jobs.list()).some((j) => j.status === 'running' && j.kind === 'scan')) {
+        throw new ConflictError('正在扫描图库，等扫描结束再撤销');
+      }
+      const back = moveBack(this.ctx.db, out.moved);
+      this.ctx.touch();
+      if (back.failed.length) throw new ConflictError(`移回了 ${back.restored} 张，${back.failed.length} 张没能移回（文件或位置已经变了）`);
+    });
+  }
+
   // T15 未识别
   async listUnrecognized(query: ListUnrecognizedQuery): Promise<ListUnrecognizedResponse> {
     return this.unrecognized.list(query);
@@ -756,33 +816,58 @@ export class SqliteDataSource implements DataSource {
     }
 
     const db = this.ctx.db;
-    const rows = db.prepare('SELECT id, path, removed_at FROM library_roots').all() as {
-      id: number;
-      path: string;
-      removed_at: string | null;
-    }[];
+    const rows = db.prepare('SELECT id, path, enabled, removed_at, imported_at FROM library_roots').all() as (ChildRoot & {
+      enabled: number;
+    })[];
     const active = rows.filter((r) => r.removed_at === null);
     if (active.some((r) => samePath(r.path, p))) throw new BadRequestError('这个文件夹已经在图库里了');
-    const overlap = active.find((r) => isInside(p, r.path) || isInside(r.path, p));
-    if (overlap) throw new BadRequestError(`和已有文件夹重叠：${overlap.path}`);
+    const parent = active.find((r) => isInside(p, r.path));
+    if (parent) throw new BadRequestError(`已经包含在「${parent.path}」里了，不用单独添加`);
     const d = normalizeRootPath(this.ctx.dataDir);
     if (samePath(p, d) || isInside(p, d) || isInside(d, p)) throw new BadRequestError('不能把 Emaki 的数据目录加入图库');
 
-    const removed = rows.find((r) => r.removed_at !== null && samePath(r.path, p));
-    let rootId: number;
-    if (removed) {
-      // 复活：旧图和识别结果全部回来
-      db.prepare('UPDATE library_roots SET removed_at = NULL, enabled = 1, path = ? WHERE id = ?').run(p, removed.id);
-      rootId = removed.id;
-    } else {
-      rootId = Number(db.prepare('INSERT INTO library_roots (path, enabled) VALUES (?, 1)').run(p).lastInsertRowid);
+    // 新文件夹包含已有的文件夹：问一下再合并。以前移除过的子文件夹直接接管，找回当时的整理结果
+    const children = rows.filter((r) => isInside(r.path, p));
+    const activeChildren = children.filter((r) => r.removed_at === null);
+    if (activeChildren.length && !body.merge) {
+      const names = activeChildren.map((r) => `「${r.path}」`).join('');
+      const disabled = activeChildren.filter((r) => !r.enabled).map((r) => `「${r.path}」`);
+      throw new NeedsConfirmError(
+        `这个文件夹包含图库里已有的${names}，合并成一个吗？原来的识别和整理结果都会保留。` +
+          (disabled.length ? `其中${disabled.join('')}现在是停用的，合并后会重新显示。` : ''),
+      );
     }
+    // 合并前照例备份（VACUUM INTO 不能在事务里，目标文件已存在会报错）
+    if (activeChildren.length) {
+      const backup = path.join(this.ctx.dataDir, 'emaki.before-merge.bak.sqlite');
+      await rm(backup, { force: true });
+      db.exec(`VACUUM INTO '${backup.replace(/\\/g, '/').replace(/'/g, "''")}'`);
+    }
+
+    const removed = rows.find((r) => r.removed_at !== null && samePath(r.path, p));
+    let rootId = 0;
+    let merged = 0;
+    db.transaction(() => {
+      if (removed) {
+        // 复活：旧图和识别结果全部回来
+        db.prepare('UPDATE library_roots SET removed_at = NULL, enabled = 1, path = ? WHERE id = ?').run(p, removed.id);
+        rootId = removed.id;
+      } else {
+        rootId = Number(db.prepare('INSERT INTO library_roots (path, enabled) VALUES (?, 1)').run(p).lastInsertRowid);
+      }
+      if (children.length) merged = mergeChildRoots(db, rootId, p, children).images;
+    })();
+    if (children.length) this.collectionsHook(null, 'all');
     this.ctx.touch();
     this.notifyRoots();
     // 只扫新文件夹；扫描正在跑时也再排一次，别丢了这个请求
     this.requests.addDirty({ rootId, relDir: '', recursive: true });
     this.ctx.jobs.enqueue('scan', { requeueIfRunning: true });
-    return done(`已添加文件夹，开始扫描：${p}`);
+    return done(
+      activeChildren.length
+        ? `已合并成一个文件夹（保留了 ${merged} 张图的整理结果），开始扫描其余部分：${p}`
+        : `已添加文件夹，开始扫描：${p}`,
+    );
   }
 
   async updateLibraryRoot(id: ID, enabled: boolean): Promise<MutationResult> {

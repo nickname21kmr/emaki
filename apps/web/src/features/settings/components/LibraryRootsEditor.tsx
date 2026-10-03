@@ -1,9 +1,9 @@
 import type { LibraryRoot } from '@emaki/shared';
-import { FolderOpen, FolderSearch, FolderX, Trash } from 'lucide-react';
+import { FolderInput, FolderOpen, FolderSearch, FolderX, Trash } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Button, IconButton, Input, Switch } from '@/components/ui';
-import { api } from '@/lib/api';
+import { api, ApiRequestError } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { formatCount, formatDateTime, formatPercent, formatRelative } from '@/lib/format';
 import { errorMessage, useMutate } from '@/lib/queries';
@@ -49,11 +49,18 @@ export function AddFolderForm({
 }) {
   const [path, setPath] = useState('');
   const [serverError, setServerError] = useState<string | null>(null);
+  // 新文件夹包含已有的文件夹：后端返回要问的话，确认后带 merge 重发
+  const [confirm, setConfirm] = useState<{ path: string; question: string } | null>(null);
   const [picking, setPicking] = useState(false);
-  const add = useMutate((p: string) => api.addLibraryRoot({ path: p }), {
-    onError: setServerError,
+  const lastPath = useRef('');
+  const add = useMutate(({ p, merge }: { p: string; merge?: boolean }) => api.addLibraryRoot({ path: p, merge }), {
+    onError: (message, err) => {
+      if (err instanceof ApiRequestError && err.code === 'needs_confirm') setConfirm({ path: lastPath.current, question: message });
+      else setServerError(message);
+    },
     onSuccess: () => {
       setPath('');
+      setConfirm(null);
       onDone?.();
     },
   });
@@ -63,11 +70,17 @@ export function AddFolderForm({
   const relative = trimmed !== '' && !ABSOLUTE.test(trimmed);
   const problem = duplicate ? '这个文件夹已经在图库里了' : relative ? '需要完整路径，例如 D:\\Pictures\\插画' : serverError;
 
+  const send = (p: string, merge?: boolean) => {
+    lastPath.current = p;
+    setServerError(null);
+    setConfirm(null);
+    add.mutate({ p, merge });
+  };
+
   const submit = (e?: FormEvent) => {
     e?.preventDefault();
     if (!trimmed || duplicate || relative) return;
-    setServerError(null);
-    add.mutate(trimmed);
+    send(trimmed);
   };
 
   const browse = async () => {
@@ -78,7 +91,7 @@ export function AddFolderForm({
       if (!picked) return;
       setPath(picked);
       // 已经添加过：留在输入框里，由下方提示说明
-      if (!roots.some((r) => normalize(r.path) === normalize(picked))) add.mutate(picked);
+      if (!roots.some((r) => normalize(r.path) === normalize(picked))) send(picked);
     } catch (err) {
       setServerError(errorMessage(err));
     } finally {
@@ -96,6 +109,7 @@ export function AddFolderForm({
           onChange={(e) => {
             setPath(e.target.value);
             setServerError(null);
+            setConfirm(null);
           }}
           onClear={() => setPath('')}
           placeholder="D:\Pictures\插画"
@@ -110,10 +124,30 @@ export function AddFolderForm({
           浏览…
         </Button>
       </div>
-      <p id="add-folder-hint" className={cn('mt-2 pl-4 text-xs', problem ? 'text-danger' : 'text-fg-subtle')}>
+      {confirm && (
+        <div role="alertdialog" aria-label="合并文件夹" className="mt-3 animate-fade-in rounded-lg bg-sunken px-4 py-3">
+          <p className="text-[13px] leading-relaxed">{confirm.question}</p>
+          <div className="mt-2.5 flex justify-end gap-2">
+            <Button type="button" size="sm" variant="ghost" onClick={() => setConfirm(null)}>
+              取消
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="primary"
+              icon={<FolderInput />}
+              loading={add.isPending}
+              onClick={() => send(confirm.path, true)}
+            >
+              合并成一个
+            </Button>
+          </div>
+        </div>
+      )}
+      <p id="add-folder-hint" hidden={!!confirm} className={cn('mt-2 pl-4 text-xs', problem ? 'text-danger' : 'text-fg-subtle')}>
         {problem ?? '支持本地磁盘和网络路径（\\\\NAS\\共享文件夹）。可以从资源管理器地址栏复制，或点「浏览…」选择。'}
       </p>
-      {actions({ disabled: !trimmed || !!problem, loading: add.isPending })}
+      {actions({ disabled: !trimmed || !!problem || !!confirm, loading: add.isPending })}
     </form>
   );
 }

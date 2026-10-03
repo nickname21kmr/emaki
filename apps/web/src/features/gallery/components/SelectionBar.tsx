@@ -1,5 +1,5 @@
 import type { BulkImageAction, ID, ImageItem } from '@emaki/shared';
-import { Ban, ChevronDown, Heart, Shapes, ShieldHalf, Trash2, UserRoundPlus, X } from 'lucide-react';
+import { Ban, ChevronDown, FolderInput, Heart, Shapes, ShieldHalf, Trash2, UserRoundPlus, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   forwardRef,
@@ -18,6 +18,7 @@ import { modKeyLabel, useHotkey } from '@/lib/hotkeys';
 import { useMutate, useTrashHint } from '@/lib/queries';
 import { useLightbox, useSelection } from '@/lib/stores';
 import { KindMenu } from '@/components/media/KindMenu';
+import { MoveImagesDialog } from '@/components/media/MoveImagesDialog';
 import { CharacterPicker } from '../CharacterPicker';
 import { RATINGS } from '../useGalleryParams';
 import { EASE_OUT } from '@/lib/motion';
@@ -44,9 +45,10 @@ export function SelectionBar({ images, scope }: { images: ImageItem[]; scope: st
   const lightboxOpen = useLightbox((s) => s.open);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [kindOpen, setKindOpen] = useState(false);
+  const [moving, setMoving] = useState(false);
 
   const count = ids.size;
-  const active = count > 0 && !lightboxOpen;
+  const active = count > 0 && !lightboxOpen && !moving;
 
   // 收藏 / 分级之后选择还在，而结果 toast 也弹在底部居中 —— 工具栏临时抬高，给 toast 让位
   const [lifted, setLifted] = useState(false);
@@ -198,6 +200,12 @@ export function SelectionBar({ images, scope }: { images: ImageItem[]; scope: st
               }
             />
 
+            <Tooltip content="移到图库里的某个文件夹，磁盘上的文件会真的移动" side="top">
+              <BarButton icon={<FolderInput />} onClick={() => setMoving(true)}>
+                移动…
+              </BarButton>
+            </Tooltip>
+
             <span className="mx-1.5 h-5 w-px bg-fg-inverse/15" />
 
             <Tooltip content="排除：不再出现在图库和统计里，文件不会被删除" shortcut="E" side="top">
@@ -219,6 +227,7 @@ export function SelectionBar({ images, scope }: { images: ImageItem[]; scope: st
           </motion.div>
         )}
       </AnimatePresence>
+      <MoveImagesDialog open={moving} onOpenChange={setMoving} target={{ ids: [...ids] }} count={count} what="选中的" onMoved={clear} />
     </div>
   );
 }

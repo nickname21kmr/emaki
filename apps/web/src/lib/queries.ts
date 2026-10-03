@@ -270,7 +270,7 @@ export function useMutate<TVars, TResult extends MutationResult = MutationResult
     silent?: boolean;
     onSuccess?: (result: TResult, vars: TVars) => void;
     /** 自己显示错误（例如表单下方的小字）；不传则弹错误 toast */
-    onError?: (message: string) => void;
+    onError?: (message: string, err: unknown) => void;
   } = {},
 ) {
   const client = useQueryClient();
@@ -282,7 +282,7 @@ export function useMutate<TVars, TResult extends MutationResult = MutationResult
       await invalidateAll(client);
     },
     onError: (err) => {
-      if (opts.onError) opts.onError(errorMessage(err));
+      if (opts.onError) opts.onError(errorMessage(err), err);
       else toast.error(errorMessage(err));
     },
   });

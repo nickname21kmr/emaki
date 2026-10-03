@@ -16,10 +16,11 @@ import { DetailHeader, type Crumb } from './DetailHeader';
 import { EditCharacterDialog } from './EditCharacterDialog';
 import { ExcludeCharacterDialog } from './ExcludeCharacterDialog';
 import { MergeCharacterDialog } from './MergeCharacterDialog';
+import { folderNameOf, MoveImagesDialog } from '@/components/media/MoveImagesDialog';
 import { RelatedCharacters, RelatedCharactersSkeleton } from './RelatedCharacters';
 import { useInView } from './useInView';
 
-type DialogKind = 'edit' | 'merge' | 'exclude' | 'cover' | null;
+type DialogKind = 'edit' | 'merge' | 'move' | 'exclude' | 'cover' | null;
 
 /**
  * 角色详情。外层按 id 加 key 挂载，切换角色时所有局部状态（选择、弹窗、记下的 +N）自动重置。
@@ -131,6 +132,7 @@ export function CharacterDetail({ id }: { id: ID }) {
           pinPending={pin.isPending}
           onEdit={() => setDialog('edit')}
           onMerge={() => setDialog('merge')}
+          onMove={() => setDialog('move')}
           onExclude={() => setDialog('exclude')}
           onChangeCover={() => setDialog('cover')}
           onRestoreCover={() => restoreCover.mutate()}
@@ -158,6 +160,14 @@ export function CharacterDetail({ id }: { id: ID }) {
         character={character}
         tint={mainWork?.color ?? 'var(--c-sunken)'}
         onPickFromAll={coverHelp}
+      />
+      <MoveImagesDialog
+        open={dialog === 'move'}
+        onOpenChange={(o) => setDialog(o ? 'move' : null)}
+        target={{ characterId: character.id }}
+        count={character.imageCount + character.otherCount}
+        what={`「${character.name}」的`}
+        defaultDir={folderNameOf(character.name)}
       />
       <ExcludeCharacterDialog
         open={dialog === 'exclude'}

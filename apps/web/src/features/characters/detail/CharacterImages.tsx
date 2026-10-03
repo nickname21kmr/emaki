@@ -1,9 +1,10 @@
 import type { Character, ID, ImageItem } from '@emaki/shared';
-import { Heart, HeartOff, ImageUp, UserRoundMinus } from 'lucide-react';
-import { useCallback, useMemo, type Ref } from 'react';
+import { FolderInput, Heart, HeartOff, ImageUp, UserRoundMinus } from 'lucide-react';
+import { useCallback, useMemo, useState, type Ref } from 'react';
 import { useNavigate } from 'react-router';
 import { ImageGrid, ImageGridSkeleton } from '@/components/media/ImageGrid';
 import { KindBadge } from '@/components/media/KindBadge';
+import { folderNameOf, MoveImagesDialog } from '@/components/media/MoveImagesDialog';
 import { Button, EmptyState, ErrorState } from '@/components/ui';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
@@ -53,7 +54,8 @@ export function CharacterImages({
   const total = query.data?.pages[0]?.total;
 
   const scope = `character:${character.id}`;
-  const selection = useScopedSelection(scope, images, dialogOpen);
+  const [moving, setMoving] = useState(false);
+  const selection = useScopedSelection(scope, images, dialogOpen || moving);
 
   // 「新」只在默认视图（最近添加 · 降序 · 不筛分级）下可信：此时最前面的 N 张就是新图
   const newIds = useMemo(() => {
@@ -97,6 +99,13 @@ export function CharacterImages({
       loading: favorite.isPending,
       disabled: busy,
       onClick: () => favorite.mutate({ ids: selection.ids, value: !allFavorite }),
+    },
+    {
+      key: 'move',
+      label: '移动到文件夹',
+      icon: <FolderInput />,
+      disabled: busy,
+      onClick: () => setMoving(true),
     },
     {
       key: 'unassign',
@@ -178,6 +187,15 @@ export function CharacterImages({
       <ImagesToolbar total={total} filters={filters} otherCount={character.otherCount} />
       {body}
       <SelectionBar count={selection.count} actions={actions} onClear={selection.clear} />
+      <MoveImagesDialog
+        open={moving}
+        onOpenChange={setMoving}
+        target={{ ids: selection.ids }}
+        count={selection.count}
+        what="选中的"
+        defaultDir={folderNameOf(character.name)}
+        onMoved={selection.clear}
+      />
     </section>
   );
 }

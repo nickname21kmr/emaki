@@ -41,6 +41,7 @@ import type {
   RetagResult,
   UnrecognizedSummary,
   HealthResponse,
+  MoveImagesBody,
   NetworkCheckResponse,
   PickFolderResponse,
   ListWorksQuery,
@@ -191,6 +192,8 @@ export const api = {
   health: () => get<HealthResponse>('/health'),
   /** 由后端弹出系统「选择文件夹」对话框；用户取消时 path 为 null */
   pickFolder: () => post<PickFolderResponse>('/system/pick-folder'),
+  /** 移到图库里的某个文件夹（磁盘上真的移动），可撤销 */
+  moveImages: (body: MoveImagesBody) => post<MutationResult>('/images/move', body),
   /** 连一下 Danbooru、Hugging Face 和国内镜像，排查同步失败 */
   checkNetwork: () => post<NetworkCheckResponse>('/system/network-check'),
 };

@@ -226,6 +226,15 @@ describe('图片、未识别、重复、排除（routes/images.ts）', () => {
     expect((await call('POST', '/api/images/bulk', { ids: ['i1'], action: { type: 'explode' } })).status).toBe(400);
   });
 
+  route('POST /api/images/move', async () => {
+    // mock 只改记录，不碰文件
+    const { status, json } = await call('POST', '/api/images/move', { characterId: 'c1', rootId: 'root1', dir: '角色/未花' });
+    expect([status, json]).toEqual([200, withUndo]);
+    expect(json.message).toMatch(/^已移动 \d+ 张到 D:\/Pics\/角色\/未花/);
+    expect((await call('POST', '/api/images/move', { ids: ['i1'], characterId: 'c1', rootId: 'root1', dir: '' })).status).toBe(400);
+    expect((await call('POST', '/api/images/move', { ids: ['i1'], rootId: 'root1', dir: 'a:b' })).status).toBe(400);
+  });
+
   route('GET /api/images/:id', async () => {
     const { status, json } = await call('GET', '/api/images/i1');
     expect(status).toBe(200);

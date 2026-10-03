@@ -1,5 +1,5 @@
 import type { Character, GetCharacterResponse, Work } from '@emaki/shared';
-import { Ban, Ellipsis, GitMerge, ImageUp, PenLine, Pin, Play, RotateCcw } from 'lucide-react';
+import { Ban, Ellipsis, FolderInput, GitMerge, ImageUp, PenLine, Pin, Play, RotateCcw } from 'lucide-react';
 import { motion } from 'motion/react';
 import type { ReactNode, Ref } from 'react';
 import { Link, useViewTransitionState } from 'react-router';
@@ -38,6 +38,7 @@ export function CharacterHero({
   pinPending,
   onEdit,
   onMerge,
+  onMove,
   onExclude,
   onChangeCover,
   onRestoreCover,
@@ -52,6 +53,8 @@ export function CharacterHero({
   pinPending?: boolean;
   onEdit: () => void;
   onMerge: () => void;
+  /** 移到图库里的某个文件夹（issue #1） */
+  onMove: () => void;
   onExclude: () => void;
   /** 打开「换封面」候选面板（CB-7） */
   onChangeCover: () => void;
@@ -197,6 +200,9 @@ export function CharacterHero({
           <Menu width={200} trigger={<IconButton label="更多"><Ellipsis /></IconButton>}>
             <MenuItem icon={<GitMerge />} onSelect={() => afterMenuClose(onMerge)}>
               合并到其他角色…
+            </MenuItem>
+            <MenuItem icon={<FolderInput />} onSelect={() => afterMenuClose(onMove)}>
+              移动到文件夹…
             </MenuItem>
             {character.coverManual && (
               <MenuItem icon={<RotateCcw />} onSelect={onRestoreCover}>

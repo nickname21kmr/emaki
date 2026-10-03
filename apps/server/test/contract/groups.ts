@@ -2,7 +2,7 @@
  * 契约用例：同一套断言分别跑在 mock 和 sqlite 上。期望值见 test/fixtures/contract-db.ts 顶部注释。
  * 每组对应一个任务；sqlite 那边只有任务在 SQLITE_READY 里才跑。
  */
-import { rmSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { makeTmpDir } from '../helpers/tmp.ts';
 import type { BulkImagesBody } from '@emaki/shared';
@@ -92,6 +92,35 @@ export function settingsContract(make: ContractFactory, name: Name) {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    });
+
+    it('添加父文件夹：先问，确认后合并；再加子文件夹提示已包含', async () => {
+      const e = env();
+      const dir = makeTmpDir('parent');
+      try {
+        const p = dir.replace(/\\/g, '/');
+        mkdirSync(`${p}/child`);
+        await e.ds.addLibraryRoot({ path: `${p}/child` });
+        await expect(e.ds.addLibraryRoot({ path: p })).rejects.toMatchObject({ code: 'needs_confirm' });
+        const r = await e.ds.addLibraryRoot({ path: p, merge: true });
+        expect(r.message).toBe(`已合并成一个文件夹（保留了 0 张图的整理结果），开始扫描其余部分：${p}`);
+        const paths = (await e.ds.getSettings()).libraryRoots.map((x) => x.path);
+        expect(paths).toContain(p);
+        expect(paths).not.toContain(`${p}/child`);
+        await expect(e.ds.addLibraryRoot({ path: `${p}/child` })).rejects.toThrow(`已经包含在「${p}」里了`);
+        // 等添加文件夹排的扫描跑完再删目录
+        while ((await e.ds.listJobs()).some((j) => j.status === 'queued' || j.status === 'running')) await new Promise((r) => setTimeout(r, 10));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('移动到文件夹：目录名和目标文件夹不对时报错', async () => {
+      const e = env();
+      const ids = [e.id('image', 'i1')];
+      await expect(e.ds.moveImages({ ids, rootId: e.id('root', 'root1'), dir: 'a:b' })).rejects.toThrow('不能包含');
+      await expect(e.ds.moveImages({ ids, rootId: e.id('root', 'root2'), dir: '' })).rejects.toThrow('停用');
+      await expect(e.ds.moveImages({ ids, rootId: missing(e, 'root'), dir: '' })).rejects.toThrow('找不到图库文件夹');
     });
 
     it('停用文件夹可撤销', async () => {

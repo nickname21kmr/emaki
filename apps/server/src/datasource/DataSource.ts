@@ -2,6 +2,7 @@ import type {
   AddLibraryRootBody,
   BulkCollectionsBody,
   BulkImagesBody,
+  MoveImagesBody,
   CollectionSummary,
   CreateCollectionBody,
   GetCollectionResponse,
@@ -98,6 +99,8 @@ export interface DataSource {
   getImage(id: ID): Promise<ImageDetail | null>;
   updateImage(id: ID, body: UpdateImageBody): Promise<MutationResult>;
   bulkImages(body: BulkImagesBody): Promise<MutationResult>;
+  /** 移到图库里的某个文件夹（真的移动文件），可撤销 */
+  moveImages(body: MoveImagesBody): Promise<MutationResult>;
   getThumbnail(id: ID, width: ThumbWidth): Promise<FileResponse | null>;
   getOriginal(id: ID): Promise<FileResponse | null>;
   revealImage(id: ID): Promise<void>;

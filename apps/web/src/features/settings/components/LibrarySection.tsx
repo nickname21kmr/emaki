@@ -13,7 +13,7 @@ export function LibrarySection({ roots }: { roots: LibraryRoot[] }) {
   return (
     <SettingsSection
       id="library"
-      description="Emaki 会扫描这些文件夹里的图片并建立索引，不会移动、重命名或修改任何文件。"
+      description="Emaki 会扫描这些文件夹里的图片并建立索引。除非你自己用「移动到文件夹」，不会移动、重命名或修改任何文件。"
       actions={
         roots.length > 0 && (
           <>

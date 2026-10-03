@@ -13,6 +13,7 @@ import {
   type AddLibraryRootBody,
   type BulkCollectionsBody,
   type BulkImagesBody,
+  type MoveImagesBody,
   type CollectionSummary,
   type CreateCollectionBody,
   type GetCollectionResponse,
@@ -60,7 +61,7 @@ import {
 import type { EventBus } from '../../core/events.ts';
 import { JobQueue, type JobRunner } from '../../core/jobs.ts';
 import { done, UndoStack } from '../../core/undo.ts';
-import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
+import { BadRequestError, ConflictError, NeedsConfirmError, NotFoundError } from '../../http/errors.ts';
 import type { DataSource, FileResponse } from '../DataSource.ts';
 import { buildMockDb, type CharacterRow, type ImageRow, type MockDb, type WorkRow } from './fixtures.ts';
 import { MockCollections } from './collections.ts';
@@ -71,6 +72,7 @@ import { artScore, classifyTheme, matchesBrowseTheme, resolveTheme } from '../..
 import { describeKindReason } from '../sqlite/hydrate.ts';
 import { coverQuality, isUnfitCover } from '../../services/covers/quality.ts';
 import { assertKindValue, KIND_LABEL } from '../sqlite/kinds.ts';
+import { normalizeSubdir } from '../sqlite/move.ts';
 
 const kindOf = (img: ImageRow): ContentKind => img.kind ?? 'illustration';
 const isArt = (img: ImageRow) => kindOf(img) === 'illustration' || kindOf(img) === 'comic';
@@ -897,6 +899,54 @@ export class MockDataSource implements DataSource {
     });
   }
 
+  /** mock 只改记录，不碰文件；规则同 sqlite/move.ts */
+  async moveImages(body: MoveImagesBody): Promise<MutationResult> {
+    const root = this.db.settings.libraryRoots.find((r) => r.id === body.rootId);
+    if (!root) throw new NotFoundError('图库文件夹');
+    if (!root.enabled) throw new BadRequestError('这个图库文件夹停用了，先启用再移动');
+    const dir = normalizeSubdir(body.dir);
+    let rows: ImageRow[];
+    if (body.characterId !== undefined) {
+      const ch = this.requireCharacter(body.characterId);
+      rows = [...this.db.images.values()].filter((i) => this.isVisible(i) && !i.excludedBy && i.characterIds.includes(ch.id));
+    } else {
+      rows = (body.ids ?? []).map((id) => this.requireImage(id));
+    }
+    if (!rows.length) throw new BadRequestError('没有可以移动的图');
+    const used = new Set([...this.db.images.values()].filter((i) => i.libraryRootId === root.id).map((i) => i.relPath.toLowerCase()));
+    const before = rows.map((r) => ({ r, rootId: r.libraryRootId, relPath: r.relPath, fileName: r.fileName }));
+    let moved = 0;
+    let inCollection = 0;
+    let alreadyThere = 0;
+    for (const r of rows) {
+      if (r.collectionId) {
+        inCollection++;
+        continue;
+      }
+      const parent = r.relPath.includes('/') ? r.relPath.slice(0, r.relPath.lastIndexOf('/')) : '';
+      if (r.libraryRootId === root.id && parent.toLowerCase() === dir.toLowerCase()) {
+        alreadyThere++;
+        continue;
+      }
+      const dot = r.fileName.lastIndexOf('.');
+      const [stem, ext] = dot > 0 ? [r.fileName.slice(0, dot), r.fileName.slice(dot)] : [r.fileName, ''];
+      let name = r.fileName;
+      for (let n = 1; used.has((dir ? `${dir}/${name}` : name).toLowerCase()); n++) name = `${stem} (${n})${ext}`;
+      r.libraryRootId = root.id;
+      r.relPath = dir ? `${dir}/${name}` : name;
+      r.fileName = name;
+      used.add(r.relPath.toLowerCase());
+      moved++;
+    }
+    const where = dir ? `${root.path.replace(/\/$/, '')}/${dir}` : root.path;
+    const notes = [alreadyThere && `${alreadyThere} 张本来就在这里`, inCollection && `合集里的 ${inCollection} 张没动`].filter(Boolean);
+    const message = `已移动 ${moved} 张到 ${where}${notes.length ? `（${notes.join('；')}）` : ''}`;
+    if (!moved) return done(message);
+    return this.withUndo(message, () => {
+      for (const b of before) Object.assign(b.r, { libraryRootId: b.rootId, relPath: b.relPath, fileName: b.fileName });
+    });
+  }
+
   async bulkImages(body: BulkImagesBody): Promise<MutationResult> {
     if (!body.ids.length) throw new BadRequestError('没有选中任何图片');
     const rows = body.ids.map((id) => this.requireImage(id));
@@ -1367,12 +1417,44 @@ export class MockDataSource implements DataSource {
   async addLibraryRoot(body: AddLibraryRootBody): Promise<MutationResult> {
     const path = body.path.trim().replace(/\\/g, '/').replace(/\/$/, '');
     if (!path) throw new BadRequestError('路径不能为空');
-    if (this.db.settings.libraryRoots.some((r) => r.path === path)) throw new BadRequestError('这个文件夹已经在图库里了');
+    const roots = this.db.settings.libraryRoots;
+    if (roots.some((r) => r.path === path)) throw new BadRequestError('这个文件夹已经在图库里了');
+    const inside = (child: string, parent: string) => child.toLowerCase().startsWith(parent.toLowerCase().replace(/\/?$/, '/'));
+    const parent = roots.find((r) => inside(path, r.path));
+    if (parent) throw new BadRequestError(`已经包含在「${parent.path}」里了，不用单独添加`);
+    // 和 sqlite 一样：包含已有文件夹时先问，确认后把子文件夹的图接管过来（mock 没有「移除过的」文件夹）
+    const children = roots.filter((r) => inside(r.path, path));
+    if (children.length && !body.merge) {
+      const disabled = children.filter((r) => !r.enabled).map((r) => `「${r.path}」`);
+      throw new NeedsConfirmError(
+        `这个文件夹包含图库里已有的${children.map((r) => `「${r.path}」`).join('')}，合并成一个吗？原来的识别和整理结果都会保留。` +
+          (disabled.length ? `其中${disabled.join('')}现在是停用的，合并后会重新显示。` : ''),
+      );
+    }
     const root = { id: `root_${hashString(path).toString(36)}`, path, enabled: true, imageCount: 0, lastScanAt: null, importedAt: new Date().toISOString() };
-    this.db.settings.libraryRoots.push(root);
+    let merged = 0;
+    for (const c of children) {
+      const prefix = c.path.slice(path.length).replace(/^\/+/, '');
+      for (const img of this.db.images.values()) {
+        if (img.libraryRootId !== c.id) continue;
+        img.libraryRootId = root.id;
+        img.relPath = `${prefix}/${img.relPath}`;
+        merged++;
+      }
+      for (const col of this.db.collections.values()) {
+        if (col.rootId !== c.id) continue;
+        col.rootId = root.id;
+        col.relDir = col.relDir ? `${prefix}/${col.relDir}` : prefix;
+      }
+      roots.splice(roots.indexOf(c), 1);
+      if (c.importedAt && c.importedAt < root.importedAt) root.importedAt = c.importedAt;
+    }
+    roots.push(root);
     this.touch();
     this.jobs.enqueue('scan');
-    return done(`已添加文件夹，开始扫描：${path}`);
+    return done(
+      children.length ? `已合并成一个文件夹（保留了 ${merged} 张图的整理结果），开始扫描其余部分：${path}` : `已添加文件夹，开始扫描：${path}`,
+    );
   }
 
   async updateLibraryRoot(id: ID, enabled: boolean): Promise<MutationResult> {

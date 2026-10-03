@@ -59,6 +59,21 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
     return ds.bulkImages(body);
   });
 
+  app.post('/api/images/move', (req) => {
+    const body = parse(
+      z
+        .object({
+          ids: z.array(z.string()).min(1).max(5000).optional(),
+          characterId: z.string().optional(),
+          rootId: z.string().min(1),
+          dir: z.string().max(400),
+        })
+        .refine((b) => (b.ids === undefined) !== (b.characterId === undefined), '要么给 ids，要么给 characterId'),
+      req.body,
+    );
+    return ds.moveImages(body);
+  });
+
   app.get('/api/images/:id', async (req) => {
     const { id } = parse(idParam, req.params);
     const img = await ds.getImage(id);

@@ -28,6 +28,13 @@ export class ConflictError extends HttpError {
   }
 }
 
+/** 操作需要用户确认：message 是要问的问题，前端确认后带上确认参数重发 */
+export class NeedsConfirmError extends HttpError {
+  constructor(message: string) {
+    super(409, 'needs_confirm', message);
+  }
+}
+
 /**
  * 还没实现的功能统一抛这个，参数是 docs/TASKS.md 里的任务编号，
  * 这样前端 toast 能直接告诉你缺的是哪一项。

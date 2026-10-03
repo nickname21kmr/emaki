@@ -47,7 +47,7 @@ export function WelcomePage() {
             Emaki
           </div>
           <h1 className="mt-3 text-[28px] font-semibold tracking-tight">把你的插画收进来</h1>
-          <p className="mt-1.5 text-[14px] text-fg-muted">Emaki 只读取文件：不会移动、改名或上传任何图片。</p>
+          <p className="mt-1.5 text-[14px] text-fg-muted">Emaki 只读取文件，不会上传任何图片；除非你自己点「移动到文件夹」，也不会移动或改名。</p>
         </header>
 
         <div className="grid border-t border-line md:grid-cols-[260px_minmax(0,1fr)]">
