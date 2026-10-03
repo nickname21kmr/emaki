@@ -53,10 +53,16 @@ const WHERE_PRIMARY = `${BASE} AND (
   OR (i.tagged_at IS NOT NULL AND i.tagger_model IS NOT @model AND (${NEWER} OR @retryOld = 1)
       AND NOT EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id)))`;
 const WHERE_LEGACY = `${BASE} AND i.tagged_at IS NULL AND i.modified_at < @before`;
-/** 读取暂时失败（IO：被占用、移动硬盘掉线）的图：这段时间内不再挑它，免得每次扫描都为它重新加载模型 */
+/**
+ * 这次读不到的图（IO：被占用、掉线、解码超时；ENOENT：文件不在了，常见是移动硬盘拔掉了）：这段时间内不再挑它，
+ * 免得每次扫描都为它重新加载模型。用户手动开始识别时清掉（resetIoBackoff）
+ */
 const IO_BACKOFF = 30 * 60_000;
 const ioBackoff = new Map<number, number>();
-/** 测试用：清掉退避记录 */
+/** 同一张图连续这么多次 IO 失败（坏扇区、怎么都解不出来）就记成失败，不再无限重试 */
+const IO_MAX_FAILS = 3;
+const ioFails = new Map<number, number>();
+/** 清掉退避记录（用户手动开始识别时、测试） */
 export const resetIoBackoff = () => ioBackoff.clear();
 /** 还在退避期内的图 id（JSON 数组，给 SQL 的 json_each） */
 const skipIds = (): string => {
@@ -208,12 +214,7 @@ export function createTagJobRunner(deps: TagJobDeps): JobRunner {
     };
     const first = await factory(opts);
     describe(first);
-    const tagger = new ResilientTagger(first, opts, factory, {
-      onSwitch: describe,
-      log,
-      signal: ctx.signal,
-      discard: deps.clientFactory ? undefined : () => releaseTagger(),
-    });
+    const tagger = new ResilientTagger(first, opts, factory, { onSwitch: describe, log, signal: ctx.signal });
 
     try {
       if (fallbackNote) ctx.setMessage(fallbackNote);
@@ -302,8 +303,18 @@ export function createTagJobRunner(deps: TagJobDeps): JobRunner {
         });
         if (!results) continue;
         await fill(); // 先把下一批发出去，再写库
+        for (const [k, r] of results.entries()) {
+          if (r.ok || (r.code !== 'IO' && r.code !== 'ENOENT')) continue;
+          ioBackoff.set(r.id, Date.now() + IO_BACKOFF);
+          if (r.code !== 'IO') continue;
+          const n = (ioFails.get(r.id) ?? 0) + 1;
+          ioFails.set(r.id, n);
+          if (n >= IO_MAX_FAILS) {
+            ioFails.delete(r.id);
+            results[k] = { ...r, code: 'DECODE', message: `连续 ${n} 次读不了，不再重试（${r.message}）` };
+          }
+        }
         writer.writeBatch(results);
-        for (const r of results) if (!r.ok && r.code === 'IO') ioBackoff.set(r.id, Date.now() + IO_BACKOFF);
         emitItem(results);
         done += rows.length;
         doneAll += rows.length;

@@ -51,7 +51,10 @@ export class ResilientTagger {
   private readonly onSwitch: (c: TaggerLike) => void;
   private readonly log: (m: string) => void;
   private readonly signal?: AbortSignal;
-  /** 这一轮已经结束后才起好的客户端怎么处理（正式环境交给 releaseTagger：空闲 60 秒后关；别的任务要用会直接接着用） */
+  /**
+   * 这一轮已经结束后才起好的客户端怎么处理。正式环境不用传：这一轮结束时已经 releaseTagger / shutdownTagger 过，
+   * 晚到的客户端就是 acquireTagger 的单例，由那个空闲定时器或下一个任务接手（再碰定时器反而可能关掉别的任务正在用的）
+   */
   private readonly discard: (c: TaggerLike) => void;
   private readonly now: () => number;
 
@@ -131,8 +134,9 @@ export class ResilientTagger {
       const step = async () => {
         if (this.switching) await this.switching;
         this.checkOpen();
-        // 在真正发出去之前才取代数：失败时据此判断「是不是当前这个子进程出的事」
+        // 在真正发出去之前才取代数和设备：失败时据此判断「是不是当前这个子进程出的事」「是在哪种设备上崩的」
         const gen = this.generation;
+        const dev = this.client.device;
         try {
           return { ok: true as const, res: await this.client.tag(items, th) };
         } catch (err) {
@@ -150,7 +154,7 @@ export class ResilientTagger {
           // recover 的同步部分在这里就把 switching 设好：交还隔离队列之后，下一个请求会等重开，不会撞上已经退出的子进程
           const rec = this.recover(gen, err, lost, !alone || (unsure && !this.lastGood));
           rec.catch(() => undefined);
-          return { ok: false as const, err, rec, poison, unsure, crashedAlone };
+          return { ok: false as const, err, rec, poison, unsure, crashedAlone, dev };
         }
       };
       const r = alone ? await this.exclusive(step) : await step();
@@ -164,8 +168,13 @@ export class ResilientTagger {
       await r.rec;
       if (r.poison) return this.skip(items, th, r.err);
       if (tries + 1 >= MAX_TRIES) {
-        // 重试到头：单独发也一直崩，而且别的图能识别、或者换到 CPU 上也照样崩（和显卡无关），就把这一张记成失败，不让整个任务失败
-        if (r.crashedAlone && items.length === 1 && (this.okCount > 0 || this.client.device === 'cpu')) return this.skip(items, th, r.err);
+        // 重试到头：单独发也一直崩，而且别的图能识别、或者在 CPU 上也照样崩（和显卡无关），就把这一张记成失败，不让整个任务失败
+        if (r.crashedAlone && items.length === 1 && (this.okCount > 0 || r.dev === 'cpu')) return this.skip(items, th, r.err);
+        // 这次恢复刚换了设备（比如刚降到 CPU）：在新设备上再给一次机会再下结论（设备最多换两次，不会无限重试）
+        if (this.client.device !== r.dev) {
+          tries = MAX_TRIES - 2;
+          continue;
+        }
         throw r.err;
       }
       if (r.unsure) {

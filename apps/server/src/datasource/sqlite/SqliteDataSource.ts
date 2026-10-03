@@ -74,7 +74,7 @@ import { shutdownTagger } from '../../services/tagger/client.ts';
 import { ARTIST_MODEL, artistPendingCount, createArtistJobRunner } from '../../services/tagger/artists.ts';
 import { isModelReady } from '../../services/tagger/download.ts';
 import { findModel } from '../../services/tagger/models.ts';
-import { createTagStage } from '../../services/tagger/tagJob.ts';
+import { createTagStage, resetIoBackoff } from '../../services/tagger/tagJob.ts';
 import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../../services/catalog/copyrights.ts';
 import { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
@@ -944,6 +944,8 @@ export class SqliteDataSource implements DataSource {
   }
   async startJob(kind: JobKind): Promise<Job> {
     if (kind === 'scan') this.requests.requestFull();
+    // 用户手动点的：之前读不到、正在退避的图也马上重试（比如刚把移动硬盘插回去）
+    if (kind === 'tag' || kind === 'artists') resetIoBackoff();
     this.pipeline.noteManualStart(kind);
     return this.ctx.jobs.enqueue(kind);
   }

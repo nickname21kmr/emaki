@@ -471,6 +471,38 @@ describe('tagJob', () => {
     expect(stage.pendingCount()).toBe(1); // 退避过了照常重试
   });
 
+  it('PixAI 唯一一张图每次都崩：要真的在 CPU 上试过也崩，才记成失败（不能刚切到 CPU 就下结论）', async () => {
+    freshDb(1);
+    const tried: string[] = [];
+    const factory = vi.fn(async (o: TaggerStartOptions) => {
+      const dev = o.device === 'cpu' ? 'cpu' : o.noDml ? 'webgpu' : 'dml';
+      return scripted(dev, () => (tried.push(dev), crash()), 5, 1);
+    });
+    await runner(factory, new EventBus(), 'A1yCE/pixai-tagger-v1.0-onnx-fp16')(ctxOf());
+    expect(pending()).toBe(0);
+    expect(failed()).toBe(1);
+    expect(tried).toContain('cpu'); // 记失败之前确实在 CPU 上跑过
+  });
+
+  it('文件不在（移动硬盘拔掉）也退避；同一张图连续 3 次读不了就记失败', async () => {
+    const enoent = (id: number): HostItemResult => ({ id, ok: false, code: 'ENOENT', message: '文件不存在' });
+    const io = (id: number): HostItemResult => ({ id, ok: false, code: 'IO', message: '读取失败（EIO），下次再试' });
+    const factory = vi.fn(async () => ({
+      ...scripted('dml', () => null),
+      tag: async (items: { id: number }[]) => items.map((i) => (i.id === 2 ? enoent(i.id) : i.id === 3 ? io(i.id) : ok(i.id, [['mika_(blue_archive)', 0.95]]))),
+    }));
+    await runner(factory)(ctxOf());
+    expect(pending()).toBe(2); // 2、3 都没写
+    expect(await runner(factory)(ctxOf())).toBe('没有需要识别的图片'); // 都在退避
+    // 第 2、3 次（退避过了再试）：id 3 还是 IO，第 3 次记成失败；id 2 一直是 ENOENT，留给扫描器
+    resetIoBackoff();
+    await runner(factory)(ctxOf());
+    resetIoBackoff();
+    await runner(factory)(ctxOf());
+    expect(count('SELECT tagged_at IS NOT NULL FROM images WHERE id = 3')).toBe(1);
+    expect(count('SELECT tagged_at IS NULL FROM images WHERE id = 2')).toBe(1);
+  });
+
   it('显卡卡死先改成一张一批，再降到 CPU 时批大小按最初的设置算', async () => {
     const factory = vi.fn(async (o: TaggerStartOptions) =>
       o.device === 'cpu' ? scripted('cpu', () => null, 5, o.batchSize) : scripted('dml', () => hung(), 5, o.batchSize),

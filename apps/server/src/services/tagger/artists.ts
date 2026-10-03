@@ -69,10 +69,7 @@ export function createArtistJobRunner(deps: ArtistJobDeps): JobRunner {
     };
     const factory = deps.clientFactory ?? acquireTagger;
     // 和识别任务一样的出错处理：子进程崩了按原样重开、显卡出错逐级降级、会弄崩子进程的图单独跳过
-    const client = new ResilientTagger(await factory(startOpts), startOpts, factory, {
-      signal: ctx.signal,
-      discard: deps.clientFactory ? undefined : () => releaseTagger(),
-    });
+    const client = new ResilientTagger(await factory(startOpts), startOpts, factory, { signal: ctx.signal });
     const sel = db.prepare(`SELECT i.id, r.path AS root, i.rel_path AS rel ${PENDING} AND i.id < ? ORDER BY i.id DESC LIMIT ?`);
     const nowIso = () => new Date(deps.now?.() ?? Date.now()).toISOString();
     let before = Number.MAX_SAFE_INTEGER;
