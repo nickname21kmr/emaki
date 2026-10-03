@@ -13,6 +13,7 @@ import { cn } from '@/lib/cn';
 import { useServerEvents } from '@/lib/events';
 import { formatCount } from '@/lib/format';
 import { useMutate, useSettings, useStartJob, useStats } from '@/lib/queries';
+import { usePrefs } from '@/lib/stores';
 
 const STEPS = [
   { title: '选择文件夹', hint: '插画放在哪里' },
@@ -150,7 +151,11 @@ function TaggerStep({ settings, onBack, onNext }: { settings: Settings; onBack: 
           danbooru: { enabled: danbooru },
           ui: { blurSensitive: blur },
         })
-        .then((): MutationResult => ({ ok: true, message: '已保存识别设置', undoToken: null })),
+        .then((): MutationResult => {
+          // 模糊实际看的是本地偏好（顶栏眼睛按钮），这里也要同步，否则要去设置里再开关一次才生效
+          usePrefs.getState().setBlurSensitive(blur);
+          return { ok: true, message: '已保存识别设置', undoToken: null };
+        }),
     { silent: true, onSuccess: onNext },
   );
 

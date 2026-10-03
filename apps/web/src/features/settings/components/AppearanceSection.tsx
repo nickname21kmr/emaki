@@ -19,7 +19,8 @@ export function AppearanceSection({ ui }: { ui: Settings['ui'] }) {
   const setBlur = usePrefs((s) => s.setBlurSensitive);
   const setRowHeight = usePrefs((s) => s.setGridRowHeight);
   const prefs = usePrefs();
-  const off = !ui.blurSensitive;
+  // 以本地偏好为准：顶栏眼睛按钮、B 键改的也是它
+  const off = !prefs.blurSensitive;
   const dim = cn(off && 'opacity-60');
 
   return (
@@ -43,7 +44,7 @@ export function AppearanceSection({ ui }: { ui: Settings['ui'] }) {
           }
         >
           <Switch
-            checked={ui.blurSensitive}
+            checked={prefs.blurSensitive}
             onCheckedChange={(blurSensitive) => {
               // 同步到本地偏好，顶栏的眼睛按钮立刻跟着变
               setBlur(blurSensitive);
