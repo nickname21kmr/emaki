@@ -30,6 +30,7 @@ export const DEFAULT_SETTINGS = {
     skipCameraPhotos: true,
     retryOld: false,
     keepAwake: true,
+    artists: false,
   },
   // 不存 hasApiKey；默认不联网，T21 的引导里让用户选
   danbooru: { enabled: false, username: '', lastSyncAt: null as string | null },

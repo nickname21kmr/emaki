@@ -12,6 +12,7 @@ import type {
   CreateCollectionBody,
   GetCollectionResponse,
   ListCollectionsQuery,
+  ListArtistsResponse,
   ListCollectionsResponse,
   UpdateCollectionBody,
   Character,
@@ -149,6 +150,7 @@ export const api = {
   revealImage: (id: ID) => post<{ ok: true }>(`/images/${encodeURIComponent(id)}/reveal`),
 
   collections: (q: ListCollectionsQuery = {}) => get<ListCollectionsResponse>('/collections', q),
+  artists: () => get<ListArtistsResponse>('/artists'),
   collection: (id: ID) => get<GetCollectionResponse>(`/collections/${encodeURIComponent(id)}`),
   createCollection: (body: CreateCollectionBody) => post<MutationResult & { collection: CollectionSummary }>('/collections', body),
   updateCollection: (id: ID, body: UpdateCollectionBody) => patch<MutationResult>(`/collections/${encodeURIComponent(id)}`, body),

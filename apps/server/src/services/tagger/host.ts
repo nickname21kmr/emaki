@@ -222,6 +222,7 @@ async function tag(m: TagMsg): Promise<void> {
         characterThreshold: m.thresholds.character,
         generalMcut: m.thresholds.generalMcut,
         characterMcut: m.thresholds.characterMcut,
+        artistThreshold: m.thresholds.artist,
       });
       results[k] = { id: m.items[k]!.id, ok: true, ...d };
     });

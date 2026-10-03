@@ -31,10 +31,11 @@ const JOB_LABELS: Record<JobKind, string> = {
   tag: '识别角色',
   'danbooru-sync': '同步 Danbooru',
   dedupe: '查找重复',
+  artists: '识别画师',
 };
 
 /** 数字越小越先跑：新放进来的图要先扫描、出缩略图，别被一个多小时的打标签堵住 */
-const PRIORITY: Record<JobKind, number> = { scan: 0, thumbnail: 1, dedupe: 2, tag: 3, 'danbooru-sync': 4 };
+const PRIORITY: Record<JobKind, number> = { scan: 0, thumbnail: 1, dedupe: 2, tag: 3, 'danbooru-sync': 4, artists: 5 };
 
 /** 已结束的任务最多保留这么多条（queued / running 永远不删） */
 const KEEP_FINISHED = 100;
@@ -43,7 +44,7 @@ const KEEP_FINISHED = 100;
  * 两条道（2026-09-28）：识别主要吃显卡，单独一条 gpu 道；扫描、缩略图、查重、同步吃 CPU / 硬盘，在 io 道里串行。
  * 两条道同时跑，所以缩略图不会再把识别堵在后面。
  */
-const LANE: Record<JobKind, 'io' | 'gpu'> = { scan: 'io', thumbnail: 'io', dedupe: 'io', tag: 'gpu', 'danbooru-sync': 'io' };
+const LANE: Record<JobKind, 'io' | 'gpu'> = { scan: 'io', thumbnail: 'io', dedupe: 'io', tag: 'gpu', 'danbooru-sync': 'io', artists: 'gpu' };
 
 /**
  * 任务队列：每条道同一时间只跑一个任务，道内按优先级出队，同优先级先进先出。

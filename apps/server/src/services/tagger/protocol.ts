@@ -9,6 +9,8 @@ export interface HostThresholds {
   character: number;
   generalMcut?: boolean;
   characterMcut?: boolean;
+  /** 画师门槛；不给就不解码画师 */
+  artist?: number;
 }
 
 export interface InitMsg {
@@ -34,7 +36,15 @@ export interface TagMsg {
 export type ParentMsg = InitMsg | TagMsg | { type: 'shutdown' };
 
 export type HostItemResult =
-  | { id: number; ok: true; rating: Record<Rating, number> | null; general: [string, number][]; character: [string, number][] }
+  | {
+      id: number;
+      ok: true;
+      rating: Record<Rating, number> | null;
+      general: [string, number][];
+      character: [string, number][];
+      /** 模型能认画师、请求里给了门槛时才有；[] = 跑过但没认出 */
+      artist?: [string, number][];
+    }
   | { id: number; ok: false; code: 'ENOENT' | 'UNSUPPORTED' | 'DECODE'; message: string };
 
 export interface ReadyMsg {

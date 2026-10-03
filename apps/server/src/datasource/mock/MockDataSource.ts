@@ -12,6 +12,7 @@ import {
   searchKey,
   type AddLibraryRootBody,
   type BulkCollectionsBody,
+  type Artist,
   type BulkImagesBody,
   type MoveImagesBody,
   type CollectionSummary,
@@ -557,6 +558,11 @@ export class MockDataSource implements DataSource {
   }
 
   // ------------------------------------------------------------ 合集（T38c）
+
+  /** 演示数据没有画师识别结果 */
+  async listArtists(): Promise<Artist[]> {
+    return [];
+  }
 
   async listCollections(query: ListCollectionsQuery): Promise<CollectionSummary[]> {
     return this.collections.list(query);
@@ -1500,6 +1506,7 @@ export class MockDataSource implements DataSource {
       thumbnail: 600,
       tag: this.idx.visible.filter((i) => !i.tagged).length || 240,
       'danbooru-sync': 120,
+      artists: 0,
       dedupe: 900,
     };
     return async (ctx) => {

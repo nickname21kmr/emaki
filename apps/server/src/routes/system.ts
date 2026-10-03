@@ -61,6 +61,7 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
             skipCameraPhotos: z.boolean(),
             retryOld: z.boolean(),
             keepAwake: z.boolean(),
+            artists: z.boolean(),
           })
           .partial()
           .optional(),
@@ -121,7 +122,7 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
 
   app.post('/api/jobs', (req) => {
     const { kind } = parse(
-      z.object({ kind: z.enum(['scan', 'thumbnail', 'tag', 'danbooru-sync', 'dedupe']) }),
+      z.object({ kind: z.enum(['scan', 'thumbnail', 'tag', 'danbooru-sync', 'dedupe', 'artists']) }),
       req.body,
     );
     return ds.startJob(kind);

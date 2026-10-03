@@ -41,6 +41,7 @@ export const qk = {
   stats: ['stats'] as const,
   contentKinds: ['content-kinds'] as const,
   collections: (q: ListCollectionsQuery = {}) => ['collections', q] as const,
+  artists: ['artists'] as const,
   collection: (id: ID) => ['collection', id] as const,
   works: (q: ListWorksQuery = {}) => ['works', q] as const,
   work: (id: ID) => ['work', id] as const,
@@ -66,6 +67,9 @@ export const qk = {
 export const useStats = () => useQuery({ queryKey: qk.stats, queryFn: api.stats });
 
 /** 合集（T38）：书架列表和一本的详情。写操作走 useMutate，成功后全部失效 */
+/** 识别出来的画师（合集页的「画师」） */
+export const useArtists = () => useQuery({ queryKey: qk.artists, queryFn: api.artists });
+
 export const useCollections = (q: ListCollectionsQuery = {}, enabled = true) =>
   useQuery({ queryKey: qk.collections(q), queryFn: () => api.collections(q), placeholderData: keepPreviousData, enabled });
 export const useCollection = (id: ID | undefined) =>

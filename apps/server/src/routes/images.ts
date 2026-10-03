@@ -28,6 +28,7 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
         seed: qNumber.min(0).max(1073741823).optional(),
         sort: z.enum(['addedAt', 'modifiedAt', 'fileName', 'bytes', 'random', 'page']).optional(),
         collectionId: z.string().min(1).optional(),
+        artist: z.string().min(1).max(200).optional(),
         order: z.enum(['asc', 'desc']).optional(),
         cursor: z.string().optional(),
         limit: qNumber.min(1).max(200).optional(),

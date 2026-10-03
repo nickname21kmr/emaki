@@ -9,6 +9,8 @@ export interface Labels {
   ratingIdx: number[];
   generalIdx: number[];
   characterIdx: number[];
+  /** 画师（PixAI 的 style 类）；WD 没有这一类，为空 */
+  artistIdx: number[];
 }
 
 /** 最小 RFC4180：支持引号、"" 转义、CRLF。真实文件里有 612924,"don't_say_""lazy""",0,1062 这种行 */
@@ -69,7 +71,7 @@ export function parseSelectedTags(text: string): Labels {
   if (ratingIdx.length && ratingIdx.map((i) => names[i]).join() !== RATING_ORDER.join()) {
     throw new Error(`rating 标签顺序不对：${ratingIdx.map((i) => names[i]).join(',')}`);
   }
-  return { names, categories, ratingIdx, generalIdx, characterIdx };
+  return { names, categories, ratingIdx, generalIdx, characterIdx, artistIdx: [...categories.keys()].filter((i) => categories[i] === 1) };
 }
 
 /** PixAI v1 的类别 → 和 WD 一致的类别码（0 general / 1 artist·画风 / 3 copyright / 4 character / 5 meta / 9 rating） */
@@ -100,7 +102,7 @@ export function parsePixaiTags(text: string): Labels {
   const idx = (code: number) => [...categories.keys()].filter((i) => categories[i] === code);
   const ratingIdx = RATING_ORDER.map((r) => names.indexOf(r));
   if (ratingIdx.some((i) => i < 0 || categories[i] !== 9)) throw new Error('tags.json 缺少 rating:g / s / q / e');
-  return { names, categories, ratingIdx, generalIdx: idx(0), characterIdx: idx(4) };
+  return { names, categories, ratingIdx, generalIdx: idx(0), characterIdx: idx(4), artistIdx: idx(1) };
 }
 
 export function parseLabels(format: 'csv' | 'pixai-json', text: string): Labels {

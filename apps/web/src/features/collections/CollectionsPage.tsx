@@ -7,13 +7,14 @@ import { Button, EmptyState, ErrorState, SearchInput, SectionTitle, Segmented, S
 import { api } from '@/lib/api';
 import { COLLECTION_META, unitWord } from '@/lib/collections';
 import { formatCount } from '@/lib/format';
-import { useCollections, useMutate } from '@/lib/queries';
+import { useArtists, useCollections, useMutate } from '@/lib/queries';
 import { CharacterPicker } from '@/features/gallery/CharacterPicker';
 import { useDebounced } from '@/features/gallery/useDebounced';
+import { ArtistShelf } from './components/ArtistShelf';
 import { CollectionShelf, unitCount } from './components/Shelf';
 
 /**
- * 合集书架（T38d）：01 本子 · 02 画集；?kind 只看一类，?q 搜书名 / 社团 / 作者，?series 看一个系列。
+ * 合集书架（T38d）：01 本子 · 02 画集 · 03 画师；?kind 只看一类，?q 搜书名 / 社团 / 作者 / 画师，?series 看一个系列。
  * 按文件夹自动成册，不移动文件。
  */
 export function CollectionsPage() {
@@ -24,11 +25,14 @@ export function CollectionsPage() {
 
 function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: ReturnType<typeof useSearchParams>[1] }) {
   const kindParam = params.get('kind');
-  const kind: CollectionKind | null = kindParam === 'doujin' || kindParam === 'artbook' ? kindParam : null;
+  const kind: CollectionKind | 'artist' | null = kindParam === 'doujin' || kindParam === 'artbook' || kindParam === 'artist' ? kindParam : null;
   const [q, setQ] = useState(params.get('q') ?? '');
   const debounced = useDebounced(q.trim(), 200);
   const list = useCollections({ q: debounced || undefined });
   const all = list.data ?? [];
+  // 画师：识别出来的才有（设置 → 识别 里打开「识别画师」）；搜索框也筛画师名
+  const artistsQ = useArtists();
+  const artists = (artistsQ.data ?? []).filter((a) => !debounced || a.name.toLowerCase().includes(debounced.toLowerCase()) || a.tag.includes(debounced.toLowerCase()));
   const by = (k: CollectionKind) => all.filter((c) => c.kind === k);
   const pages = (xs: CollectionSummary[]) => xs.reduce((n, c) => n + c.pageCount, 0);
   const set = (key: string, v: string | null) =>
@@ -45,7 +49,20 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
   let body;
   if (list.isError) body = <ErrorState error={list.error} onRetry={() => void list.refetch()} />;
   else if (list.isPending) body = <ShelfSkeleton />;
-  else if (!all.length)
+  else if (kind === 'artist')
+    body = artists.length ? (
+      <section>
+        <SectionTitle hint={`${formatCount(artists.length)} 位 · 识别出来的画师，认不出的不在这里`}>画师</SectionTitle>
+        <ArtistShelf list={artists} />
+      </section>
+    ) : (
+      <EmptyState
+        glyph="画"
+        title={debounced ? `没有找到「${debounced}」` : '还没有识别出画师'}
+        description="在「设置 → 识别」里打开「识别画师」，识别完的图会按画师归到这里。只认得 Danbooru 上图多的画师，认不出的不会出现。"
+      />
+    );
+  else if (!all.length && !artists.length)
     body = debounced ? (
       <EmptyState glyph="无" title={`没有找到「${debounced}」`} description="可以搜书名、社团、作者、原作或汉化组。" />
     ) : (
@@ -71,6 +88,12 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
               </section>
             );
           })}
+        {!kind && artists.length > 0 && (
+          <section>
+            <SectionTitle hint={`${formatCount(artists.length)} 位 · 识别出来的画师`}>画师</SectionTitle>
+            <ArtistShelf list={artists} />
+          </section>
+        )}
       </div>
     );
 
@@ -90,8 +113,8 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
         }
       >
         <div className="flex items-center gap-3">
-          <SearchInput value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索书名、社团、作者" className="w-[280px]" />
-          <Segmented<'all' | CollectionKind>
+          <SearchInput value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索书名、社团、作者、画师" className="w-[280px]" />
+          <Segmented<'all' | CollectionKind | 'artist'>
             size="sm"
             value={kind ?? 'all'}
             onChange={(v) => set('kind', v === 'all' ? null : v)}
@@ -99,6 +122,7 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
               { value: 'all', label: '全部' },
               { value: 'doujin', label: '本子' },
               { value: 'artbook', label: '画集' },
+              { value: 'artist', label: '画师' },
             ]}
           />
         </div>

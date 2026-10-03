@@ -28,6 +28,8 @@ export interface GalleryFilters {
   /** 自定义画面的 id（?custom=）；和 theme 互斥 */
   custom: string | undefined;
   favorite: boolean;
+  /** 画师（Danbooru 标签，?artist=），从合集页的「画师」点进来 */
+  artist: string | undefined;
   sort: GallerySort;
   order: SortOrder;
 }
@@ -61,6 +63,7 @@ function parse(params: URLSearchParams, kindFallback: ContentKind[] | 'all'): Ga
     theme: (BROWSE_THEMES as readonly string[]).includes(params.get('theme') ?? '') ? (params.get('theme') as BrowseTheme) : undefined,
     custom: params.get('custom') || undefined,
     favorite: params.get('fav') === '1',
+    artist: params.get('artist') || undefined,
     sort,
     order: orderParam === 'asc' || orderParam === 'desc' ? orderParam : defaultOrder(sort),
   };
@@ -95,6 +98,7 @@ export function useGalleryParams() {
           set('theme', merged.theme);
           set('custom', merged.custom);
           set('fav', merged.favorite ? '1' : undefined);
+          set('artist', merged.artist);
           set('sort', merged.sort === 'addedAt' ? undefined : merged.sort);
           // 换排序时回到该排序的默认方向；方向等于默认值时不写进 URL
           const order = patch.sort && patch.order === undefined ? defaultOrder(merged.sort) : merged.order;
@@ -121,16 +125,17 @@ export function useGalleryParams() {
       theme: filters.theme,
       tags: customTags,
       favorite: filters.favorite || undefined,
+      artist: filters.artist,
       sort: filters.sort,
       order: filters.sort === 'random' ? undefined : filters.order,
     }),
     [filters, customTags],
   );
 
-  const hasFilters = !!(filters.q || filters.rating.length || filters.orientation || filters.theme || customTheme || filters.favorite);
+  const hasFilters = !!(filters.q || filters.rating.length || filters.orientation || filters.theme || customTheme || filters.favorite || filters.artist);
 
   const clearFilters = useCallback(
-    () => update({ q: '', rating: [], orientation: undefined, theme: undefined, custom: undefined, favorite: false }),
+    () => update({ q: '', rating: [], orientation: undefined, theme: undefined, custom: undefined, favorite: false, artist: undefined }),
     [update],
   );
 

@@ -1,5 +1,5 @@
 import type { Job, JobKind, JobStatus } from '@emaki/shared';
-import { CloudDownload, Copy, FolderSearch, Image as ImageIcon, ScanFace, type LucideIcon } from 'lucide-react';
+import { CloudDownload, Copy, FolderSearch, Image as ImageIcon, Palette, ScanFace, type LucideIcon } from 'lucide-react';
 
 export const JOB_LABEL: Record<JobKind, string> = {
   scan: '扫描图库',
@@ -7,6 +7,7 @@ export const JOB_LABEL: Record<JobKind, string> = {
   tag: '识别角色',
   'danbooru-sync': '同步 Danbooru',
   dedupe: '查找重复',
+  artists: '识别画师',
 };
 
 /** 进度条旁边的动词，比「进行中」更具体 */
@@ -16,6 +17,7 @@ export const JOB_VERB: Record<JobKind, string> = {
   tag: '识别中',
   'danbooru-sync': '同步中',
   dedupe: '查找中',
+  artists: '识别中',
 };
 
 export const JOB_ICON: Record<JobKind, LucideIcon> = {
@@ -24,6 +26,7 @@ export const JOB_ICON: Record<JobKind, LucideIcon> = {
   tag: ScanFace,
   'danbooru-sync': CloudDownload,
   dedupe: Copy,
+  artists: Palette,
 };
 
 /** 「运行任务」菜单里的顺序：按日常使用频率 */

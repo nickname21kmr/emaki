@@ -1,6 +1,7 @@
 import type {
   AddLibraryRootBody,
   BulkCollectionsBody,
+  Artist,
   BulkImagesBody,
   CollectionSummary,
   CreateCollectionBody,
@@ -31,6 +32,7 @@ import type {
   ListWorksQuery,
   MoveImagesBody,
   MutationResult,
+  Rating,
   Page,
   RetagResult,
   SearchHit,
@@ -70,6 +72,7 @@ import { backfillSources } from '../../services/source/backfill.ts';
 import { backfillClassification } from '../../services/classify/backfill.ts';
 import { CollectionService, type CollectionsHook } from '../../services/collections/CollectionService.ts';
 import { shutdownTagger } from '../../services/tagger/client.ts';
+import { artistPendingCount, createArtistJobRunner } from '../../services/tagger/artists.ts';
 import { createTagStage } from '../../services/tagger/tagJob.ts';
 import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../../services/catalog/copyrights.ts';
@@ -194,6 +197,20 @@ export class SqliteDataSource implements DataSource {
           relocalizeAll,
           getDanbooru: () => ({ ...readSettings(db).danbooru, apiKey: getDanbooruApiKey(db) }),
           setLastSyncAt: (at) => patchSettingsInternal(db, 'danbooru', { lastSyncAt: at }),
+        }),
+      },
+    });
+    ds.pipeline.register({
+      artists: {
+        enabled: () => readSettings(db).tagger.artists,
+        pendingCount: () => artistPendingCount(db),
+        run: createArtistJobRunner({
+          db,
+          modelsDir: config.modelsDir,
+          getDevice: () => {
+            const t = readSettings(db).tagger;
+            return { device: t.device, batchSize: t.batchSize };
+          },
         }),
       },
     });
@@ -379,6 +396,31 @@ export class SqliteDataSource implements DataSource {
       this.ctx.invalidate('all');
       this.ctx.bus.emit({ type: 'library-changed', reason });
     }
+  }
+
+  /** 画师：只数计入张数的插画；封面优先挑全年龄、分数最高的一张 */
+  async listArtists(): Promise<Artist[]> {
+    const rows = this.ctx
+      .stmt(
+        `WITH a AS (
+           SELECT ia.artist, ia.score, i.id, i.dominant_color, i.rating, i.width, i.height
+           FROM image_artists ia JOIN v_counted_images i ON i.id = ia.image_id
+           WHERE i.content_kind = 'illustration'
+         ),
+         ranked AS (
+           SELECT a.*, COUNT(*) OVER (PARTITION BY artist) AS n,
+                  ROW_NUMBER() OVER (PARTITION BY artist ORDER BY (rating = 'general') DESC, score DESC, id) AS rn
+           FROM a
+         )
+         SELECT artist, n, id, dominant_color, rating, width, height FROM ranked WHERE rn = 1 ORDER BY n DESC, artist`,
+      )
+      .all() as { artist: string; n: number; id: number; dominant_color: string | null; rating: Rating; width: number; height: number }[];
+    return rows.map((r) => ({
+      tag: r.artist,
+      name: r.artist.replace(/_/g, ' '),
+      imageCount: r.n,
+      cover: { id: toId(r.id), dominantColor: r.dominant_color ?? '#888888', rating: r.rating, width: r.width, height: r.height },
+    }));
   }
 
   // T38c 合集
@@ -770,6 +812,7 @@ export class SqliteDataSource implements DataSource {
 
   async updateSettings(body: UpdateSettingsBody): Promise<Settings> {
     const before = readSettings(this.ctx.db).tagger.autoAcceptThreshold;
+    const beforeArtists = readSettings(this.ctx.db).tagger.artists;
     applySettingsPatch(this.ctx.db, body as Parameters<typeof applySettingsPatch>[1]);
     const settings = await this.getSettings();
     // 调低自动采纳阈值：已达标的建议当场归到角色（和识别任务开头的「阶段 0」同一段逻辑）
@@ -788,6 +831,8 @@ export class SqliteDataSource implements DataSource {
         this.refreshCollections('mutation');
       }
     }
+    // 刚打开「识别画师」：给已识别的图补跑（任务在显卡道里排在识别后面，可以随时取消）
+    if (body.tagger?.artists === true && !beforeArtists) this.ctx.jobs.enqueue('artists');
     for (const fn of this.settingsListeners) fn(settings);
     this.ctx.touch();
     return settings;

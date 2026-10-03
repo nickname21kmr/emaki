@@ -351,6 +351,12 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     expect([status, json]).toEqual([200, { path: 'D:/Picked' }]);
   });
 
+  route('GET /api/artists', async () => {
+    const { status, json } = await call('GET', '/api/artists');
+    expect([status, json]).toEqual([200, []]); // 演示数据没有画师
+    expect((await call('GET', '/api/images?artist=kantoku')).status).toBe(200);
+  });
+
   route('POST /api/system/network-check', async () => {
     const { status, json } = await call('POST', '/api/system/network-check');
     expect([status, json]).toMatchObject([200, { proxy: { url: null }, targets: [], summary: expect.any(String) }]);

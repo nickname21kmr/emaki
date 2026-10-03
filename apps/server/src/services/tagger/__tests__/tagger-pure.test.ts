@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { sharp } from '../../image/sharpConfig.ts';
-import { parseCsv, parseSelectedTags } from '../labels.ts';
+import { parseCsv, parsePixaiTags, parseSelectedTags } from '../labels.ts';
 import { decodeRow, mcutThreshold, pickRating } from '../postprocess.ts';
 import { preprocessWdV3 } from '../preprocess.ts';
 
@@ -49,6 +49,29 @@ describe('postprocess', () => {
     expect(pickRating(d.rating!)).toBe('sensitive');
     expect(d.general).toEqual([['1girl', 0.99]]);
     expect(d.character).toEqual([['mika_(blue_archive)', 0.93]]);
+    // 没要画师：结果里没有 artist；WD 没有画师类，要了也没有
+    expect(d.artist).toBeUndefined();
+    expect(decodeRow(p, 0, L, { generalThreshold: 0.35, characterThreshold: 0.35, artistThreshold: 0.35 }).artist).toBeUndefined();
+  });
+
+  it('decodeRow：PixAI 的 style 类解码成画师，按门槛、最多 2 个', () => {
+    const L = parsePixaiTags(
+      JSON.stringify({
+        num_classes: 8,
+        category_order: ['general', 'style', 'rating'],
+        categories: [
+          { name: 'general', offset: 0, count: 1, tags: ['1girl'] },
+          { name: 'style', offset: 1, count: 3, tags: ['kantoku', 'mignon', 'mishima_kurone'] },
+          { name: 'rating', offset: 4, count: 4, tags: ['rating:g', 'rating:s', 'rating:q', 'rating:e'] },
+        ],
+      }),
+    );
+    const p = new Float32Array([0.9, 0.98, 0.4, 0.3, 0.9, 0.05, 0.03, 0.02]);
+    const d = decodeRow(p, 0, L, { generalThreshold: 0.35, characterThreshold: 0.35, artistThreshold: 0.35 });
+    expect(d.artist).toEqual([
+      ['kantoku', 0.98],
+      ['mignon', 0.4],
+    ]);
   });
 });
 

@@ -190,7 +190,7 @@ function SidebarLinkInner({ item, ...rest }: { item: NavItem }) {
   );
 }
 
-const JOB_GLYPH: Record<Job['kind'], string> = { scan: '扫', thumbnail: '图', tag: '识', dedupe: '重', 'danbooru-sync': '同' };
+const JOB_GLYPH: Record<Job['kind'], string> = { scan: '扫', thumbnail: '图', tag: '识', dedupe: '重', 'danbooru-sync': '同', artists: '画' };
 
 /** 后台任务进度环（TR-7）：环里是任务类型字，下面是百分比；点一下去设置页的后台任务 */
 function JobRing({ kind, progress, label }: { kind: Job['kind']; progress: number | null; label: string }) {

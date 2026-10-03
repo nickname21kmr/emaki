@@ -1,3 +1,4 @@
+import type { ListArtistsResponse } from '@emaki/shared';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { DataSource } from '../datasource/DataSource.ts';
@@ -25,6 +26,8 @@ export function collectionRoutes(app: FastifyInstance, ds: DataSource): void {
     );
     return ds.listCollections(q);
   });
+
+  app.get('/api/artists', (): Promise<ListArtistsResponse> => ds.listArtists());
 
   app.post('/api/collections/bulk', (req) => {
     const body = parse(

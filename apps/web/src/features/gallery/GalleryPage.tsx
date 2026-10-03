@@ -130,7 +130,20 @@ export function GalleryPage() {
     <div className="flex min-h-full flex-col">
       <PageHeader
         sticky
-        title="图库"
+        // 从合集页的「画师」点进来：标题换成画师名，上面一行可以回到全部图库
+        kicker={
+          filters.artist ? (
+            <>
+              <Link to="/collections?kind=artist" className="font-semibold text-shu-fg hover:underline">
+                画师
+              </Link>
+              <button type="button" className="ml-3 hover:text-fg" onClick={() => update({ artist: undefined })}>
+                看全部图库
+              </button>
+            </>
+          ) : undefined
+        }
+        title={filters.artist ? filters.artist.replace(/_/g, ' ') : '图库'}
         subtitle={
           <Subtitle
             stats={stats}

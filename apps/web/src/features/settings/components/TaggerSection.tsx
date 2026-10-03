@@ -1,5 +1,5 @@
 import type { Settings } from '@emaki/shared';
-import { Cpu, ScanFace, Zap } from 'lucide-react';
+import { Cpu, Palette, ScanFace, Zap } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Button, Field, Segmented, Switch } from '@/components/ui';
@@ -98,6 +98,20 @@ export function TaggerSection({
             onCheckedChange={(v) => save({ tagger: { retryOld: v } })}
             label="WD 没认出的旧图，用主模型再认一遍"
           />
+        </Field>
+
+        <Field
+          label="识别画师"
+          hint="用 PixAI 模型认画师，认出来的会出现在「合集 → 画师」里，认不出的不管。只认得 Danbooru 上图多的画师。打开后会给已经识别过的插画补跑一遍：每张约 0.5 秒，图多的话要好几个小时，在后台进行，随时可以取消，下次接着跑。"
+        >
+          <div className="flex items-center gap-3">
+            {tagger.artists && (
+              <JobAction kind="artists" icon={<Palette />} variant="ghost">
+                补跑
+              </JobAction>
+            )}
+            <Switch checked={tagger.artists} onCheckedChange={(v) => save({ tagger: { artists: v } })} label="识别画师" />
+          </div>
         </Field>
 
         <Field label="运行设备" hint="有显卡就选 GPU，NVIDIA、AMD、Intel 都可以，走 DirectML。DirectML 用不了时会自动改用 WebGPU，再不行用 CPU。">

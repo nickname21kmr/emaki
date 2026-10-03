@@ -4,6 +4,7 @@
  * 各阶段由对应任务注入（register）；没有注入的阶段 runner 抛 NotImplementedError，任务显示 failed 并提示缺哪一项。
  */
 import type { JobKind } from '@emaki/shared';
+import { AUTO_ARTIST_MAX } from './tagger/artists.ts';
 import type { JobContext, JobQueue, JobRunner } from '../core/jobs.ts';
 import { NotImplementedError } from '../http/errors.ts';
 import type { ThumbnailService } from './image/ThumbnailService.ts';
@@ -21,6 +22,12 @@ export interface DanbooruStage {
   shouldRunAfterTag(): boolean;
   run: JobRunner;
 }
+/** 画师（默认关，设置里打开） */
+export interface ArtistStage {
+  enabled(): boolean;
+  pendingCount(): number;
+  run: JobRunner;
+}
 /** T16 */
 export interface DedupeStage {
   run(ctx: JobContext): Promise<string>;
@@ -36,6 +43,7 @@ export interface PipelineDeps {
   tag?: TagStage;
   danbooru?: DanbooruStage;
   dedupe?: DedupeStage;
+  artists?: ArtistStage;
   /** T20：refreshTagCounts */
   afterTag?: () => void;
   /** 扫描完成（没被取消）后的钩子，例如 T08 重新同步监听 */
@@ -45,7 +53,7 @@ export interface PipelineDeps {
 /** 延后的文件（2 秒内刚写入）过多久再扫 */
 const DEFERRED_RETRY_MS = 3000;
 
-export type PipelineStages = Partial<Pick<PipelineDeps, 'tag' | 'danbooru' | 'dedupe' | 'afterTag' | 'afterScan'>>;
+export type PipelineStages = Partial<Pick<PipelineDeps, 'tag' | 'danbooru' | 'dedupe' | 'artists' | 'afterTag' | 'afterScan'>>;
 
 export class Pipeline {
   private dedupeDirty = false;
@@ -85,8 +93,19 @@ export class Pipeline {
             this.d.afterTag?.();
             if (this.d.danbooru?.shouldRunAfterTag()) this.d.jobs().enqueue('danbooru-sync');
             if (this.dedupeDirty) this.d.jobs().enqueue('dedupe');
+            // 开着画师的：新图（WD 识别的旧图）顺手补上；第一次打开时的大批量由打开开关时排
+            const a = this.d.artists;
+            if (a?.enabled()) {
+              const n = a.pendingCount();
+              if (n > 0 && n <= AUTO_ARTIST_MAX) this.d.jobs().enqueue('artists');
+            }
           }
           return msg;
+        }
+        case 'artists': {
+          if (!this.d.artists) throw new NotImplementedError('artists', '识别画师');
+          if (!this.d.artists.enabled()) return '识别画师：设置里没有打开';
+          return this.d.artists.run(ctx);
         }
         case 'dedupe': {
           if (!this.d.dedupe) throw new NotImplementedError('T16', '查重');

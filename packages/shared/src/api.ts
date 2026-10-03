@@ -186,6 +186,8 @@ export interface ListImagesQuery extends PageQuery {
   seed?: number;
   /** 合集：具体 id = 这一本的页；'none' = 不在任何合集里的图（T38c） */
   collectionId?: ID | 'none';
+  /** 画师（Danbooru 标签，如 kantoku）：识别出这位画师的图 */
+  artist?: string;
   sort?: ImageSort;
   order?: 'asc' | 'desc';
 }
@@ -246,6 +248,24 @@ export interface MoveImagesBody {
  */
 export const THUMB_WIDTHS = [240, 480, 960] as const;
 export type ThumbWidth = (typeof THUMB_WIDTHS)[number];
+
+// ---------------------------------------------------------------- 画师
+
+/**
+ * GET /api/artists —— 识别出来的画师（PixAI 的 style 输出，分数达到门槛才算），按张数从多到少。
+ * 认不出画师的图不在这里。
+ */
+export interface Artist {
+  /** Danbooru 标签，如 mishima_kurone */
+  tag: string;
+  /** 显示名：标签去掉下划线 */
+  name: string;
+  /** 只数计入张数的插画 */
+  imageCount: number;
+  /** 封面：这位画师分数最高的一张 */
+  cover: Pick<ImageItem, 'id' | 'dominantColor' | 'rating' | 'width' | 'height'> | null;
+}
+export type ListArtistsResponse = Artist[];
 
 // ---------------------------------------------------------------- 合集（T38）
 

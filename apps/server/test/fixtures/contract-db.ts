@@ -226,6 +226,7 @@ export function buildContractDb(now: number): MockDb {
       skipCameraPhotos: true,
       retryOld: false,
       keepAwake: true,
+      artists: false,
     },
     danbooru: { enabled: false, username: '', hasApiKey: false, lastSyncAt: null },
     dedupe: { hammingThreshold: 8, lastRunAt: null },

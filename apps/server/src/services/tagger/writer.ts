@@ -8,6 +8,7 @@
  * 未知角色不新建，只进建议（BI-15），已有角色照常关联。
  */
 import type { Db, Statement } from '../../db/connection.ts';
+import { writeArtists } from './artists.ts';
 import type { CharacterCatalog } from '../catalog/characterCatalog.ts';
 import type { CopyrightSource } from '../catalog/copyrights.ts';
 import { CLASS_COLS, classificationStatements, computeClassification, writeClassification, type ClassRow } from '../classify/backfill.ts';
@@ -160,6 +161,8 @@ export class TagResultWriter {
     }
     stats.suggestions += n;
     if (r.rating) s.updRating!.run(pickRating(r.rating), r.id);
+    // 能认画师的模型（PixAI）顺便给出画师；WD 没有这一项，留给「识别画师」任务补
+    if (r.artist) writeArtists(this.db, r.id, r.artist, now);
     s.markTagged!.run(now, o.repo, r.id);
     stats.tagged++;
     return r.id;

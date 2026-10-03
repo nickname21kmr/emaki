@@ -175,7 +175,7 @@ describe('tagJob', () => {
       db,
       bus,
       modelsDir: 'X:/models',
-      getTaggerSettings: () => ({ model, device: 'dml', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true }),
+      getTaggerSettings: () => ({ model, device: 'dml', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true, artists: false }),
       makeCatalog: () => {
         const copyrights = new CopyrightResolver(db, OFFLINE);
         return { catalog: new CharacterCatalog(db, { copyrights }), copyrights };
@@ -328,6 +328,7 @@ describe('tagJob 分流（旧文件用旧模型、新文件用新模型、相机
     skipCameraPhotos: true,
     retryOld: false,
     keepAwake: true,
+    artists: false,
   });
 
   beforeEach(() => {

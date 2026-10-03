@@ -376,6 +376,8 @@ export interface Settings {
     retryOld: boolean;
     /** 扫描、识别等后台任务运行时不让电脑休眠（默认开；只挡睡眠，不挡关屏） */
     keepAwake: boolean;
+    /** 识别画师（PixAI 的画师输出，默认关）：打开后识别时顺便记画师，并给已识别的图补跑 */
+    artists: boolean;
   };
   danbooru: {
     /** 是否允许联网同步标签元数据 */
@@ -404,7 +406,8 @@ export interface Settings {
   };
 }
 
-export type JobKind = 'scan' | 'thumbnail' | 'tag' | 'danbooru-sync' | 'dedupe';
+/** artists：给还没识别过画师的图补跑 PixAI，只记画师（2026-10-04） */
+export type JobKind = 'scan' | 'thumbnail' | 'tag' | 'danbooru-sync' | 'dedupe' | 'artists';
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 
 export interface Job {

@@ -13,6 +13,7 @@ import { backfillClassification } from '../classify/backfill.ts';
 import { readCameraFromExif, readJpegExifHead } from '../image/exif.ts';
 import type { TagStage } from '../pipeline.ts';
 import { acquireTagger, releaseTagger, shutdownTagger, TaggerCrashedError, type TaggerLike, type TaggerStartOptions } from './client.ts';
+import { ARTIST_THRESHOLD } from './artists.ts';
 import { ensureModelFiles, isModelReady } from './download.ts';
 import { clampBatch, findModel, TAGGER_MODELS, type TaggerModelSpec } from './models.ts';
 import type { HostItemResult, HostThresholds } from './protocol.ts';
@@ -253,7 +254,11 @@ export function createTagJobRunner(deps: TagJobDeps): JobRunner {
 
     try {
       if (fallbackNote) ctx.setMessage(fallbackNote);
-      const th: HostThresholds = { general: t.generalThreshold, character: Math.min(t.characterThreshold, t.autoAcceptThreshold) };
+      const th: HostThresholds = {
+        general: t.generalThreshold,
+        character: Math.min(t.characterThreshold, t.autoAcceptThreshold),
+        ...(t.artists ? { artist: ARTIST_THRESHOLD } : {}),
+      };
       const B = tagger.current.batchSize;
       let beforeId = Number.MAX_SAFE_INTEGER;
       let yielded = false;
