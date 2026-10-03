@@ -1,7 +1,7 @@
 {
   "name": "emaki",
   "private": true,
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Emaki 絵巻 — 本地二次元插画收藏管理器：按角色/作品整理、自动识别、查重。",
   "type": "module",
   "workspaces": [
