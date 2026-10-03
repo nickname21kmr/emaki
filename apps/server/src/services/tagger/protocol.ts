@@ -45,7 +45,7 @@ export type HostItemResult =
       /** 模型能认画师、请求里给了门槛时才有；[] = 跑过但没认出 */
       artist?: [string, number][];
     }
-  /** ENOENT：文件不在了；IO：暂时读不了（被占用、没权限），这次不记、下次再试；UNSUPPORTED / DECODE：图本身的问题 */
+  /** ENOENT：文件不在了；IO：暂时读不了（被占用、掉线、解码超时），这次不记、下次再试；UNSUPPORTED / DECODE：图本身的问题 */
   | { id: number; ok: false; code: 'ENOENT' | 'IO' | 'UNSUPPORTED' | 'DECODE'; message: string };
 
 export interface ReadyMsg {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TaggerCrashedError, type TaggerLike, type TaggerStartOptions } from '../client.ts';
 import type { HostItemResult } from '../protocol.ts';
-import { ResilientTagger } from '../tagJob.ts';
+import { ResilientTagger } from '../resilient.ts';
 
 const OPTS: TaggerStartOptions = { repo: 'A1yCE/pixai-tagger-v1.0-onnx-fp16', modelPath: 'm', labelsPath: 'l', device: 'dml', batchSize: 1, modelsDir: 'x' };
 const TH = { general: 0.35, character: 0.35 };
@@ -46,7 +46,7 @@ describe('ResilientTagger', () => {
     for (const order of [[1, 2, 3, 4], [2, 1, 3, 4], [4, 3, 2, 1], [2, 3, 4, 1]]) {
       const BAD = 1;
       let made = 0;
-      const t = new ResilientTagger(client(BAD), OPTS, async () => (made++, client(BAD)), () => {});
+      const t = new ResilientTagger(client(BAD), OPTS, async () => (made++, client(BAD)));
       // 第一轮先成功几张，留下「识别成功过的图」
       for (const id of [10, 11, 12]) await t.tag([{ id, path: `p${id}` }], TH);
       const res = await Promise.all(order.map((id) => t.tag([{ id, path: `p${id}` }], TH)));
@@ -59,7 +59,7 @@ describe('ResilientTagger', () => {
 
   it('后面又来了一批好图（隔离中排在坏图后面）：都不会被误判', async () => {
     const BAD = 5;
-    const t = new ResilientTagger(client(BAD), OPTS, async () => client(BAD), () => {});
+    const t = new ResilientTagger(client(BAD), OPTS, async () => client(BAD));
     await t.tag([{ id: 100, path: 'p' }], TH);
     const all = await Promise.all([5, 6, 7, 8, 9, 10, 11, 12].map((id) => t.tag([{ id, path: `p${id}` }], TH)));
     const flat = all.flat();

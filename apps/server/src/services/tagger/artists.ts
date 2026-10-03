@@ -9,6 +9,7 @@ import type { JobRunner } from '../../core/jobs.ts';
 import type { Db } from '../../db/connection.ts';
 import { toAbs } from '../fs/paths.ts';
 import { acquireTagger, releaseTagger, type TaggerLike, type TaggerStartOptions } from './client.ts';
+import { ResilientTagger } from './resilient.ts';
 import { ensureModelFiles } from './download.ts';
 import { clampBatch, findModel } from './models.ts';
 import type { HostItemResult } from './protocol.ts';
@@ -58,13 +59,19 @@ export function createArtistJobRunner(deps: ArtistJobDeps): JobRunner {
     if (ctx.signal.aborted) return '识别画师：已取消';
     const { device, batchSize } = deps.getDevice();
     ctx.setMessage(device === 'dml' ? '识别画师：加载模型到显卡…' : '识别画师：加载模型…');
-    const client = await (deps.clientFactory ?? acquireTagger)({
+    const startOpts: TaggerStartOptions = {
       repo: spec.repo,
       modelPath: files.modelPath,
       labelsPath: files.labelsPath,
       device,
       batchSize: clampBatch(spec, device, batchSize),
       modelsDir: deps.modelsDir,
+    };
+    const factory = deps.clientFactory ?? acquireTagger;
+    // 和识别任务一样的出错处理：子进程崩了按原样重开、显卡出错逐级降级、会弄崩子进程的图单独跳过
+    const client = new ResilientTagger(await factory(startOpts), startOpts, factory, {
+      signal: ctx.signal,
+      discard: deps.clientFactory ? undefined : () => releaseTagger(),
     });
     const sel = db.prepare(`SELECT i.id, r.path AS root, i.rel_path AS rel ${PENDING} AND i.id < ? ORDER BY i.id DESC LIMIT ?`);
     const nowIso = () => new Date(deps.now?.() ?? Date.now()).toISOString();
@@ -79,14 +86,20 @@ export function createArtistJobRunner(deps: ArtistJobDeps): JobRunner {
           ctx.requeue();
           return `识别画师：已让出（这次补了 ${done} 张）`;
         }
-        const rows = sel.all(before, client.batchSize * 4) as { id: number; root: string; rel: string }[];
+        const rows = sel.all(before, client.current.batchSize * 4) as { id: number; root: string; rel: string }[];
         if (!rows.length) break;
         before = rows.at(-1)!.id;
         // 一般标签和角色门槛给到 2（不可能达到），只解码画师
-        const results: HostItemResult[] = await client.tag(
-          rows.map((r) => ({ id: r.id, path: toAbs(r.root, r.rel) })),
-          { general: 2, character: 2, artist: ARTIST_THRESHOLD },
-        );
+        let results: HostItemResult[];
+        try {
+          results = await client.tag(
+            rows.map((r) => ({ id: r.id, path: toAbs(r.root, r.rel) })),
+            { general: 2, character: 2, artist: ARTIST_THRESHOLD },
+          );
+        } catch (err) {
+          if (ctx.signal.aborted) return `识别画师：已取消（这次补了 ${done} 张，认出 ${found} 张）`;
+          throw err;
+        }
         const now = nowIso();
         db.transaction(() => {
           for (const r of results) {
@@ -104,6 +117,7 @@ export function createArtistJobRunner(deps: ArtistJobDeps): JobRunner {
         ctx.advance(rows.length, `识别画师：${done} / ${total} · 认出 ${found} 张 · ${rate.toFixed(1)} 张/秒 · 剩余约 ${eta}`);
       }
     } finally {
+      client.close();
       releaseTagger();
     }
     return `识别画师：补了 ${done} 张，认出画师 ${found} 张`;

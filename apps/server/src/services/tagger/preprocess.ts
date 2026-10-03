@@ -26,8 +26,8 @@ export type PreprocessResult =
 
 /** 文件不在了 */
 const GONE = new Set(['ENOENT', 'ENOTDIR']);
-/** 一会儿就好的读取错误（被别的程序占着、移动硬盘 / 网络盘掉线、句柄用完）；没权限这类不会自己好的按图片问题记 */
-const TRANSIENT = new Set(['EBUSY', 'EIO', 'ETIMEDOUT', 'EAGAIN', 'ECONNRESET', 'ENOTCONN', 'EMFILE', 'ENFILE', 'UNKNOWN']);
+/** 不会自己好的读取错误（没权限、其实是文件夹、路径太长、文件太大）：按图片问题记；其余（被占用、掉线、网络盘出错……）都下次再试 */
+const PERMANENT = new Set(['EACCES', 'EPERM', 'EISDIR', 'ELOOP', 'ENAMETOOLONG', 'ERR_FS_FILE_TOO_LARGE']);
 /**
  * 读文件 + 预处理，错误按原因分类（预处理线程和主线程共用）：
  * - ENOENT：文件不在了，交给扫描器标丢失
@@ -41,13 +41,15 @@ export async function preprocessFile(spec: TaggerModelSpec, path: string): Promi
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code ?? '';
     if (GONE.has(code)) return { ok: false, code: 'ENOENT', message: '文件不存在' };
-    if (TRANSIENT.has(code)) return { ok: false, code: 'IO', message: `读取失败（${code}），下次再试` };
-    return { ok: false, code: 'DECODE', message: `读取失败（${code || (err as Error).message}）` };
+    if (PERMANENT.has(code)) return { ok: false, code: 'DECODE', message: `读取失败（${code}）` };
+    return { ok: false, code: 'IO', message: `读取失败（${code || (err as Error).message}），下次再试` };
   }
   try {
     return { ok: true, data: await preprocess(spec, buf) };
   } catch (err) {
     const msg = (err as Error).message;
+    // 解码超时多半是机器当时太忙（几亿像素的图也就几秒），下次再试
+    if (/timeout/i.test(msg)) return { ok: false, code: 'IO', message: `解码超时，下次再试（${msg}）` };
     return { ok: false, code: /unsupported image format/i.test(msg) ? 'UNSUPPORTED' : 'DECODE', message: msg };
   }
 }

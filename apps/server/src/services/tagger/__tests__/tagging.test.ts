@@ -13,7 +13,7 @@ import { humanizeCharacterTag, humanizeCopyrightTag } from '../../i18n/humanize.
 import { HumanizeLocalizer, type AutoAlias } from '../../i18n/localizer.ts';
 import { TaggerCrashedError, type TaggerLike, type TaggerStartOptions } from '../client.ts';
 import type { HostItemResult } from '../protocol.ts';
-import { createTagJobRunner } from '../tagJob.ts';
+import { createTagJobRunner, createTagStage, resetIoBackoff } from '../tagJob.ts';
 import { TagResultWriter } from '../writer.ts';
 
 const REPO = 'SmilingWolf/wd-eva02-large-tagger-v3';
@@ -185,7 +185,10 @@ describe('tagJob', () => {
     });
   const pending = () => count('SELECT count(*) FROM images WHERE tagged_at IS NULL');
 
-  beforeEach(() => freshDb(5));
+  beforeEach(() => {
+    freshDb(5);
+    resetIoBackoff();
+  });
 
   it('全部跑完；再跑一次不启动引擎', async () => {
     const factory = vi.fn(async () => fakeClient('dml'));
@@ -436,6 +439,36 @@ describe('tagJob', () => {
     await runner(factory)(ctxOf());
     expect(factory.mock.calls.map((c) => c[0].device)).toEqual(['dml', 'cpu']);
     expect(pending()).toBe(0);
+  });
+
+  it('唯一剩下的一张图每次都让子进程崩溃（没有别的图能证明显卡是好的）：最后记成失败跳过，任务不失败', async () => {
+    freshDb(1);
+    const factory = vi.fn(async (o: TaggerStartOptions) => scripted(o.device, () => crash()));
+    await runner(factory)(ctxOf());
+    expect(pending()).toBe(0);
+    expect(failed()).toBe(1);
+    expect(factory.mock.calls.at(-1)![0].device).toBe('cpu'); // 先降到 CPU，CPU 上也崩才认定是图的问题
+  });
+
+  it('读取暂时失败（IO）的图：这次不记，30 分钟内不再挑它，也不会因为它触发识别', async () => {
+    const io = (id: number): HostItemResult => ({ id, ok: false, code: 'IO', message: '读取失败（EBUSY），下次再试' });
+    const factory = vi.fn(async () => ({
+      ...scripted('dml', () => null),
+      tag: async (items: { id: number }[]) => items.map((i) => (i.id === 2 ? io(i.id) : ok(i.id, [['mika_(blue_archive)', 0.95]]))),
+    }));
+    await runner(factory)(ctxOf());
+    expect(pending()).toBe(1); // id 2 没有写
+    const stage = createTagStage({
+      db,
+      bus: new EventBus(),
+      modelsDir: 'X:/models',
+      getTaggerSettings: () => ({ model: REPO, device: 'dml', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true, artists: false }),
+      clientFactory: factory,
+    });
+    expect(stage.pendingCount()).toBe(0); // 退避中，扫描后不会为它重新加载模型
+    expect(await runner(factory)(ctxOf())).toBe('没有需要识别的图片');
+    resetIoBackoff();
+    expect(stage.pendingCount()).toBe(1); // 退避过了照常重试
   });
 
   it('显卡卡死先改成一张一批，再降到 CPU 时批大小按最初的设置算', async () => {

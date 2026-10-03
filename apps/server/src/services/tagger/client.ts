@@ -50,8 +50,9 @@ export class TaggerClient implements TaggerLike {
       else if (m.type === 'error' && m.reqId !== null) this.settle(m.reqId, new Error(m.message));
     });
     child.on('exit', (code, sig) => this.die(`识别子进程退出（${sig ?? code}）`));
-    // IPC 断了（子进程还没退出）也当成没了：之后发不出去，acquireTagger 要换新的
-    child.on('disconnect', () => this.die('识别子进程断开'));
+    // IPC 断了也当成没了（alive 已经看 connected，acquireTagger 不会再交出去）；
+    // 一般 exit 紧跟着就到，等一下让 exit 带着退出码报原因，没等到再按「断开」处理
+    child.on('disconnect', () => setTimeout(() => this.die('识别子进程断开'), 100).unref());
     // 没人监听的 'error' 会直接抛出、把整个后端带崩（例如子进程刚退出时 send 失败）
     child.on('error', (err) => this.die(`识别子进程出错：${err.message}`));
   }
