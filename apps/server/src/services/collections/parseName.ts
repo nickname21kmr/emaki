@@ -29,7 +29,9 @@ const TRAIL_TAG = /^(.*\S)\s*\[([^\]]+)\]\s*$/;
 const VOLUME_TAIL = /^(.*?)\s*(?:[(（](\d{1,3})[)）]|\s(上|中|下|前編|後編|前篇|后篇|後篇))\s*$/;
 const PARODY_TAIL = /^(.*?)\s*[(（]\s*([^)）]+)\s*[)）]\s*$/;
 export const CHAPTER = /^(.*?)\s*(?:第\s*)?(\d{1,4})\s*[话話回章]\s*$/;
-const ARTIST_ARTBOOK = /^(.{2,20}?)\s*(?:画集|畫集|イラスト集|作品集|原画集)\s*(.*)$/;
+/** 括号里的备注：页数（159P）、下载来源、日期范围、自整理 / 截止 */
+const NOTE_IN_PARENS = /\d+\s*P\b|ex-?hentai|e-?hentai|nhentai|\d{4}[.\-/]\d{1,2}|自整理|截止|按.{0,8}排序/i;
+const ARTIST_ARTBOOK =/^(.{2,20}?)\s*(?:画集|畫集|イラスト集|作品集|原画集)\s*(.*)$/;
 
 const VOLUME_WORD: Record<string, number> = { 上: 1, 前編: 1, 前篇: 1, 中: 2, 下: 3, 後編: 2, 后篇: 2, 後篇: 2 };
 
@@ -97,7 +99,10 @@ export function parseFolderName(leaf: string): ParsedFolderName {
 
   // (8) 原作：结尾的 (…)
   const par = PARODY_TAIL.exec(s);
-  if (par && par[1]) {
+  if (par && par[1] && NOTE_IN_PARENS.test(par[2]!)) {
+    // 括号里是下载来源、页数、日期这类备注，不是原作，去掉不记
+    s = par[1];
+  } else if (par && par[1]) {
     parody = par[2]!;
     s = par[1];
   }
@@ -116,8 +121,15 @@ export function parseFolderName(leaf: string): ParsedFolderName {
   // (11) 「某画师画集 副题」
   const ab = ARTIST_ARTBOOK.exec(s);
   if (ab && !artist && !circle) {
-    artist = ab[1]!;
-    if (ab[2]) s = ab[2];
+    const tail = ab[2]!.trim();
+    if (/^\d{1,3}$/.test(tail)) {
+      // 「FANTIA 作品集 2」：后面只是卷号，书名保留整串，不拿前半当画师（常是平台名）
+      volumeNo ??= Number(tail);
+      seriesKey ??= s.slice(0, s.length - tail.length).trim();
+    } else {
+      artist = ab[1]!;
+      if (tail) s = tail;
+    }
   }
 
   // (12)

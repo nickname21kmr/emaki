@@ -62,3 +62,19 @@ describe('parseFolderName', () => {
     expect(parseFolderName('Some Artist - W (JPG)').title).toBe('Some Artist - W');
   });
 });
+
+describe('画集名后面只有卷号、括号里是备注', () => {
+  it('「FANTIA 作品集 2 (ex-hentai 159P …)」：书名保留整串，记成第 2 卷，括号不当原作', () => {
+    expect(parseFolderName('FANTIA 作品集 2 (ex-hentai 159P 2020.06-2021.07)')).toMatchObject({
+      title: 'FANTIA 作品集 2',
+      artist: null,
+      parody: null,
+      seriesKey: 'FANTIA 作品集',
+      volumeNo: 2,
+    });
+  });
+  it('括号里是自整理、页数、日期的不算原作；真正的原作照旧', () => {
+    expect(parseFolderName('PIXIV 全投稿作品集 (自整理 703P 截止2022.01.04)').parody).toBeNull();
+    expect(parseFolderName('某本子 (東方Project)').parody).toBe('東方Project');
+  });
+});
