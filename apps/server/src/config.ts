@@ -46,7 +46,7 @@ export const config = {
   hfEndpoint: (process.env.HF_ENDPOINT ?? 'https://huggingface.co').replace(/\/+$/, ''),
   /** 强制 DirectML 适配器序号；不设就自动探测，结果缓存到 <modelsDir>/dml-device.json */
   dmlDeviceId: process.env.EMAKI_DML_DEVICE_ID ? Number(process.env.EMAKI_DML_DEVICE_ID) : null,
-  /** 出网代理（Clash 系统代理模式下 Node 不走系统代理，要写 http://127.0.0.1:7890） */
+  /** 出网代理；不设时自动读 Windows 系统代理（见 net/proxy.ts） */
   httpProxy: process.env.EMAKI_HTTP_PROXY ?? process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY ?? null,
   /** 开发时可指向 https://testbooru.donmai.us；离线测试可指向 http://127.0.0.1:9 */
   danbooruBaseUrl: process.env.EMAKI_DANBOORU_URL ?? 'https://danbooru.donmai.us',

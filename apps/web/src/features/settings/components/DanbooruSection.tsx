@@ -1,9 +1,13 @@
-import type { Settings } from '@emaki/shared';
-import { CloudDownload, KeyRound, UserRound } from 'lucide-react';
+import type { NetworkCheckResponse, Settings } from '@emaki/shared';
+import { useMutation } from '@tanstack/react-query';
+import { Activity, CloudDownload, KeyRound, UserRound } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
+import { toast } from 'sonner';
 import { Badge, Button, Field, Input, Switch } from '@/components/ui';
+import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { formatDateTime, formatRelative } from '@/lib/format';
+import { errorMessage } from '@/lib/queries';
 import { useSaveSettings } from '../hooks';
 import { JobAction } from './JobAction';
 import { SettingsCard, SettingsSection } from './SettingsSection';
@@ -55,8 +59,56 @@ export function DanbooruSection({ danbooru }: { danbooru: Settings['danbooru'] }
             </JobAction>
           </Field>
         </div>
+
+        <NetworkCheck />
       </SettingsCard>
     </SettingsSection>
+  );
+}
+
+const PROXY_SOURCE: Record<NonNullable<NetworkCheckResponse['proxy']['source']>, string> = {
+  env: '.env 里设的',
+  system: '系统代理',
+  pac: '系统自动代理脚本',
+};
+
+/** 同步失败时排查：分别连 Danbooru、Hugging Face、国内镜像，看是哪一段不通、有没有用上代理 */
+function NetworkCheck() {
+  const check = useMutation({ mutationFn: api.checkNetwork, onError: (err) => toast.error(errorMessage(err)) });
+  const r = check.data;
+  const proxy = r?.proxy;
+
+  return (
+    <div className="py-3.5">
+      <div className="flex items-center justify-between gap-6">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">检测网络</div>
+          <div className="mt-0.5 text-[12.5px] leading-relaxed text-fg-muted">同步失败时点一下，看看是哪一段连不上、有没有用上代理。</div>
+        </div>
+        <Button size="sm" icon={<Activity />} loading={check.isPending} onClick={() => check.mutate()}>
+          检测网络
+        </Button>
+      </div>
+
+      {r && proxy && (
+        <div className="mt-3 animate-fade-in rounded-lg bg-sunken px-3.5 py-3 text-[12.5px] leading-relaxed">
+          <p>{r.summary}</p>
+          <ul className="mt-2.5 space-y-1">
+            {r.targets.map((t) => (
+              <li key={t.name} className="flex items-baseline gap-2">
+                <span className={cn('size-1.5 shrink-0 translate-y-[-1px] rounded-full', t.ok ? 'bg-ok' : 'bg-danger')} />
+                <span className="w-36 shrink-0 text-fg-muted">{t.name}</span>
+                <span className={cn(!t.ok && 'text-danger')}>{t.message}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2.5 text-fg-subtle">
+            代理：{proxy.url ? `${proxy.url}（${PROXY_SOURCE[proxy.source!]}）` : '没有用'}
+            {proxy.note && `。${proxy.note}`}
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 

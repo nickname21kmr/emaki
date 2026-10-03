@@ -1,10 +1,17 @@
-import { CUSTOM_THEME_LIMITS, type ListTaggerModelsResponse, type PickFolderResponse, type ServerEvent } from '@emaki/shared';
+import {
+  CUSTOM_THEME_LIMITS,
+  type ListTaggerModelsResponse,
+  type NetworkCheckResponse,
+  type PickFolderResponse,
+  type ServerEvent,
+} from '@emaki/shared';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.ts';
 import type { EventBus } from '../core/events.ts';
 import type { DataSource } from '../datasource/DataSource.ts';
 import { BadRequestError } from '../http/errors.ts';
+import { checkNetwork } from '../net/check.ts';
 import { idParam, parse } from '../http/validate.ts';
 import { isModelReady } from '../services/tagger/download.ts';
 import { DEFAULT_TAGGER_MODEL, findModel, MODEL_NOTES, modelDownloadSize, TAGGER_MODELS } from '../services/tagger/models.ts';
@@ -16,6 +23,9 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
 
   // 不经过 DataSource，mock 与 sqlite 通用
   app.post('/api/system/pick-folder', async (): Promise<PickFolderResponse> => ({ path: await pickFolder() }));
+
+  // 真的会联网（mock 下也是），用来排查连不上 Danbooru
+  app.post('/api/system/network-check', (): Promise<NetworkCheckResponse> => checkNetwork());
 
   app.get('/api/settings', () => ds.getSettings());
 

@@ -5,6 +5,7 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { z } from 'zod';
 import { config } from '../../config.ts';
+import { diagnose } from '../../net/diagnose.ts';
 import { defaultFetchLike, type FetchLike, type HttpResponse } from '../../net/http.ts';
 import { RateLimiter } from './rateLimiter.ts';
 import {
@@ -89,7 +90,8 @@ export class DanbooruClient {
           await sleep(2000 * 2 ** attempt, undefined, { signal });
           continue;
         }
-        throw new DanbooruError('网络不可用，连不上 Danbooru（已改用本地词库）', 'network');
+        const { reason, hint } = diagnose(err, 'Danbooru');
+        throw new DanbooruError(`${reason}，这次先用本地词库整理。${hint ? `${hint}。` : ''}设置 → Danbooru 里可以「检测网络」`, 'network');
       }
       // 先 text() 再解析：挑战页是 HTML，直接 json() 会抛语法错误
       const body = await res.text();

@@ -540,6 +540,21 @@ export interface PickFolderResponse {
   path: string | null;
 }
 
+/** POST /api/system/network-check —— 连不上 Danbooru 时排查用 */
+export interface NetworkCheckResponse {
+  proxy: {
+    /** 实际在用的代理；null 是直连 */
+    url: string | null;
+    /** env：.env 或环境变量；system：Windows 系统代理；pac：系统的自动配置脚本 */
+    source: 'env' | 'system' | 'pac' | null;
+    /** 检测到了但没用上的原因，比如系统代理开着、端口却没在监听 */
+    note: string | null;
+  };
+  targets: { name: string; url: string; ok: boolean; ms: number | null; message: string }[];
+  /** 一句话结论和建议 */
+  summary: string;
+}
+
 // ---------------------------------------------------------------- 撤销
 
 /** POST /api/undo/:token */

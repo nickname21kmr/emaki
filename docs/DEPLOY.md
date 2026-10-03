@@ -238,7 +238,7 @@ npm run dev
 后端没启动或已经崩溃。看一下 `npm run dev` 窗口里 `[server]` 开头的报错信息。
 
 **模型下载很慢或失败**
-Emaki 会同时测试 huggingface.co、hf-mirror.com、ModelScope 三个下载源，自动选最快的。如果你用代理（比如 Clash），在项目目录新建一个 `.env` 文件（可以复制 `.env.example` 再改名），写入：
+Emaki 会同时测试 huggingface.co、hf-mirror.com、ModelScope 三个下载源，自动选最快的。Clash、v2rayN 开着「系统代理」时会自动使用；没开系统代理、也没开 TUN 的话，在项目目录新建一个 `.env` 文件（可以复制 `.env.example` 再改名），写入：
 
 ```
 EMAKI_HTTP_PROXY=http://127.0.0.1:7890

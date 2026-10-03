@@ -15,6 +15,10 @@ import { buildContractDb } from './fixtures/contract-db.ts';
 
 // 真实实现会弹出 Windows 的选择文件夹对话框，测试里换成固定返回值
 vi.mock('../src/system/pickFolder.ts', () => ({ pickFolder: async () => 'D:/Picked' }));
+// 检测网络会真的联网
+vi.mock('../src/net/check.ts', () => ({
+  checkNetwork: async () => ({ proxy: { url: null, source: null, note: null }, targets: [], summary: '测试' }),
+}));
 
 const SRC = path.resolve(import.meta.dirname, '../src');
 const prevLogLevel = process.env.EMAKI_LOG_LEVEL;
@@ -336,6 +340,11 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
   route('POST /api/system/pick-folder', async () => {
     const { status, json } = await call('POST', '/api/system/pick-folder');
     expect([status, json]).toEqual([200, { path: 'D:/Picked' }]);
+  });
+
+  route('POST /api/system/network-check', async () => {
+    const { status, json } = await call('POST', '/api/system/network-check');
+    expect([status, json]).toMatchObject([200, { proxy: { url: null }, targets: [], summary: expect.any(String) }]);
   });
 
   route('GET /api/tagger/models', async () => {

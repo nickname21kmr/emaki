@@ -92,9 +92,14 @@ flowchart LR
 
 **下载不动怎么办**
 
-- 用代理的话，在项目目录新建 `.env`，写一行 `EMAKI_HTTP_PROXY=http://127.0.0.1:7890`（端口换成你自己的），重启。
+- Clash、v2rayN 这类软件开着「系统代理」时，Emaki 会自动用它，不用设置。
+- 没开系统代理、也没开 TUN 的话，在项目目录新建 `.env`，写一行 `EMAKI_HTTP_PROXY=http://127.0.0.1:7890`（端口换成你自己的），重启。
 - 只想走国内镜像：`.env` 里写 `HF_ENDPOINT=https://hf-mirror.com`。
 - 也可以自己下载好放进去：把文件放到 `data/models/<仓库名>/`，仓库名里的 `/` 换成 `__`。比如 `A1yCE/pixai-tagger-v1.0-onnx-fp16` 就放到 `data/models/A1yCE__pixai-tagger-v1.0-onnx-fp16/`。放好后会先校验，文件不对会重新下载。
+
+**同步 Danbooru 失败**
+
+国内直连 Danbooru 一般连不上，代理的设置和上面一样。不确定是哪里的问题，可以到「设置 → Danbooru」点「检测网络」：它会分别连 Danbooru、Hugging Face 和国内镜像，告诉你是哪一段不通、有没有用上代理。连不上时会先用本地词库整理，不影响识别。
 
 **笔记本识别时用的是核显、独显闲着**
 

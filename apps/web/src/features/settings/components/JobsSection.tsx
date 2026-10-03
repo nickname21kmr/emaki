@@ -143,7 +143,8 @@ function JobRow({ job, now }: { job: Job; now: number }) {
             {status.label}
           </Badge>
         </div>
-        <div className={cn('mt-1 truncate text-xs tabular', job.status === 'failed' ? 'text-danger' : 'text-fg-muted')}>
+        {/* 失败原因要整句看完（比如连不上 Danbooru 时的排查建议），不截断 */}
+        <div className={cn('mt-1 text-xs tabular', job.status === 'failed' ? 'leading-relaxed text-danger' : 'truncate text-fg-muted')}>
           <JobMeta job={job} now={now} />
         </div>
         {active && (
