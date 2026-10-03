@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { autoKind, decideCollection, dirFeatures, orderPages, type DirPage } from './detect.ts';
+import { autoKind, bookLeaf, decideCollection, dirFeatures, orderPages, type DirPage } from './detect.ts';
 
 interface Opts {
   names?: string[];
@@ -108,5 +108,24 @@ describe('orderPages', () => {
       'ScanImage10.jpg',
       '招募.png',
     ]);
+  });
+});
+
+describe('v2：网页另存的画集（书名/xxx_files/images/00002.jpeg）', () => {
+  it('通用的子目录名往上找书名；全是通用名就还用最内层', () => {
+    expect(bookLeaf('うたわれるもの 公式ビジュアルコレクション/lkfafw_files/images')).toBe('うたわれるもの 公式ビジュアルコレクション');
+    expect(bookLeaf('某画集/pages')).toBe('某画集');
+    expect(bookLeaf('images')).toBe('images');
+    expect(bookLeaf('QQ/images')).toBe('QQ');
+    expect(bookLeaf('')).toBe('');
+  });
+  it('补零的 5 位页码算页码，书名代替 images 判定', () => {
+    const pages = mk(308, { names: Array.from({ length: 308 }, (_, k) => `${pad(k + 2, 5)}.jpeg`), w: 1356, h: 1920 });
+    expect(decideCollection('images', dirFeatures(pages))).toBeNull();
+    expect(decideCollection(bookLeaf('某某 公式ビジュアルコレクション/x_files/images'), dirFeatures(pages))?.rule).toBe('A');
+  });
+  it('不补零的 5 位数（按日期编号的 21041a、21042）不算页码', () => {
+    const names = ['21041a', '21041b', '21041c', '21042', '21043', '21044a', '21044b', '21044c', '21044d'].map((s) => `${s}.png`);
+    expect(decideCollection("2021'04", dirFeatures(mk(9, { names, w: 1129, h: 1500 })))).toBeNull();
   });
 });

@@ -13,7 +13,7 @@
  * - 被排除、进回收站、丢失的页离开合集；其余页按页序重新从 1 编号，不留空号。
  */
 import type { Db } from '../../db/connection.ts';
-import { autoKind, decideCollection, dirFeatures, DETECTOR_VERSION, evidenceOf, isJudged, orderPages, type DirPage, type PageOrder } from './detect.ts';
+import { autoKind, bookLeaf, decideCollection, dirFeatures, DETECTOR_VERSION, evidenceOf, isJudged, orderPages, type DirPage, type PageOrder } from './detect.ts';
 import { parseFolderName } from './parseName.ts';
 
 interface Row {
@@ -90,7 +90,8 @@ const ROW_SQL = `SELECT i.id, i.root_id, i.rel_path, i.file_name, i.width, i.hei
 const keyOf = (rootId: number, dir: string) => `${rootId}\u0000${dir}`;
 const dirOf = (relPath: string, fileName: string) =>
   relPath.length > fileName.length ? relPath.slice(0, relPath.length - fileName.length - 1) : '';
-const leafOf = (dir: string) => dir.slice(dir.lastIndexOf('/') + 1);
+// 「书名/xxx_files/images」这种结构用书名判定和起名（v2）
+const leafOf = bookLeaf;
 
 /** 自动判定会写的列 */
 const AUTO_COLS = [

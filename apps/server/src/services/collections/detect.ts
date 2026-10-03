@@ -11,19 +11,31 @@
  */
 import { CHAPTER, TRANSLATOR } from './parseName.ts';
 
-export const DETECTOR_VERSION = 1;
+export const DETECTOR_VERSION = 2;
 export const MIN_PAGES = 8;
 export const MAX_PAGES = 2000;
 
 const MISC_DIR =
   /^(qq_?images?|tieba|screenshots?|screen ?shots?|pixiv|downloads?|browser|weibo|weixin|wechat|dcim|camera|pictures?|images?|pics?|photos?|tmp|temp|twitter|bili(bili)?|nga|知乎|.*相册|表情.*|二维码|qq|taobao|icons?|share|bdshare|baidunetdisk|bluetooth|截图|截屏|屏幕截图)$/i;
-const PAGE_STEM = /^(?:(?:p|page|img|image|scan ?image|pic|scan)[ _-]?)?(\d{1,4})(?:(?:[ _-]{1,2}|_[a-z]{1,4}_\d+_)(\d{1,4}))?[a-z]?$/i;
+const PAGE_STEM = /^(?:(?:p|page|img|image|scan ?image|pic|scan)[ _-]?)?(\d{1,4}|0\d{4})(?:(?:[ _-]{1,2}|_[a-z]{1,4}_\d+_)(\d{1,4}))?[a-z]?$/i;
 const MACHINE_STEM = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,40}|-?\d{6,})$/i;
 export const ARTBOOK_NAME =
-  /画集|畫集|画册|畫冊|原画集|設定資料集|设定集|設定集|イラスト集|作品集|ビジュアルファンブック|visual ?fan ?book|art ?book|artworks?|illustrations?|fanbook|ファンブック/i;
+  /画集|畫集|画册|畫冊|原画集|設定資料集|设定集|設定集|イラスト集|作品集|ビジュアルファンブック|ビジュアルコレクション|visual ?fan ?book|visual ?collection|art ?book|artworks?|illustrations?|fanbook|ファンブック/i;
 const DOUJIN_EVENT =
   /^\s*(?:\[[^\]]*\]\s*)?[(（]\s*(?:C\d{2,3}|COMIC ?1|例大祭|紅楼夢|红楼梦|FF\d{1,3}|CP\d{1,3}|COMITIA|コミティア|サンクリ|みみけっと|歌姫庭園|僕らのラブライブ)[^)）]*[)）]|^\s*(?:C|FF|CP)\d{2,3}\b/i;
 const LEAD_CIRCLE = /^\s*\[[^\]]+\]\s*\S/;
+/** 只是装图的通用子目录：images、pages，以及浏览器「另存网页」生成的 xxx_files */
+const GENERIC_LEAF = /^(?:images?|imgs?|pics?|pages?|scans?|.+_files|.+\.files)$/i;
+
+/**
+ * 判定和起书名用的目录名。最内层是通用名字时（「书名/lkfafw_files/images」），往上找第一个不通用的；
+ * 全是通用名字（图库文件夹下直接一个 images）就还用最内层，照旧按杂项目录排除（v2）
+ */
+export function bookLeaf(dir: string): string {
+  const parts = dir.split('/').filter(Boolean);
+  for (let i = parts.length - 1; i >= 0; i--) if (!GENERIC_LEAF.test(parts[i]!.normalize('NFC'))) return parts[i]!;
+  return parts.at(-1) ?? '';
+}
 
 /** T38c 之后改成从 @emaki/shared 导入 */
 export type CollectionKind = 'doujin' | 'artbook';
