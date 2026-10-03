@@ -188,18 +188,19 @@ export function DuplicatesPage() {
   );
 
   // ------------------------------------------------------------ 头部
-  const suggestedReclaim = useMemo(() => groups.reduce((n, g) => n + reclaimBytes(g, [g.suggestedKeepId]), 0), [groups]);
+  const suggestedReclaim = useMemo(() => groups.reduce((n, g) => n + reclaimBytes(g, g.suggestedKeepIds), 0), [groups]);
   // 打开确认框时把计划定格下来，处理过程中列表变化不影响弹窗里的数字
   const [plans, setPlans] = useState<ResolvePlan[]>([]);
   const openConfirm = () => {
-    // 「可能是同一套」的不跟着一键处理
+    // 「可能是同一套」的不跟着一键处理；全是书里的页（没有可删的）也跳过
     setPlans(
       groups
         .filter((g) => !g.setId)
         .map((g) => {
           const keepIds = keepOf(g);
           return { id: g.id, exact: g.kind === 'exact', keepIds, trashCount: g.images.length - keepIds.length, bytes: reclaimBytes(g, keepIds) };
-        }),
+        })
+        .filter((p) => p.trashCount > 0),
     );
     setConfirmOpen(true);
   };

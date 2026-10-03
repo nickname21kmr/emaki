@@ -262,8 +262,13 @@ export interface DuplicateGroup {
   /** 0~1，组内最低相似度 */
   similarity: number;
   images: ImageItem[];
-  /** 推荐保留的图片（分辨率最高 / 体积最大 / 最早入库） */
+  /** 推荐保留的图片（在合集里 / 分辨率最高 / 体积最大 / 最早入库） */
   suggestedKeepId: ID;
+  /**
+   * 默认保留的全部图片：推荐的那张，加上组里所有在合集（画集、本子）里的页。
+   * 书里的页尽量不删，只删合集外的副本（用户 2026-10-04）
+   */
+  suggestedKeepIds: ID[];
   resolved: boolean;
   /**
    * 可能和别的组是同一套图（差分 CG、连拍）：同一文件夹、尺寸相同、代表图两两相近。

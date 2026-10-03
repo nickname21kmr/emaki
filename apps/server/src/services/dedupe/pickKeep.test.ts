@@ -25,3 +25,11 @@ it('其余都一样：入库早的、id 小的', () => {
   expect(pickKeep([c(1, 'a.png', { added_at: '2026-02-01T00:00:00.000Z' }), c(2, 'b.png')]).id).toBe(2);
   expect(pickKeep([c(5, 'a.png'), c(3, 'b.png')]).id).toBe(3);
 });
+
+it('合集里的页优先保留：哪怕另一份更早入库、文件名更像原件', () => {
+  const download = c(1, 'a.png', { added_at: '2020-01-01T00:00:00.000Z' });
+  const inBook = c(2, 'M05_D10_Y20_2 (1).png', { collection_id: 7 });
+  expect(pickKeep([download, inBook]).id).toBe(2);
+  // 两份都在合集里，照原来的规则比
+  expect(pickKeep([c(1, 'a.png', { collection_id: 3 }), c(2, 'a.png', { collection_id: 7, width: 2000 })]).id).toBe(2);
+});

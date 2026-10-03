@@ -20,7 +20,7 @@ export const kindLabel = (g: Pick<DuplicateGroup, 'kind' | 'similarity'>) =>
  */
 export function resolveKeep(group: DuplicateGroup, override: readonly ID[] | undefined): ID[] {
   const ids = new Set(group.images.map((i) => i.id));
-  const kept = (override ?? [group.suggestedKeepId]).filter((id) => ids.has(id));
+  const kept = (override ?? group.suggestedKeepIds ?? [group.suggestedKeepId]).filter((id) => ids.has(id));
   if (kept.length) return kept;
   return [ids.has(group.suggestedKeepId) ? group.suggestedKeepId : group.images[0]!.id];
 }

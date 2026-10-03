@@ -22,7 +22,7 @@ interface GroupRow {
   resolved_at: string | null;
   ignored: number;
 }
-type MemberRow = ImageRow & { group_id: number; visible: number; root_path: string };
+type MemberRow = ImageRow & { group_id: number; visible: number; root_path: string; collection_id: number | null };
 
 /** 「同一套」：代表图两两距离不超过它（64 位 dHash） */
 export const SET_MAX_DISTANCE = 16;
@@ -41,7 +41,7 @@ export class DuplicateQueries {
   private members(groupIds: number[]): Map<number, MemberRow[]> {
     const rows = this.ctx.db
       .prepare(
-        `SELECT m.group_id, ${IMAGE_COLS}, r.path AS root_path,
+        `SELECT m.group_id, ${IMAGE_COLS}, i.collection_id, r.path AS root_path,
                 EXISTS (SELECT 1 FROM v_images v WHERE v.id = i.id) AS visible
          FROM duplicate_members m JOIN images i ON i.id = m.image_id JOIN library_roots r ON r.id = i.root_id
          WHERE m.group_id IN (SELECT value FROM json_each(?))
@@ -92,6 +92,8 @@ export class DuplicateQueries {
       similarity: g.similarity,
       images: items.slice(at, (at += rows.length)),
       suggestedKeepId: toId(keep),
+      // 书里的页默认都留着，只删合集外的副本
+      suggestedKeepIds: [...new Set([keep, ...rows.filter((m) => m.collection_id != null).map((m) => m.id)])].map(toId),
       resolved: g.resolved_at !== null,
       setId: sets.has(g.id) ? toId(sets.get(g.id)!) : null,
     }));

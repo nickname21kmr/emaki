@@ -54,7 +54,7 @@ export function TriageCards({ stats }: { stats: LibraryStats }) {
   const reclaimable = useMemo(
     () =>
       (duplicates.data ?? []).reduce(
-        (total, g) => total + g.images.reduce((s, img) => (img.id === g.suggestedKeepId ? s : s + img.bytes), 0),
+        (total, g) => total + g.images.reduce((s, img) => (g.suggestedKeepIds.includes(img.id) ? s : s + img.bytes), 0),
         0,
       ),
     [duplicates.data],

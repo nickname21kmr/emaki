@@ -1,7 +1,7 @@
 import type { ID, MutationResult } from '@emaki/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { Undo2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Button, Dialog, DialogFooter, Progress, Segmented } from '@/components/ui';
 import { api } from '@/lib/api';
@@ -46,10 +46,14 @@ export function ResolveAllDialog({
   const client = useQueryClient();
   const canUndo = useCanUndoTrash();
   const [progress, setProgress] = useState(0);
+  const stopRef = useRef(false);
+  const [stopping, setStopping] = useState(false);
   // 默认只处理完全一样的：相似的组里常有同一张图的不同版本（调色、加字、改尺寸），留给人逐组看
   const [scope, setScope] = useState<'exact' | 'all'>('exact');
   useEffect(() => {
-    if (open) setScope('exact');
+    if (!open) return;
+    setScope('exact');
+    setStopping(false);
   }, [open]);
   const exactCount = plans.filter((p) => p.exact).length;
   const chosen = scope === 'exact' ? plans.filter((p) => p.exact) : plans;
@@ -71,7 +75,19 @@ export function ResolveAllDialog({
       const done: ID[] = [];
       let trashed = 0;
       setProgress(0);
+      stopRef.current = false;
       for (const plan of list) {
+        // 点了「停止」：当前这一组做完就停，已经处理的保留
+        if (stopRef.current) {
+          onDone(done);
+          return {
+            ok: true,
+            message: `已停止：处理了 ${done.length} 组，${trashed} 张移到回收站，其余 ${list.length - done.length} 组没动`,
+            undoToken: null,
+            tokens,
+            failed: '已停止',
+          };
+        }
         try {
           const res = await api.resolveDuplicate(plan.id, plan.keepIds);
           if (res.undoToken) tokens.push(res.undoToken);
@@ -117,7 +133,7 @@ export function ResolveAllDialog({
   return (
     <Dialog
       open={open}
-      // 处理中不让关，避免误以为已经取消
+      // 处理中不让点外面关掉，避免误以为已经取消；要中途停下用「停止」
       onOpenChange={(v) => !running && onOpenChange(v)}
       title="全部按推荐处理？"
       description="每组保留「建议保留」的那张（你手动调整过的组按你的选择），其余移到系统回收站，不会永久删除。默认只处理完全一样的文件。"
@@ -171,9 +187,22 @@ export function ResolveAllDialog({
       </div>
 
       <DialogFooter>
-        <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={running}>
-          取消
-        </Button>
+        {running ? (
+          <Button
+            variant="ghost"
+            disabled={stopping}
+            onClick={() => {
+              stopRef.current = true;
+              setStopping(true);
+            }}
+          >
+            {stopping ? '正在停止…' : '停止'}
+          </Button>
+        ) : (
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            取消
+          </Button>
+        )}
         <Button variant="primary" loading={running} disabled={!chosen.length} onClick={() => run.mutate(chosen)}>
           处理 {formatCount(chosen.length)} 组
         </Button>

@@ -226,7 +226,7 @@ export class DedupeService {
 
   loadRows(): DedupeRow[] {
     return this.d.db
-      .prepare('SELECT i.id, i.sha256, i.dhash, i.width, i.height, i.bytes, i.added_at, i.file_name FROM v_counted_images i')
+      .prepare('SELECT i.id, i.sha256, i.dhash, i.width, i.height, i.bytes, i.added_at, i.file_name, i.collection_id FROM v_counted_images i')
       .all() as DedupeRow[];
   }
 

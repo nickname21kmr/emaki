@@ -129,3 +129,18 @@ describe('v2：网页另存的画集（书名/xxx_files/images/00002.jpeg）', (
     expect(decideCollection("2021'04", dirFeatures(mk(9, { names, w: 1129, h: 1500 })))).toBeNull();
   });
 });
+
+describe('v3：名字写明画集 / 作品集的，不要求尺寸统一', () => {
+  // pixiv 作品号命名、尺寸各不相同的画师作品合集
+  const pages = mk(40, { names: Array.from({ length: 40 }, (_, k) => `${52804833 + k * 977}_p0.png`), w: (i) => 700 + (i % 7) * 90, h: 1500 });
+  it('「PIXIV 全投稿作品集」成画集', () => {
+    expect(decideCollection('PIXIV 全投稿作品集 (自整理 703P)', dirFeatures(pages))?.rule).toBe('C');
+  });
+  it('只叫 illustrations 的文件夹不放宽', () => {
+    expect(decideCollection('illustrations', dirFeatures(pages))).toBeNull();
+  });
+  it('横版为主的不算', () => {
+    const wide = mk(40, { names: Array.from({ length: 40 }, (_, k) => `${1000 + k * 7}_p0.png`), w: 1900, h: (i) => 900 + (i % 5) * 40 });
+    expect(decideCollection('某某作品集', dirFeatures(wide))).toBeNull();
+  });
+});

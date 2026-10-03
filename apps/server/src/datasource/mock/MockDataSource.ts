@@ -1228,6 +1228,7 @@ export class MockDataSource implements DataSource {
           return img && (wantResolved || this.isVisible(img)) ? [this.toImage(img)] : [];
         }),
         suggestedKeepId: d.suggestedKeepId,
+        suggestedKeepIds: [d.suggestedKeepId],
         resolved: d.resolved,
         setId: null,
       }))

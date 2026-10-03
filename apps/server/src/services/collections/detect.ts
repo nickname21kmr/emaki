@@ -11,7 +11,7 @@
  */
 import { CHAPTER, TRANSLATOR } from './parseName.ts';
 
-export const DETECTOR_VERSION = 2;
+export const DETECTOR_VERSION = 3;
 export const MIN_PAGES = 8;
 export const MAX_PAGES = 2000;
 
@@ -21,6 +21,9 @@ const PAGE_STEM = /^(?:(?:p|page|img|image|scan ?image|pic|scan)[ _-]?)?(\d{1,4}
 const MACHINE_STEM = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,40}|-?\d{6,})$/i;
 export const ARTBOOK_NAME =
   /画集|畫集|画册|畫冊|原画集|設定資料集|设定集|設定集|イラスト集|作品集|ビジュアルファンブック|ビジュアルコレクション|visual ?fan ?book|visual ?collection|art ?book|artworks?|illustrations?|fanbook|ファンブック/i;
+/** 明确是书的画集名：不含 illustrations / artworks 这类常被用来随手命名存图文件夹的英文词 */
+const STRONG_ARTBOOK =
+  /画集|畫集|画册|畫冊|原画集|設定資料集|设定集|設定集|イラスト集|作品集|ビジュアルファンブック|ビジュアルコレクション|art ?book|fan ?book|ファンブック/i;
 const DOUJIN_EVENT =
   /^\s*(?:\[[^\]]*\]\s*)?[(（]\s*(?:C\d{2,3}|COMIC ?1|例大祭|紅楼夢|红楼梦|FF\d{1,3}|CP\d{1,3}|COMITIA|コミティア|サンクリ|みみけっと|歌姫庭園|僕らのラブライブ)[^)）]*[)）]|^\s*(?:C|FF|CP)\d{2,3}\b/i;
 const LEAD_CIRCLE = /^\s*\[[^\]]+\]\s*\S/;
@@ -135,6 +138,8 @@ export function decideCollection(leaf: string, f: DirFeatures): { rule: Collecti
   else {
     const sig = nameSignals(leaf);
     if ((sig.doujin || sig.artbook || sig.chapter) && (f.seq >= 0.5 || f.uniform >= 0.6) && f.portrait >= 0.5) rule = 'C';
+    // v3：名字明确写着画集 / 作品集的，不要求尺寸统一（画师作品合集是不同时期、不同尺寸的图拼起来的）
+    else if (STRONG_ARTBOOK.test(leaf.normalize('NFC')) && f.portrait >= 0.5) rule = 'C';
   }
   if (!rule) return null;
   return { rule, pageOrder: f.seq >= 0.8 ? 'name' : 'mtime' };
