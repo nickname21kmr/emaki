@@ -5,7 +5,7 @@
  * 文件操作全用同步 API：移动过程中事件循环不让出，扫描任务插不进来，
  * 不会出现「扫描读到了旧的记录、又发现文件不在了」把刚移走的图标成丢失。
  */
-import { constants, copyFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync, utimesSync } from 'node:fs';
+import { constants, copyFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync, unlinkSync, utimesSync } from 'node:fs';
 import path from 'node:path';
 import { BadRequestError } from '../../http/errors.ts';
 import { isSkippedDirName, parentRel, toAbs } from '../../services/fs/paths.ts';
@@ -45,8 +45,14 @@ function moveFile(src: string, dst: string): void {
     if ((err as NodeJS.ErrnoException).code !== 'EXDEV') throw err;
     const st = statSync(src);
     copyFileSync(src, dst, constants.COPYFILE_EXCL);
-    utimesSync(dst, st.atime, st.mtime);
-    unlinkSync(src);
+    try {
+      utimesSync(dst, st.atime, st.mtime);
+      unlinkSync(src);
+    } catch (e) {
+      // 原文件删不掉（比如被占用）：删掉刚复制的那份，算这张移动失败，记录仍指向原文件
+      rmSync(dst, { force: true });
+      throw e;
+    }
   }
 }
 
