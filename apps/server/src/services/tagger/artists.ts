@@ -99,7 +99,9 @@ export function createArtistJobRunner(deps: ArtistJobDeps): JobRunner {
         })();
         done += rows.length;
         const rate = done / ((performance.now() - t0) / 1000);
-        ctx.advance(rows.length, `识别画师：${done} / ${total} · 认出 ${found} 张 · ${rate.toFixed(1)} 张/秒`);
+        const left = (total - done) / rate;
+        const eta = left < 60 ? `${Math.ceil(left)} 秒` : left < 3600 ? `${Math.ceil(left / 60)} 分钟` : `${(left / 3600).toFixed(1)} 小时`;
+        ctx.advance(rows.length, `识别画师：${done} / ${total} · 认出 ${found} 张 · ${rate.toFixed(1)} 张/秒 · 剩余约 ${eta}`);
       }
     } finally {
       releaseTagger();
