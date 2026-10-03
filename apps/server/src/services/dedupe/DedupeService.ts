@@ -7,6 +7,7 @@ import type { JobContext } from '../../core/jobs.ts';
 import { findSimilarPairs, parseDHash, popcount32 } from './hamming.ts';
 import { pickKeep, type KeepCandidate } from './pickKeep.ts';
 import { UnionFind } from './unionFind.ts';
+import { compareFingerprints, computeFingerprint, FINE_BITS, looksSame, type Fingerprint } from './fingerprint.ts';
 
 export interface DedupeRow extends KeepCandidate {
   sha256: string;
@@ -39,7 +40,28 @@ const distance = (a: string, b: string) => {
   return popcount32((ah ^ bh) >>> 0) + popcount32((al ^ bl) >>> 0);
 };
 
-export function buildGroups(rows: DedupeRow[], threshold: number, onProgress?: (done: number) => void): BuildResult {
+/** 复核：候选对是不是真的像；diff 给相似度用（0 = 一样，1 = 完全不同），没有细指纹时返回 null 用粗哈希 */
+export interface PairCheck {
+  same(a: DedupeRow, b: DedupeRow): boolean;
+  diff(a: DedupeRow, b: DedupeRow): number | null;
+}
+
+export interface Candidates {
+  buckets: DedupeRow[][];
+  reps: DedupeRow[];
+  /** reps 的下标对 */
+  pairs: [number, number][];
+  missingHash: number;
+}
+
+export function buildGroups(rows: DedupeRow[], threshold: number, onProgress?: (done: number) => void, check?: PairCheck): BuildResult {
+  const c = findCandidates(rows, threshold);
+  onProgress?.(c.reps.length);
+  return groupCandidates(c, check);
+}
+
+/** 1–2：按 sha 分桶，再用 64 位 dHash 找候选对（宽高比差太多的不算） */
+export function findCandidates(rows: DedupeRow[], threshold: number): Candidates {
   const T = Math.min(Math.max(Math.floor(threshold), 0), 16);
   // 1. 按 sha 分桶，每桶一个代表（优先有 dhash 的）
   const bySha = new Map<string, DedupeRow[]>();
@@ -70,17 +92,23 @@ export function buildGroups(rows: DedupeRow[], threshold: number, onProgress?: (
   idx.forEach((k, n) => {
     [hi[n], lo[n]] = parseDHash(reps[k]!.dhash!);
   });
-  const uf = new UnionFind(reps.length);
+  const pairs: [number, number][] = [];
   const aspect = (r: DedupeRow) => r.width / Math.max(r.height, 1);
   findSimilarPairs(hi, lo, T, (a, b) => {
     const ra = reps[idx[a]!]!;
     const rb = reps[idx[b]!]!;
     if (Math.abs(Math.log(aspect(ra) / aspect(rb))) > MAX_ASPECT_LOG) return;
-    uf.union(idx[a]!, idx[b]!);
+    pairs.push([idx[a]!, idx[b]!]);
   });
-  onProgress?.(reps.length);
+  return { buckets, reps, pairs, missingHash };
+}
 
-  // 3. 连通分量 → 展开成桶里的所有图
+/** 3–4：复核候选对 → 并查集连成组 → 展开成桶里的所有图 */
+export function groupCandidates({ buckets, reps, pairs, missingHash }: Candidates, check?: PairCheck): BuildResult {
+  const uf = new UnionFind(reps.length);
+  for (const [a, b] of pairs) if (!check || check.same(reps[a]!, reps[b]!)) uf.union(a, b);
+
+  // 连通分量 → 展开成桶里的所有图
   const comps = new Map<number, number[]>();
   for (let k = 0; k < reps.length; k++) {
     const root = uf.find(k);
@@ -102,10 +130,15 @@ export function buildGroups(rows: DedupeRow[], threshold: number, onProgress?: (
     let kind: BuiltGroup['kind'] = 'exact';
     if (ks.length > 1) {
       kind = 'similar';
+      // 组里最不像的那一对决定相似度；有细指纹就用细的（256 位，更能区分 88% 和 98%）
       let max = 0;
       for (let x = 0; x < ks.length; x++)
-        for (let y = x + 1; y < ks.length; y++) max = Math.max(max, distance(reps[ks[x]!]!.dhash!, reps[ks[y]!]!.dhash!));
-      similarity = 1 - max / 64;
+        for (let y = x + 1; y < ks.length; y++) {
+          const a = reps[ks[x]!]!;
+          const b = reps[ks[y]!]!;
+          max = Math.max(max, check?.diff(a, b) ?? distance(a.dhash!, b.dhash!) / 64);
+        }
+      similarity = 1 - max;
     }
     groups.push({
       kind,
@@ -182,6 +215,8 @@ export interface DedupeServiceDeps {
   getThreshold: () => number;
   /** 写库后让缓存失效（stats 的 duplicateGroupCount） */
   onChanged?: () => void;
+  /** 240 宽缩略图的路径（细指纹从它算）；不给就只用粗哈希 */
+  thumbFile?: (sha256: string) => string;
   /** 成功跑完（没被取消）：记下时间，写进 settings.dedupe.lastRunAt */
   onFinished?: (atIso: string) => void;
 }
@@ -193,6 +228,50 @@ export class DedupeService {
     return this.d.db
       .prepare('SELECT i.id, i.sha256, i.dhash, i.width, i.height, i.bytes, i.added_at, i.file_name FROM v_counted_images i')
       .all() as DedupeRow[];
+  }
+
+  /**
+   * 候选对涉及的图的细指纹：先从 image_fingerprints 读，没有的从 240 缩略图算出来存进去。
+   * 第一次要算的可能有上万张（约一两分钟），之后只算新图。有扫描在排队时返回 null 让出。
+   * 缩略图还没生成、读失败的不算，复核时当作通过（退回只看粗哈希）。
+   */
+  private async fingerprints(c: Candidates, ctx: JobContext): Promise<Map<string, Fingerprint> | null> {
+    const shas = new Set<string>();
+    for (const [a, b] of c.pairs) {
+      shas.add(c.reps[a]!.sha256);
+      shas.add(c.reps[b]!.sha256);
+    }
+    const out = new Map<string, Fingerprint>();
+    const { db } = this.d;
+    const saved = db
+      .prepare('SELECT sha256, fine, color FROM image_fingerprints WHERE sha256 IN (SELECT value FROM json_each(?))')
+      .all(JSON.stringify([...shas])) as { sha256: string; fine: Buffer; color: Buffer }[];
+    for (const r of saved) out.set(r.sha256, { fine: r.fine, color: r.color });
+    const todo = [...shas].filter((s) => !out.has(s));
+    if (!todo.length || !this.d.thumbFile) return out;
+    const ins = db.prepare('INSERT OR REPLACE INTO image_fingerprints (sha256, fine, color) VALUES (?, ?, ?)');
+    for (let i = 0; i < todo.length; i += 16) {
+      if (ctx.signal.aborted) return out;
+      if (ctx.shouldYield()) return null;
+      ctx.setMessage(`查找重复：复核细节 ${i} / ${todo.length}`);
+      const got = await Promise.all(
+        todo.slice(i, i + 16).map(async (sha) => {
+          try {
+            return [sha, await computeFingerprint(this.d.thumbFile!(sha))] as const;
+          } catch {
+            return null;
+          }
+        }),
+      );
+      db.transaction(() => {
+        for (const g of got) {
+          if (!g) continue;
+          ins.run(g[0], g[1].fine, g[1].color);
+          out.set(g[0], g[1]);
+        }
+      })();
+    }
+    return out;
   }
 
   /** 不依赖任务队列的版本（脚本和测试用） */
@@ -212,8 +291,26 @@ export class DedupeService {
     }
     const rows = this.loadRows();
     ctx.setTotal(rows.length);
-    const build = buildGroups(rows, this.d.getThreshold(), () => ctx.advance(rows.length));
+    const cand = findCandidates(rows, this.d.getThreshold());
+    ctx.advance(rows.length);
+    const fps = await this.fingerprints(cand, ctx);
+    if (!fps) {
+      ctx.requeue(); // 算到一半有扫描在排队：已经算好的存进库了，下次接着算
+      return '查找重复：已让出给扫描';
+    }
     if (ctx.signal.aborted) return '查找重复：已取消';
+    const build = groupCandidates(cand, {
+      same: (a, b) => {
+        const fa = fps.get(a.sha256);
+        const fb = fps.get(b.sha256);
+        return !fa || !fb || looksSame(fa, fb);
+      },
+      diff: (a, b) => {
+        const fa = fps.get(a.sha256);
+        const fb = fps.get(b.sha256);
+        return fa && fb ? compareFingerprints(fa, fb).fd / FINE_BITS : null;
+      },
+    });
     const at = new Date(this.d.clock()).toISOString();
     this.d.db.transaction(() => reconcile(this.d.db, build.groups, at))();
     this.d.onFinished?.(at);

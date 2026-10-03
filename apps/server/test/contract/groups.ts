@@ -108,8 +108,12 @@ export function settingsContract(make: ContractFactory, name: Name) {
         expect(paths).toContain(p);
         expect(paths).not.toContain(`${p}/child`);
         await expect(e.ds.addLibraryRoot({ path: `${p}/child` })).rejects.toThrow(`已经包含在「${p}」里了`);
-        // 等添加文件夹排的扫描跑完再删目录
-        while ((await e.ds.listJobs()).some((j) => j.status === 'queued' || j.status === 'running')) await new Promise((r) => setTimeout(r, 10));
+        // 添加文件夹会排扫描，扫描后还会接着排识别（会去加载本机的模型）：测完全部取消，等停下来再删目录
+        const busy = async () => (await e.ds.listJobs()).filter((j) => j.status === 'queued' || j.status === 'running');
+        for (let i = 0; i < 500 && (await busy()).length; i++) {
+          for (const j of await busy()) await e.ds.cancelJob(j.id);
+          await new Promise((r) => setTimeout(r, 10));
+        }
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

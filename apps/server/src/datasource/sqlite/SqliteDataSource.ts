@@ -62,6 +62,7 @@ import type { DataSource, FileResponse } from '../DataSource.ts';
 import { toAbs } from '../../services/fs/paths.ts';
 import { revealInFileManager } from '../../services/fs/reveal.ts';
 import { ThumbnailService, type ThumbRow } from '../../services/image/ThumbnailService.ts';
+import { thumbPath } from '../../services/image/pixels.ts';
 import { Pipeline } from '../../services/pipeline.ts';
 import { Scanner } from '../../services/scan/Scanner.ts';
 import { ScanRequests } from '../../services/scan/ScanRequests.ts';
@@ -307,6 +308,7 @@ export class SqliteDataSource implements DataSource {
       db,
       clock: this.ctx.clock,
       getThreshold: () => readSettings(db).dedupe.hammingThreshold,
+      thumbFile: (sha) => thumbPath(path.join(dataDir, 'thumbs', 'v1'), sha, 240),
       onChanged: () => this.ctx.invalidate('all'),
       onFinished: (at) => patchSettingsInternal(db, 'dedupe', { lastRunAt: at }),
     });

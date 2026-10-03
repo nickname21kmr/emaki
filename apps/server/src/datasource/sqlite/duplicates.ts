@@ -63,7 +63,10 @@ export class DuplicateQueries {
       .stmt(
         `SELECT id, kind, similarity, suggested_keep_id, resolved_at, ignored FROM duplicate_groups
          WHERE (@resolved = 1 AND resolved_at IS NOT NULL) OR (@resolved = 0 AND resolved_at IS NULL AND ignored = 0)
-         ORDER BY created_at DESC, id DESC`,
+         -- 未处理的：完全一样的在最前，再按相似度从高到低（越像越该先处理）；已处理的按时间
+         ORDER BY CASE WHEN @resolved = 0 THEN (kind = 'exact') END DESC,
+                  CASE WHEN @resolved = 0 THEN similarity END DESC,
+                  created_at DESC, id DESC`,
       )
       .all({ resolved: resolved ? 1 : 0 }) as GroupRow[];
     const members = this.members(groups.map((g) => g.id));

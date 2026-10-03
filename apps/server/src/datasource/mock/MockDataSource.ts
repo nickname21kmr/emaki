@@ -1231,7 +1231,9 @@ export class MockDataSource implements DataSource {
         resolved: d.resolved,
         setId: null,
       }))
-      .filter((g) => g.images.length > (wantResolved ? 0 : 1));
+      .filter((g) => g.images.length > (wantResolved ? 0 : 1))
+      // 和 sqlite 一样：未处理的完全一样的在前，再按相似度从高到低（sort 是稳定的，同分保持原顺序）
+      .sort((a, b) => (wantResolved ? 0 : Number(b.kind === 'exact') - Number(a.kind === 'exact') || b.similarity - a.similarity));
   }
 
   async resolveDuplicate(id: ID, keepIds: ID[]): Promise<MutationResult> {
