@@ -1,15 +1,17 @@
 import type { ID, MutationResult } from '@emaki/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { Undo2 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Button, Dialog, DialogFooter, Progress } from '@/components/ui';
+import { Button, Dialog, DialogFooter, Progress, Segmented } from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatBytes, formatCount } from '@/lib/format';
 import { errorMessage, invalidateAll, useCanUndoTrash, useMutate } from '@/lib/queries';
 
 export interface ResolvePlan {
   id: ID;
+  /** 完全一样（sha256 相同）；默认只一键处理这种 */
+  exact: boolean;
   keepIds: ID[];
   trashCount: number;
   bytes: number;
@@ -44,6 +46,13 @@ export function ResolveAllDialog({
   const client = useQueryClient();
   const canUndo = useCanUndoTrash();
   const [progress, setProgress] = useState(0);
+  // 默认只处理完全一样的：相似的组里常有同一张图的不同版本（调色、加字、改尺寸），留给人逐组看
+  const [scope, setScope] = useState<'exact' | 'all'>('exact');
+  useEffect(() => {
+    if (open) setScope('exact');
+  }, [open]);
+  const exactCount = plans.filter((p) => p.exact).length;
+  const chosen = scope === 'exact' ? plans.filter((p) => p.exact) : plans;
 
   const undoAll = async (tokens: string[]) => {
     try {
@@ -101,8 +110,8 @@ export function ResolveAllDialog({
     },
   );
 
-  const totalTrash = plans.reduce((n, p) => n + p.trashCount, 0);
-  const totalBytes = plans.reduce((n, p) => n + p.bytes, 0);
+  const totalTrash = chosen.reduce((n, p) => n + p.trashCount, 0);
+  const totalBytes = chosen.reduce((n, p) => n + p.bytes, 0);
   const running = run.isPending;
 
   return (
@@ -111,11 +120,26 @@ export function ResolveAllDialog({
       // 处理中不让关，避免误以为已经取消
       onOpenChange={(v) => !running && onOpenChange(v)}
       title="全部按推荐处理？"
-      description="每组保留「建议保留」的那张（你手动调整过的组按你的选择），其余移到系统回收站，不会永久删除。"
+      description="每组保留「建议保留」的那张（你手动调整过的组按你的选择），其余移到系统回收站，不会永久删除。默认只处理完全一样的文件。"
       width={500}
     >
+      <Segmented<'exact' | 'all'>
+        className="mb-3"
+        value={scope}
+        onChange={setScope}
+        disabled={running}
+        options={[
+          { value: 'exact', label: `只处理完全一样的 · ${formatCount(exactCount)} 组` },
+          { value: 'all', label: `也处理相似的 · ${formatCount(plans.length)} 组` },
+        ]}
+      />
+      {scope === 'all' && plans.length > exactCount && (
+        <p className="mb-3 text-[12.5px] leading-relaxed text-warn">
+          相似的 {formatCount(plans.length - exactCount)} 组里可能有同一张图的不同版本（调色、加字、换尺寸），一起处理时每组只留推荐的那张。拿不准的话建议逐组看。
+        </p>
+      )}
       <div className="grid grid-cols-3 divide-x divide-line rounded-lg bg-sunken py-4">
-        <Stat value={formatCount(plans.length)} label="组重复" />
+        <Stat value={formatCount(chosen.length)} label="组重复" />
         <Stat value={formatCount(totalTrash)} label="张移到回收站" />
         <Stat value={formatBytes(totalBytes)} label="可释放" />
       </div>
@@ -131,10 +155,10 @@ export function ResolveAllDialog({
             <div className="mb-2 flex items-baseline justify-between text-[12.5px] text-fg-muted tabular">
               <span>正在处理…</span>
               <span>
-                {progress} / {plans.length}
+                {progress} / {chosen.length}
               </span>
             </div>
-            <Progress value={plans.length ? progress / plans.length : 0} tone="shu" />
+            <Progress value={chosen.length ? progress / chosen.length : 0} tone="shu" />
           </div>
         ) : (
           <p className="flex items-center gap-2 text-[12.5px] leading-relaxed text-fg-muted">
@@ -150,8 +174,8 @@ export function ResolveAllDialog({
         <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={running}>
           取消
         </Button>
-        <Button variant="primary" loading={running} disabled={!plans.length} onClick={() => run.mutate(plans)}>
-          处理 {formatCount(plans.length)} 组
+        <Button variant="primary" loading={running} disabled={!chosen.length} onClick={() => run.mutate(chosen)}>
+          处理 {formatCount(chosen.length)} 组
         </Button>
       </DialogFooter>
     </Dialog>

@@ -198,7 +198,7 @@ export function DuplicatesPage() {
         .filter((g) => !g.setId)
         .map((g) => {
           const keepIds = keepOf(g);
-          return { id: g.id, keepIds, trashCount: g.images.length - keepIds.length, bytes: reclaimBytes(g, keepIds) };
+          return { id: g.id, exact: g.kind === 'exact', keepIds, trashCount: g.images.length - keepIds.length, bytes: reclaimBytes(g, keepIds) };
         }),
     );
     setConfirmOpen(true);
