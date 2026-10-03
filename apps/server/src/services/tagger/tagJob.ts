@@ -120,14 +120,19 @@ const MAX_TRIES = 6;
  * 识别客户端出问题时的处理：
  * - 显卡问题（GPU_LOST）：一批多张的先改成一张一批；还不行、模型能走 WebGPU（PixAI）就换 WebGPU；最后换 CPU。
  * - 子进程崩溃 / 请求超时（TaggerCrashedError，不是显卡报错）：多半不是显卡坏了（一张坏图、休眠唤醒后的超时），
- *   先按原样重开；30 分钟内崩到第 3 次才按显卡问题降级。重开后一段时间请求一个一个发，
- *   单独发还把子进程弄崩的那批图就是坏图：多张的拆开重试，单张的记成识别失败跳过，不再拖累整个任务。
+ *   先按原样重开；正常运行时 30 分钟内崩到第 3 次才按显卡问题降级。
+ * - 崩溃后接下来的请求一个一个发（隔离），这样崩了就知道是谁。单独发连崩两次、而且有证据显卡是好的
+ *   （中间别的请求成功了，或者拿识别成功过的图试一下成功了），就认定是这批图的问题：多张的拆开重试，单张的记成识别失败跳过。
  * - 多个在途请求同时失败时只做一次决定（generation + switching），其余的等它做完再重试。
+ * - 任务结束或取消后（close / signal）不再重开子进程。
  */
-class ResilientTagger {
+/** 导出只为测试 */
+export class ResilientTagger {
   private generation = 0;
   private switching: Promise<void> | null = null;
   private opts: TaggerStartOptions;
+  /** 降级到 CPU 时的批大小按最初的设置算（一张一批是给显卡卡死用的） */
+  private readonly initialBatch: number;
   private shrunk = false;
   private toWebgpu = false;
   private fellBack = false;
@@ -137,6 +142,7 @@ class ResilientTagger {
   /** 最近一张识别成功的图，用来试显卡是不是好的 */
   private lastGood: { id: number; path: string } | null = null;
   private gate: Promise<void> = Promise.resolve();
+  private closed = false;
 
   constructor(
     private client: TaggerLike,
@@ -144,13 +150,32 @@ class ResilientTagger {
     private readonly factory: (o: TaggerStartOptions) => Promise<TaggerLike>,
     private readonly onSwitch: (c: TaggerLike) => void,
     private readonly log: (m: string) => void = () => {},
+    private readonly signal?: AbortSignal,
     private readonly now: () => number = () => Date.now(),
   ) {
+    this.initialBatch = opts.batchSize;
+    // 一开始就已经回退了（DirectML 起不来）：按实际能用的设置重开，别再去试已经失败过的
+    if (client.device === 'cpu' && opts.device !== 'cpu') {
+      this.fellBack = true;
+      opts = { ...opts, device: 'cpu', batchSize: client.batchSize };
+    } else if (client.device === 'webgpu' && findModel(opts.repo)?.gpu === 'dml') {
+      this.toWebgpu = true;
+      opts = { ...opts, noDml: true };
+    }
     this.opts = opts;
   }
 
   get current(): TaggerLike {
     return this.client;
+  }
+
+  /** 这一轮结束（完成、取消、出错）：之后不再重开子进程，还在重试的请求直接失败 */
+  close(): void {
+    this.closed = true;
+  }
+
+  private checkOpen(): void {
+    if (this.closed || this.signal?.aborted) throw new Error('识别已停止');
   }
 
   /** 一次只放一个请求进去 */
@@ -174,42 +199,53 @@ class ResilientTagger {
     /** 这个请求上次单独发崩溃时，全局成功了多少个请求 */
     let okAtCrash: number | null = null;
     for (let tries = 0; ; tries++) {
-      const gen = this.generation;
+      this.checkOpen();
       const alone = this.isolate > 0;
-      try {
-        // 隔离时排队进去；前一个刚把子进程弄崩的话，等它重开好再发，免得撞上已经退出的子进程
-        const res = alone
-          ? await this.exclusive(async () => {
-              if (this.switching) await this.switching;
-              return this.client.tag(items, th);
-            })
-          : await this.client.tag(items, th);
+      const step = async () => {
+        if (this.switching) await this.switching;
+        this.checkOpen();
+        // 在真正发出去之前才取代数：失败时据此判断「是不是当前这个子进程出的事」
+        const gen = this.generation;
+        try {
+          return { ok: true as const, res: await this.client.tag(items, th) };
+        } catch (err) {
+          const lost = isGpuLost(err);
+          if (!(err instanceof TaggerCrashedError || lost)) throw err;
+          const crashedAlone = alone && !lost;
+          // 单独发崩了两次，而这中间有别的请求正常跑完：显卡是好的，是这批图本身有问题
+          // （显卡要是坏了，别的请求也会崩，不会有成功的，也就不会误判）
+          const poison = crashedAlone && okAtCrash !== null && this.okCount > okAtCrash;
+          // 单独发连崩两次、中间没有任何请求成功过（比如它是最后一批）：还分不清是图的问题还是显卡的问题
+          const unsure = crashedAlone && okAtCrash !== null && this.okCount === okAtCrash;
+          if (crashedAlone) okAtCrash = this.okCount;
+          // 隔离排查时的重开不算进「显卡不稳定」的次数（显卡坏没坏由 probe 判断）；
+          // 还没有识别成功过的图可以拿来试（一开始显卡就是坏的），那就照常计数，到次数就降级。
+          // recover 的同步部分在这里就把 switching 设好：交还隔离队列之后，下一个请求会等重开，不会撞上已经退出的子进程
+          const rec = this.recover(gen, err, lost, !alone || (unsure && !this.lastGood));
+          rec.catch(() => undefined);
+          return { ok: false as const, err, rec, poison, unsure, crashedAlone };
+        }
+      };
+      const r = alone ? await this.exclusive(step) : await step();
+      if (r.ok) {
         this.okCount++;
-        const good = res.find((r) => r.ok);
+        const good = r.res.find((x) => x.ok);
         if (good) this.lastGood = items.find((it) => it.id === good.id) ?? this.lastGood;
         if (alone) this.isolate = Math.max(0, this.isolate - 1);
-        return res;
-      } catch (err) {
-        const lost = isGpuLost(err);
-        if (!(err instanceof TaggerCrashedError || lost)) throw err;
-        if (tries >= MAX_TRIES) throw err;
-        const crashedAlone = alone && !lost;
-        // 单独发崩了两次，而这中间有别的请求正常跑完：显卡是好的，是这批图本身有问题
-        // （显卡要是坏了，别的请求也会崩，不会有成功的，也就不会误判）
-        const poison = crashedAlone && okAtCrash !== null && this.okCount > okAtCrash;
-        // 单独发连崩两次、中间没有任何请求成功过（比如它是最后一批）：还分不清是图的问题还是显卡的问题
-        const unsure = crashedAlone && okAtCrash !== null && this.okCount === okAtCrash;
-        if (crashedAlone) okAtCrash = this.okCount;
-        // 隔离排查时的重开不算进「显卡不稳定」的次数（显卡坏没坏由 probe 判断）；
-        // 还没有识别成功过的图可以拿来试（一开始显卡就是坏的），那就照常计数，到次数就降级
-        await this.recover(gen, err, lost, !alone || (unsure && !this.lastGood));
-        if (poison) return this.skip(items, th, err);
-        if (unsure) {
-          // 多张的拆开：好图会成功，问题图再崩就能认出来
-          if (items.length > 1) return this.split(items, th);
-          // 单张的：拿之前识别成功过的一张图试一下，成功说明显卡没问题，下次它再崩就认定是这张图
-          await this.probe(th);
-        }
+        return r.res;
+      }
+      await r.rec;
+      if (r.poison) return this.skip(items, th, r.err);
+      if (tries + 1 >= MAX_TRIES) {
+        // 重试到头：单独发也一直崩、而且别的图能识别，就把这一张记成失败，不让整个任务失败
+        if (r.crashedAlone && items.length === 1 && this.okCount > 0) return this.skip(items, th, r.err);
+        throw r.err;
+      }
+      if (r.unsure) {
+        // 多张的拆开：好图会成功，问题图再崩就能认出来
+        if (items.length > 1) return this.split(items, th);
+        // 单张的：拿之前识别成功过的一张图试一下，成功说明显卡没问题，下次它再崩就认定是这张图
+        await this.probe(th);
       }
     }
   }
@@ -224,19 +260,24 @@ class ResilientTagger {
   private async probe(th: HostThresholds): Promise<void> {
     const good = this.lastGood;
     if (!good) return;
-    const gen = this.generation;
-    try {
-      await this.exclusive(async () => {
-        if (this.switching) await this.switching;
-        return this.client.tag([good], th);
-      });
-      this.okCount++;
-    } catch (err) {
-      const lost = isGpuLost(err);
-      if (!(err instanceof TaggerCrashedError || lost)) throw err;
-      // 识别成功过的图也崩：算显卡问题
-      await this.recover(gen, err, lost, true);
-    }
+    const rec = await this.exclusive(async () => {
+      if (this.switching) await this.switching;
+      this.checkOpen();
+      const gen = this.generation;
+      try {
+        await this.client.tag([good], th);
+        this.okCount++;
+        return null;
+      } catch (err) {
+        const lost = isGpuLost(err);
+        if (!(err instanceof TaggerCrashedError || lost)) throw err;
+        // 识别成功过的图也崩：算显卡问题
+        const p = this.recover(gen, err, lost, true);
+        p.catch(() => undefined);
+        return p;
+      }
+    });
+    if (rec) await rec;
   }
 
   /** 认定会弄崩子进程的图：多张的拆开各自重试（排在别的图后面），单张的记成识别失败 */
@@ -249,13 +290,19 @@ class ResilientTagger {
     return items.map((it) => ({ id: it.id, ok: false, code: 'DECODE', message: `识别时子进程崩溃，已跳过（${why}）` }));
   }
 
-  /** 换一个客户端。同一代只决定一次，其余失败的请求等它换好后重试。count：这次崩溃算不算进「显卡不稳定」的次数 */
+  /**
+   * 换一个客户端。同一代只决定一次，其余失败的请求等它换好后重试。count：这次崩溃算不算进「显卡不稳定」的次数。
+   * 同步部分（判断、设 switching）在调用时立刻执行完。
+   */
   private async recover(gen: number, err: unknown, lost: boolean, count: boolean): Promise<void> {
-    if (gen !== this.generation) return;
+    if (gen !== this.generation) return; // 已经换过了：这次失败是旧子进程的，直接重试
     if (!this.switching) {
+      this.checkOpen();
       const next = this.decide(err, lost, count);
       this.switching = this.factory(next)
         .then((c) => {
+          // 这一轮已经结束：不接管新客户端，直接关掉，免得占着显存
+          if (this.closed) return void (c as Partial<{ dispose(): Promise<void> }>).dispose?.().catch(() => undefined);
           this.opts = next;
           this.client = c;
           this.generation++;
@@ -300,7 +347,7 @@ class ResilientTagger {
     }
     this.fellBack = true;
     this.log(`显卡出错（${msg}），改用 CPU`);
-    return { ...this.opts, device: 'cpu', noDml: false, batchSize: Math.min(this.opts.batchSize, 4) };
+    return { ...this.opts, device: 'cpu', noDml: false, batchSize: Math.min(this.initialBatch, 4) };
   }
 }
 
@@ -393,7 +440,7 @@ export function createTagJobRunner(deps: TagJobDeps): JobRunner {
     };
     const first = await factory(opts);
     describe(first);
-    const tagger = new ResilientTagger(first, opts, factory, describe, log);
+    const tagger = new ResilientTagger(first, opts, factory, describe, log, ctx.signal);
 
     try {
       if (fallbackNote) ctx.setMessage(fallbackNote);
@@ -475,7 +522,12 @@ export function createTagJobRunner(deps: TagJobDeps): JobRunner {
       await fill();
       while (queue.length) {
         const { rows, p } = queue.shift()!;
-        const results = await p; // 出错原样抛出，任务 failed
+        // 出错原样抛出，任务 failed；取消时还在重试的请求会以「识别已停止」结束，不算失败
+        const results = await p.catch((err: unknown) => {
+          if (ctx.signal.aborted) return null;
+          throw err;
+        });
+        if (!results) continue;
         await fill(); // 先把下一批发出去，再写库
         writer.writeBatch(results);
         emitItem(results);
@@ -500,6 +552,7 @@ export function createTagJobRunner(deps: TagJobDeps): JobRunner {
         yielded: false,
       };
     } finally {
+      tagger.close();
       // 换模型的轮次之间立刻释放（两个大模型同时占显存会爆）；最后一轮照旧空闲 60 秒后关
       if (!deps.clientFactory) {
         if (passes.indexOf(pass) < passes.length - 1) await shutdownTagger();

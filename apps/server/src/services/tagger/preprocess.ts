@@ -26,10 +26,12 @@ export type PreprocessResult =
 
 /** 文件不在了 */
 const GONE = new Set(['ENOENT', 'ENOTDIR']);
+/** 一会儿就好的读取错误（被别的程序占着、移动硬盘 / 网络盘掉线、句柄用完）；没权限这类不会自己好的按图片问题记 */
+const TRANSIENT = new Set(['EBUSY', 'EIO', 'ETIMEDOUT', 'EAGAIN', 'ECONNRESET', 'ENOTCONN', 'EMFILE', 'ENFILE', 'UNKNOWN']);
 /**
  * 读文件 + 预处理，错误按原因分类（预处理线程和主线程共用）：
  * - ENOENT：文件不在了，交给扫描器标丢失
- * - IO：文件暂时读不了（被别的程序占着、没权限、移动硬盘掉线），这次不记，下次识别再试
+ * - IO：文件暂时读不了（被别的程序占着、移动硬盘掉线），这次不记，下次识别再试
  * - UNSUPPORTED / DECODE：图片本身的问题，记成识别过，不再反复卡在它上面
  */
 export async function preprocessFile(spec: TaggerModelSpec, path: string): Promise<PreprocessResult> {
@@ -39,7 +41,8 @@ export async function preprocessFile(spec: TaggerModelSpec, path: string): Promi
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code ?? '';
     if (GONE.has(code)) return { ok: false, code: 'ENOENT', message: '文件不存在' };
-    return { ok: false, code: 'IO', message: `读取失败（${code || (err as Error).message}），下次再试` };
+    if (TRANSIENT.has(code)) return { ok: false, code: 'IO', message: `读取失败（${code}），下次再试` };
+    return { ok: false, code: 'DECODE', message: `读取失败（${code || (err as Error).message}）` };
   }
   try {
     return { ok: true, data: await preprocess(spec, buf) };

@@ -272,19 +272,43 @@ describe('tagJob', () => {
     expect(factory).toHaveBeenCalledTimes(1);
   });
 
-  /** 每次调用由 behave(items, 第几次调用) 决定：返回 Error 就抛出，否则正常出结果；delay 模拟推理耗时，让多个请求同时在途 */
+  /**
+   * 每次调用由 behave(items, 第几次调用) 决定：返回 Error 就抛出，否则正常出结果；delay 模拟推理耗时，让多个请求同时在途。
+   * 和真的 TaggerClient 一样：子进程崩了（TaggerCrashedError）之后这个客户端就死了，在途和之后的请求都立刻失败。
+   */
   const scripted = (
     device: 'dml' | 'webgpu' | 'cpu',
     behave: (items: { id: number }[], call: number) => Error | null,
     delay = 5,
+    batchSize = 2,
   ): TaggerLike => {
     let call = 0;
+    let dead = false;
+    const waiting = new Set<(e: Error) => void>();
     return {
       ...fakeClient(device),
+      batchSize,
       tag: async (items) => {
+        if (dead) throw new TaggerCrashedError('识别子进程已退出');
         const n = call++;
-        await new Promise((r) => setTimeout(r, delay));
+        await new Promise<void>((resolve, reject) => {
+          const fail = (e: Error) => {
+            clearTimeout(t);
+            reject(e);
+          };
+          const t = setTimeout(() => {
+            waiting.delete(fail);
+            resolve();
+          }, delay);
+          waiting.add(fail);
+        });
+        if (dead) throw new TaggerCrashedError('识别子进程已退出');
         const e = behave(items, n);
+        if (e instanceof TaggerCrashedError) {
+          dead = true;
+          for (const w of waiting) w(e); // 子进程退出：在途的一起失败
+          waiting.clear();
+        }
         if (e) throw e;
         return items.map((i) => ok(i.id, [['mika_(blue_archive)', 0.95]]));
       },
@@ -367,6 +391,59 @@ describe('tagJob', () => {
     const factory = vi.fn(async (o: TaggerStartOptions) => (o.batchSize > 1 ? scripted('dml', (_, n) => (n === 0 ? oom() : null)) : { ...scripted('dml', () => null), batchSize: 1 }));
     await runner(factory)(ctxOf());
     expect(factory.mock.calls.map((c) => [c[0].device, c[0].batchSize])).toEqual([['dml', 2], ['dml', 1]]);
+    expect(pending()).toBe(0);
+  });
+
+  it('PixAI（一张一批、4 个在途）：坏图后面排着的好图不会被连累成失败', async () => {
+    freshDb(16);
+    for (const BAD of [16, 12, 9, 1]) {
+      freshDb(16);
+      const factory = vi.fn(async (o: TaggerStartOptions) =>
+        scripted(o.device, (items) => (items.some((i) => i.id === BAD) ? crash() : null), 5, 1),
+      );
+      await runner(factory, new EventBus(), 'A1yCE/pixai-tagger-v1.0-onnx-fp16')(ctxOf());
+      expect(pending()).toBe(0);
+      expect(linked()).toBe(15); // 只有坏图没认出来
+      expect(count(`SELECT count(*) FROM image_characters WHERE image_id = ${BAD}`)).toBe(0);
+      expect(factory.mock.calls.every((c) => c[0].device === 'dml')).toBe(true); // 没有因为一张坏图降级
+    }
+  });
+
+  it('取消后不再重开子进程，任务按取消结束', async () => {
+    freshDb(20);
+    const ac = new AbortController();
+    let made = 0;
+    const factory = vi.fn(async () => {
+      made++;
+      if (made === 2) ac.abort(); // 第一次重开的同时用户点了取消
+      return scripted('dml', () => crash());
+    });
+    await runner(factory)(ctxOf({ signal: ac.signal })); // 不抛错（取消不算失败）
+    const callsAtEnd = factory.mock.calls.length;
+    await new Promise((r) => setTimeout(r, 50));
+    expect(factory.mock.calls.length).toBe(callsAtEnd); // 结束后没有再起新的
+    expect(callsAtEnd).toBeLessThanOrEqual(2);
+  });
+
+  it('一开始就回退到 CPU 的：之后崩溃按 CPU 重开，不再去试起不来的 DirectML', async () => {
+    let first = true;
+    const factory = vi.fn(async (o: TaggerStartOptions) => {
+      const crashOnce = first;
+      first = false;
+      const c = scripted('cpu', (_, n) => (crashOnce && n === 0 ? crash() : null));
+      return o.device === 'dml' ? { ...c, info: { ...c.info, fallbackReason: 'DirectML 不可用' } } : c;
+    });
+    await runner(factory)(ctxOf());
+    expect(factory.mock.calls.map((c) => c[0].device)).toEqual(['dml', 'cpu']);
+    expect(pending()).toBe(0);
+  });
+
+  it('显卡卡死先改成一张一批，再降到 CPU 时批大小按最初的设置算', async () => {
+    const factory = vi.fn(async (o: TaggerStartOptions) =>
+      o.device === 'cpu' ? scripted('cpu', () => null, 5, o.batchSize) : scripted('dml', () => hung(), 5, o.batchSize),
+    );
+    await runner(factory)(ctxOf());
+    expect(factory.mock.calls.map((c) => [c[0].device, c[0].batchSize])).toEqual([['dml', 2], ['dml', 1], ['cpu', 2]]);
     expect(pending()).toBe(0);
   });
 });
