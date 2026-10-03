@@ -4,6 +4,8 @@
 
 图片不会上传，识别模型在本机跑。
 
+> **English**: Emaki is a local-first anime illustration organizer for Windows. It recognizes characters with a local tagging model (PixAI / WD14, GPU via DirectML), groups your images by character and series, separates comics, screenshots and photos, and finds duplicate or visually similar images. Nothing is uploaded. The UI is in Chinese; a portable build is available on the [Releases](https://github.com/nickname21kmr/emaki/releases/latest) page.
+
 ![角色页](docs/screenshots/real-characters.webp)
 
 | | |
