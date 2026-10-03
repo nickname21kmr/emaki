@@ -13,7 +13,9 @@ import { clearReshapeAllowzero } from './dmlPatch.ts';
 import { parseLabels, type Labels } from './labels.ts';
 import { findModel, type TaggerModelSpec } from './models.ts';
 import { decodeRow } from './postprocess.ts';
-import { perImage, preprocess } from './preprocess.ts';
+// 主线程也加载一次 preprocess（连带 sharp）：原生模块先在主线程初始化，工作线程和回退路径都用它
+import { perImage, preprocessFile } from './preprocess.ts';
+import { PoolUnavailableError, PreprocessPool, type PreprocessReply } from './preprocessPool.ts';
 import type { ChildMsg, HostDevice, HostItemResult, InitMsg, ParentMsg, TagMsg } from './protocol.ts';
 
 // onnxruntime-node 是 CJS，用 require 最稳
@@ -42,6 +44,8 @@ interface State {
   fixedBatch: boolean;
 }
 let state: State | null = null;
+/** 预处理线程池：模型加载好之后再开（加载期间不和它抢 CPU）；起不来就是 null，预处理留在主线程 */
+let pool: PreprocessPool | null = null;
 
 function sessionOptions(spec: TaggerModelSpec, device: HostDevice, deviceId: number, batch: number, fixed: boolean): Ort.InferenceSession.SessionOptions {
   if (device === 'dml') {
@@ -158,6 +162,7 @@ async function init(msg: InitMsg): Promise<void> {
     throw new Error(`标签表与模型不匹配：输出 ${probe.length / n} 维，标签 ${labels.names.length} 个`);
   }
   state = { spec, labels, session, inputName, outputName, batchSize, fixedBatch };
+  pool = new PreprocessPool(undefined, (msg) => console.warn(`[tagger] ${msg}`));
   const meta = session.inputMetadata[0] as { shape?: (number | string)[] } | undefined;
   send({
     type: 'ready',
@@ -175,6 +180,11 @@ async function init(msg: InitMsg): Promise<void> {
   });
 }
 
+/** 线程池用不了时在主线程预处理（原来的做法），错误口径和工作线程一致 */
+async function preprocessInline(spec: TaggerModelSpec, id: number, path: string): Promise<PreprocessReply> {
+  return { id, ...(await preprocessFile(spec, path)) };
+}
+
 async function tag(m: TagMsg): Promise<void> {
   const s = state;
   if (!s) throw new Error('子进程还没初始化');
@@ -182,19 +192,17 @@ async function tag(m: TagMsg): Promise<void> {
   const results: (HostItemResult | null)[] = [];
   const inputs: (Float32Array | null)[] = await Promise.all(
     m.items.map(async (item, k) => {
+      let r: PreprocessReply;
       try {
-        await stat(item.path);
-      } catch {
-        results[k] = { id: item.id, ok: false, code: 'ENOENT', message: '文件不存在' };
-        return null;
-      }
-      try {
-        return await preprocess(s.spec, await readFile(item.path));
+        if (!pool) throw new PoolUnavailableError('没有线程池');
+        r = await pool.run(s.spec.repo, item.path);
       } catch (err) {
-        const msg = (err as Error).message;
-        results[k] = { id: item.id, ok: false, code: /unsupported image format/i.test(msg) ? 'UNSUPPORTED' : 'DECODE', message: msg };
-        return null;
+        if (!(err instanceof PoolUnavailableError)) throw err;
+        r = await preprocessInline(s.spec, item.id, item.path);
       }
+      if (r.ok) return r.data;
+      results[k] = { id: item.id, ok: false, code: r.code, message: r.message };
+      return null;
     }),
   );
   const preprocessMs = performance.now() - t0;
@@ -206,8 +214,13 @@ async function tag(m: TagMsg): Promise<void> {
     const chunk = okIdx.slice(start, start + s.batchSize);
     // 固定 batch 时最后一批补零到 batch 大小，输出里丢掉
     const n = s.fixedBatch ? s.batchSize : chunk.length;
-    const buf = new Float32Array(n * per);
-    chunk.forEach((k, j) => buf.set(inputs[k]!, j * per));
+    // 一张一批（PixAI）直接用线程池给的数组，省一次 12 MB 的复制
+    let buf: Float32Array;
+    if (n === 1 && chunk.length === 1 && inputs[chunk[0]!]!.length === per) buf = inputs[chunk[0]!]!;
+    else {
+      buf = new Float32Array(n * per);
+      chunk.forEach((k, j) => buf.set(inputs[k]!, j * per));
+    }
     const t1 = performance.now();
     const out = await serial(() =>
       s.session.run({ [s.inputName]: new ort.Tensor('float32', buf, dims(s.spec, n)) }, [s.outputName]),
@@ -239,6 +252,7 @@ process.on('message', (msg: ParentMsg) => {
       tag(msg).catch((err) => send({ type: 'error', reqId: msg.reqId, message: (err as Error).message, fatal: false }));
       break;
     case 'shutdown':
+      void pool?.close();
       void state?.session.release().finally(() => process.exit(0));
       if (!state) process.exit(0);
       break;

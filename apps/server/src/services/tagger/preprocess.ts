@@ -2,19 +2,51 @@
  * 模型输入预处理，对齐官方 Space 的 app.py：RGBA 合成到白底 → 居中补白成正方形 → BICUBIC 缩到 448 → float32 0–255 → BGR。
  * sharp 的 extend() 永远在 resize 之后执行，所以用 fit:'contain' + 白色背景代替「先补白再缩放」（±1 像素的取整差异）。
  */
+import { readFile } from 'node:fs/promises';
 import { decodeBmp } from '../image/bmp.ts';
 import { sharp } from '../image/sharpConfig.ts';
 import type { TaggerModelSpec } from './models.ts';
 
 const WHITE = { r: 255, g: 255, b: 255, alpha: 1 };
+/** 一张图解码缩放最多给这么久（libvips 自己中止）；几亿像素的大图也就几秒，卡住多半是文件有问题 */
+const SHARP_TIMEOUT = { seconds: 60 };
 
 /** BMP（sharp 不支持）先用自己的解码器转成 raw，再走同样的流程 */
 function open(input: string | Buffer) {
   if (Buffer.isBuffer(input) && input[0] === 0x42 && input[1] === 0x4d) {
     const raw = decodeBmp(input);
-    if (raw) return sharp(raw.data, { raw: { width: raw.width, height: raw.height, channels: raw.channels } });
+    if (raw) return sharp(raw.data, { raw: { width: raw.width, height: raw.height, channels: raw.channels } }).timeout(SHARP_TIMEOUT);
   }
-  return sharp(input, { failOn: 'none', autoOrient: true }); // 默认只读第一帧（GIF / 动图 WebP）
+  return sharp(input, { failOn: 'none', autoOrient: true }).timeout(SHARP_TIMEOUT); // 默认只读第一帧（GIF / 动图 WebP）
+}
+
+export type PreprocessResult =
+  | { ok: true; data: Float32Array }
+  | { ok: false; code: 'ENOENT' | 'IO' | 'UNSUPPORTED' | 'DECODE'; message: string };
+
+/** 文件不在了 */
+const GONE = new Set(['ENOENT', 'ENOTDIR']);
+/**
+ * 读文件 + 预处理，错误按原因分类（预处理线程和主线程共用）：
+ * - ENOENT：文件不在了，交给扫描器标丢失
+ * - IO：文件暂时读不了（被别的程序占着、没权限、移动硬盘掉线），这次不记，下次识别再试
+ * - UNSUPPORTED / DECODE：图片本身的问题，记成识别过，不再反复卡在它上面
+ */
+export async function preprocessFile(spec: TaggerModelSpec, path: string): Promise<PreprocessResult> {
+  let buf: Buffer;
+  try {
+    buf = await readFile(path);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code ?? '';
+    if (GONE.has(code)) return { ok: false, code: 'ENOENT', message: '文件不存在' };
+    return { ok: false, code: 'IO', message: `读取失败（${code || (err as Error).message}），下次再试` };
+  }
+  try {
+    return { ok: true, data: await preprocess(spec, buf) };
+  } catch (err) {
+    const msg = (err as Error).message;
+    return { ok: false, code: /unsupported image format/i.test(msg) ? 'UNSUPPORTED' : 'DECODE', message: msg };
+  }
 }
 
 /** WD v3：返回长度 size*size*3 的 Float32Array，HWC、BGR、0~255 */

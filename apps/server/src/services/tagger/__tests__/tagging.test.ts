@@ -272,11 +272,101 @@ describe('tagJob', () => {
     expect(factory).toHaveBeenCalledTimes(1);
   });
 
-  it('DML 崩溃 → 换 CPU 继续', async () => {
-    const factory = vi.fn(async (o: TaggerStartOptions) => (o.device === 'dml' ? fakeClient('dml', true) : fakeClient('cpu')));
+  /** 每次调用由 behave(items, 第几次调用) 决定：返回 Error 就抛出，否则正常出结果；delay 模拟推理耗时，让多个请求同时在途 */
+  const scripted = (
+    device: 'dml' | 'webgpu' | 'cpu',
+    behave: (items: { id: number }[], call: number) => Error | null,
+    delay = 5,
+  ): TaggerLike => {
+    let call = 0;
+    return {
+      ...fakeClient(device),
+      tag: async (items) => {
+        const n = call++;
+        await new Promise((r) => setTimeout(r, delay));
+        const e = behave(items, n);
+        if (e) throw e;
+        return items.map((i) => ok(i.id, [['mika_(blue_archive)', 0.95]]));
+      },
+    };
+  };
+  const crash = () => new TaggerCrashedError('识别子进程退出（3221225477）');
+  const linked = () => count('SELECT count(DISTINCT image_id) FROM image_characters');
+  const failed = () => count('SELECT count(*) FROM images WHERE tagged_at IS NOT NULL AND id NOT IN (SELECT image_id FROM image_characters)');
+
+  it('子进程崩溃一次（不是显卡报错）→ 按原设置重开，接着跑完，不降级', async () => {
+    let first = true;
+    const factory = vi.fn(async (_o: TaggerStartOptions) => {
+      const crashOnce = first;
+      first = false;
+      return scripted('dml', (_, n) => (crashOnce && n === 0 ? crash() : null));
+    });
+    await runner(factory)(ctxOf());
+    expect(factory.mock.calls.map((c) => [c[0].device, c[0].batchSize, !!c[0].noDml])).toEqual([['dml', 2, false], ['dml', 2, false]]);
+    expect(pending()).toBe(0);
+    expect(linked()).toBe(5);
+  });
+
+  it('几个在途请求一起失败：只重开一次，任务照常完成', async () => {
+    freshDb(20);
+    let first = true;
+    const factory = vi.fn(async () => {
+      const dead = first;
+      first = false;
+      // 第一个客户端：所有请求都失败（子进程退出时在途的请求会一起被拒）
+      return scripted('dml', () => (dead ? crash() : null), 20);
+    });
     await runner(factory)(ctxOf());
     expect(factory).toHaveBeenCalledTimes(2);
-    expect(factory.mock.calls[1]![0].device).toBe('cpu');
+    expect(pending()).toBe(0);
+    expect(linked()).toBe(20);
+  });
+
+  it('DirectML 每次都崩（显卡 / 驱动坏了）：重开几次后降级到 CPU，不会把好图当坏图跳过', async () => {
+    const factory = vi.fn(async (o: TaggerStartOptions) => (o.device === 'cpu' ? scripted('cpu', () => null) : scripted('dml', () => crash())));
+    await runner(factory)(ctxOf());
+    const devices = factory.mock.calls.map((c) => c[0].device);
+    expect(devices.at(-1)).toBe('cpu');
+    // 计数的重开 3 次之外，还有排查坏图时的几次重开；总数有上限，不会无限重开
+    expect(devices.filter((d) => d === 'dml').length).toBeGreaterThanOrEqual(4);
+    expect(devices.filter((d) => d === 'dml').length).toBeLessThanOrEqual(8);
+    expect(pending()).toBe(0);
+    expect(linked()).toBe(5);
+    expect(failed()).toBe(0);
+  });
+
+  it('一张坏图每次都让子进程崩溃：找出来单独跳过，别的图照常识别，不降级', async () => {
+    freshDb(9);
+    const BAD = 4;
+    // 不管哪种设备，带着这张图就崩
+    const factory = vi.fn(async (o: TaggerStartOptions) => scripted(o.device, (items) => (items.some((i) => i.id === BAD) ? crash() : null)));
+    const log: string[] = [];
+    const run = createTagJobRunner({
+      db,
+      bus: new EventBus(),
+      modelsDir: 'X:/models',
+      getTaggerSettings: () => ({ model: REPO, device: 'dml', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true, artists: false }),
+      makeCatalog: () => {
+        const copyrights = new CopyrightResolver(db, OFFLINE);
+        return { catalog: new CharacterCatalog(db, { copyrights }), copyrights };
+      },
+      clientFactory: factory,
+      ensureFiles: async () => ({ dir: 'X:', modelPath: 'X:/m.onnx', labelsPath: 'X:/l.csv' }),
+      log: (m) => log.push(m),
+    });
+    await run(ctxOf());
+    expect(factory.mock.calls.every((c) => c[0].device === 'dml' && c[0].batchSize === 2)).toBe(true);
+    expect(pending()).toBe(0);
+    expect(linked()).toBe(8);
+    expect(count(`SELECT count(*) FROM image_characters WHERE image_id = ${BAD}`)).toBe(0);
+    expect(log.some((m) => m.includes(`id ${BAD}`))).toBe(true);
+  });
+
+  it('显存不够（0x8007000E）按显卡问题处理：先改成一张一批', async () => {
+    const oom = () => new Error('Non-zero status code returned while running Conv node. Status Message: D3D12 failed with 8007000E (E_OUTOFMEMORY)');
+    const factory = vi.fn(async (o: TaggerStartOptions) => (o.batchSize > 1 ? scripted('dml', (_, n) => (n === 0 ? oom() : null)) : { ...scripted('dml', () => null), batchSize: 1 }));
+    await runner(factory)(ctxOf());
+    expect(factory.mock.calls.map((c) => [c[0].device, c[0].batchSize])).toEqual([['dml', 2], ['dml', 1]]);
     expect(pending()).toBe(0);
   });
 });

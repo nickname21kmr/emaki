@@ -49,11 +49,16 @@ export class TaggerClient implements TaggerLike {
       if (m.type === 'result') this.settle(m.reqId, null, m.results);
       else if (m.type === 'error' && m.reqId !== null) this.settle(m.reqId, new Error(m.message));
     });
-    child.on('exit', (code, sig) => {
-      this.exited = true;
-      const err = new TaggerCrashedError(`识别子进程退出（${sig ?? code}）`);
-      for (const id of [...this.pending.keys()]) this.settle(id, err);
-    });
+    child.on('exit', (code, sig) => this.die(`识别子进程退出（${sig ?? code}）`));
+    // 没人监听的 'error' 会直接抛出、把整个后端带崩（例如子进程刚退出时 send 失败）
+    child.on('error', (err) => this.die(`识别子进程出错：${err.message}`));
+  }
+
+  /** 子进程没了：所有在途请求按「子进程崩溃」失败，交给 ResilientTagger 处理 */
+  private die(why: string) {
+    this.exited = true;
+    const err = new TaggerCrashedError(why);
+    for (const id of [...this.pending.keys()]) this.settle(id, err);
   }
 
   get device() {
@@ -88,13 +93,20 @@ export class TaggerClient implements TaggerLike {
         cleanup();
         reject(new TaggerCrashedError(`识别子进程在加载时退出（${sig ?? code}）`));
       };
+      const onError = (err: Error) => {
+        cleanup();
+        child.kill();
+        reject(new TaggerCrashedError(`识别子进程起不来：${err.message}`));
+      };
       const cleanup = () => {
         clearTimeout(timer);
         child.off('message', onMsg);
         child.off('exit', onExit);
+        child.off('error', onError);
       };
       child.on('message', onMsg);
       child.on('exit', onExit);
+      child.on('error', onError);
       const init: InitMsg = {
         type: 'init',
         repo: o.repo,
@@ -111,7 +123,7 @@ export class TaggerClient implements TaggerLike {
   }
 
   tag(items: { id: number; path: string }[], th: HostThresholds, timeoutMs = REQUEST_TIMEOUT): Promise<HostItemResult[]> {
-    if (this.exited) return Promise.reject(new TaggerCrashedError('识别子进程已退出'));
+    if (this.exited || !this.child.connected) return Promise.reject(new TaggerCrashedError('识别子进程已退出'));
     const reqId = ++this.reqId;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -119,7 +131,10 @@ export class TaggerClient implements TaggerLike {
         reject(new TaggerCrashedError('识别请求超时'));
       }, timeoutMs);
       this.pending.set(reqId, { resolve, reject, timer });
-      this.child.send({ type: 'tag', reqId, items, thresholds: th });
+      // 带回调：发送失败（子进程刚好退出）时只让这个请求失败，不触发 'error'
+      this.child.send({ type: 'tag', reqId, items, thresholds: th }, (err) => {
+        if (err) this.settle(reqId, new TaggerCrashedError(`发给识别子进程失败：${err.message}`));
+      });
     });
   }
 

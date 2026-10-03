@@ -90,8 +90,8 @@ export function createArtistJobRunner(deps: ArtistJobDeps): JobRunner {
         const now = nowIso();
         db.transaction(() => {
           for (const r of results) {
-            // 读不了的图也标跑过，免得每次都卡在它上面；文件不在了的留给扫描器
-            if (!r.ok && r.code === 'ENOENT') continue;
+            // 读不了的图也标跑过，免得每次都卡在它上面；文件不在了的留给扫描器，暂时读不了的（IO）下次再试
+            if (!r.ok && (r.code === 'ENOENT' || r.code === 'IO')) continue;
             const artists = r.ok ? (r.artist ?? []) : [];
             writeArtists(db, r.id, artists, now);
             if (artists.length) found++;

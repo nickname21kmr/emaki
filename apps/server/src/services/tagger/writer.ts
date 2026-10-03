@@ -2,7 +2,8 @@
  * 把引擎输出写进 SQLite。规则（以 TASKS.md T10「规则」表为准）：
  *   general ≥ 阈值 → image_tags；character ≥ autoAccept → image_characters（没有就新建角色）；
  *   characterThreshold ≤ 分数 < autoAccept → character_suggestions（每图最多 5 条），建议角色的主作品已存在时挂 image_copyrights；
- *   rating 取 argmax（手动改过的不动）；DECODE / UNSUPPORTED 也标记已处理；ENOENT 不写，留给扫描器标 missing。
+ *   rating 取 argmax（手动改过的不动）；DECODE / UNSUPPORTED 也标记已处理；ENOENT 不写，留给扫描器标 missing；
+ *   IO（文件暂时读不了）也不写，下次识别再试。
  * 重打标签时 image_tags / suggestions / image_copyrights 先删后写，image_characters 只增不删。
  * T27：写完标签后按标签重算内容类型、主题和 art_score（manual 只保护类型）；截图、文字、照片、表情、动图上的
  * 未知角色不新建，只进建议（BI-15），已有角色照常关联。
@@ -104,7 +105,7 @@ export class TagResultWriter {
   private writeOne(r: HostItemResult, now: string): number | null {
     const { s, o, stats, catalog } = this;
     if (!r.ok) {
-      if (r.code === 'ENOENT') {
+      if (r.code === 'ENOENT' || r.code === 'IO') {
         stats.missing++;
         return null;
       }
