@@ -25,6 +25,11 @@ export interface WriterOptions {
   /** T17：在同一个事务里对本批图应用排除规则 */
   afterBatchInTx?: (imageIds: number[]) => void;
   now?: () => number;
+  /**
+   * 这次识别顺便解码了画师（开着「识别画师」、模型能出画师）：识别失败的图也标画师跑过，
+   * 免得画师补跑再单独跑它（会弄崩子进程的图要重开、降级好几次才放弃）
+   */
+  artists?: boolean;
 }
 
 export interface WriteStats {
@@ -110,6 +115,7 @@ export class TagResultWriter {
         return null;
       }
       s.markTagged!.run(now, o.repo, r.id);
+      if (o.artists) writeArtists(this.db, r.id, [], now);
       // 识别失败也算「识别过」：没有标签，按空标签写主题和质量分（保持 tagged_at 与 theme 同时为空 / 非空）
       const failedRow = s.classRow!.get(r.id) as ClassRow | undefined;
       if (failedRow) writeClassification(this.cls, failedRow, computeClassification({ ...failedRow, tagged_at: now }, []));

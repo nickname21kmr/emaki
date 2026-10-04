@@ -125,6 +125,18 @@ describe('TagResultWriter', () => {
     expect(db.prepare('SELECT id FROM images WHERE tagged_at IS NOT NULL').pluck().all()).toEqual([1]);
   });
 
+  it('顺便解码画师时，识别失败的图也标画师跑过（画师补跑不再单独跑它）；没解码画师时不标', () => {
+    const copyrights = new CopyrightResolver(db, OFFLINE);
+    const catalog = new CharacterCatalog(db, { copyrights, localizer: new HumanizeLocalizer() });
+    new TagResultWriter(db, catalog, copyrights, { repo: REPO, ...TH }).writeBatch([{ id: 1, ok: false, code: 'DECODE', message: 'x' }]);
+    new TagResultWriter(db, catalog, copyrights, { repo: REPO, ...TH, artists: true }).writeBatch([
+      { id: 2, ok: false, code: 'DECODE', message: '识别时子进程崩溃，已跳过' },
+      { id: 3, ok: false, code: 'ENOENT', message: 'x' },
+    ]);
+    expect(db.prepare('SELECT id FROM images WHERE artist_checked_at IS NOT NULL').pluck().all()).toEqual([2]);
+    expect(db.prepare('SELECT COUNT(*) FROM image_artists').pluck().get()).toBe(0);
+  });
+
   it('幂等', () => {
     const batch = [ok(1, [['mika_(blue_archive)', 0.95], ['hina_(blue_archive)', 0.5]], 'sensitive')];
     writer().writeBatch(batch);

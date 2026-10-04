@@ -156,6 +156,7 @@ export function createTagJobRunner(deps: TagJobDeps): JobRunner {
       autoAcceptThreshold: t.autoAcceptThreshold,
       afterBatchInTx: deps.afterBatchInTx,
       now: deps.now,
+      artists: !!t.artists && spec.labelsFormat === 'pixai-json',
     });
 
     // 阶段 0：阈值调低后已达标的建议直接采纳；没有作品的角色补挂作品

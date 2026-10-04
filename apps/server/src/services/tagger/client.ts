@@ -221,9 +221,10 @@ export function acquireTagger(o: TaggerStartOptions): Promise<TaggerClient> {
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = null;
   const key = `${o.repo}|${o.device}|${o.batchSize}|${o.noDml ? 'nodml' : ''}`;
-  if (current && current.key !== key) void shutdownTagger();
-  if (!current) {
-    const client = startTagger(o);
+  if (!current || current.key !== key) {
+    // 换模型 / 换设备：等旧子进程退出、显存放掉再起新的（两个大模型同时在显存里，8 GB 不够）
+    const closing = current ? shutdownTagger() : Promise.resolve();
+    const client = closing.then(() => startTagger(o));
     current = { key, client };
     // 启动失败不要把 rejected 的 promise 一直缓存着
     client.catch(() => {
