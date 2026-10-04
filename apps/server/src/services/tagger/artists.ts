@@ -18,8 +18,11 @@ import type { HostItemResult } from './protocol.ts';
 export const ARTIST_THRESHOLD = 0.35;
 /** 能认画师的模型 */
 export const ARTIST_MODEL = 'A1yCE/pixai-tagger-v1.0-onnx-fp16';
-/** 识别完角色后，待补的少于这么多才自动接着补；多的（第一次用）要用户在设置里点 */
-export const AUTO_ARTIST_MAX = 2000;
+/**
+ * 同时在途的请求数：上一批还在推理时就把下一批发出去，子进程里预处理和推理重叠，显卡不用等写库和读图。
+ * 每个请求 batchSize × 4 张（PixAI 是 4 张），两个在途就够喂满显卡；再多只会让取消、让出时白跑的图变多
+ */
+const IN_FLIGHT = 2;
 
 /** 记下一张图的画师（替换旧的），并标记跑过。必须在事务里调用 */
 export function writeArtists(db: Db, imageId: number, artists: [string, number][], now: string): void {
@@ -29,9 +32,12 @@ export function writeArtists(db: Db, imageId: number, artists: [string, number][
   db.prepare('UPDATE images SET artist_checked_at = ? WHERE id = ?').run(now, imageId);
 }
 
-/** 待补的图；读不了、正在退避的（readBackoff）先不算，免得自动续补为它们反复加载模型 */
+/**
+ * 待补的图：已经识别过的插画。还没识别的留给识别任务（开着画师时识别会顺便写画师，不用跑两遍）；
+ * 读不了、正在退避的（readBackoff）先不算，免得自动续补为它们反复加载模型
+ */
 const PENDING = `FROM images i JOIN library_roots r ON r.id = i.root_id
-  WHERE i.artist_checked_at IS NULL AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL
+  WHERE i.artist_checked_at IS NULL AND i.tagged_at IS NOT NULL AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL
     AND r.enabled = 1 AND r.removed_at IS NULL AND i.content_kind = 'illustration' AND ${NOT_SKIPPED}`;
 
 export function artistPendingCount(db: Db): number {
@@ -57,7 +63,11 @@ export function createArtistJobRunner(deps: ArtistJobDeps): JobRunner {
     if (!total) return '识别画师：没有需要补的图';
     const spec = findModel(ARTIST_MODEL)!;
     ctx.setMessage('识别画师：检查模型文件…');
-    const files = await (deps.ensureFiles ?? ensureModelFiles)(spec, deps.modelsDir, { signal: ctx.signal });
+    const mb = (n: number) => (n / 1048576).toFixed(0);
+    const files = await (deps.ensureFiles ?? ensureModelFiles)(spec, deps.modelsDir, {
+      signal: ctx.signal,
+      onProgress: (p) => ctx.setMessage(`识别画师：下载模型 ${p.file}（${p.source}）${mb(p.received)}/${mb(p.total)} MB`),
+    });
     if (ctx.signal.aborted) return '识别画师：已取消';
     const { device, batchSize } = deps.getDevice();
     ctx.setMessage(device === 'dml' ? '识别画师：加载模型到显卡…' : '识别画师：加载模型…');
@@ -75,30 +85,49 @@ export function createArtistJobRunner(deps: ArtistJobDeps): JobRunner {
     const sel = db.prepare(`SELECT i.id, r.path AS root, i.rel_path AS rel ${PENDING} AND i.id < @before ORDER BY i.id DESC LIMIT @limit`);
     const nowIso = () => new Date(deps.now?.() ?? Date.now()).toISOString();
     let before = Number.MAX_SAFE_INTEGER;
+    let exhausted = false;
     let done = 0;
     let found = 0;
     const t0 = performance.now();
+    const cancelled = () => `识别画师：已取消（这次补了 ${done} 张，认出 ${found} 张）`;
+    /** 已经发出去、还没写库的请求，按发出的先后 */
+    const queue: { rows: { id: number; root: string; rel: string }[]; p: Promise<HostItemResult[]> }[] = [];
+    const fill = () => {
+      while (!exhausted && queue.length < IN_FLIGHT) {
+        const rows = sel.all({ before, limit: client.current.batchSize * 4, skip: skipIds() }) as { id: number; root: string; rel: string }[];
+        if (!rows.length) {
+          exhausted = true;
+          break;
+        }
+        before = rows.at(-1)!.id;
+        // 一般标签和角色门槛给到 2（不可能达到），只解码画师
+        const p = client.tag(
+          rows.map((r) => ({ id: r.id, path: toAbs(r.root, r.rel) })),
+          { general: 2, character: 2, artist: ARTIST_THRESHOLD },
+        );
+        p.catch(() => undefined); // 轮到它时再处理；取消、让出时没等的请求不算未处理的拒绝
+        queue.push({ rows, p });
+      }
+    };
     try {
       for (;;) {
-        if (ctx.signal.aborted) return `识别画师：已取消（这次补了 ${done} 张，认出 ${found} 张）`;
+        if (ctx.signal.aborted) return cancelled();
         if (ctx.shouldYield()) {
+          // 还在途的那一批不写，下次接着补时会重新挑到
           ctx.requeue();
           return `识别画师：已让出（这次补了 ${done} 张）`;
         }
-        const rows = sel.all({ before, limit: client.current.batchSize * 4, skip: skipIds() }) as { id: number; root: string; rel: string }[];
-        if (!rows.length) break;
-        before = rows.at(-1)!.id;
-        // 一般标签和角色门槛给到 2（不可能达到），只解码画师
+        fill();
+        const head = queue.shift();
+        if (!head) break;
         let results: HostItemResult[];
         try {
-          results = await client.tag(
-            rows.map((r) => ({ id: r.id, path: toAbs(r.root, r.rel) })),
-            { general: 2, character: 2, artist: ARTIST_THRESHOLD },
-          );
+          results = await head.p;
         } catch (err) {
-          if (ctx.signal.aborted) return `识别画师：已取消（这次补了 ${done} 张，认出 ${found} 张）`;
+          if (ctx.signal.aborted) return cancelled();
           throw err;
         }
+        fill(); // 先把下一批发出去，再写库
         // 读不了的（ENOENT / IO）先退避，过一阵再试；同一张连续读不了 3 次就改成失败，标跑过
         noteReadFailures(results);
         const now = nowIso();
@@ -111,11 +140,11 @@ export function createArtistJobRunner(deps: ArtistJobDeps): JobRunner {
             if (artists.length) found++;
           }
         })();
-        done += rows.length;
+        done += head.rows.length;
         const rate = done / ((performance.now() - t0) / 1000);
         const left = (total - done) / rate;
         const eta = left < 60 ? `${Math.ceil(left)} 秒` : left < 3600 ? `${Math.ceil(left / 60)} 分钟` : `${(left / 3600).toFixed(1)} 小时`;
-        ctx.advance(rows.length, `识别画师：${done} / ${total} · 认出 ${found} 张 · ${rate.toFixed(1)} 张/秒 · 剩余约 ${eta}`);
+        ctx.advance(head.rows.length, `识别画师：${done} / ${total} · 认出 ${found} 张 · ${rate.toFixed(1)} 张/秒 · 剩余约 ${eta}`);
       }
     } finally {
       client.close();

@@ -13,13 +13,33 @@ import { resetIoBackoff } from '../readBackoff.ts';
 describe('画师', () => {
   let dir: string;
   let ds: SqliteDataSource;
-  const add = (id: number, kind = 'illustration') =>
+  /** 画师只补已经识别过的图：默认带 tagged_at */
+  const add = (id: number, kind = 'illustration', taggedAt: string | null = 'x') =>
     ds.ctx.db
       .prepare(
-        `INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at, content_kind, rating)
-         VALUES (?, 1, ?, ?, 100, 140, 1, 'png', ?, 'x', 'x', ?, 'general')`,
+        `INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at, content_kind, rating, tagged_at)
+         VALUES (?, 1, ?, ?, 100, 140, 1, 'png', ?, 'x', 'x', ?, 'general', ?)`,
       )
-      .run(id, `${id}.png`, `${id}.png`, `s${id}`, kind);
+      .run(id, `${id}.png`, `${id}.png`, `s${id}`, kind, taggedAt);
+  const ctxOf = (signal = new AbortController().signal) =>
+    ({
+      signal,
+      setTotal() {},
+      advance() {},
+      setMessage() {},
+      shouldYield: () => false,
+      requeue() {},
+      yielded: false,
+    }) as unknown as JobContext;
+  const runner = (fake: TaggerLike) =>
+    createArtistJobRunner({
+      db: ds.ctx.db,
+      modelsDir: 'X:/models',
+      getDevice: () => ({ device: 'dml', batchSize: 1 }),
+      clientFactory: async () => fake,
+      ensureFiles: (async () => ({ dir: 'X', modelPath: 'X/m', labelsPath: 'X/l' })) as never,
+    });
+  const okArtist = (id: number): HostItemResult => ({ id, ok: true, rating: null, general: [], character: [], artist: [] });
 
   beforeEach(async () => {
     dir = makeTmpDir('artists');
@@ -160,5 +180,58 @@ describe('画师', () => {
     expect(artistPendingCount(ds.ctx.db)).toBe(0);
     resetIoBackoff();
     expect(artistPendingCount(ds.ctx.db)).toBe(1);
+  });
+
+  it('还没识别的图不补（留给识别任务顺便写画师）', () => {
+    add(6, 'illustration', null);
+    expect(artistPendingCount(ds.ctx.db)).toBe(4);
+  });
+
+  it('两个请求在途：上一批还没返回就发下一批；写库按发出的先后', async () => {
+    for (let id = 6; id <= 12; id++) add(id);
+    const pending: { ids: number[]; resolve: (r: HostItemResult[]) => void }[] = [];
+    let maxInFlight = 0;
+    const fake = {
+      device: 'dml',
+      batchSize: 1,
+      info: { pid: 1, dmlDeviceId: 0, fallbackReason: null },
+      tag(items: { id: number }[]) {
+        return new Promise<HostItemResult[]>((resolve) => {
+          pending.push({ ids: items.map((i) => i.id), resolve: (r) => resolve(r) });
+          maxInFlight = Math.max(maxInFlight, pending.length);
+        });
+      },
+    } as unknown as TaggerLike;
+    const job = runner(fake)(ctxOf());
+    // 按发出的先后答复：每次答最早的那个
+    for (let k = 0; k < 20 && !(await Promise.race([job.then(() => true), new Promise((r) => setTimeout(() => r(false), 5))])); k++) {
+      const p = pending.shift();
+      if (p) p.resolve(p.ids.map(okArtist));
+    }
+    expect(await job).toBe('识别画师：补了 11 张，认出画师 0 张');
+    expect(maxInFlight).toBe(2);
+    expect(artistPendingCount(ds.ctx.db)).toBe(0);
+  });
+
+  it('取消时在途的那批不写，下次接着补', async () => {
+    for (let id = 6; id <= 12; id++) add(id);
+    const ac = new AbortController();
+    let calls = 0;
+    const fake = {
+      device: 'dml',
+      batchSize: 1,
+      info: { pid: 1, dmlDeviceId: 0, fallbackReason: null },
+      async tag(items: { id: number }[]) {
+        calls++;
+        // 第一批返回之后用户点了取消；第二批晚一点才回来
+        if (calls === 1) setTimeout(() => ac.abort(), 0);
+        if (calls === 2) await new Promise((r) => setTimeout(r, 20));
+        return items.map((i) => okArtist(i.id));
+      },
+    } as unknown as TaggerLike;
+    const msg = await runner(fake)(ctxOf(ac.signal));
+    expect(msg).toMatch(/^识别画师：已取消/);
+    // 第一批、第二批（等它的时候点了取消，它回来了照样写）都写了；第三批已经发出去但没等，不写，下次接着补
+    expect(ds.ctx.db.prepare("SELECT id FROM images WHERE artist_checked_at IS NULL AND content_kind = 'illustration' ORDER BY id").pluck().all()).toEqual([1, 2, 3]);
   });
 });
