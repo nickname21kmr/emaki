@@ -10,12 +10,14 @@ import { defaultFetchLike, type FetchLike, type HttpResponse } from '../../net/h
 import { RateLimiter } from './rateLimiter.ts';
 import {
   AliasSchema,
+  ArtistSchema,
   AutocompleteSchema,
   RelatedSchema,
   TAG_ONLY,
   TagSchema,
   WikiSchema,
   type DbAlias,
+  type DbArtist,
   type DbAutocomplete,
   type DbRelated,
   type DbTag,
@@ -141,6 +143,17 @@ export class DanbooruClient {
           signal,
         )),
       );
+    }
+    return out;
+  }
+
+  /** 画师资料（其他名字、社团、主页链接） */
+  async artistsByNames(names: string[], signal: AbortSignal): Promise<DbArtist[]> {
+    const { batches } = splitComma(names);
+    const out: DbArtist[] = [];
+    const only = 'name,other_names,group_name,is_deleted,urls[url,is_active]';
+    for (const b of batches) {
+      out.push(...(await this.request('/artists.json', { 'search[name_comma]': b.join(','), limit: String(b.length), only }, ArtistSchema.array(), signal)));
     }
     return out;
   }

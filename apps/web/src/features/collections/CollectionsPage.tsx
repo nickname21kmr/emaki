@@ -32,7 +32,10 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
   const all = list.data ?? [];
   // 画师：识别出来的才有（设置 → 识别 里打开「识别画师」）；搜索框也筛画师名
   const artistsQ = useArtists();
-  const artists = (artistsQ.data ?? []).filter((a) => !debounced || a.name.toLowerCase().includes(debounced.toLowerCase()) || a.tag.includes(debounced.toLowerCase()));
+  const needle = debounced.toLowerCase();
+  const artists = (artistsQ.data ?? []).filter(
+    (a) => !needle || [a.name, a.tag, a.twitter ?? '', ...a.tags, ...a.aliases].some((n) => n.toLowerCase().replace(/_/g, ' ').includes(needle.replace(/_/g, ' '))),
+  );
   const by = (k: CollectionKind) => all.filter((c) => c.kind === k);
   const pages = (xs: CollectionSummary[]) => xs.reduce((n, c) => n + c.pageCount, 0);
   const set = (key: string, v: string | null) =>

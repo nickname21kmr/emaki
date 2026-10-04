@@ -186,7 +186,7 @@ export interface ListImagesQuery extends PageQuery {
   seed?: number;
   /** 合集：具体 id = 这一本的页；'none' = 不在任何合集里的图（T38c） */
   collectionId?: ID | 'none';
-  /** 画师（Danbooru 标签，如 kantoku）：识别出这位画师的图 */
+  /** 画师（合集页「画师」里的 tag）：识别出这位画师的图，同一个人的不同标签一起算 */
   artist?: string;
   sort?: ImageSort;
   order?: 'asc' | 'desc';
@@ -258,8 +258,14 @@ export type ThumbWidth = (typeof THUMB_WIDTHS)[number];
 export interface Artist {
   /** Danbooru 标签，如 mishima_kurone */
   tag: string;
-  /** 显示名：标签去掉下划线 */
+  /** 显示名：Danbooru 资料里的日文 / 汉字名（读音最对得上标签的那个）；没同步过就是标签去掉下划线 */
   name: string;
+  /** 合并进来的全部标签（同一个人的旧名、社团名被认成了另一个画师） */
+  tags: string[];
+  /** 其他名字：日文名、中文名、账号名、社团（搜索用） */
+  aliases: string[];
+  /** 推特账号（不带 @） */
+  twitter: string | null;
   /** 只数计入张数的插画 */
   imageCount: number;
   /** 封面：这位画师分数最高的一张 */

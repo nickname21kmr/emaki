@@ -17,6 +17,15 @@ export const TagSchema = z.object({
   consequent_aliases: z.array(z.object({ antecedent_name: z.string() })).default([]),
 });
 export const AliasSchema = z.object({ antecedent_name: z.string(), consequent_name: z.string() });
+/** /artists.json：画师的其他名字、社团、主页链接 */
+export const ArtistSchema = z.object({
+  name: z.string(),
+  other_names: z.array(z.string()).default([]),
+  group_name: z.string().nullable().default(null),
+  is_deleted: z.boolean().default(false),
+  urls: z.array(z.object({ url: z.string(), is_active: z.boolean().optional() })).default([]),
+});
+export type DbArtist = z.infer<typeof ArtistSchema>;
 export const WikiSchema = z.object({ title: z.string(), other_names: z.array(z.string()).default([]), is_deleted: z.boolean().default(false) });
 const MiniTag = z.object({ name: z.string(), category: z.number().int(), post_count: z.number().int() });
 export const RelatedSchema = z.object({

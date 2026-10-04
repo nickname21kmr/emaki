@@ -18,10 +18,14 @@ export function ArtistShelf({ list }: { list: Artist[] }) {
                 <Thumb image={a.cover} width={480} className="size-full" imgClassName="transition-transform duration-500 group-hover:scale-[1.03]" blurBadge="corner" />
               )}
             </div>
-            <div className="mt-2.5 truncate text-[13.5px] font-medium" title={a.tag}>
+            <div className="mt-2.5 truncate text-[13.5px] font-medium" title={[a.name, ...a.aliases].join(' / ')}>
               {a.name}
             </div>
-            <div className="text-xs text-fg-muted tabular">{formatCount(a.imageCount)} 张</div>
+            <div className="truncate text-xs text-fg-muted">
+              <span className="tabular">{formatCount(a.imageCount)} 张</span>
+              {/* 有推特显示账号；名字是日文名时再给出标签，方便对照 */}
+              <span className="ml-1.5 text-fg-subtle">{a.twitter ? `@${a.twitter}` : a.name !== a.tag.replace(/_/g, ' ') ? a.tag : ''}</span>
+            </div>
           </Link>
         </li>
       ))}

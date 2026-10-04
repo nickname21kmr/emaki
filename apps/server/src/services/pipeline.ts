@@ -4,7 +4,6 @@
  * 各阶段由对应任务注入（register）；没有注入的阶段 runner 抛 NotImplementedError，任务显示 failed 并提示缺哪一项。
  */
 import type { JobKind } from '@emaki/shared';
-import { AUTO_ARTIST_MAX } from './tagger/artists.ts';
 import type { JobContext, JobQueue, JobRunner } from '../core/jobs.ts';
 import { NotImplementedError } from '../http/errors.ts';
 import type { ThumbnailService } from './image/ThumbnailService.ts';
@@ -59,6 +58,8 @@ export class Pipeline {
   private dedupeDirty = false;
   /** 用户取消了识别：之后不再自动续跑，直到用户手动开始（进程内状态，重启后恢复自动） */
   private tagPaused = false;
+  /** 用户取消了画师补跑：之后不自动续跑，直到手动点「补跑」或重新打开开关 */
+  private artistsPaused = false;
 
   constructor(private d: PipelineDeps) {}
 
@@ -93,19 +94,20 @@ export class Pipeline {
             this.d.afterTag?.();
             if (this.d.danbooru?.shouldRunAfterTag()) this.d.jobs().enqueue('danbooru-sync');
             if (this.dedupeDirty) this.d.jobs().enqueue('dedupe');
-            // 开着画师的：新图（WD 识别的旧图）顺手补上；第一次打开时的大批量由打开开关时排
+            // 开着画师的：接着补（新图、WD 识别的旧图、重启前没补完的）；用户取消过就等他手动再点
             const a = this.d.artists;
-            if (a?.enabled()) {
-              const n = a.pendingCount();
-              if (n > 0 && n <= AUTO_ARTIST_MAX) this.d.jobs().enqueue('artists');
-            }
+            if (a?.enabled() && !this.artistsPaused && a.pendingCount() > 0) this.d.jobs().enqueue('artists');
           }
           return msg;
         }
         case 'artists': {
           if (!this.d.artists) throw new NotImplementedError('artists', '识别画师');
           if (!this.d.artists.enabled()) return '识别画师：设置里没有打开';
-          return this.d.artists.run(ctx);
+          const msg = await this.d.artists.run(ctx);
+          if (ctx.signal.aborted) this.artistsPaused = true;
+          // 认出新画师后，同步 Danbooru 拿日文名、推特（打开了联网同步时）
+          if (!ctx.signal.aborted && !ctx.yielded && this.d.danbooru?.shouldRunAfterTag()) this.d.jobs().enqueue('danbooru-sync');
+          return msg;
         }
         case 'dedupe': {
           if (!this.d.dedupe) throw new NotImplementedError('T16', '查重');
@@ -147,6 +149,7 @@ export class Pipeline {
   /** 用户手动开始某个任务（取消识别后再点「运行识别」→ 恢复自动续跑） */
   noteManualStart(kind: JobKind): void {
     if (kind === 'tag') this.tagPaused = false;
+    if (kind === 'artists') this.artistsPaused = false;
   }
 
   private afterThumbnail() {
@@ -159,5 +162,10 @@ export class Pipeline {
   private maybeTag() {
     const t = this.d.tag;
     if (t?.isReady() && !this.tagPaused && t.pendingCount() > 0) this.d.jobs().enqueue('tag');
+    // 没有要识别的（比如重启后）：画师补跑没完就接着补。有识别时等识别完再接（同在显卡道里，优先级也低）
+    else {
+      const a = this.d.artists;
+      if (a?.enabled() && !this.artistsPaused && a.pendingCount() > 0) this.d.jobs().enqueue('artists');
+    }
   }
 }

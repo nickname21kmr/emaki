@@ -47,6 +47,20 @@ describe('画师', () => {
       ['mishima_kurone', 'mishima kurone', 1, '3'],
     ]);
     expect((await ds.listImages({ artist: 'kantoku' })).items.map((i) => i.id).sort()).toEqual(['1', '2']);
+
+    // 同步过 Danbooru：用日文名；社团名被认成了另一个画师的，并到本人
+    ds.ctx.db.transaction(() => {
+      writeArtists(ds.ctx.db, 4, [['afterschool_of_the_5th_year', 0.7]], 'x');
+      ds.ctx.db
+        .prepare("INSERT INTO danbooru_artists (name, display, names, twitter, fetched_at) VALUES ('kantoku', 'カントク', '[\"5年目の放課後\",\"afterschool_of_the_5th_year\"]', 'kantoku_5th', 'x')")
+        .run();
+    })();
+    ds.ctx.invalidate();
+    const merged = await ds.listArtists();
+    expect(merged[0]).toMatchObject({ tag: 'kantoku', name: 'カントク', imageCount: 3, twitter: 'kantoku_5th' });
+    expect(merged[0]!.tags.sort()).toEqual(['afterschool_of_the_5th_year', 'kantoku']);
+    expect(merged[0]!.aliases).toContain('5年目の放課後');
+    expect((await ds.listImages({ artist: 'kantoku' })).items.map((i) => i.id).sort()).toEqual(['1', '2', '4']);
     // 跑过的不再待补；截图不补
     expect(artistPendingCount(ds.ctx.db)).toBe(0);
   });

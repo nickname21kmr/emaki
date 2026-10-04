@@ -205,6 +205,36 @@ describe('sync', () => {
     await runner(true, f.fn)(ctx());
     expect(f.calls.length).toBe(before); // 缓存未过期
   });
+
+  it('画师资料：日文显示名、推特；改过名的旧标签指向新标签；查不到的记下', async () => {
+    db.exec(`INSERT INTO library_roots (id, path) VALUES (1, 'D:/x');
+      INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
+        VALUES (1, 1, 'a.png', 'a.png', 1, 1, 1, 'png', 's1', 'x', 'x');
+      INSERT INTO image_artists (image_id, artist, score) VALUES (1, 'kantoku', 0.9), (1, 'old_artist', 0.5), (1, 'ghost', 0.4);`);
+    const f = fakeFetch((u) => {
+      if (u.pathname === '/artists.json') {
+        const names = (u.searchParams.get('search[name_comma]') ?? '').split(',');
+        const out: unknown[] = [];
+        if (names.includes('kantoku'))
+          out.push({ name: 'kantoku', other_names: ['5年目の放課後', 'カントク'], group_name: 'afterschool_of_the_5th_year', urls: [{ url: 'https://twitter.com/kantoku_5th', is_active: true }] });
+        if (names.includes('new_artist')) out.push({ name: 'new_artist', other_names: ['新しい人'], group_name: null, urls: [] });
+        return { body: out };
+      }
+      if (u.pathname === '/tag_aliases.json') {
+        const names = (u.searchParams.get('search[antecedent_name_comma]') ?? '').split(',');
+        return { body: names.includes('old_artist') ? [{ antecedent_name: 'old_artist', consequent_name: 'new_artist' }] : [] };
+      }
+      return { body: [] };
+    });
+    const msg = await runner(true, f.fn)(ctx());
+    expect(msg).toContain('画师 3 位');
+    const row = (n: string) => db.prepare('SELECT display, twitter, alias_of, not_found, names FROM danbooru_artists WHERE name = ?').get(n);
+    expect(row('kantoku')).toMatchObject({ display: 'カントク', twitter: 'kantoku_5th', alias_of: null, not_found: 0 });
+    expect(JSON.parse((row('kantoku') as { names: string }).names)).toContain('afterschool_of_the_5th_year');
+    expect(row('old_artist')).toMatchObject({ alias_of: 'new_artist', not_found: 0 });
+    expect(row('new_artist')).toMatchObject({ display: '新しい人' });
+    expect(row('ghost')).toMatchObject({ not_found: 1 });
+  });
 });
 
 describe('matcher', () => {

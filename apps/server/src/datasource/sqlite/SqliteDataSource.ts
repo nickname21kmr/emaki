@@ -32,7 +32,6 @@ import type {
   ListWorksQuery,
   MoveImagesBody,
   MutationResult,
-  Rating,
   Page,
   RetagResult,
   SearchHit,
@@ -77,7 +76,7 @@ import { createTagStage } from '../../services/tagger/tagJob.ts';
 import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../../services/catalog/copyrights.ts';
 import { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
-import { createDanbooruSyncRunner, hasUncachedCharacterTags } from '../../services/danbooru/sync.ts';
+import { createDanbooruSyncRunner, hasUncachedArtists, hasUncachedCharacterTags } from '../../services/danbooru/sync.ts';
 import { importDictIfNeeded } from '../../services/i18n/dict.ts';
 import { SqliteLocalizer, type Localizer } from '../../services/i18n/localizer.ts';
 import { relocalizeAll } from '../../services/i18n/relocalize.ts';
@@ -102,6 +101,7 @@ import { applyExclusionRules, ExclusionQueries } from './exclusions.ts';
 import { LibraryQueries } from './library.ts';
 import { TagResultWriter } from '../../services/tagger/writer.ts';
 import { moveBack, moveImageFiles, normalizeSubdir, type MoveRow } from './move.ts';
+import { listArtists as listArtistsQuery } from './artists.ts';
 import { mergeChildRoots, type ChildRoot } from './roots.ts';
 import { applySettingsPatch, getDanbooruApiKey, isInside, normalizeRootPath, patchSettingsInternal, readSettings, samePath } from './settings.ts';
 import { iso, MIME, parseId, toId, VISIBLE } from './sql.ts';
@@ -188,7 +188,7 @@ export class SqliteDataSource implements DataSource {
         log: (m) => console.info(`[tag] ${m}`),
       }),
       danbooru: {
-        shouldRunAfterTag: () => readSettings(db).danbooru.enabled && hasUncachedCharacterTags(db),
+        shouldRunAfterTag: () => readSettings(db).danbooru.enabled && (hasUncachedCharacterTags(db) || hasUncachedArtists(db)),
         run: createDanbooruSyncRunner({
           db,
           danbooru,
@@ -398,29 +398,9 @@ export class SqliteDataSource implements DataSource {
     }
   }
 
-  /** 画师：只数计入张数的插画；封面优先挑全年龄、分数最高的一张 */
+  /** 画师：同一个人的不同标签合并，名字用 Danbooru 资料里的日文 / 汉字名（sqlite/artists.ts） */
   async listArtists(): Promise<Artist[]> {
-    const rows = this.ctx
-      .stmt(
-        `WITH a AS (
-           SELECT ia.artist, ia.score, i.id, i.dominant_color, i.rating, i.width, i.height
-           FROM image_artists ia JOIN v_counted_images i ON i.id = ia.image_id
-           WHERE i.content_kind = 'illustration'
-         ),
-         ranked AS (
-           SELECT a.*, COUNT(*) OVER (PARTITION BY artist) AS n,
-                  ROW_NUMBER() OVER (PARTITION BY artist ORDER BY (rating = 'general') DESC, score DESC, id) AS rn
-           FROM a
-         )
-         SELECT artist, n, id, dominant_color, rating, width, height FROM ranked WHERE rn = 1 ORDER BY n DESC, artist`,
-      )
-      .all() as { artist: string; n: number; id: number; dominant_color: string | null; rating: Rating; width: number; height: number }[];
-    return rows.map((r) => ({
-      tag: r.artist,
-      name: r.artist.replace(/_/g, ' '),
-      imageCount: r.n,
-      cover: { id: toId(r.id), dominantColor: r.dominant_color ?? '#888888', rating: r.rating, width: r.width, height: r.height },
-    }));
+    return listArtistsQuery(this.ctx.db);
   }
 
   // T38c 合集
@@ -832,7 +812,10 @@ export class SqliteDataSource implements DataSource {
       }
     }
     // 刚打开「识别画师」：给已识别的图补跑（任务在显卡道里排在识别后面，可以随时取消）
-    if (body.tagger?.artists === true && !beforeArtists) this.ctx.jobs.enqueue('artists');
+    if (body.tagger?.artists === true && !beforeArtists) {
+      this.pipeline.noteManualStart('artists');
+      this.ctx.jobs.enqueue('artists');
+    }
     for (const fn of this.settingsListeners) fn(settings);
     this.ctx.touch();
     return settings;

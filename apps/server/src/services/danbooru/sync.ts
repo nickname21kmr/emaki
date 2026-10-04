@@ -14,6 +14,8 @@ import type { CharacterCatalog } from '../catalog/characterCatalog.ts';
 import type { Localizer } from '../i18n/localizer.ts';
 import { applyToLibrary, type ApplyDeps } from './apply.ts';
 import type { DanbooruCatalog } from './catalog.ts';
+import type { DbArtist } from './types.ts';
+import { normName, pickDisplayName, twitterOf } from './artistNames.ts';
 import { DanbooruClient } from './client.ts';
 import { pickCopyrights } from './copyright.ts';
 import type { RateLimiter } from './rateLimiter.ts';
@@ -70,6 +72,7 @@ export function createDanbooruSyncRunner(deps: DanbooruSyncDeps): JobRunner {
     let updatedTags = 0;
     let copyrightChars = 0;
     let otherNames = 0;
+    let artists = 0;
     let done = 0;
     let completed = false;
     let yielded = false;
@@ -239,6 +242,49 @@ export function createDanbooruSyncRunner(deps: DanbooruSyncDeps): JobRunner {
           done++;
           ctx.advance(1, `匹配自建角色 ${c.name}`);
         }
+
+        // ---- F：画师资料（显示名、推特、社团；打开「识别画师」后才有画师）
+        const artistNames = db
+          .prepare(
+            `SELECT DISTINCT ia.artist FROM image_artists ia LEFT JOIN danbooru_artists d ON d.name = ia.artist
+             WHERE d.name IS NULL OR d.fetched_at < ?`,
+          )
+          .pluck()
+          .all(stale) as string[];
+        ctx.setTotal(done + Math.ceil(artistNames.length / 100));
+        const putArtist = db.prepare(
+          `INSERT INTO danbooru_artists (name, display, names, twitter, alias_of, not_found, fetched_at)
+           VALUES (@name, @display, @names, @twitter, @alias, @nf, @now)
+           ON CONFLICT(name) DO UPDATE SET display = excluded.display, names = excluded.names, twitter = excluded.twitter,
+             alias_of = excluded.alias_of, not_found = excluded.not_found, fetched_at = excluded.fetched_at`,
+        );
+        for (let i = 0; i < artistNames.length && !signal.aborted; i += 100) {
+          const batch = artistNames.slice(i, i + 100);
+          const got = new Map((await client.artistsByNames(batch, signal)).filter((a) => !a.is_deleted).map((a) => [a.name, a]));
+          // 查不到的可能是改过名的旧标签：查别名，再把新标签的资料也拿下来
+          const missing = batch.filter((n) => !got.has(n));
+          const aliasTo = new Map((missing.length ? await client.aliasesByAntecedents(missing, signal) : []).map((a) => [a.antecedent_name, a.consequent_name]));
+          const targets = [...new Set(aliasTo.values())].filter((t) => !got.has(t));
+          if (targets.length) for (const a of await client.artistsByNames(targets, signal)) if (!a.is_deleted) got.set(a.name, a);
+          const now = iso(nowMs());
+          const put = (name: string, a: DbArtist | undefined, alias: string | undefined) =>
+            putArtist.run({
+              name,
+              display: a ? pickDisplayName(name, a.other_names, a.group_name) : null,
+              names: JSON.stringify(a ? [...a.other_names, ...(a.group_name ? [a.group_name] : [])].map(normName) : []),
+              twitter: a ? twitterOf(a.urls) : null,
+              alias: alias ?? null,
+              nf: a || alias ? 0 : 1,
+              now,
+            });
+          db.transaction(() => {
+            for (const n of batch) put(n, got.get(n), aliasTo.get(n));
+            for (const t of targets) if (got.has(t)) put(t, got.get(t), undefined);
+          })();
+          artists += batch.length;
+          done++;
+          ctx.advance(1, `查询画师 ${Math.min(i + 100, artistNames.length)}/${artistNames.length}`);
+        }
         completed = !signal.aborted;
       }
     } finally {
@@ -251,8 +297,15 @@ export function createDanbooruSyncRunner(deps: DanbooruSyncDeps): JobRunner {
       return `同步 Danbooru：已让出给扫描（更新 ${updatedTags} 个标签 · 作品 ${copyrightChars} 个角色）`;
     }
     if (completed) deps.setLastSyncAt(iso(nowMs()));
-    return `同步 Danbooru：更新 ${updatedTags} 个标签 · 作品 ${copyrightChars} 个角色 · 别名 ${otherNames} 条`;
+    return `同步 Danbooru：更新 ${updatedTags} 个标签 · 作品 ${copyrightChars} 个角色 · 别名 ${otherNames} 条${artists ? ` · 画师 ${artists} 位` : ''}`;
   };
+}
+
+/** 认出来的画师还没查过 Danbooru 资料（补跑画师后要不要自动同步） */
+export function hasUncachedArtists(db: Db): boolean {
+  return !!db
+    .prepare('SELECT 1 FROM image_artists ia WHERE NOT EXISTS (SELECT 1 FROM danbooru_artists d WHERE d.name = ia.artist) LIMIT 1')
+    .get();
 }
 
 /** 有 character 标签在 danbooru_tags 里还没有行（打完标签后要不要自动同步） */

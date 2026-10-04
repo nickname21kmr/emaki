@@ -11,7 +11,7 @@ import { KindIndex } from '@/features/annex/KindIndex';
 import { Button, EmptyState, ErrorState, Skeleton } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { formatBytes, formatCount } from '@/lib/format';
-import { useImagesInfinite, useStats } from '@/lib/queries';
+import { useArtists, useImagesInfinite, useStats } from '@/lib/queries';
 import { usePrefs, useSelection } from '@/lib/stores';
 import { GalleryToolbar } from './components/GalleryToolbar';
 import { GridFooter } from './components/GridStates';
@@ -26,6 +26,9 @@ const SCOPE = 'gallery';
  */
 export function GalleryPage() {
   const { filters, query, update, hasFilters, clearFilters, customThemes } = useGalleryParams();
+  // 按画师看时标题用显示名（日文名），列表里没有就用标签
+  const artistsQ = useArtists(!!filters.artist);
+  const artistName = filters.artist ? artistsQ.data?.find((a) => a.tag === filters.artist)?.name : undefined;
   const { data: stats } = useStats();
   const rowHeight = usePrefs((s) => s.gridRowHeight);
   const list = useImagesInfinite(query);
@@ -143,7 +146,7 @@ export function GalleryPage() {
             </>
           ) : undefined
         }
-        title={filters.artist ? filters.artist.replace(/_/g, ' ') : '图库'}
+        title={filters.artist ? (artistName ?? filters.artist.replace(/_/g, ' ')) : '图库'}
         subtitle={
           <Subtitle
             stats={stats}

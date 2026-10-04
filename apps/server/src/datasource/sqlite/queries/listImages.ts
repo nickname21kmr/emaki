@@ -5,6 +5,7 @@
  * 用 keyset 游标而不是 offset：扫描期间不断插入新图，offset 分页会让无限滚动出现重复或漏图。
  */
 import { searchKey, TAG_FILTER_MIN_SCORE, type ImageItem, type ImageSort, type ListImagesQuery, type Page } from '@emaki/shared';
+import { tagsOfArtist } from '../artists.ts';
 import type { Db } from '../../../db/connection.ts';
 import { hydrateImages, IMAGE_COLS, type ImageRow } from '../hydrate.ts';
 import { THEME_FILTERS } from '../../../services/classify/theme.ts';
@@ -141,8 +142,9 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
   }
   if (q.original !== undefined) both(q.original ? 'i.original_at IS NOT NULL' : 'i.original_at IS NULL');
   if (q.artist) {
-    p.artist = q.artist;
-    both('i.id IN (SELECT ia.image_id FROM image_artists ia WHERE ia.artist = @artist)');
+    // 同一个人的不同标签（旧名、社团名）一起算
+    p.artists = JSON.stringify(tagsOfArtist(db, q.artist));
+    both('i.id IN (SELECT ia.image_id FROM image_artists ia WHERE ia.artist IN (SELECT value FROM json_each(@artists)))');
   }
   if (q.theme) {
     // 任一组标签达到阈值（THEME_FILTERS）。先把标签名换成 id，SQL 里不再联 tags 表；
