@@ -13,7 +13,8 @@ import { humanizeCharacterTag, humanizeCopyrightTag } from '../../i18n/humanize.
 import { HumanizeLocalizer, type AutoAlias } from '../../i18n/localizer.ts';
 import { TaggerCrashedError, type TaggerLike, type TaggerStartOptions } from '../client.ts';
 import type { HostItemResult } from '../protocol.ts';
-import { createTagJobRunner, createTagStage, resetIoBackoff } from '../tagJob.ts';
+import { resetIoBackoff } from '../readBackoff.ts';
+import { createTagJobRunner, createTagStage } from '../tagJob.ts';
 import { TagResultWriter } from '../writer.ts';
 
 const REPO = 'SmilingWolf/wd-eva02-large-tagger-v3';

@@ -8,6 +8,7 @@ import { makeTmpDir } from '../../../../test/helpers/tmp.ts';
 import { artistPendingCount, createArtistJobRunner, writeArtists } from '../artists.ts';
 import type { TaggerLike } from '../client.ts';
 import type { HostItemResult, HostThresholds } from '../protocol.ts';
+import { resetIoBackoff } from '../readBackoff.ts';
 
 describe('画师', () => {
   let dir: string;
@@ -27,6 +28,7 @@ describe('画师', () => {
     for (const id of [1, 2, 3, 4]) add(id);
     add(5, 'screenshot');
     ds.ctx.invalidate();
+    resetIoBackoff();
   });
   afterEach(async () => {
     await ds.close();
@@ -104,5 +106,59 @@ describe('画师', () => {
     expect(ds.ctx.db.prepare('SELECT artist FROM image_artists').pluck().all()).toEqual(['ama_mitsuki']);
     // 没有动角色和标签
     expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM image_tags').pluck().get()).toBe(0);
+  });
+
+  it('读不了的图：这次不标跑过，退避期间不算待补（自动续补不会为它反复加载模型）；连续 3 次读不了才标跑过', async () => {
+    let calls = 0;
+    const fake = {
+      device: 'dml',
+      batchSize: 2,
+      info: { pid: 1, dmlDeviceId: 0, fallbackReason: null },
+      async tag(items: { id: number }[]) {
+        calls++;
+        return items.map((it): HostItemResult =>
+          it.id === 3
+            ? { id: it.id, ok: false, code: 'IO', message: 'EBUSY' }
+            : it.id === 4
+              ? { id: it.id, ok: false, code: 'ENOENT', message: 'gone' }
+              : { id: it.id, ok: true, rating: null, general: [], character: [], artist: [] },
+        );
+      },
+    } as unknown as TaggerLike;
+    const run = createArtistJobRunner({
+      db: ds.ctx.db,
+      modelsDir: 'X:/models',
+      getDevice: () => ({ device: 'dml', batchSize: 2 }),
+      clientFactory: async () => fake,
+      ensureFiles: (async () => ({ dir: 'X', modelPath: 'X/m', labelsPath: 'X/l' })) as never,
+    });
+    const ctx = {
+      signal: new AbortController().signal,
+      setTotal() {},
+      advance() {},
+      setMessage() {},
+      shouldYield: () => false,
+      requeue() {},
+      yielded: false,
+    } as unknown as JobContext;
+    const checked = () => ds.ctx.db.prepare('SELECT id FROM images WHERE artist_checked_at IS NOT NULL ORDER BY id').pluck().all();
+
+    await run(ctx);
+    expect(checked()).toEqual([1, 2]);
+    // 3 和 4 还没补，但在退避：不算待补，再跑也不会加载模型
+    expect(artistPendingCount(ds.ctx.db)).toBe(0);
+    calls = 0;
+    expect(await run(ctx)).toBe('识别画师：没有需要补的图');
+    expect(calls).toBe(0);
+
+    // 用户手动点（清掉退避）：再试；3 第三次还是读不了就标跑过，4（文件不在）留给扫描器
+    resetIoBackoff();
+    await run(ctx);
+    resetIoBackoff();
+    await run(ctx);
+    expect(checked()).toEqual([1, 2, 3]);
+    expect(artistPendingCount(ds.ctx.db)).toBe(0);
+    resetIoBackoff();
+    expect(artistPendingCount(ds.ctx.db)).toBe(1);
   });
 });

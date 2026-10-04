@@ -9,6 +9,7 @@ import type { JobRunner } from '../../core/jobs.ts';
 import type { Db } from '../../db/connection.ts';
 import { toAbs } from '../fs/paths.ts';
 import { acquireTagger, releaseTagger, type TaggerLike, type TaggerStartOptions } from './client.ts';
+import { NOT_SKIPPED, noteReadFailures, skipIds } from './readBackoff.ts';
 import { ResilientTagger } from './resilient.ts';
 import { ensureModelFiles } from './download.ts';
 import { clampBatch, findModel } from './models.ts';
@@ -28,12 +29,13 @@ export function writeArtists(db: Db, imageId: number, artists: [string, number][
   db.prepare('UPDATE images SET artist_checked_at = ? WHERE id = ?').run(now, imageId);
 }
 
+/** 待补的图；读不了、正在退避的（readBackoff）先不算，免得自动续补为它们反复加载模型 */
 const PENDING = `FROM images i JOIN library_roots r ON r.id = i.root_id
   WHERE i.artist_checked_at IS NULL AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL
-    AND r.enabled = 1 AND r.removed_at IS NULL AND i.content_kind = 'illustration'`;
+    AND r.enabled = 1 AND r.removed_at IS NULL AND i.content_kind = 'illustration' AND ${NOT_SKIPPED}`;
 
 export function artistPendingCount(db: Db): number {
-  return (db.prepare(`SELECT COUNT(*) AS n ${PENDING}`).get() as { n: number }).n;
+  return (db.prepare(`SELECT COUNT(*) AS n ${PENDING}`).get({ skip: skipIds() }) as { n: number }).n;
 }
 
 export interface ArtistJobDeps {
@@ -70,7 +72,7 @@ export function createArtistJobRunner(deps: ArtistJobDeps): JobRunner {
     const factory = deps.clientFactory ?? acquireTagger;
     // 和识别任务一样的出错处理：子进程崩了按原样重开、显卡出错逐级降级、会弄崩子进程的图单独跳过
     const client = new ResilientTagger(await factory(startOpts), startOpts, factory, { signal: ctx.signal });
-    const sel = db.prepare(`SELECT i.id, r.path AS root, i.rel_path AS rel ${PENDING} AND i.id < ? ORDER BY i.id DESC LIMIT ?`);
+    const sel = db.prepare(`SELECT i.id, r.path AS root, i.rel_path AS rel ${PENDING} AND i.id < @before ORDER BY i.id DESC LIMIT @limit`);
     const nowIso = () => new Date(deps.now?.() ?? Date.now()).toISOString();
     let before = Number.MAX_SAFE_INTEGER;
     let done = 0;
@@ -83,7 +85,7 @@ export function createArtistJobRunner(deps: ArtistJobDeps): JobRunner {
           ctx.requeue();
           return `识别画师：已让出（这次补了 ${done} 张）`;
         }
-        const rows = sel.all(before, client.current.batchSize * 4) as { id: number; root: string; rel: string }[];
+        const rows = sel.all({ before, limit: client.current.batchSize * 4, skip: skipIds() }) as { id: number; root: string; rel: string }[];
         if (!rows.length) break;
         before = rows.at(-1)!.id;
         // 一般标签和角色门槛给到 2（不可能达到），只解码画师
@@ -97,10 +99,12 @@ export function createArtistJobRunner(deps: ArtistJobDeps): JobRunner {
           if (ctx.signal.aborted) return `识别画师：已取消（这次补了 ${done} 张，认出 ${found} 张）`;
           throw err;
         }
+        // 读不了的（ENOENT / IO）先退避，过一阵再试；同一张连续读不了 3 次就改成失败，标跑过
+        noteReadFailures(results);
         const now = nowIso();
         db.transaction(() => {
           for (const r of results) {
-            // 读不了的图也标跑过，免得每次都卡在它上面；文件不在了的留给扫描器，暂时读不了的（IO）下次再试
+            // 解不出来的图也标跑过，免得每次都卡在它上面；文件不在了的留给扫描器，暂时读不了的（IO）下次再试
             if (!r.ok && (r.code === 'ENOENT' || r.code === 'IO')) continue;
             const artists = r.ok ? (r.artist ?? []) : [];
             writeArtists(db, r.id, artists, now);
