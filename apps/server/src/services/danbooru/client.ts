@@ -149,7 +149,10 @@ export class DanbooruClient {
 
   /** 画师资料（其他名字、社团、主页链接） */
   async artistsByNames(names: string[], signal: AbortSignal): Promise<DbArtist[]> {
-    const { batches } = splitComma(names);
+    // 画师接口一次查 100 个会返回 500（2026-10-04 实测），50 个正常
+    const plain = splitComma(names).batches.flat();
+    const batches: string[][] = [];
+    for (let i = 0; i < plain.length; i += 50) batches.push(plain.slice(i, i + 50));
     const out: DbArtist[] = [];
     const only = 'name,other_names,group_name,is_deleted,urls[url,is_active]';
     for (const b of batches) {
