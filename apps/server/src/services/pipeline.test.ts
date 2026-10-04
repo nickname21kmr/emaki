@@ -23,7 +23,7 @@ const ctx = (aborted = false): JobContext => {
   return { signal: c.signal, setTotal() {}, advance() {}, setMessage() {}, shouldYield: () => false, requeue() {}, yielded: false };
 };
 
-function setup(o: { scan?: ScanSummary; tagPending?: number; tagReady?: boolean; artists?: { enabled: boolean; pending: number } } = {}) {
+function setup(o: { scan?: ScanSummary; tagPending?: number; tagReady?: boolean; artists?: { enabled: boolean; pending: number; ready?: boolean } } = {}) {
   const enqueued: JobKind[] = [];
   const jobs = { enqueue: (k: JobKind) => enqueued.push(k) } as unknown as JobQueue;
   const deps = {
@@ -33,7 +33,7 @@ function setup(o: { scan?: ScanSummary; tagPending?: number; tagReady?: boolean;
     thumbs: { runBackfill: async () => '缩略图完成' },
     pixelPendingCount: () => 0,
     tag: { isReady: () => o.tagReady ?? true, pendingCount: () => o.tagPending ?? 0, run: async () => '识别完成' },
-    artists: o.artists && { enabled: () => o.artists!.enabled, pendingCount: () => o.artists!.pending, run: async () => '画师完成' },
+    artists: o.artists && { enabled: () => o.artists!.enabled, isReady: () => o.artists!.ready ?? true, pendingCount: () => o.artists!.pending, run: async () => '画师完成' },
   } as unknown as PipelineDeps;
   return { pipeline: new Pipeline(deps), enqueued };
 }
@@ -99,5 +99,25 @@ describe('Pipeline', () => {
     expect(enqueued).toEqual(['tag']);
     await pipeline.runner('tag')(ctx());
     expect(enqueued).toEqual(['tag', 'artists']);
+  });
+
+  it('画师：排队中被取消（runner 没执行）也记暂停，识别完不再排', async () => {
+    const { pipeline, enqueued } = setup({ tagPending: 10, artists: { enabled: true, pending: 500 } });
+    pipeline.notePaused('artists');
+    await pipeline.runner('tag')(ctx());
+    expect(enqueued).toEqual([]);
+  });
+
+  it('画师：识别被用户暂停、还有没识别的图时不接手显卡', async () => {
+    const { pipeline, enqueued } = setup({ tagPending: 10, artists: { enabled: true, pending: 500 } });
+    await pipeline.runner('tag')(ctx(true)); // 取消识别
+    await pipeline.runner('scan')(ctx());
+    expect(enqueued).toEqual([]);
+  });
+
+  it('画师：模型没下载时不自动续补', async () => {
+    const { pipeline, enqueued } = setup({ tagPending: 0, artists: { enabled: true, pending: 500, ready: false } });
+    await pipeline.runner('scan')(ctx());
+    expect(enqueued).toEqual([]);
   });
 });

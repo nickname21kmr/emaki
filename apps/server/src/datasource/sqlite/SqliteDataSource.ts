@@ -71,7 +71,9 @@ import { backfillSources } from '../../services/source/backfill.ts';
 import { backfillClassification } from '../../services/classify/backfill.ts';
 import { CollectionService, type CollectionsHook } from '../../services/collections/CollectionService.ts';
 import { shutdownTagger } from '../../services/tagger/client.ts';
-import { artistPendingCount, createArtistJobRunner } from '../../services/tagger/artists.ts';
+import { ARTIST_MODEL, artistPendingCount, createArtistJobRunner } from '../../services/tagger/artists.ts';
+import { isModelReady } from '../../services/tagger/download.ts';
+import { findModel } from '../../services/tagger/models.ts';
 import { createTagStage } from '../../services/tagger/tagJob.ts';
 import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../../services/catalog/copyrights.ts';
@@ -203,6 +205,8 @@ export class SqliteDataSource implements DataSource {
     ds.pipeline.register({
       artists: {
         enabled: () => readSettings(db).tagger.artists,
+        // 模型没下载（主模型用 WD 的人）时不自动续补，免得静默下载 1 GB、离线时反复失败；手动打开 / 点补跑才下
+        isReady: () => isModelReady(findModel(ARTIST_MODEL)!, config.modelsDir),
         pendingCount: () => artistPendingCount(db),
         run: createArtistJobRunner({
           db,
@@ -816,6 +820,10 @@ export class SqliteDataSource implements DataSource {
       this.pipeline.noteManualStart('artists');
       this.ctx.jobs.enqueue('artists');
     }
+    // 关掉：正在跑和排队中的补跑一起停（关了开关，设置页的进度和取消按钮也没了）
+    if (body.tagger?.artists === false && beforeArtists) {
+      for (const j of this.ctx.jobs.list()) if (j.kind === 'artists' && (j.status === 'queued' || j.status === 'running')) this.ctx.jobs.cancel(j.id);
+    }
     for (const fn of this.settingsListeners) fn(settings);
     this.ctx.touch();
     return settings;
@@ -940,6 +948,9 @@ export class SqliteDataSource implements DataSource {
     return this.ctx.jobs.enqueue(kind);
   }
   async cancelJob(id: ID): Promise<void> {
+    // 排队中的任务被取消时 runner 不会执行，pipeline 收不到「被取消」：这里先记下暂停，免得识别一结束又排上
+    const job = this.ctx.jobs.list().find((j) => j.id === id);
+    if (job && (job.status === 'queued' || job.status === 'running')) this.pipeline.notePaused(job.kind);
     this.ctx.jobs.cancel(id);
   }
 

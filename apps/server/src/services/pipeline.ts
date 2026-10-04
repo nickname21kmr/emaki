@@ -24,6 +24,8 @@ export interface DanbooruStage {
 /** 画师（默认关，设置里打开） */
 export interface ArtistStage {
   enabled(): boolean;
+  /** 模型文件在不在：不在时不自动续补 */
+  isReady(): boolean;
   pendingCount(): number;
   run: JobRunner;
 }
@@ -96,7 +98,7 @@ export class Pipeline {
             if (this.dedupeDirty) this.d.jobs().enqueue('dedupe');
             // 开着画师的：接着补（新图、WD 识别的旧图、重启前没补完的）；用户取消过就等他手动再点
             const a = this.d.artists;
-            if (a?.enabled() && !this.artistsPaused && a.pendingCount() > 0) this.d.jobs().enqueue('artists');
+            if (this.canAutoArtists()) this.d.jobs().enqueue('artists');
           }
           return msg;
         }
@@ -161,11 +163,20 @@ export class Pipeline {
 
   private maybeTag() {
     const t = this.d.tag;
-    if (t?.isReady() && !this.tagPaused && t.pendingCount() > 0) this.d.jobs().enqueue('tag');
-    // 没有要识别的（比如重启后）：画师补跑没完就接着补。有识别时等识别完再接（同在显卡道里，优先级也低）
-    else {
-      const a = this.d.artists;
-      if (a?.enabled() && !this.artistsPaused && a.pendingCount() > 0) this.d.jobs().enqueue('artists');
-    }
+    const tagNeeded = !!t?.isReady() && t.pendingCount() > 0;
+    if (tagNeeded && !this.tagPaused) this.d.jobs().enqueue('tag');
+    // 识别确实不用跑（比如重启后）才接着补画师；识别被用户暂停时也不接，免得新图先被 PixAI 跑一遍画师、恢复识别后再跑一遍
+    else if (!tagNeeded && this.canAutoArtists()) this.d.jobs().enqueue('artists');
+  }
+
+  private canAutoArtists(): boolean {
+    const a = this.d.artists;
+    return !!a && a.enabled() && a.isReady() && !this.artistsPaused && a.pendingCount() > 0;
+  }
+
+  /** 用户取消了排队中的任务（runner 不会执行，收不到 aborted）：同样记暂停 */
+  notePaused(kind: JobKind): void {
+    if (kind === 'tag') this.tagPaused = true;
+    if (kind === 'artists') this.artistsPaused = true;
   }
 }
