@@ -1,5 +1,5 @@
 import type { BulkImageAction, ID, ImageItem } from '@emaki/shared';
-import { Ban, ChevronDown, FolderInput, Heart, Shapes, ShieldHalf, Trash2, UserRoundPlus, X } from 'lucide-react';
+import { Ban, ChevronDown, CircleMinus, FolderInput, Heart, Palette, Shapes, ShieldHalf, Trash2, UserRoundPlus, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   forwardRef,
@@ -19,6 +19,7 @@ import { useMutate, useTrashHint } from '@/lib/queries';
 import { useLightbox, useSelection } from '@/lib/stores';
 import { KindMenu } from '@/components/media/KindMenu';
 import { MoveImagesDialog } from '@/components/media/MoveImagesDialog';
+import { ArtistPicker } from '../ArtistPicker';
 import { CharacterPicker } from '../CharacterPicker';
 import { RATINGS } from '../useGalleryParams';
 import { EASE_OUT } from '@/lib/motion';
@@ -26,7 +27,7 @@ import { EASE_OUT } from '@/lib/motion';
 const EMPTY: ReadonlySet<ID> = new Set();
 
 /** 这些操作之后图片会离开当前视图（或已经整理完），顺手清空选择 */
-const CLEARS_SELECTION: BulkImageAction['type'][] = ['assign', 'exclude', 'trash', 'kind'];
+const CLEARS_SELECTION: BulkImageAction['type'][] = ['assign', 'exclude', 'trash', 'kind', 'artist', 'artist-auto'];
 
 /** sonner 默认 4 秒，多留一点余量等它退场 */
 const TOAST_MS = 4400;
@@ -36,14 +37,25 @@ const TOAST_MS = 4400;
  * 用 sticky 贴在滚动区底部（而不是 fixed 贴窗口），这样它永远居中在「纸」上，不受侧边栏宽度影响。
  *
  * 快捷键：Esc 取消选择 · Ctrl+A 全选已加载 · E 排除 · F 收藏 · C 归入…（改类型，再按 1–7）
+ * 按画师看时（artist）多一个「移出画师」：认错了的图从这位画师里拿掉。
  */
-export function SelectionBar({ images, scope }: { images: ImageItem[]; scope: string }) {
+export function SelectionBar({
+  images,
+  scope,
+  artist,
+}: {
+  images: ImageItem[];
+  scope: string;
+  artist?: { tag: string; name: string; tags: string[] };
+}) {
   const ids = useSelection((s) => (s.scope === scope ? s.ids : EMPTY));
   const trashHint = useTrashHint();
   const setMany = useSelection((s) => s.setMany);
   const clear = useSelection((s) => s.clear);
   const lightboxOpen = useLightbox((s) => s.open);
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const [charOpen, setCharOpen] = useState(false);
+  const [artistOpen, setArtistOpen] = useState(false);
+  const pickerOpen = charOpen || artistOpen;
   const [kindOpen, setKindOpen] = useState(false);
   const [moving, setMoving] = useState(false);
 
@@ -152,14 +164,40 @@ export function SelectionBar({ images, scope }: { images: ImageItem[]; scope: st
               align="center"
               title="归到角色"
               meta={`${formatCount(count)} 张`}
-              open={pickerOpen}
-              onOpenChange={setPickerOpen}
+              open={charOpen}
+              onOpenChange={setCharOpen}
               onPick={(c) => run({ type: 'assign', characterId: c.id })}
             >
               <BarButton icon={<UserRoundPlus />} pending={pendingType === 'assign'} aria-haspopup="dialog">
                 归到角色…
               </BarButton>
             </CharacterPicker>
+
+            <ArtistPicker
+              side="top"
+              align="center"
+              title="改画师"
+              meta={`${formatCount(count)} 张`}
+              open={artistOpen}
+              onOpenChange={setArtistOpen}
+              onPick={(tag) => run({ type: 'artist', mode: 'set', artists: [tag] })}
+              actions={[
+                { key: 'none', label: '没有画师 / 不知道是谁', hint: '去掉认出的画师，以后也不再自动认', onSelect: () => run({ type: 'artist', mode: 'set', artists: [] }) },
+                { key: 'auto', label: '改回自动识别', hint: '清掉手动改的，交给「识别画师」重新认', onSelect: () => run({ type: 'artist-auto' }) },
+              ]}
+            >
+              <BarButton icon={<Palette />} pending={pendingType === 'artist' || pendingType === 'artist-auto'} aria-haspopup="dialog">
+                画师…
+              </BarButton>
+            </ArtistPicker>
+
+            {artist && (
+              <Tooltip content={`这几张不是「${artist.name}」画的：去掉这位画师，以后识别也不再动它们`} side="top">
+                <BarButton icon={<CircleMinus />} onClick={() => run({ type: 'artist', mode: 'remove', artists: artist.tags })}>
+                  移出画师
+                </BarButton>
+              </Tooltip>
+            )}
 
             <Tooltip content={allFavorite ? '取消收藏' : '收藏'} shortcut="F" side="top">
               <BarButton

@@ -1,5 +1,5 @@
 /**
- * 批量操作（T18）。assign / unassign / exclude / restore / favorite / rating / kind 可撤销；
+ * 批量操作（T18）。assign / unassign / exclude / restore / favorite / rating / kind / artist 可撤销；
  * trash 把文件移到系统回收站（绝不永久删除，逐个核实），不可撤销——用户可以从回收站还原，扫描后原 id 回来。
  */
 import type { BulkImagesBody, MutationResult, Rating } from '@emaki/shared';
@@ -8,6 +8,8 @@ import { toAbs } from '../../services/fs/paths.ts';
 import { assertRecyclable } from '../../services/trash/driveType.ts';
 import { moveToRecycleBin } from '../../services/trash/recycleBin.ts';
 import type { SqliteContext } from './context.ts';
+import { artistAutoMessage, artistEditMessage, normArtists } from '../artistEdits.ts';
+import { artistGroupMap, artistNames } from './artists.ts';
 import { createExclusionInTx } from './exclusions.ts';
 import { assertKindValue, setKindInTx, type KindDeps } from './kinds.ts';
 import type { CollectionsHook } from '../../services/collections/CollectionService.ts';
@@ -144,6 +146,42 @@ export class BulkOps {
       }
       case 'trash':
         return this.trash(ids, now);
+      case 'artist': {
+        // 手动改画师：改过的图记 artist_manual，之后识别、补跑都不再动它（writeArtists）
+        const tags = normArtists(a.mode, a.artists);
+        const names = artistNames(db, tags);
+        const tj = JSON.stringify(tags);
+        return this.ctx.mutate((u) => {
+          u.set('image_artists', 'image_id IN (SELECT value FROM json_each(?))', [json]);
+          u.columns('images', ['artist_manual', 'artist_checked_at'], ids);
+          if (a.mode === 'set') db.prepare('DELETE FROM image_artists WHERE image_id IN (SELECT value FROM json_each(?))').run(json);
+          if (a.mode === 'remove') {
+            // 同一个人的旧名、社团名等标签一起去掉（和按画师筛图的 tagsOfArtist 是同一组）
+            const groups = artistGroupMap(db);
+            const reps = new Set(tags.map((t) => groups.get(t) ?? t));
+            const all = [...new Set([...tags, ...[...groups].filter(([, g]) => reps.has(g)).map(([t]) => t)])];
+            db.prepare('DELETE FROM image_artists WHERE image_id IN (SELECT value FROM json_each(?)) AND artist IN (SELECT value FROM json_each(?))').run(json, JSON.stringify(all));
+          } else {
+            db.prepare('INSERT OR IGNORE INTO image_artists (image_id, artist, score) SELECT i.value, t.value, 1 FROM json_each(?) i, json_each(?) t').run(json, tj);
+          }
+          db.prepare('UPDATE images SET artist_manual = 1, artist_checked_at = COALESCE(artist_checked_at, ?) WHERE id IN (SELECT value FROM json_each(?))').run(now, json);
+          return { message: artistEditMessage(a.mode, n, names) };
+        });
+      }
+      case 'artist-auto': {
+        // 改回自动：只动手动改过的图，清掉手动改的、artist_checked_at 置空，「识别画师」会重新认；没改过的图不动
+        const manual = db.prepare('SELECT id FROM images WHERE artist_manual = 1 AND id IN (SELECT value FROM json_each(?))').pluck().all(json) as number[];
+        const mj = JSON.stringify(manual);
+        return this.ctx.mutate((u) => {
+          if (manual.length) {
+            u.set('image_artists', 'image_id IN (SELECT value FROM json_each(?))', [mj]);
+            u.columns('images', ['artist_manual', 'artist_checked_at'], manual);
+            db.prepare('DELETE FROM image_artists WHERE image_id IN (SELECT value FROM json_each(?))').run(mj);
+            db.prepare('UPDATE images SET artist_manual = 0, artist_checked_at = NULL WHERE id IN (SELECT value FROM json_each(?))').run(mj);
+          }
+          return { message: artistAutoMessage(n, manual.length) };
+        });
+      }
     }
   }
 

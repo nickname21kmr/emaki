@@ -137,6 +137,8 @@ export function seedFromMockDb(db: Db, mock: MockDb, opts: { now: number }): IdM
     const insIt = db.prepare('INSERT OR IGNORE INTO image_tags (image_id, tag_id, score) VALUES (?, ?, ?)');
     const insSug = db.prepare('INSERT OR IGNORE INTO character_suggestions (image_id, danbooru_tag, score) VALUES (?, ?, ?)');
     const setTheme = db.prepare('UPDATE images SET theme = ?, art_score = ? WHERE id = ?');
+    const insArtist = db.prepare('INSERT OR IGNORE INTO image_artists (image_id, artist, score) VALUES (?, ?, ?)');
+    const setArtist = db.prepare('UPDATE images SET artist_checked_at = ?, artist_manual = ? WHERE id = ?');
     for (const img of mock.images.values()) {
       const iid = map.images.get(img.id)!;
       const viaChars = new Set<string>();
@@ -151,6 +153,8 @@ export function seedFromMockDb(db: Db, mock: MockDb, opts: { now: number }): IdM
         insIt.run(iid, tagId.get(t.tag), t.score);
       }
       for (const [tag, score] of img.suggestions) insSug.run(iid, tag, score);
+      for (const a of img.artists ?? []) insArtist.run(iid, a.tag, a.score);
+      if (img.artists || img.artistsManual) setArtist.run(img.addedAt, img.artistsManual ? 1 : 0, iid);
       // 主题和质量分：与 mock 现算一致（T27 补充第 8 条）
       if (img.tagged) {
         const general = img.tags.filter((t) => t.category === 'general').map((t) => [t.tag, t.score] as [string, number]);

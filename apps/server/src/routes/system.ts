@@ -17,6 +17,8 @@ import { isModelReady } from '../services/tagger/download.ts';
 import { DEFAULT_TAGGER_MODEL, findModel, MODEL_NOTES, modelDownloadSize, TAGGER_MODELS } from '../services/tagger/models.ts';
 import { pickFolder } from '../system/pickFolder.ts';
 
+const themeTags = z.array(z.string().trim().min(1).max(100)).max(CUSTOM_THEME_LIMITS.tags);
+
 /** 设置、图库文件夹、后台任务、SSE、撤销 */
 export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus): void {
   // ---------------------------------------------------------- 设置
@@ -79,11 +81,16 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
           .object({
             customThemes: z
               .array(
-                z.object({
-                  id: z.string().min(1).max(64),
-                  name: z.string().trim().min(1).max(CUSTOM_THEME_LIMITS.name),
-                  tags: z.array(z.string().trim().min(1).max(100)).min(1).max(CUSTOM_THEME_LIMITS.tags),
-                }),
+                z
+                  .object({
+                    id: z.string().min(1).max(64),
+                    name: z.string().trim().min(1).max(CUSTOM_THEME_LIMITS.name),
+                    tags: themeTags,
+                    all: themeTags.optional(),
+                    none: themeTags.optional(),
+                  })
+                  .refine((t) => t.tags.length + (t.all?.length ?? 0) > 0, '至少要有一个「必含」或「任一」标签')
+                  .refine((t) => t.tags.length + (t.all?.length ?? 0) + (t.none?.length ?? 0) <= CUSTOM_THEME_LIMITS.tags, '标签太多'),
               )
               .max(CUSTOM_THEME_LIMITS.themes),
           })

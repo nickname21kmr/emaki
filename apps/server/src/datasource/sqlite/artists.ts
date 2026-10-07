@@ -2,7 +2,7 @@
  * 画师列表：识别结果（image_artists）按「同一个人」合并（artistGroups），名字用 Danbooru 资料里挑的显示名。
  * 没同步过 Danbooru 的画师照样列出，显示标签。
  */
-import type { Artist, ID, Rating } from '@emaki/shared';
+import type { Artist, ID, ImageArtist, Rating } from '@emaki/shared';
 import type { Db } from '../../db/connection.ts';
 import { artistGroups, type ArtistMeta } from '../../services/danbooru/artistNames.ts';
 import { toId } from './sql.ts';
@@ -34,6 +34,30 @@ export function tagsOfArtist(db: Db, artist: string): string[] {
 }
 
 const pretty = (tag: string) => tag.replace(/_/g, ' ');
+
+/** 一张图的画师：同一个人的几个标签合成一条，名字和画师列表里一致 */
+export function imageArtists(db: Db, imageId: number): ImageArtist[] {
+  const tags = db.prepare('SELECT artist FROM image_artists WHERE image_id = ? ORDER BY score DESC, artist').pluck().all(imageId) as string[];
+  if (!tags.length) return [];
+  const meta = loadMeta(db);
+  const groups = artistGroupMap(db);
+  const out = new Map<string, ImageArtist>();
+  for (const t of tags) {
+    const g = groups.get(t) ?? t;
+    const e = out.get(g);
+    if (e) e.tags.push(t);
+    else out.set(g, { tag: g, name: meta.get(g)?.display ?? pretty(g), tags: [t] });
+  }
+  return [...out.values()];
+}
+
+/** 改画师时提示里用的名字：按人去重（同一个人的几个标签只说一次） */
+export function artistNames(db: Db, tags: string[]): string[] {
+  const meta = loadMeta(db);
+  const present = db.prepare('SELECT DISTINCT artist FROM image_artists').pluck().all() as string[];
+  const groups = artistGroups([...new Set([...present, ...tags])], meta);
+  return [...new Set(tags.map((t) => groups.get(t) ?? t))].map((g) => meta.get(g)?.display ?? pretty(g));
+}
 
 export function listArtists(db: Db): Artist[] {
   const meta = loadMeta(db);

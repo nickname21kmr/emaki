@@ -87,6 +87,64 @@ describe('画师', () => {
     expect(artistPendingCount(ds.ctx.db)).toBe(0);
   });
 
+  it('手动改过的图：补跑、重新识别都不动它的画师；改回自动后重新待补', async () => {
+    const of = (id: number) => ds.ctx.db.prepare('SELECT artist FROM image_artists WHERE image_id = ? ORDER BY artist').pluck().all(id);
+    ds.ctx.db.transaction(() => writeArtists(ds.ctx.db, 1, [['kantoku', 0.9]], 'x'))();
+    // 1 认错了，改成 mignon；2 标成没有画师
+    await ds.bulkImages({ ids: ['1'], action: { type: 'artist', mode: 'set', artists: ['mignon'] } });
+    await ds.bulkImages({ ids: ['2'], action: { type: 'artist', mode: 'set', artists: [] } });
+    expect(artistPendingCount(ds.ctx.db)).toBe(2);
+    expect(await ds.getImage('1')).toMatchObject({ artists: [{ tag: 'mignon', name: 'mignon', tags: ['mignon'] }], artistsManual: true });
+
+    ds.ctx.db.transaction(() => {
+      for (const id of [1, 2, 3]) writeArtists(ds.ctx.db, id, [['kantoku', 0.9]], 'y');
+    })();
+    expect([of(1), of(2), of(3)]).toEqual([['mignon'], [], ['kantoku']]);
+    expect(artistPendingCount(ds.ctx.db)).toBe(1);
+
+    const r = await ds.bulkImages({ ids: ['1'], action: { type: 'artist-auto' } });
+    expect(r.message).toBe('已把 1 张图的画师改回自动识别');
+    expect(of(1)).toEqual([]);
+    expect(artistPendingCount(ds.ctx.db)).toBe(2);
+    ds.ctx.db.transaction(() => writeArtists(ds.ctx.db, 1, [['kantoku', 0.9]], 'z'))();
+    expect(of(1)).toEqual(['kantoku']);
+    // 撤销「改回自动」：手动改的回来
+    await ds.undo(r.undoToken!);
+    expect(of(1)).toEqual(['mignon']);
+    expect((await ds.getImage('1'))!.artistsManual).toBe(true);
+    // 没手动改过的图（3）改回自动：认出的画师不动
+    const r3 = await ds.bulkImages({ ids: ['1', '3'], action: { type: 'artist-auto' } });
+    expect(r3.message).toBe('已把 1 张图的画师改回自动识别（另外 1 张本来就是自动识别的）');
+    expect([of(1), of(3)]).toEqual([[], ['kantoku']]);
+  });
+
+  it('去掉画师：同一个人的旧名、社团名标签一起去掉', async () => {
+    ds.ctx.db.transaction(() => {
+      writeArtists(ds.ctx.db, 1, [['afterschool_of_the_5th_year', 0.7]], 'x');
+      writeArtists(ds.ctx.db, 2, [['kantoku', 0.9]], 'x');
+      ds.ctx.db
+        .prepare("INSERT INTO danbooru_artists (name, display, names, twitter, fetched_at) VALUES ('kantoku', 'カントク', '[\"afterschool_of_the_5th_year\"]', NULL, 'x')")
+        .run();
+    })();
+    const r = await ds.bulkImages({ ids: ['1', '2'], action: { type: 'artist', mode: 'remove', artists: ['kantoku'] } });
+    expect(r.message).toBe('已从 2 张图去掉画师「カントク」');
+    expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM image_artists').pluck().get()).toBe(0);
+    expect((await ds.listImages({ artist: 'kantoku' })).total).toBe(0);
+  });
+
+  it('手动加的画师并到 Danbooru 上的同一个人（日文名）；提示用显示名', async () => {
+    ds.ctx.db.transaction(() => {
+      writeArtists(ds.ctx.db, 1, [['kantoku', 0.9]], 'x');
+      ds.ctx.db
+        .prepare("INSERT INTO danbooru_artists (name, display, names, twitter, fetched_at) VALUES ('kantoku', 'カントク', '[\"カントク\",\"5年目の放課後\"]', NULL, 'x')")
+        .run();
+    })();
+    const r = await ds.bulkImages({ ids: ['2'], action: { type: 'artist', mode: 'add', artists: ['カントク'] } });
+    expect(r.message).toBe('已给 1 张图加上画师「カントク」');
+    expect((await ds.getImage('2'))!.artists).toEqual([{ tag: 'kantoku', name: 'カントク', tags: ['カントク'] }]);
+    expect((await ds.listImages({ artist: 'kantoku' })).items.map((i) => i.id).sort()).toEqual(['1', '2']);
+  });
+
   it('补跑任务：只写画师，读不到的也标跑过', async () => {
     const calls: HostThresholds[] = [];
     const fake: TaggerLike = {

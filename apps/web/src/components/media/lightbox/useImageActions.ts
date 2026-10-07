@@ -1,4 +1,4 @@
-import type { ContentKind, ID, Rating } from '@emaki/shared';
+import type { BulkImageAction, ContentKind, ID, Rating } from '@emaki/shared';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { errorMessage, useMutate } from '@/lib/queries';
@@ -34,6 +34,7 @@ export function useImageActions(current: CurrentImage | undefined) {
   const accept = useMutate((v: { id: ID; danbooruTag: string }) =>
     api.acceptSuggestion(v.id, { danbooruTag: v.danbooruTag }),
   );
+  const artist = useMutate((v: { id: ID; action: BulkImageAction }) => api.bulkImages({ ids: [v.id], action: v.action }));
   const exclude = useMutate((id: ID) => api.bulkImages({ ids: [id], action: { type: 'exclude' } }), {
     onSuccess: (_, id) => dropFromLightbox(id),
   });
@@ -64,6 +65,7 @@ export function useImageActions(current: CurrentImage | undefined) {
       exclude: exclude.isPending,
       trash: trash.isPending,
       accept: accept.isPending ? accept.variables?.danbooruTag : undefined,
+      artist: artist.isPending,
     },
     toggleFavorite: () => {
       if (current && !favorite.isPending) favorite.mutate({ id: current.id, value: !favoriteValue });
@@ -85,6 +87,21 @@ export function useImageActions(current: CurrentImage | undefined) {
     },
     removeCharacter: (characterId: ID) => {
       if (current) characters.mutate({ id: current.id, characterIds: characterIds.filter((c) => c !== characterId) });
+    },
+    /** 手动改画师（可撤销）：改过的图之后识别不再动它 */
+    addArtist: (tag: string) => {
+      if (current && !artist.isPending) artist.mutate({ id: current.id, action: { type: 'artist', mode: 'add', artists: [tag] } });
+    },
+    /** tags：这位画师在这张图上的全部标签 */
+    removeArtist: (tags: string[]) => {
+      if (current && !artist.isPending) artist.mutate({ id: current.id, action: { type: 'artist', mode: 'remove', artists: tags } });
+    },
+    /** 标成没有画师（识别认出的不对，又不知道是谁） */
+    clearArtists: () => {
+      if (current && !artist.isPending) artist.mutate({ id: current.id, action: { type: 'artist', mode: 'set', artists: [] } });
+    },
+    artistsAuto: () => {
+      if (current && !artist.isPending) artist.mutate({ id: current.id, action: { type: 'artist-auto' } });
     },
     acceptSuggestion: (danbooruTag: string) => {
       if (current && !accept.isPending) accept.mutate({ id: current.id, danbooruTag });

@@ -73,10 +73,13 @@ import { artScore, classifyTheme, matchesBrowseTheme, resolveTheme } from '../..
 import { describeKindReason } from '../sqlite/hydrate.ts';
 import { coverQuality, isUnfitCover } from '../../services/covers/quality.ts';
 import { assertKindValue, KIND_LABEL } from '../sqlite/kinds.ts';
+import { artistAutoMessage, artistEditMessage, normArtists } from '../artistEdits.ts';
 import { normalizeSubdir } from '../sqlite/move.ts';
 
 const kindOf = (img: ImageRow): ContentKind => img.kind ?? 'illustration';
 const isArt = (img: ImageRow) => kindOf(img) === 'illustration' || kindOf(img) === 'comic';
+/** 画师标签的显示名（和 sqlite 没有 Danbooru 资料时一样） */
+const prettyTag = (tag: string) => tag.replace(/_/g, ' ');
 
 const DAY = 86_400_000;
 const RECENT_DAYS = 30;
@@ -559,9 +562,34 @@ export class MockDataSource implements DataSource {
 
   // ------------------------------------------------------------ 合集（T38c）
 
-  /** 演示数据没有画师识别结果 */
+  /** 画师：mock 没有 Danbooru 资料，每个标签自成一位，名字 = 标签 */
   async listArtists(): Promise<Artist[]> {
-    return [];
+    const by = new Map<string, { n: number; best: ImageRow; score: number }>();
+    // 封面：全年龄优先，再按分数
+    const better = (img: ImageRow, score: number, e: { best: ImageRow; score: number }) =>
+      (img.rating === 'general') !== (e.best.rating === 'general') ? img.rating === 'general' : score > e.score;
+    for (const img of this.idx.visible) {
+      if (this.status(img) === 'excluded' || kindOf(img) !== 'illustration') continue;
+      for (const a of img.artists ?? []) {
+        const e = by.get(a.tag);
+        if (!e) by.set(a.tag, { n: 1, best: img, score: a.score });
+        else {
+          e.n++;
+          if (better(img, a.score, e)) Object.assign(e, { best: img, score: a.score });
+        }
+      }
+    }
+    return [...by]
+      .map(([tag, e]): Artist => ({
+        tag,
+        name: prettyTag(tag),
+        tags: [tag],
+        aliases: [],
+        twitter: null,
+        imageCount: e.n,
+        cover: { id: e.best.id, dominantColor: mockDominantColor(e.best.hue, e.best.id), rating: e.best.rating, width: e.best.width, height: e.best.height },
+      }))
+      .sort((a, b) => b.imageCount - a.imageCount || a.tag.localeCompare(b.tag));
   }
 
   async listCollections(query: ListCollectionsQuery): Promise<CollectionSummary[]> {
@@ -778,13 +806,19 @@ export class MockDataSource implements DataSource {
       if (query.rating?.length && !query.rating.includes(img.rating)) return false;
       if (query.favorite !== undefined && img.favorite !== query.favorite) return false;
       if (query.original !== undefined && !!img.originalAt !== query.original) return false;
+      if (query.artist && !img.artists?.some((a) => a.tag === query.artist)) return false;
       if (Array.isArray(query.kind) && query.kind.length && !query.kind.includes(kindOf(img))) return false;
       if (query.rated && !img.tagged) return false;
       if (query.collectionId === 'none' && img.collectionId) return false;
       if (query.collectionId !== undefined && query.collectionId !== 'none' && img.collectionId !== query.collectionId) return false;
       if (query.theme && !(img.tagged && matchesBrowseTheme(query.theme, img.tags.filter((t) => t.category === 'general')))) return false;
-      if (query.tags?.length && !(img.tagged && img.tags.some((t) => t.category === 'general' && t.score >= TAG_FILTER_MIN_SCORE && query.tags!.includes(t.tag))))
-        return false;
+      if (query.tags?.length || query.tagsAll?.length || query.tagsNone?.length) {
+        if (!img.tagged) return false;
+        const has = new Set(img.tags.filter((t) => t.category === 'general' && t.score >= TAG_FILTER_MIN_SCORE).map((t) => t.tag));
+        if (query.tags?.length && !query.tags.some((t) => has.has(t))) return false;
+        if (query.tagsAll?.some((t) => !has.has(t))) return false;
+        if (query.tagsNone?.some((t) => has.has(t))) return false;
+      }
       if (query.orientation) {
         const ratio = img.width / img.height;
         const o = ratio > 1.05 ? 'landscape' : ratio < 0.95 ? 'portrait' : 'square';
@@ -831,6 +865,10 @@ export class MockDataSource implements DataSource {
       kindSource: row.kindManual ? 'manual' : (row.kindSource ?? 'default'),
       kindReason: row.kindManual ? null : describeKindReason(row.kindSource ?? 'default', row.kindEvidence ?? null),
       collection: this.collections.ofImage(row),
+      artists: [...(row.artists ?? [])]
+        .sort((a, b) => b.score - a.score || (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0))
+        .map((a) => ({ tag: a.tag, name: prettyTag(a.tag), tags: [a.tag] })),
+      artistsManual: !!row.artistsManual,
     };
   }
 
@@ -970,6 +1008,8 @@ export class MockDataSource implements DataSource {
       shelvedAt: r.shelvedAt,
       originalAt: r.originalAt,
       copyrightWorkIds: [...r.copyrightWorkIds],
+      artists: r.artists,
+      artistsManual: r.artistsManual,
     }));
     const exclusionsBefore = [...this.db.exclusions];
     const n = rows.length;
@@ -1048,6 +1088,27 @@ export class MockDataSource implements DataSource {
         for (const r of rows) r.trashed = true;
         message = `已把 ${n} 张图移到回收站`;
         break;
+      case 'artist': {
+        const tags = normArtists(action.mode, action.artists);
+        for (const r of rows) {
+          const cur = action.mode === 'set' ? [] : (r.artists ?? []).filter((a) => action.mode !== 'remove' || !tags.includes(a.tag));
+          const add = action.mode === 'remove' ? [] : tags.filter((t) => !cur.some((a) => a.tag === t)).map((tag) => ({ tag, score: 1 }));
+          r.artists = [...cur, ...add];
+          r.artistsManual = true;
+        }
+        message = artistEditMessage(action.mode, n, tags.map(prettyTag));
+        break;
+      }
+      case 'artist-auto': {
+        // 只动手动改过的图
+        const manual = rows.filter((r) => r.artistsManual);
+        for (const r of manual) {
+          r.artists = [];
+          r.artistsManual = false;
+        }
+        message = artistAutoMessage(n, manual.length);
+        break;
+      }
     }
 
     return this.withUndo(message, () => {
@@ -1064,6 +1125,8 @@ export class MockDataSource implements DataSource {
         s.row.shelvedAt = s.shelvedAt;
         s.row.originalAt = s.originalAt;
         s.row.copyrightWorkIds = s.copyrightWorkIds;
+        s.row.artists = s.artists;
+        s.row.artistsManual = s.artistsManual;
       }
       this.db.exclusions = exclusionsBefore;
     });

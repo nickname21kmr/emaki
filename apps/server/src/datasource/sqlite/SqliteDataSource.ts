@@ -104,7 +104,7 @@ import { applyExclusionRules, ExclusionQueries } from './exclusions.ts';
 import { LibraryQueries } from './library.ts';
 import { TagResultWriter } from '../../services/tagger/writer.ts';
 import { moveBack, moveImageFiles, normalizeSubdir, type MoveRow } from './move.ts';
-import { listArtists as listArtistsQuery } from './artists.ts';
+import { imageArtists, listArtists as listArtistsQuery } from './artists.ts';
 import { mergeChildRoots, type ChildRoot } from './roots.ts';
 import { applySettingsPatch, getDanbooruApiKey, isInside, normalizeRootPath, patchSettingsInternal, readSettings, samePath } from './settings.ts';
 import { iso, MIME, parseId, toId, VISIBLE } from './sql.ts';
@@ -517,6 +517,8 @@ export class SqliteDataSource implements DataSource {
       kindSource: row.content_kind_manual ? 'manual' : row.content_kind_source,
       kindReason: row.content_kind_manual ? null : describeKindReason(row.content_kind_source, row.content_kind_evidence),
       collection: this.imageCollection(n),
+      artists: imageArtists(this.ctx.db, n),
+      artistsManual: !!this.ctx.stmt('SELECT artist_manual FROM images WHERE id = ?').pluck().get(n),
     };
   }
 
@@ -630,7 +632,10 @@ export class SqliteDataSource implements DataSource {
 
   // T18 批量操作 / 回收站
   async bulkImages(body: BulkImagesBody): Promise<MutationResult> {
-    return this.bulk.run(body);
+    const r = await this.bulk.run(body);
+    // 画师改回自动：能自动续补时马上重新认这几张（用户暂停过补跑就不拉起来）
+    if (body.action.type === 'artist-auto') this.pipeline.requestArtists();
+    return r;
   }
 
   async moveImages(body: MoveImagesBody): Promise<MutationResult> {

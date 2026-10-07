@@ -215,6 +215,7 @@ describe('图片、未识别、重复、排除（routes/images.ts）', () => {
     expect(json).toMatchObject(page);
     expect(json.items).toHaveLength(5);
     expect((await call('GET', '/api/images?tags=thighhighs,glasses')).json.total).toBe(1);
+    expect((await call('GET', '/api/images?tagsAll=1girl,thighhighs&tagsNone=glasses')).json.total).toBe(1);
     expect(json.items[0]).toMatchObject({ id: expect.any(String), relPath: expect.any(String), width: expect.any(Number) });
     expect((await call('GET', '/api/images?kind=bogus')).status).toBe(400);
     expect((await call('GET', '/api/images?limit=500')).status).toBe(400);
@@ -224,6 +225,11 @@ describe('图片、未识别、重复、排除（routes/images.ts）', () => {
     const { status, json } = await call('POST', '/api/images/bulk', { ids: ['i1', 'i2'], action: { type: 'rating', value: 'sensitive' } });
     expect([status, json]).toEqual([200, withUndo]);
     expect((await call('POST', '/api/images/bulk', { ids: ['i1'], action: { type: 'explode' } })).status).toBe(400);
+    const artist = await call('POST', '/api/images/bulk', { ids: ['i1'], action: { type: 'artist', mode: 'set', artists: ['kantoku'] } });
+    expect([artist.status, artist.json]).toEqual([200, withUndo]);
+    expect((await call('GET', '/api/images/i1')).json).toMatchObject({ artists: [{ tag: 'kantoku', name: 'kantoku', tags: ['kantoku'] }], artistsManual: true });
+    expect((await call('POST', '/api/images/bulk', { ids: ['i1'], action: { type: 'artist', mode: 'bogus', artists: [] } })).status).toBe(400);
+    expect((await call('POST', '/api/images/bulk', { ids: ['i1'], action: { type: 'artist-auto' } })).status).toBe(200);
   });
 
   route('POST /api/images/move', async () => {
@@ -384,6 +390,12 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     expect((await call('PUT', '/api/settings', { browse: { customThemes: [theme] } })).json.browse).toEqual({ customThemes: [theme] });
     expect((await call('PUT', '/api/settings', { browse: { customThemes: [{ ...theme, tags: [] }] } })).status).toBe(400);
     expect((await call('PUT', '/api/settings', { browse: { customThemes: [{ ...theme, name: '一二三四五六七八九十一二三' }] } })).status).toBe(400);
+    // 必含 / 不含：只有「不含」不行；三组合计不超过 20
+    const strict = { id: 't2', name: '白丝', tags: [], all: ['thighhighs', 'white_thighhighs'], none: ['comic'] };
+    expect((await call('PUT', '/api/settings', { browse: { customThemes: [strict] } })).json.browse).toEqual({ customThemes: [strict] });
+    expect((await call('PUT', '/api/settings', { browse: { customThemes: [{ ...strict, all: [] }] } })).status).toBe(400);
+    const many = Array.from({ length: 11 }, (_, k) => `t${k}`);
+    expect((await call('PUT', '/api/settings', { browse: { customThemes: [{ ...theme, tags: many, none: many.map((t) => `x${t}`) }] } })).status).toBe(400);
   });
 
   route('POST /api/library-roots', async () => {

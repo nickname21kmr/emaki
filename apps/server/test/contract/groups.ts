@@ -725,6 +725,26 @@ export function imagesContract(make: ContractFactory, name: Name) {
       expect((await e.ds.listImages({ tags: ['thighhighs'], workId: e.id('work', 'w1') })).total).toBe(0);
     });
 
+    it('按标签筛选（自定义画面）：必含 / 不含；只有「不含」时只看识别过的图', async () => {
+      const e = env();
+      const total = async (q: Parameters<typeof e.ds.listImages>[0]) => (await e.ds.listImages(q)).total;
+      const tagged = await total({ tags: ['1girl'] });
+      expect(tagged).toBeGreaterThan(2);
+      expect(await total({ tagsAll: ['1girl'] })).toBe(tagged);
+      expect(ids(e, (await e.ds.listImages({ tagsAll: ['1girl', 'thighhighs'] })).items)).toEqual(['i25']);
+      expect(ids(e, (await e.ds.listImages({ tagsAll: ['thighhighs'], tags: ['1girl', 'comic'] })).items)).toEqual(['i25']);
+      expect(await total({ tagsAll: ['1girl', 'no_such_tag'] })).toBe(0);
+      expect(await total({ tags: ['1girl'], tagsNone: ['thighhighs'] })).toBe(tagged - 1);
+      expect(await total({ tags: ['1girl'], tagsNone: ['no_such_tag'] })).toBe(tagged);
+      // 只有「不含」：没识别的 i30 不算
+      const recognized = await e.ds.listImages({ tagsNone: ['no_such_tag'], limit: 200 });
+      expect(ids(e, recognized.items)).not.toContain('i30');
+      expect(recognized.total).toBeGreaterThan(2);
+      expect(await total({ tagsNone: ['thighhighs'] })).toBe(recognized.total - 1);
+      expect(ids(e, (await e.ds.listImages({ tagsNone: ['1girl'] })).items)).toEqual([]);
+      expect(await total({ tagsAll: ['thighhighs'], tagsNone: ['thighhighs'] })).toBe(0);
+    });
+
     it('getImage：标签与建议；不可见返回 null', async () => {
       const e = env();
       const img = await e.ds.getImage(e.id('image', 'i24'));
@@ -832,6 +852,17 @@ export function bulkContract(make: ContractFactory, name: Name) {
       ['rating', () => ({ type: 'rating', value: 'explicit' }), '已把 2 张图设为「限制级」', async (e, ids) => {
         for (const id of ids) expect((await e.ds.getImage(id))!.rating).toBe('explicit');
       }],
+      ['artist add', () => ({ type: 'artist', mode: 'add', artists: ['kantoku', ' Mika Pikazo '] }), '已给 2 张图加上画师「kantoku、mika pikazo」', async (e, ids) => {
+        for (const id of ids) {
+          const d = (await e.ds.getImage(id))!;
+          expect(d.artists.map((a) => [a.tag, a.name])).toEqual([['kantoku', 'kantoku'], ['mika_pikazo', 'mika pikazo']]);
+          expect(d.artistsManual).toBe(true);
+        }
+        expect(ids.length).toBe((await e.ds.listImages({ artist: 'mika_pikazo' })).total);
+      }],
+      ['artist set 空', () => ({ type: 'artist', mode: 'set', artists: [] }), '已把 2 张图标成没有画师', async (e, ids) => {
+        for (const id of ids) expect((await e.ds.getImage(id))!).toMatchObject({ artists: [], artistsManual: true });
+      }],
     ];
     for (const [title, action, message, check] of cases) {
       it(`${title}：生效、提示一致、撤销后完全还原`, async () => {
@@ -845,6 +876,25 @@ export function bulkContract(make: ContractFactory, name: Name) {
         expect(await snapshot(e, ids)).toEqual(before);
       });
     }
+
+    it('画师：去掉、改回自动；画师列表按张数；空名字 → 400', async () => {
+      const e = env();
+      const [a, b] = [e.id('image', 'i1'), e.id('image', 'i2')];
+      await e.ds.bulkImages({ ids: [a, b], action: { type: 'artist', mode: 'add', artists: ['kantoku'] } });
+      await e.ds.bulkImages({ ids: [a], action: { type: 'artist', mode: 'add', artists: ['mignon'] } });
+      expect((await e.ds.listArtists()).map((x) => [x.tag, x.imageCount])).toEqual([['kantoku', 2], ['mignon', 1]]);
+      const r = await e.ds.bulkImages({ ids: [a, b], action: { type: 'artist', mode: 'remove', artists: ['kantoku'] } });
+      expect(r.message).toBe('已从 2 张图去掉画师「kantoku」');
+      expect((await e.ds.getImage(a))!.artists.map((x) => x.tag)).toEqual(['mignon']);
+      expect((await e.ds.getImage(b))!).toMatchObject({ artists: [], artistsManual: true });
+      // 改回自动只动手动改过的图
+      const c = e.id('image', 'i3');
+      const auto = await e.ds.bulkImages({ ids: [a, c], action: { type: 'artist-auto' } });
+      expect(auto.message).toBe('已把 1 张图的画师改回自动识别（另外 1 张本来就是自动识别的）');
+      expect((await e.ds.getImage(a))!).toMatchObject({ artists: [], artistsManual: false });
+      expect((await e.ds.bulkImages({ ids: [c], action: { type: 'artist-auto' } })).message).toBe('这张图的画师本来就是自动识别的');
+      await expect(e.ds.bulkImages({ ids: [a], action: { type: 'artist', mode: 'add', artists: ['  '] } })).rejects.toMatchObject({ statusCode: 400 });
+    });
 
     it('restore：规则排除的和单张排除的都恢复；可撤销', async () => {
       const e = env();

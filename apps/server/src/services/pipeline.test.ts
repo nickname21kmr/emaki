@@ -25,7 +25,13 @@ const ctx = (aborted = false): JobContext => {
 
 function setup(o: { scan?: ScanSummary; tagPending?: number; tagReady?: boolean; artists?: { enabled: boolean; pending: number; ready?: boolean } } = {}) {
   const enqueued: JobKind[] = [];
-  const jobs = { enqueue: (k: JobKind) => enqueued.push(k) } as unknown as JobQueue;
+  const requeue: JobKind[] = [];
+  const jobs = {
+    enqueue: (k: JobKind, opts?: { requeueIfRunning?: boolean }) => {
+      enqueued.push(k);
+      if (opts?.requeueIfRunning) requeue.push(k);
+    },
+  } as unknown as JobQueue;
   const deps = {
     jobs: () => jobs,
     requests: {},
@@ -35,7 +41,7 @@ function setup(o: { scan?: ScanSummary; tagPending?: number; tagReady?: boolean;
     tag: { isReady: () => o.tagReady ?? true, pendingCount: () => o.tagPending ?? 0, run: async () => '识别完成' },
     artists: o.artists && { enabled: () => o.artists!.enabled, isReady: () => o.artists!.ready ?? true, pendingCount: () => o.artists!.pending, run: async () => '画师完成' },
   } as unknown as PipelineDeps;
-  return { pipeline: new Pipeline(deps), enqueued };
+  return { pipeline: new Pipeline(deps), enqueued, requeue };
 }
 
 describe('Pipeline', () => {
@@ -119,5 +125,22 @@ describe('Pipeline', () => {
     const { pipeline, enqueued } = setup({ tagPending: 0, artists: { enabled: true, pending: 500, ready: false } });
     await pipeline.runner('scan')(ctx());
     expect(enqueued).toEqual([]);
+  });
+
+  it('画师改回自动（requestArtists）：能续补时排一轮（正在跑也再排）；关着、模型不在、用户暂停过都不排', async () => {
+    const on = setup({ artists: { enabled: true, pending: 3 } });
+    on.pipeline.requestArtists();
+    expect([on.enqueued, on.requeue]).toEqual([['artists'], ['artists']]);
+
+    for (const artists of [{ enabled: false, pending: 3 }, { enabled: true, pending: 3, ready: false }, { enabled: true, pending: 0 }]) {
+      const p = setup({ artists });
+      p.pipeline.requestArtists();
+      expect(p.enqueued).toEqual([]);
+    }
+
+    const paused = setup({ artists: { enabled: true, pending: 3 } });
+    paused.pipeline.notePaused('artists');
+    paused.pipeline.requestArtists();
+    expect(paused.enqueued).toEqual([]);
   });
 });

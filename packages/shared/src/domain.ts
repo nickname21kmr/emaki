@@ -172,6 +172,20 @@ export interface ImageDetail extends ImageItem {
   kindReason: string | null;
   /** 所在合集（T38c）；pageNo 是可见页里的序号，恒在 1..pageCount 之间（RV-C-8） */
   collection: { id: ID; kind: CollectionKind; title: string | null; pageNo: number; pageCount: number } | null;
+  /** 画师（识别的或手动改的）；同一个人的几个标签合成一条 */
+  artists: ImageArtist[];
+  /** 用户手动改过画师：识别、补跑都不再动 */
+  artistsManual: boolean;
+}
+
+/** 一张图上的一位画师 */
+export interface ImageArtist {
+  /** 这个人的代表标签（按画师筛图用它，和 Artist.tag 一致） */
+  tag: string;
+  /** 显示名：Danbooru 资料里的日文名等，没有就是标签 */
+  name: string;
+  /** 这张图上属于这个人的标签（去掉这位画师时一起去掉） */
+  tags: string[];
 }
 
 /** 合集（T38）：本子 = 漫画为主的同人志 / 单行本；画集 = 插画集。一个文件夹最多一本 */
@@ -342,13 +356,21 @@ export interface LibraryStats {
 
 export type ThemePreference = 'system' | 'light' | 'dark';
 
-/** 自定义「画面」筛选：用户拿识别标签自己拼的一组，图有任一标签（分数够）就算 */
+/**
+ * 自定义「画面」筛选：用户拿识别标签自己拼的一组（标签分数够才算有）。
+ * 图要有 all 里的每一个、tags 里的任一个（tags 空时不要求）、没有 none 里的任何一个。
+ * 三组合计 1–20 个，tags 和 all 至少一个；旧数据只有 tags
+ */
 export interface CustomTheme {
   id: string;
   /** 1–12 字 */
   name: string;
-  /** danbooru 风格的一般标签名，1–20 个 */
+  /** 任一：有其中一个就行（danbooru 风格的一般标签名） */
   tags: string[];
+  /** 必含 */
+  all?: string[];
+  /** 不含 */
+  none?: string[];
 }
 export type TaggerDevice = 'cpu' | 'dml';
 

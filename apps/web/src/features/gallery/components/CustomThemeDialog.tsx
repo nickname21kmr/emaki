@@ -1,17 +1,21 @@
 import { CUSTOM_THEME_LIMITS, type CustomTheme } from '@emaki/shared';
 import { useQueries } from '@tanstack/react-query';
-import { Check, X } from 'lucide-react';
+import { Ban, Check, X } from 'lucide-react';
+import { motion, useReducedMotion } from 'motion/react';
 import { useId, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { Button, Dialog, DialogFooter, Input, SearchInput, Spinner } from '@/components/ui';
+import { Button, Dialog, DialogFooter, Input, SearchInput, Segmented, Spinner } from '@/components/ui';
 import { useSaveSettings } from '@/features/settings/hooks';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
+import { plainTag, TAG_MODE_LABEL, themeItems, themeQuery, themeSentence, type TagMode } from '@/lib/customTheme';
 import { formatCount } from '@/lib/format';
-import { useCustomThemes, useTagSuggestions } from '@/lib/queries';
+import { SPRING } from '@/lib/motion';
+import { useCustomThemes, useImageCount, useTagSuggestions } from '@/lib/queries';
 import { useDebounced } from '../useDebounced';
 
 /**
- * 新建 / 编辑自定义「画面」：起个名字，再从识别标签里挑几个（有任一个就算）。
+ * 新建 / 编辑自定义「画面」：起个名字，再从识别标签里挑几个，分到三组里：
+ * 必含（交集）、任一（并集）、不含（排除）。点已挑的标签在三组之间轮换。
  * 存在设置的 browse.customThemes 里；theme 为空 = 新建。
  */
 export function CustomThemeDialog({
@@ -33,8 +37,8 @@ export function CustomThemeDialog({
       open={open}
       onOpenChange={onOpenChange}
       title={theme ? '编辑画面' : '新建画面'}
-      description="挑几个识别标签，图里有其中任一个就算。"
-      width={520}
+      description="必含的每个都要有，任一的有一个就行，不含的一个都不能有。"
+      width={540}
     >
       {/* 表单放在内容里：每次打开都重新初始化 */}
       <ThemeForm
@@ -47,8 +51,11 @@ export function CustomThemeDialog({
   );
 }
 
-/** 标签的显示名：中文名优先，没有就把下划线换成空格 */
-const plain = (tag: string) => tag.replace(/_/g, ' ');
+type Item = { tag: string; mode: TagMode };
+
+const MODES: TagMode[] = ['all', 'any', 'none'];
+/** 点标签时的轮换顺序 */
+const NEXT: Record<TagMode, TagMode> = { any: 'all', all: 'none', none: 'any' };
 
 function ThemeForm({
   theme,
@@ -65,45 +72,66 @@ function ThemeForm({
   const themes = useCustomThemes();
   const save = useSaveSettings();
   const [name, setName] = useState(theme?.name ?? '');
-  const [tags, setTags] = useState<string[]>(theme?.tags ?? []);
+  const [items, setItems] = useState<Item[]>(() => (theme ? themeItems(theme) : []));
+  /** 新挑的标签放进哪一组 */
+  const [addMode, setAddMode] = useState<TagMode>('any');
   const [q, setQ] = useState('');
   const debounced = useDebounced(q, 200);
   const suggestions = useTagSuggestions(debounced);
   // 挑过的标签记下中文名（编辑已有画面时，下面再按标签名查一次）
   const [names, setNames] = useState<Record<string, string>>({});
   const known = useQueries({
-    queries: (theme?.tags ?? []).map((tag) => ({
+    queries: (theme ? themeItems(theme) : []).map(({ tag }) => ({
       queryKey: ['tag-name', tag],
       queryFn: () => api.tags(tag, 1),
       staleTime: Infinity,
     })),
   });
   const nameOf = (tag: string) =>
-    names[tag] ?? known.map((k) => k.data?.[0]).find((s) => s?.tag === tag)?.name ?? plain(tag);
+    names[tag] ?? known.map((k) => k.data?.[0]).find((s) => s?.tag === tag)?.name ?? plainTag(tag);
 
-  const full = tags.length >= CUSTOM_THEME_LIMITS.tags;
-  const toggle = (tag: string, label: string) => {
-    if (tags.includes(tag)) {
-      setTags(tags.filter((t) => t !== tag));
+  const modeOf = (tag: string) => items.find((i) => i.tag === tag)?.mode;
+  const full = items.length >= CUSTOM_THEME_LIMITS.tags;
+  /** 列表里点一下：放进当前组；已经在这一组的再点 = 去掉 */
+  const pick = (tag: string, label: string) => {
+    const cur = modeOf(tag);
+    if (cur === addMode) {
+      setItems(items.filter((i) => i.tag !== tag));
+      return;
+    }
+    if (cur) {
+      setItems(items.map((i) => (i.tag === tag ? { tag, mode: addMode } : i)));
       return;
     }
     if (full) return;
-    setTags([...tags, tag]);
+    setItems([...items, { tag, mode: addMode }]);
     setNames((m) => ({ ...m, [tag]: label }));
-    // 名字还空着：先用第一个标签的中文名
-    if (!name.trim()) setName(label.slice(0, CUSTOM_THEME_LIMITS.name));
+    // 名字还空着：先用第一个必含 / 任一标签的中文名（不含的标签当名字意思正好反了）
+    if (!name.trim() && addMode !== 'none') setName(label.slice(0, CUSTOM_THEME_LIMITS.name));
   };
+  const cycle = (tag: string) => setItems(items.map((i) => (i.tag === tag ? { tag, mode: NEXT[i.mode] } : i)));
+  const removeTag = (tag: string) => setItems(items.filter((i) => i.tag !== tag));
 
-  const trimmed = name.trim();
-  const valid = trimmed.length > 0 && tags.length > 0;
-  const dirty = !theme || trimmed !== theme.name || tags.join('\n') !== theme.tags.join('\n');
+  const of = (m: TagMode) => items.filter((i) => i.mode === m).map((i) => i.tag);
+  const next: Omit<CustomTheme, 'id'> = {
+    name: name.trim(),
+    tags: of('any'),
+    ...(of('all').length ? { all: of('all') } : {}),
+    ...(of('none').length ? { none: of('none') } : {}),
+  };
+  const positive = next.tags.length + (next.all?.length ?? 0) > 0;
+  const valid = next.name.length > 0 && positive;
+  const key = (t: Omit<CustomTheme, 'id'>) => JSON.stringify([t.name, t.tags, t.all ?? [], t.none ?? []]);
+  const dirty = !theme || key(next) !== key(theme);
   const tooMany = !theme && themes.length >= CUSTOM_THEME_LIMITS.themes;
+  // 预览张数：和图库默认一样只数插画
+  const count = useImageCount({ ...themeQuery({ id: '', ...next }), kind: ['illustration'] }, positive);
 
   const submit = () => {
     if (!valid || !dirty || tooMany) return;
-    const next: CustomTheme = { id: theme?.id ?? newId(), name: trimmed, tags };
-    save({ browse: { customThemes: theme ? themes.map((t) => (t.id === theme.id ? next : t)) : [...themes, next] } });
-    onSaved?.(next);
+    const saved: CustomTheme = { id: theme?.id ?? newId(), ...next };
+    save({ browse: { customThemes: theme ? themes.map((t) => (t.id === theme.id ? saved : t)) : [...themes, saved] } });
+    onSaved?.(saved);
     onDone();
   };
 
@@ -116,12 +144,13 @@ function ThemeForm({
 
   const list = suggestions.data ?? [];
   const onSearchKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    // 回车 = 加上第一条（没选过的）
+    // 回车 = 把第一条（没挑过的）放进当前组。列表还是上一次搜索的结果（防抖、加载中）时不动，免得加错标签
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    const first = list.find((s) => !tags.includes(s.tag));
+    if (debounced !== q || suggestions.isPlaceholderData) return;
+    const first = list.find((s) => !modeOf(s.tag));
     if (first && q.trim()) {
-      toggle(first.tag, first.name);
+      pick(first.tag, first.name);
       setQ('');
     }
   };
@@ -145,40 +174,72 @@ function ThemeForm({
         />
       </FormField>
 
-      <FormField label="标签" hint={`${tags.length} / ${CUSTOM_THEME_LIMITS.tags}`}>
-        <div className="flex min-h-9 flex-wrap items-center gap-1.5 rounded-md bg-sunken p-1.5">
-          {tags.length === 0 && <span className="px-1.5 text-[12.5px] text-fg-subtle">从下面挑，至少一个</span>}
-          {tags.map((tag) => (
-            <span
-              key={tag}
-              className="inline-flex h-7 items-center gap-1 rounded-full bg-raised pr-1 pl-2.5 text-xs shadow-[0_0_0_1px_var(--c-line)]"
-              title={tag}
-            >
-              {nameOf(tag)}
-              <button
-                type="button"
-                aria-label={`去掉 ${nameOf(tag)}`}
-                onClick={() => setTags(tags.filter((t) => t !== tag))}
-                className="flex size-5 items-center justify-center rounded-full text-fg-subtle hover:bg-hover hover:text-fg"
-              >
-                <X className="size-3" />
-              </button>
-            </span>
-          ))}
+      <FormField label="标签" hint={`${items.length ? '点标签换组 · ' : ''}${items.length} / ${CUSTOM_THEME_LIMITS.tags}`}>
+        <div className="rounded-md bg-sunken p-1.5">
+          {items.length === 0 ? (
+            <div className="flex h-7 items-center px-1.5 text-[12.5px] text-fg-subtle">从下面挑，至少一个</div>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {MODES.filter((m) => items.some((i) => i.mode === m)).map((m) => (
+                <div key={m} className="flex items-start gap-2">
+                  <span className={cn('w-8 shrink-0 pt-[7px] pl-1 text-[11px]', LANE_TEXT[m])}>{TAG_MODE_LABEL[m]}</span>
+                  <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                    {items
+                      .filter((i) => i.mode === m)
+                      .map((i) => (
+                        <TagChip
+                          key={i.tag}
+                          layoutId={`${uid}-${i.tag}`}
+                          tag={i.tag}
+                          label={nameOf(i.tag)}
+                          mode={i.mode}
+                          onCycle={() => cycle(i.tag)}
+                          onRemove={() => removeTag(i.tag)}
+                        />
+                      ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
+        {items.length > 0 && (
+          <div className="mt-1.5 flex items-baseline gap-3 px-0.5 text-[11.5px]">
+            <span className={cn('min-w-0 flex-1', positive ? 'text-fg-muted' : 'text-danger')}>
+              {positive ? themeSentence(items, nameOf) : '只有「不含」筛不出图，至少要有一个「必含」或「任一」'}
+            </span>
+            {positive && (
+              <span className={cn('shrink-0 text-fg-subtle tabular', count.isPlaceholderData && 'opacity-60')}>
+                {count.data === undefined ? '…' : `插画 ${formatCount(count.data)} 张`}
+              </span>
+            )}
+          </div>
+        )}
       </FormField>
 
       <div>
-        <SearchInput
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={onSearchKey}
-          onClear={() => setQ('')}
-          placeholder="搜标签：中文或英文，如 白发、glasses"
-          aria-label="搜索标签"
-          spellCheck={false}
-          trailing={suggestions.isFetching ? <Spinner className="size-3.5 text-fg-subtle" /> : undefined}
-        />
+        <div className="flex items-center gap-2">
+          <SearchInput
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={onSearchKey}
+            onClear={() => setQ('')}
+            placeholder="搜标签：中文或英文，如 白发"
+            aria-label="搜索标签"
+            spellCheck={false}
+            className="min-w-0 flex-1"
+            trailing={suggestions.isFetching ? <Spinner className="size-3.5 text-fg-subtle" /> : undefined}
+          />
+          <div className="flex shrink-0 items-center gap-1.5" title="从列表里挑的标签放进哪一组">
+            <span className="text-[11.5px] text-fg-subtle">加到</span>
+            <Segmented
+              size="sm"
+              value={addMode}
+              onChange={setAddMode}
+              options={MODES.map((m) => ({ value: m, label: TAG_MODE_LABEL[m] }))}
+            />
+          </div>
+        </div>
         <div
           className={cn(
             'mt-2 h-[232px] overflow-y-auto rounded-md ring-1 ring-line scrollbar-thin',
@@ -194,25 +255,28 @@ function ThemeForm({
             </div>
           ) : (
             list.map((s) => {
-              const on = tags.includes(s.tag);
+              const mode = modeOf(s.tag);
               return (
                 <button
                   key={s.tag}
                   type="button"
                   role="option"
-                  aria-selected={on}
-                  disabled={!on && full}
-                  onClick={() => toggle(s.tag, s.name)}
+                  aria-selected={!!mode}
+                  disabled={!mode && full}
+                  onClick={() => pick(s.tag, s.name)}
                   className={cn(
                     'flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-hover disabled:opacity-40 disabled:hover:bg-transparent',
-                    on && 'bg-hover',
+                    mode && 'bg-hover',
                   )}
                 >
-                  <span className="flex size-4 shrink-0 items-center justify-center text-shu">{on && <Check className="size-3.5" />}</span>
+                  <span className={cn('flex size-4 shrink-0 items-center justify-center', mode && LANE_TEXT[mode])}>
+                    {mode === 'none' ? <Ban className="size-3.5" /> : mode ? <Check className="size-3.5" /> : null}
+                  </span>
                   <span className="min-w-0 flex-1 truncate text-[13px]">
                     {s.name}
-                    {s.name !== plain(s.tag) && <span className="ml-2 font-mono text-[11.5px] text-fg-subtle">{s.tag}</span>}
+                    {s.name !== plainTag(s.tag) && <span className="ml-2 font-mono text-[11.5px] text-fg-subtle">{s.tag}</span>}
                   </span>
+                  {mode && <span className={cn('shrink-0 text-[11px]', LANE_TEXT[mode])}>{TAG_MODE_LABEL[mode]}</span>}
                   <span className="shrink-0 text-[11.5px] text-fg-subtle tabular">{formatCount(s.count)} 张</span>
                 </button>
               );
@@ -236,6 +300,64 @@ function ThemeForm({
         </Button>
       </DialogFooter>
     </form>
+  );
+}
+
+/** 三组的颜色：必含 = 墨色实心（和选中的 chip 一样），任一 = 普通，不含 = 红、划掉 */
+const LANE_TEXT: Record<TagMode, string> = { all: 'text-fg', any: 'text-fg-subtle', none: 'text-danger' };
+const CHIP: Record<TagMode, string> = {
+  all: 'bg-ink text-fg-inverse',
+  any: 'bg-raised text-fg shadow-[0_0_0_1px_var(--c-line)]',
+  none: 'bg-danger-soft text-danger',
+};
+const CHIP_X: Record<TagMode, string> = {
+  all: 'text-fg-inverse/60 hover:bg-fg-inverse/15 hover:text-fg-inverse',
+  any: 'text-fg-subtle hover:bg-hover hover:text-fg',
+  none: 'text-danger/60 hover:bg-danger/10 hover:text-danger',
+};
+
+function TagChip({
+  layoutId,
+  tag,
+  label,
+  mode,
+  onCycle,
+  onRemove,
+}: {
+  layoutId: string;
+  tag: string;
+  label: string;
+  mode: TagMode;
+  onCycle: () => void;
+  onRemove: () => void;
+}) {
+  const reduce = useReducedMotion();
+  return (
+    <motion.span
+      layoutId={layoutId}
+      transition={reduce ? { duration: 0 } : SPRING}
+      className={cn('inline-flex h-7 items-center rounded-full pr-1 text-xs transition-colors duration-150', CHIP[mode])}
+    >
+      <button
+        type="button"
+        onClick={onCycle}
+        title={`${tag}\n点一下换到「${TAG_MODE_LABEL[NEXT[mode]]}」`}
+        aria-label={`${label}：${TAG_MODE_LABEL[mode]}，点一下换到「${TAG_MODE_LABEL[NEXT[mode]]}」`}
+        className="inline-flex h-full items-center gap-1 rounded-l-full pr-0.5 pl-2.5 outline-none focus-visible:underline"
+      >
+        {mode === 'all' && <Check className="size-3" />}
+        {mode === 'none' && <Ban className="size-3" />}
+        <span className={cn(mode === 'none' && 'line-through decoration-danger/50')}>{label}</span>
+      </button>
+      <button
+        type="button"
+        aria-label={`去掉 ${label}`}
+        onClick={onRemove}
+        className={cn('flex size-5 items-center justify-center rounded-full', CHIP_X[mode])}
+      >
+        <X className="size-3" />
+      </button>
+    </motion.span>
   );
 }
 

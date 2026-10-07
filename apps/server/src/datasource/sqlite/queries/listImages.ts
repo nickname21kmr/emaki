@@ -159,19 +159,53 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
     });
     where.push(groups.length ? `EXISTS (SELECT 1 FROM image_tags it WHERE it.image_id = i.id AND (${groups.join(' OR ')}))` : '0');
     countWhere.push(groups.length ? `i.id IN (SELECT it.image_id FROM image_tags it WHERE ${groups.join(' OR ')})` : '0');
+    // 等重新识别的图（文件内容变了）还留着旧标签，不算
+    both('i.tagged_at IS NOT NULL');
   }
-  if (q.tags?.length) {
-    // 自定义画面：有任一一般标签、分数够。和 theme 一样先把名字换成 id
-    const ids = db
-      .prepare("SELECT id FROM tags WHERE category = 'general' AND name IN (SELECT value FROM json_each(?))")
-      .pluck()
-      .all(JSON.stringify(q.tags)) as number[];
-    if (!ids.length) return EMPTY_PAGE;
-    p.ctags = JSON.stringify(ids);
+  if (q.tags?.length || q.tagsAll?.length || q.tagsNone?.length) {
+    // 自定义画面：标签分数够才算有。和 theme 一样先把名字换成 id
+    const idsOf = (names: string[]) =>
+      db
+        .prepare("SELECT id FROM tags WHERE category = 'general' AND name IN (SELECT value FROM json_each(?))")
+        .pluck()
+        .all(JSON.stringify([...new Set(names)])) as number[];
     p.ctagMin = TAG_FILTER_MIN_SCORE;
-    const cond = 'it.tag_id IN (SELECT value FROM json_each(@ctags)) AND it.score >= @ctagMin';
-    where.push(`EXISTS (SELECT 1 FROM image_tags it WHERE it.image_id = i.id AND ${cond})`);
-    countWhere.push(`i.id IN (SELECT it.image_id FROM image_tags it WHERE ${cond})`);
+    const has = (param: string) => ({
+      page: `EXISTS (SELECT 1 FROM image_tags it WHERE it.image_id = i.id AND it.tag_id ${param} AND it.score >= @ctagMin)`,
+      count: `i.id IN (SELECT it.image_id FROM image_tags it WHERE it.tag_id ${param} AND it.score >= @ctagMin)`,
+    });
+    if (q.tags?.length) {
+      // 任一：认不出的标签不算，一个都认不出就没有图
+      const ids = idsOf(q.tags);
+      if (!ids.length) return EMPTY_PAGE;
+      p.ctags = JSON.stringify(ids);
+      const c = has('IN (SELECT value FROM json_each(@ctags))');
+      where.push(c.page);
+      countWhere.push(c.count);
+    }
+    if (q.tagsAll?.length) {
+      // 必含：每个一条，走 (tag_id, score, image_id) 索引；有一个认不出就没有图
+      const ids = idsOf(q.tagsAll);
+      if (ids.length < new Set(q.tagsAll).size) return EMPTY_PAGE;
+      ids.forEach((id, k) => {
+        p[`call${k}`] = id;
+        const c = has(`= @call${k}`);
+        where.push(c.page);
+        countWhere.push(c.count);
+      });
+    }
+    if (q.tagsNone?.length) {
+      // 不含：认不出的标签本来就没有图有，忽略
+      const ids = idsOf(q.tagsNone);
+      if (ids.length) {
+        p.cnone = JSON.stringify(ids);
+        const c = has('IN (SELECT value FROM json_each(@cnone))');
+        where.push(`NOT ${c.page}`);
+        countWhere.push(c.count.replace('i.id IN', 'i.id NOT IN'));
+      }
+    }
+    // 只看识别过的图：文件内容变了等重新识别的图还留着旧标签，不能拿旧标签算（和 mock 一致）
+    both('i.tagged_at IS NOT NULL');
   }
   if (q.orientation === 'landscape') both('i.width > i.height * 1.05');
   if (q.orientation === 'portrait') both('i.width < i.height * 0.95');

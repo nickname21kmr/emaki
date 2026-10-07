@@ -28,7 +28,8 @@ export function GalleryPage() {
   const { filters, query, update, hasFilters, clearFilters, customThemes } = useGalleryParams();
   // 按画师看时标题用显示名（日文名），列表里没有就用标签
   const artistsQ = useArtists(!!filters.artist);
-  const artistName = filters.artist ? artistsQ.data?.find((a) => a.tag === filters.artist)?.name : undefined;
+  const artist = filters.artist ? artistsQ.data?.find((a) => a.tag === filters.artist) : undefined;
+  const artistName = artist?.name;
   const { data: stats } = useStats();
   const rowHeight = usePrefs((s) => s.gridRowHeight);
   const list = useImagesInfinite(query);
@@ -174,7 +175,7 @@ export function GalleryPage() {
 
       <PageBody className="flex-1 pt-2">{body}</PageBody>
 
-      <SelectionBar images={images} scope={SCOPE} />
+      <SelectionBar images={images} scope={SCOPE} artist={filters.artist ? (artist ?? { tag: filters.artist, name: filters.artist, tags: [filters.artist] }) : undefined} />
     </div>
   );
 }

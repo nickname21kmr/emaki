@@ -1,6 +1,7 @@
 import { BROWSE_THEMES, CONTENT_KINDS, type BrowseTheme, type ContentKind, type ImageSort, type ListImagesQuery, type Rating } from '@emaki/shared';
 import { useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
+import { themeQuery } from '@/lib/customTheme';
 import { useCustomThemes } from '@/lib/queries';
 import { usePrefs } from '@/lib/stores';
 
@@ -114,7 +115,7 @@ export function useGalleryParams() {
   // 自定义画面换成它的标签；id 找不到（被删了、设置还没加载）就当没选
   const customThemes = useCustomThemes();
   const customTheme = filters.custom ? customThemes.find((t) => t.id === filters.custom) : undefined;
-  const customTags = customTheme?.tags;
+  const customTags = useMemo(() => themeQuery(customTheme), [customTheme]);
 
   const query = useMemo<Omit<ListImagesQuery, 'cursor'>>(
     () => ({
@@ -123,7 +124,7 @@ export function useGalleryParams() {
       rating: filters.rating.length ? filters.rating : undefined,
       orientation: filters.orientation,
       theme: filters.theme,
-      tags: customTags,
+      ...customTags,
       favorite: filters.favorite || undefined,
       artist: filters.artist,
       sort: filters.sort,

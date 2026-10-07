@@ -175,6 +175,10 @@ export interface ListImagesQuery extends PageQuery {
   theme?: BrowseTheme;
   /** 自定义画面：有其中任一一般标签（分数达到 TAG_FILTER_MIN_SCORE）的图 */
   tags?: string[];
+  /** 自定义画面：必含，这些标签每个都要有 */
+  tagsAll?: string[];
+  /** 自定义画面：这些标签一个都不能有 */
+  tagsNone?: string[];
   favorite?: boolean;
   /** true = 用户归为原创的图；false = 没归为原创的 */
   original?: boolean;
@@ -219,7 +223,14 @@ export type BulkImageAction =
   /** 放下：不找角色了，不再出现在未识别（T34a）；false = 放回 */
   | { type: 'shelve'; value: boolean }
   /** 归为原创（true）/ 移出原创（false）：挂到「原创」作品、离开未识别 */
-  | { type: 'original'; value: boolean };
+  | { type: 'original'; value: boolean }
+  /**
+   * 手动改画师：add 加上、remove 去掉、set 换成这几位（空 = 没有画师）。artists 是标签（Artist.tag / ImageArtist.tags）
+   * 或新名字（服务端规范成小写、空格换下划线）。改过的图之后识别不再动它
+   */
+  | { type: 'artist'; mode: 'add' | 'remove' | 'set'; artists: string[] }
+  /** 画师改回自动识别：清掉手动改的，交给「识别画师」重新认 */
+  | { type: 'artist-auto' };
 
 /** POST /api/images/bulk */
 export interface BulkImagesBody {
@@ -474,7 +485,7 @@ export type TagSuggestionsResponse = TagSuggestion[];
 
 /** 自定义画面按标签筛图时的最低分数（和内置画面里最宽的一组一致） */
 export const TAG_FILTER_MIN_SCORE = 0.5;
-/** 自定义画面的数量 / 名字 / 标签上限 */
+/** 自定义画面的数量 / 名字 / 标签上限（标签是三组合计） */
 export const CUSTOM_THEME_LIMITS = { themes: 30, name: 12, tags: 20 } as const;
 
 // ---------------------------------------------------------------- 设置

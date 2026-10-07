@@ -213,3 +213,21 @@ it('翻页途中插入新图不会产生重复', () => {
 it('无效游标 → 400', () => {
   expect(() => listImages(db, { cursor: 'not-a-cursor' })).toThrow('分页游标无效');
 });
+
+it('按标签筛（画面、自定义画面）只看识别过的图：文件内容变了、等重新识别的图留着旧标签也不算', () => {
+  const d = openDatabase(':memory:');
+  migrate(d);
+  d.exec(`INSERT INTO library_roots (id, path, enabled) VALUES (1, 'D:/a', 1);
+    INSERT INTO tags (id, name, category) VALUES (1, 'thighhighs', 'general'), (2, 'comic', 'general');
+    INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at, tagged_at)
+      VALUES (1, 1, '1.png', '1.png', 100, 150, 1, 'png', 's1', 'x', 'x', 'x'),
+             (2, 1, '2.png', '2.png', 100, 150, 1, 'png', 's2', 'x', 'x', NULL);
+    INSERT INTO image_tags (image_id, tag_id, score) VALUES (1, 1, 0.9), (2, 1, 0.9);`);
+  const ids = (q: ListImagesQuery) => listImages(d, q).items.map((i) => i.id);
+  expect(ids({ tags: ['thighhighs'] })).toEqual(['1']);
+  expect(ids({ tagsAll: ['thighhighs'] })).toEqual(['1']);
+  expect(ids({ tagsAll: ['thighhighs'], tagsNone: ['comic'] })).toEqual(['1']);
+  expect(ids({ tagsNone: ['comic'] })).toEqual(['1']);
+  expect(listImages(d, { tagsAll: ['thighhighs'] }).total).toBe(1);
+  expect(ids({ theme: 'legs' })).toEqual(['1']);
+});

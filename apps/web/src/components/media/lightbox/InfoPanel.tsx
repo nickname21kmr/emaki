@@ -13,12 +13,13 @@ import {
 import { CONTENT_KINDS } from '@emaki/shared';
 import { cn } from '@/lib/cn';
 import { KIND_GLYPH, KIND_HINT, KIND_LABEL } from '@/lib/kinds';
+import { PanelArtists } from './PanelArtists';
 import { PanelCharacters } from './PanelCharacters';
 import { PanelCollection } from './PanelCollection';
 import { ActionTile, Section } from './PanelParts';
 import { PanelTags } from './PanelTags';
 import type { ImageActions } from './useImageActions';
-import { useCharacter, useTrashHint } from '@/lib/queries';
+import { useCharacter, useSettings, useTrashHint } from '@/lib/queries';
 import { CharacterAvatar } from '@/features/gallery/CharacterPicker';
 
 const RATINGS = Object.keys(RATING_LABEL) as Rating[];
@@ -54,10 +55,11 @@ export function InfoPanel({
   onTagClick: (tag: string) => void;
 }) {
   const trashHint = useTrashHint();
+  const artistsOn = useSettings().data?.tagger.artists ?? false;
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-[20px] bg-sheet text-fg shadow-pop ring-1 ring-line">
       <div key={base?.id} className="min-h-0 flex-1 animate-fade-in overflow-y-auto overscroll-contain scrollbar-thin">
-        <Header base={base} />
+        <Header base={base} artists={detail?.artists} />
 
         <div className="grid grid-cols-5 gap-1 px-3 pb-4">
           <ActionTile
@@ -113,6 +115,11 @@ export function InfoPanel({
               actions={actions}
               onNavigate={onNavigate}
             />
+
+            {/* 没开画师识别、也没改过的图不占地方 */}
+            {(artistsOn || detail.artists.length > 0 || detail.artistsManual) && (
+              <PanelArtists artists={detail.artists} manual={detail.artistsManual} actions={actions} onNavigate={onNavigate} />
+            )}
 
             <Section title="分级">
               <Segmented<Rating>
@@ -187,7 +194,7 @@ function KindSection({ detail, actions }: { detail: ImageDetail; actions: ImageA
   );
 }
 
-function Header({ base }: { base: ImageItem | undefined }) {
+function Header({ base, artists }: { base: ImageItem | undefined; artists?: ImageDetail['artists'] }) {
   if (!base) {
     return (
       <div className="space-y-2.5 px-5 pt-6 pb-5">
@@ -199,7 +206,8 @@ function Header({ base }: { base: ImageItem | undefined }) {
   // 头部先说「这是谁」，文件名降成一行小字（BR-8）
   const names = base.characterNames;
   const art = base.kind === 'illustration' || base.kind === 'comic';
-  const artist = base.source?.artist;
+  // 认出（或手动改）的画师优先，没有再用文件名、元数据里的
+  const artist = artists?.length ? artists.map((a) => a.name).join('、') : base.source?.artist;
   return (
     <div className="px-5 pt-5 pb-4">
       {names.length > 0 ? (

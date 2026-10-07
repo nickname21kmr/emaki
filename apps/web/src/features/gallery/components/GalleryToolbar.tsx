@@ -28,6 +28,7 @@ import {
   Tooltip,
 } from '@/components/ui';
 import { cn } from '@/lib/cn';
+import { themeItems, themeSentence } from '@/lib/customTheme';
 import { RATING_LABEL } from '@/lib/format';
 import { usePrefs } from '@/lib/stores';
 import {
@@ -271,7 +272,7 @@ function CustomChip({
           e.preventDefault();
           onEdit();
         }}
-        title={`${theme.tags.join('、')}\n右键编辑`}
+        title={`${themeSentence(themeItems(theme))}\n右键编辑`}
       >
         {theme.name}
       </Chip>

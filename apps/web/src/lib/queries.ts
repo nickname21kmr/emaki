@@ -148,6 +148,15 @@ export const useImagesInfinite = (q: Omit<ListImagesQuery, 'cursor'>) =>
     placeholderData: keepPreviousData,
   });
 
+/** 只要张数（编辑自定义画面时预览能筛出多少张） */
+export const useImageCount = (q: Omit<ListImagesQuery, 'cursor' | 'limit'>, enabled = true) =>
+  useQuery({
+    queryKey: ['image-count', q] as const,
+    queryFn: () => api.images({ ...q, limit: 1 }).then((p) => p.total),
+    placeholderData: keepPreviousData,
+    enabled,
+  });
+
 export const useImage = (id: ID | null | undefined) =>
   useQuery({ queryKey: qk.image(id ?? ''), queryFn: () => api.image(id!), enabled: !!id });
 

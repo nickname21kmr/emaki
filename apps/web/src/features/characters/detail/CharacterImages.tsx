@@ -8,6 +8,7 @@ import { folderNameOf, MoveImagesDialog } from '@/components/media/MoveImagesDia
 import { Button, EmptyState, ErrorState } from '@/components/ui';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
+import { themeQuery } from '@/lib/customTheme';
 import { useImagesInfinite, useMutate } from '@/lib/queries';
 import { shouldBlur } from '@/lib/blur';
 import { useBlurPrefs, usePrefs } from '@/lib/stores';
@@ -43,7 +44,7 @@ export function CharacterImages({
     order: filters.order,
     rating: filters.rating.length ? filters.rating : undefined,
     theme: filters.theme,
-    tags: filters.custom?.tags,
+    ...themeQuery(filters.custom),
   });
   const { fetchNextPage } = query;
   // cancelRefetch: false —— 已经在加载下一页时不要重复发请求

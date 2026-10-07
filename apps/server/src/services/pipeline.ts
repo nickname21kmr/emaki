@@ -174,6 +174,14 @@ export class Pipeline {
     return !!a && a.enabled() && a.isReady() && !this.artistsPaused && a.pendingCount() > 0;
   }
 
+  /**
+   * 有图改回了自动识别画师：能自动续补时（开着、模型在、用户没暂停）排一轮；正在跑也再排一轮，
+   * 游标已经走过的图这一轮挑不到。用户暂停过就等他手动点「补跑」
+   */
+  requestArtists(): void {
+    if (this.canAutoArtists()) this.d.jobs().enqueue('artists', { requeueIfRunning: true });
+  }
+
   /** 用户取消了排队中的任务（runner 不会执行，收不到 aborted）：同样记暂停 */
   notePaused(kind: JobKind): void {
     if (kind === 'tag') this.tagPaused = true;

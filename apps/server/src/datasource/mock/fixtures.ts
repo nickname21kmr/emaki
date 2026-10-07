@@ -83,6 +83,10 @@ export interface ImageRow {
   /** 所在合集和页码（T38c） */
   collectionId?: ID | null;
   pageNo?: number | null;
+  /** 画师（识别的或手动改的，对应 image_artists）；手动加的 score 为 1 */
+  artists?: { tag: string; score: number }[];
+  /** 手动改过画师（images.artist_manual） */
+  artistsManual?: boolean;
 }
 
 /** 合集（T38c）：字段与 collections 表一一对应，外加手动关联 */
@@ -328,6 +332,12 @@ export function buildMockDb(now = Date.now()): MockDb {
     img.autoKind = kind;
     img.kindSource = kind === 'animated' ? 'format' : 'tags';
     img.kindEvidence = kind === 'animated' ? 'GIF 动图' : `识别标签（演示数据）`;
+  }
+
+  // 画师识别（演示）：识别过的图约七成认出了来源里的画师。只用哈希，不打乱随机序列
+  for (const img of images.values()) {
+    if (!img.tagged || !img.source?.artist || hashString(img.id + 'artist') % 10 >= 7) continue;
+    img.artists = [{ tag: img.source.artist, score: 0.4 + (hashString(img.id + 'artist-score') % 60) / 100 }];
   }
 
   // 未识别的主题（T34a）：给已识别的图按哈希补一个主题标签，约 45% 的未识别图没有建议（落进「没认出」）。

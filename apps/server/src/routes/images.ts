@@ -6,6 +6,8 @@ import type { DataSource, FileResponse } from '../datasource/DataSource.ts';
 import { NotFoundError } from '../http/errors.ts';
 import { idParam, kindSchema, parse, qBool, qKinds, qList, qNumber, ratingSchema } from '../http/validate.ts';
 
+const tagList = qList(z.string().min(1).max(100)).refine((a) => a.length <= CUSTOM_THEME_LIMITS.tags, '标签太多');
+
 /** 图片、未识别、重复、排除 */
 export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
   app.get('/api/images', (req) => {
@@ -18,9 +20,9 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
         q: z.string().optional(),
         orientation: z.enum(['portrait', 'landscape', 'square']).optional(),
         theme: z.enum(BROWSE_THEMES).optional(),
-        tags: qList(z.string().min(1).max(100))
-          .refine((a) => a.length <= CUSTOM_THEME_LIMITS.tags, '标签太多')
-          .optional(),
+        tags: tagList.optional(),
+        tagsAll: tagList.optional(),
+        tagsNone: tagList.optional(),
         favorite: qBool.optional(),
         original: qBool.optional(),
         kind: qKinds.optional(),
@@ -53,6 +55,12 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
           z.object({ type: z.literal('rating'), value: ratingSchema }),
           z.object({ type: z.literal('kind'), value: z.union([kindSchema, z.literal('auto')]) }),
           z.object({ type: z.literal('trash') }),
+          z.object({
+            type: z.literal('artist'),
+            mode: z.enum(['add', 'remove', 'set']),
+            artists: z.array(z.string().trim().min(1).max(200)).max(10),
+          }),
+          z.object({ type: z.literal('artist-auto') }),
         ]),
       }),
       req.body,

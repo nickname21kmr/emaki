@@ -5,6 +5,7 @@ import { ImageGrid, ImageGridSkeleton } from '@/components/media/ImageGrid';
 import { Button, EmptyState, ErrorState, Segmented } from '@/components/ui';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
+import { themeQuery } from '@/lib/customTheme';
 import { useImagesInfinite, useMutate, useWork } from '@/lib/queries';
 import { KindBadge } from '@/components/media/KindBadge';
 import { usePrefs } from '@/lib/stores';
@@ -36,7 +37,7 @@ export function WorkImages({ workId, gridKey, dialogOpen = false }: { workId: ID
     order: filters.order,
     rating: filters.rating.length ? filters.rating : undefined,
     theme: filters.theme,
-    tags: filters.custom?.tags,
+    ...themeQuery(filters.custom),
     original,
   });
   const { fetchNextPage } = query;
