@@ -11,6 +11,8 @@ import {
   type CoverCandidatesResponse,
   searchKey,
   type AddLibraryRootBody,
+  type LibraryRoot,
+  type UpdateLibraryRootBody,
   type BulkCollectionsBody,
   type Artist,
   type BulkImagesBody,
@@ -68,7 +70,7 @@ import { buildMockDb, type CharacterRow, type ImageRow, type MockDb, type WorkRo
 import { MockCollections } from './collections.ts';
 import { hashString, placeholderSvg } from './placeholder.ts';
 import { mockDominantColor, workColorFromHue } from '../../util/color.ts';
-import { classifyContent } from '../../services/classify/rules.ts';
+import { classifyContent, COMIC_ROOT_EVIDENCE } from '../../services/classify/rules.ts';
 import { artScore, classifyTheme, matchesBrowseTheme, resolveTheme } from '../../services/classify/theme.ts';
 import { describeKindReason } from '../sqlite/hydrate.ts';
 import { coverQuality, isUnfitCover } from '../../services/covers/quality.ts';
@@ -180,9 +182,22 @@ export class MockDataSource implements DataSource {
     return w.id;
   }
 
-  /** 逐张未识别队列（sql.ts 的 QUEUE）：计入张数、插画或漫画、没放下、没角色 */
+  /** 逐张未识别队列（sql.ts 的 QUEUE）：计入张数、插画或漫画、没放下、没角色；按漫画导入的文件夹不进 */
   private inQueue(img: ImageRow): boolean {
-    return !img.excludedBy && isArt(img) && !img.shelvedAt && !img.originalAt && !img.characterIds.length && !img.collectionId;
+    return (
+      !img.excludedBy &&
+      isArt(img) &&
+      !img.shelvedAt &&
+      !img.originalAt &&
+      !img.characterIds.length &&
+      !img.collectionId &&
+      !this.inComicRoot(img)
+    );
+  }
+
+  /** 所在图库文件夹按漫画导入 */
+  private inComicRoot(img: ImageRow): boolean {
+    return this.db.settings.libraryRoots.some((r) => r.id === img.libraryRootId && r.mode === 'comic');
   }
 
   /** 图库文字搜索用：这张图的角色（名字、标签、别名）和作品（名字、标签、别名），同 sqlite 的 matchText */
@@ -478,7 +493,7 @@ export class MockDataSource implements DataSource {
         if (!img.tagged && kindOf(img) !== 'comic') untagged++;
       }
       kindCounts[kindOf(img)]++;
-      if (!img.tagged) pendingTag++;
+      if (!img.tagged && !this.inComicRoot(img)) pendingTag++;
       bytes += img.bytes;
       if (kindOf(img) !== 'illustration') continue; // 最晚入库、本周新收只数插画（BI-11）
       if (!lastAdded || img.addedAt > lastAdded) lastAdded = img.addedAt;
@@ -874,7 +889,9 @@ export class MockDataSource implements DataSource {
 
   /** 「恢复自动判断」的结果：演示数据用分配时的类型，其余按规则现算 */
   private autoKindOf(img: ImageRow): { kind: ContentKind; source: ImageRow['kindSource']; evidence: string | null } {
-    if (img.autoKind) return { kind: img.autoKind, source: img.kindSource === 'manual' ? 'tags' : (img.kindSource ?? 'tags'), evidence: null };
+    if (this.inComicRoot(img)) return { kind: 'comic', source: 'folder', evidence: COMIC_ROOT_EVIDENCE };
+    // 演示数据分配的类型：动图按格式、其余按标签（kindSource 可能是手动或按漫画导入留下的，不能照抄）
+    if (img.autoKind) return { kind: img.autoKind, source: img.autoKind === 'animated' ? 'format' : 'tags', evidence: null };
     const general = img.tags.filter((t) => t.category === 'general').map((t) => [t.tag, t.score] as [string, number]);
     const r = classifyContent({
       fileName: img.fileName,
@@ -910,6 +927,7 @@ export class MockDataSource implements DataSource {
     const before = {
       characterIds: [...row.characterIds],
       rating: row.rating,
+      ratingManual: row.ratingManual,
       favorite: row.favorite,
       kind: row.kind,
       kindSource: row.kindSource,
@@ -924,7 +942,10 @@ export class MockDataSource implements DataSource {
       for (const cid of body.characterIds) this.requireCharacter(cid);
       row.characterIds = [...new Set(body.characterIds)];
     }
-    if (body.rating) row.rating = body.rating;
+    if (body.rating) {
+      row.rating = body.rating;
+      row.ratingManual = true;
+    }
     if (body.favorite !== undefined) row.favorite = body.favorite;
     const msg =
       body.kind !== undefined
@@ -1000,6 +1021,7 @@ export class MockDataSource implements DataSource {
       excludedBy: r.excludedBy,
       favorite: r.favorite,
       rating: r.rating,
+      ratingManual: r.ratingManual,
       trashed: r.trashed,
       kind: r.kind,
       kindSource: r.kindSource,
@@ -1076,7 +1098,10 @@ export class MockDataSource implements DataSource {
         break;
       }
       case 'rating':
-        for (const r of rows) r.rating = action.value;
+        for (const r of rows) {
+          r.rating = action.value;
+          r.ratingManual = true;
+        }
         message = `已把 ${n} 张图设为「${RATING_LABEL[action.value]}」`;
         break;
       case 'kind':
@@ -1117,6 +1142,7 @@ export class MockDataSource implements DataSource {
         s.row.excludedBy = s.excludedBy;
         s.row.favorite = s.favorite;
         s.row.rating = s.rating;
+        s.row.ratingManual = s.ratingManual;
         s.row.trashed = s.trashed;
         s.row.kind = s.kind;
         s.row.kindSource = s.kindSource;
@@ -1187,7 +1213,7 @@ export class MockDataSource implements DataSource {
   private unrecRows() {
     const base = this.idx.visible.filter((img) => !img.excludedBy && !img.characterIds.length && !img.originalAt);
     return {
-      art: base.filter((img) => isArt(img) && !img.collectionId).map((img) => this.unrecRow(img)),
+      art: base.filter((img) => isArt(img) && !img.collectionId && !this.inComicRoot(img)).map((img) => this.unrecRow(img)),
       annex: base.filter((img) => !isArt(img)).map((img) => this.unrecRow(img)),
     };
   }
@@ -1503,7 +1529,16 @@ export class MockDataSource implements DataSource {
           (disabled.length ? `其中${disabled.join('')}现在是停用的，合并后会重新显示。` : ''),
       );
     }
-    const root = { id: `root_${hashString(path).toString(36)}`, path, enabled: true, imageCount: 0, lastScanAt: null, importedAt: new Date().toISOString() };
+    const root: LibraryRoot = {
+      id: `root_${hashString(path).toString(36)}`,
+      path,
+      enabled: true,
+      imageCount: 0,
+      lastScanAt: null,
+      importedAt: new Date().toISOString(),
+      mode: body.mode ?? 'auto',
+      comicRating: body.comicRating ?? 'general',
+    };
     let merged = 0;
     for (const c of children) {
       const prefix = c.path.slice(path.length).replace(/^\/+/, '');
@@ -1519,9 +1554,10 @@ export class MockDataSource implements DataSource {
         col.relDir = col.relDir ? `${prefix}/${col.relDir}` : prefix;
       }
       roots.splice(roots.indexOf(c), 1);
-      if (c.importedAt && c.importedAt < root.importedAt) root.importedAt = c.importedAt;
+      if (c.importedAt && root.importedAt && c.importedAt < root.importedAt) root.importedAt = c.importedAt;
     }
     roots.push(root);
+    if (children.length) this.applyRootMode(root);
     this.touch();
     this.jobs.enqueue('scan');
     return done(
@@ -1529,14 +1565,47 @@ export class MockDataSource implements DataSource {
     );
   }
 
-  async updateLibraryRoot(id: ID, enabled: boolean): Promise<MutationResult> {
+  async updateLibraryRoot(id: ID, body: UpdateLibraryRootBody): Promise<MutationResult> {
     const root = this.db.settings.libraryRoots.find((r) => r.id === id);
     if (!root) throw new NotFoundError('图库文件夹');
-    const before = root.enabled;
-    root.enabled = enabled;
-    return this.withUndo(enabled ? `已启用：${root.path}` : `已停用：${root.path}`, () => {
-      root.enabled = before;
+    const before = { ...root };
+    const next = { enabled: body.enabled ?? root.enabled, mode: body.mode ?? root.mode, comicRating: body.comicRating ?? root.comicRating };
+    const modeChanged = next.mode !== root.mode;
+    const ratingChanged = next.comicRating !== root.comicRating;
+    if (next.enabled === root.enabled && !modeChanged && !ratingChanged) return done('没有变化');
+    const rows = [...this.db.images.values()].filter((img) => img.libraryRootId === root.id);
+    const snap = rows.map((img) => ({ img, kind: img.kind, kindSource: img.kindSource, kindEvidence: img.kindEvidence, rating: img.rating }));
+    Object.assign(root, next);
+    const touches = modeChanged || (ratingChanged && next.mode === 'comic');
+    if (touches) this.applyRootMode(root);
+    const message =
+      next.enabled !== before.enabled
+        ? next.enabled
+          ? `已启用：${root.path}`
+          : `已停用：${root.path}`
+        : modeChanged
+          ? next.mode === 'comic'
+            ? `已改成按漫画导入：${rows.length} 张归到漫画，不再识别`
+            : '已改回按插画识别：没识别过的图会开始识别'
+          : `按漫画导入的分级改成了「${RATING_LABEL[next.comicRating]}」`;
+    return this.withUndo(message, () => {
+      Object.assign(root, before);
+      for (const s of snap) Object.assign(s.img, { kind: s.kind, kindSource: s.kindSource, kindEvidence: s.kindEvidence, rating: s.rating });
     });
+  }
+
+  /** 和 sqlite 的 applyRootMode 一样：按文件夹设置重判类型（手动改过的不动）；按漫画导入的，没识别过的页用选的分级 */
+  private applyRootMode(root: LibraryRoot): void {
+    for (const img of this.db.images.values()) {
+      if (img.libraryRootId !== root.id) continue;
+      if (!img.kindManual) {
+        const a = this.autoKindOf(img);
+        img.kind = a.kind;
+        img.kindSource = a.source;
+        img.kindEvidence = a.evidence;
+      }
+      if (root.mode === 'comic' && !img.tagged && !img.ratingManual) img.rating = root.comicRating;
+    }
   }
 
   async removeLibraryRoot(id: ID): Promise<MutationResult> {

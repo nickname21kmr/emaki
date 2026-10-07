@@ -7,6 +7,7 @@ import type {
   MutationResult,
   Settings,
   UpdateSettingsBody,
+  UpdateLibraryRootBody,
 } from '@emaki/shared';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -61,14 +62,14 @@ function patchRoots(client: QueryClient, fn: (roots: LibraryRoot[]) => LibraryRo
   client.setQueryData<Settings>(qk.settings, (s) => (s ? { ...s, libraryRoots: fn(s.libraryRoots) } : s));
 }
 
-/** 启用 / 停用文件夹（乐观更新，开关不等网络） */
-export function useToggleRoot() {
+/** 改文件夹：启用 / 停用、按漫画导入、漫画的分级（乐观更新，开关不等网络） */
+export function useUpdateRoot() {
   const client = useQueryClient();
-  const { mutate } = useMutate((v: { id: ID; enabled: boolean }) => api.updateLibraryRoot(v.id, v.enabled));
+  const { mutate } = useMutate((v: { id: ID; body: UpdateLibraryRootBody }) => api.updateLibraryRoot(v.id, v.body));
   return useCallback(
-    (id: ID, enabled: boolean) => {
-      patchRoots(client, (roots) => roots.map((r) => (r.id === id ? { ...r, enabled } : r)));
-      mutate({ id, enabled }, { onError: () => void client.invalidateQueries({ queryKey: qk.settings }) });
+    (id: ID, body: UpdateLibraryRootBody) => {
+      patchRoots(client, (roots) => roots.map((r) => (r.id === id ? { ...r, ...body } : r)));
+      mutate({ id, body }, { onError: () => void client.invalidateQueries({ queryKey: qk.settings }) });
     },
     [client, mutate],
   );

@@ -15,7 +15,7 @@ import { assertKindValue, setKindInTx, type KindDeps } from './kinds.ts';
 import type { CollectionsHook } from '../../services/collections/CollectionService.ts';
 import { iso, parseId } from './sql.ts';
 
-const RATING_LABEL: Record<Rating, string> = { general: '全年龄', sensitive: '轻微', questionable: '较敏感', explicit: '限制级' };
+export const RATING_LABEL: Record<Rating, string> = { general: '全年龄', sensitive: '轻微', questionable: '较敏感', explicit: '限制级' };
 
 export class BulkOps {
   constructor(

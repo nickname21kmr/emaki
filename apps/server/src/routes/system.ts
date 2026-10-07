@@ -12,11 +12,12 @@ import type { EventBus } from '../core/events.ts';
 import type { DataSource } from '../datasource/DataSource.ts';
 import { BadRequestError } from '../http/errors.ts';
 import { checkNetwork } from '../net/check.ts';
-import { idParam, parse } from '../http/validate.ts';
+import { idParam, parse, ratingSchema } from '../http/validate.ts';
 import { isModelReady } from '../services/tagger/download.ts';
 import { DEFAULT_TAGGER_MODEL, findModel, MODEL_NOTES, modelDownloadSize, TAGGER_MODELS } from '../services/tagger/models.ts';
 import { pickFolder } from '../system/pickFolder.ts';
 
+const rootMode = z.enum(['auto', 'comic']);
 const themeTags = z.array(z.string().trim().min(1).max(100)).max(CUSTOM_THEME_LIMITS.tags);
 
 /** 设置、图库文件夹、后台任务、SSE、撤销 */
@@ -108,14 +109,22 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
   });
 
   app.post('/api/library-roots', (req) => {
-    const body = parse(z.object({ path: z.string().min(1), merge: z.boolean().optional() }), req.body);
+    const body = parse(
+      z.object({ path: z.string().min(1), merge: z.boolean().optional(), mode: rootMode.optional(), comicRating: ratingSchema.optional() }),
+      req.body,
+    );
     return ds.addLibraryRoot(body);
   });
 
   app.patch('/api/library-roots/:id', (req) => {
     const { id } = parse(idParam, req.params);
-    const { enabled } = parse(z.object({ enabled: z.boolean() }), req.body);
-    return ds.updateLibraryRoot(id, enabled);
+    const body = parse(
+      z
+        .object({ enabled: z.boolean().optional(), mode: rootMode.optional(), comicRating: ratingSchema.optional() })
+        .refine((b) => b.enabled !== undefined || b.mode !== undefined || b.comicRating !== undefined, '没有要改的'),
+      req.body,
+    );
+    return ds.updateLibraryRoot(id, body);
   });
 
   app.delete('/api/library-roots/:id', (req) => {

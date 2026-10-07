@@ -7,7 +7,7 @@ import { BookFace, BookPlate } from '@/components/media/BookPlate';
 import { Button, EmptyState, ErrorState, Skeleton } from '@/components/ui';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
-import { displayTitle, shouldCloth, toShelfUnits, type ShelfUnit } from '@/lib/collections';
+import { displayTitle, shouldCloth, toShelfUnits, unitWord, type ShelfUnit } from '@/lib/collections';
 import { formatCount } from '@/lib/format';
 import { EASE_OUT } from '@/lib/motion';
 import { useCollections, useMutate } from '@/lib/queries';
@@ -101,7 +101,7 @@ function Unit({ u, onReview, onCharacter }: { u: ShelfUnit; onReview: () => void
   const name = u.type === 'series' ? u.key : displayTitle(u.c);
   const info =
     u.type === 'series'
-      ? `全 ${u.items.length} 话`
+      ? `全 ${u.items.length} ${unitWord(u.items)}`
       : u.c.kind === 'artbook'
         ? `${formatCount(u.c.unrecognizedPageCount)} 页未认出`
         : `${formatCount(u.c.pageCount)} 页 · 还没关联角色`;

@@ -40,7 +40,7 @@ import {
   Skeleton,
 } from '@/components/ui';
 import { api } from '@/lib/api';
-import { byline, COLLECTION_META, displayTitle, readProgress } from '@/lib/collections';
+import { byline, COLLECTION_META, displayTitle, readProgress, unitWord } from '@/lib/collections';
 import { formatCount, RATING_LABEL } from '@/lib/format';
 import { useCollection, useImagesInfinite, useMutate } from '@/lib/queries';
 import { CharacterPicker } from '@/features/gallery/CharacterPicker';
@@ -263,7 +263,7 @@ function Colophon({ data, onReview }: { data: GetCollectionResponse; onReview: (
           {data.series.map((s) => (
             <Link key={s.id} to={`/collections/${s.id}`}>
               <Chip size="sm" selected={s.id === c.id}>
-                {s.volumeNo !== null ? `第 ${s.volumeNo} 话` : displayTitle(s)}
+                {s.volumeNo !== null ? `第 ${s.volumeNo} ${unitWord(data.series)}` : displayTitle(s)}
               </Chip>
             </Link>
           ))}
@@ -440,7 +440,7 @@ function SeriesDialog({
     <Dialog open={open} onOpenChange={onOpenChange} title="归入系列" description="系列名相同的几本会在书架上叠成一张卡。">
       <div className="grid grid-cols-[minmax(0,1fr)_6rem] gap-3">
         <Input value={key} onChange={(e) => setKey(e.target.value)} placeholder="系列名" />
-        <Input value={no} onChange={(e) => setNo(e.target.value.replace(/[^\d.]/g, ''))} placeholder="第几话" inputMode="decimal" />
+        <Input value={no} onChange={(e) => setNo(e.target.value.replace(/[^\d.]/g, ''))} placeholder="第几话 / 第几册" inputMode="decimal" />
       </div>
       <DialogFooter>
         <Button

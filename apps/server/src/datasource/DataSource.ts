@@ -1,5 +1,6 @@
 import type {
   AddLibraryRootBody,
+  UpdateLibraryRootBody,
   BulkCollectionsBody,
   Artist,
   BulkImagesBody,
@@ -135,7 +136,7 @@ export interface DataSource {
   getSettings(): Promise<Settings>;
   updateSettings(body: UpdateSettingsBody): Promise<Settings>;
   addLibraryRoot(body: AddLibraryRootBody): Promise<MutationResult>;
-  updateLibraryRoot(id: ID, enabled: boolean): Promise<MutationResult>;
+  updateLibraryRoot(id: ID, body: UpdateLibraryRootBody): Promise<MutationResult>;
   removeLibraryRoot(id: ID): Promise<MutationResult>;
 
   // 后台任务

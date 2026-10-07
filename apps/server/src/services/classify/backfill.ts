@@ -7,7 +7,7 @@
  * content_kind_manual=1 的行只写 theme、art_score（manual 只保护类型）；任何重算都不动 shelved_at。
  */
 import type { ContentKind, ContentKindSource, ImageFormat } from '@emaki/shared';
-import type { Db, Statement } from '../../db/connection.ts';
+import { transact, type Db, type Statement } from '../../db/connection.ts';
 import { classifyContent, CLASSIFIER_VERSION, SIGNAL_TAGS } from './rules.ts';
 import { artScore, classifyTheme, THEME_TAG_NAMES, type StoredTheme } from './theme.ts';
 
@@ -21,6 +21,8 @@ export interface ClassRow {
   camera: string | null;
   content_kind_manual: number;
   tagged_at: string | null;
+  /** 所在图库文件夹按漫画导入（1） */
+  comic_root: number;
 }
 
 export interface Classification {
@@ -31,7 +33,9 @@ export interface Classification {
   artScore: number | null;
 }
 
-export const CLASS_COLS = 'id, file_name, rel_path, width, height, format, camera, content_kind_manual, tagged_at';
+/** 只能接在 FROM images 后面（不带别名）：comic_root 用相关子查询从图库文件夹取 */
+export const CLASS_COLS = `id, file_name, rel_path, width, height, format, camera, content_kind_manual, tagged_at,
+  COALESCE((SELECT r.content_mode = 'comic' FROM library_roots r WHERE r.id = images.root_id), 0) AS comic_root`;
 /** 分类、主题、质量分用到的全部标签名：回填只读这些（RV-T-6） */
 export const CLASSIFY_TAG_NAMES: readonly string[] = [...new Set([...SIGNAL_TAGS, ...THEME_TAG_NAMES])];
 
@@ -46,6 +50,7 @@ export function computeClassification(r: ClassRow, tags: [string, number][] | nu
     format: r.format,
     camera: r.camera,
     tags: tagged ? new Map(tags) : null,
+    comicRoot: !!r.comic_root,
   });
   const score = tagged ? artScore({ w: r.width, h: r.height, fileName: r.file_name }, tags) : null;
   return { kind: c.kind, source: c.source, evidence: c.evidence, theme: tagged ? classifyTheme(tags, score) : null, artScore: score };
@@ -125,9 +130,9 @@ export function backfillClassification(db: Db, opts: { ids?: number[] } = {}): {
         db,
         batch.filter((r) => r.tagged_at !== null).map((r) => r.id),
       );
-    db.transaction(() => {
+    transact(db, () => {
       for (const r of batch) writeClassification(stmts, r, computeClassification(r, r.tagged_at !== null ? (tags.get(r.id) ?? []) : null));
-    })();
+    });
   }
   return { rows: rows.length, ms: Math.round(performance.now() - t0) };
 }

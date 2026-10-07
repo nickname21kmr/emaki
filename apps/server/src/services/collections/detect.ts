@@ -11,7 +11,7 @@
  */
 import { CHAPTER, TRANSLATOR } from './parseName.ts';
 
-export const DETECTOR_VERSION = 3;
+export const DETECTOR_VERSION = 4;
 export const MIN_PAGES = 8;
 export const MAX_PAGES = 2000;
 
@@ -42,7 +42,8 @@ export function bookLeaf(dir: string): string {
 
 /** T38c 之后改成从 @emaki/shared 导入 */
 export type CollectionKind = 'doujin' | 'artbook';
-export type CollectionRule = 'A' | 'B' | 'C';
+/** H = 按漫画导入的文件夹：每个子文件夹都成一本，不看 A / B / C */
+export type CollectionRule = 'A' | 'B' | 'C' | 'H';
 export type PageOrder = 'name' | 'mtime';
 
 export interface DirPage {
@@ -130,6 +131,12 @@ export function nameSignals(leaf: string): { doujin: boolean; artbook: boolean; 
   };
 }
 
+/** 按漫画导入的文件夹：两页以上就成一本本子，页序按文件名 */
+export const COMIC_MIN_PAGES = 2;
+export function decideComicCollection(f: DirFeatures): { rule: CollectionRule; pageOrder: PageOrder } | null {
+  return f.n >= COMIC_MIN_PAGES && f.n <= MAX_PAGES ? { rule: 'H', pageOrder: 'name' } : null;
+}
+
 export function decideCollection(leaf: string, f: DirFeatures): { rule: CollectionRule; pageOrder: PageOrder } | null {
   if (f.n < MIN_PAGES || f.n > MAX_PAGES || MISC_DIR.test(leaf.normalize('NFC')) || f.nonBook > 0.2) return null;
   let rule: CollectionRule | null = null;
@@ -146,7 +153,8 @@ export function decideCollection(leaf: string, f: DirFeatures): { rule: Collecti
 }
 
 /** 本子还是画集：已判定页够多就看漫画是否过半，否则按目录名暂定（识别后自动更正） */
-export function autoKind(leaf: string, f: DirFeatures, rule: CollectionRule | null): { kind: CollectionKind; source: 'pages' | 'name' } {
+export function autoKind(leaf: string, f: DirFeatures, rule: CollectionRule | null): { kind: CollectionKind; source: 'pages' | 'name' | 'root' } {
+  if (rule === 'H') return { kind: 'doujin', source: 'root' };
   if (f.judged >= Math.max(3, 0.5 * f.n)) return { kind: (f.comicShare ?? 0) >= 0.5 ? 'doujin' : 'artbook', source: 'pages' };
   const sig = nameSignals(leaf);
   if (sig.artbook) return { kind: 'artbook', source: 'name' };
@@ -169,9 +177,10 @@ export function orderPages<T extends DirPage>(pages: T[], order: PageOrder): T[]
 export function evidenceOf(
   rule: CollectionRule | null,
   f: DirFeatures,
-  kindRes: { kind: CollectionKind; source: 'pages' | 'name' },
+  kindRes: { kind: CollectionKind; source: 'pages' | 'name' | 'root' },
   leaf = '',
 ): string {
+  if (rule === 'H') return '按漫画导入的文件夹';
   const parts: string[] = [];
   if (rule === 'A') parts.push(`文件名是页码（${f.seqHits}/${f.n}）`);
   else if (rule === 'B') parts.push(`版心统一 ${f.medianW}×${Math.round(f.medianW * f.medianAspect)} · 文件名是下载器编号`);

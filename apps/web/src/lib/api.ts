@@ -56,6 +56,7 @@ import type {
   UpdateCharacterBody,
   UpdateImageBody,
   UpdateSettingsBody,
+  UpdateLibraryRootBody,
   Work,
 } from '@emaki/shared';
 
@@ -181,8 +182,7 @@ export const api = {
   taggerModels: () => get<ListTaggerModelsResponse>('/tagger/models'),
   updateSettings: (body: UpdateSettingsBody) => put<Settings>('/settings', body),
   addLibraryRoot: (body: AddLibraryRootBody) => post<MutationResult>('/library-roots', body),
-  updateLibraryRoot: (id: ID, enabled: boolean) =>
-    patch<MutationResult>(`/library-roots/${encodeURIComponent(id)}`, { enabled }),
+  updateLibraryRoot: (id: ID, body: UpdateLibraryRootBody) => patch<MutationResult>(`/library-roots/${encodeURIComponent(id)}`, body),
   removeLibraryRoot: (id: ID) => del<MutationResult>(`/library-roots/${encodeURIComponent(id)}`),
 
   jobs: () => get<ListJobsResponse>('/jobs'),

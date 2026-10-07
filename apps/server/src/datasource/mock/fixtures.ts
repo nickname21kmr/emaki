@@ -54,6 +54,8 @@ export interface ImageRow {
   addedAt: string;
   modifiedAt: string;
   rating: Rating;
+  /** 用户手动改过分级（images.rating_manual） */
+  ratingManual?: boolean;
   characterIds: ID[];
   /** tagger 识别出的作品（即使没识别出角色也可能有） */
   copyrightWorkIds: ID[];
@@ -449,8 +451,8 @@ export function buildMockDb(now = Date.now()): MockDb {
 
   const settings: Settings = {
     libraryRoots: [
-      { id: 'root1', path: 'D:/Pictures/插画', enabled: true, imageCount: 0, lastScanAt: new Date(now - 2 * 3600_000).toISOString(), importedAt: new Date(now - 200 * DAY).toISOString() },
-      { id: 'root2', path: 'E:/下载/pixiv', enabled: true, imageCount: 0, lastScanAt: new Date(now - 26 * 3600_000).toISOString(), importedAt: new Date(now - 200 * DAY).toISOString() },
+      { id: 'root1', path: 'D:/Pictures/插画', enabled: true, imageCount: 0, lastScanAt: new Date(now - 2 * 3600_000).toISOString(), importedAt: new Date(now - 200 * DAY).toISOString(), mode: 'auto', comicRating: 'general' },
+      { id: 'root2', path: 'E:/下载/pixiv', enabled: true, imageCount: 0, lastScanAt: new Date(now - 26 * 3600_000).toISOString(), importedAt: new Date(now - 200 * DAY).toISOString(), mode: 'auto', comicRating: 'general' },
     ],
     tagger: {
       model: 'A1yCE/pixai-tagger-v1.0-onnx-fp16',

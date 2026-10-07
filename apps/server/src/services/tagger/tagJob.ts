@@ -43,9 +43,9 @@ export interface TagJobDeps {
  * - 旧模型轮：没识别过、文件时间早于 @before
  * - 主模型轮：没识别过、文件时间不早于 @before；以及别的模型识别过、没认出角色、文件时间不早于 @before 的（@retryOld = 1 时不看时间）；
  *   以及用户在「未识别」里要求重新识别的（retag = 1，不管之前是哪个模型认的）
- * 两轮都跳过相机照片（@skipCamera = 1）。@before 为 NULL 时主模型轮覆盖全部。
+ * 两轮都跳过相机照片（@skipCamera = 1）和按漫画导入的文件夹。@before 为 NULL 时主模型轮覆盖全部。
  */
-const BASE = `r.enabled = 1 AND r.removed_at IS NULL AND i.missing = 0 AND i.trashed_at IS NULL AND i.excluded_by IS NULL
+const BASE = `r.enabled = 1 AND r.removed_at IS NULL AND r.content_mode <> 'comic' AND i.missing = 0 AND i.trashed_at IS NULL AND i.excluded_by IS NULL
   AND NOT (@skipCamera = 1 AND i.content_kind = 'photo' AND COALESCE(i.camera, '') <> '')`;
 const NEWER = '(@before IS NULL OR i.modified_at >= @before)';
 const WHERE_PRIMARY = `${BASE} AND (

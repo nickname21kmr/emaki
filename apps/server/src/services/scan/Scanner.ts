@@ -110,6 +110,9 @@ interface RootRow {
   id: number;
   path: string;
   last_scan_at: string | null;
+  /** 'comic' = 按漫画导入 */
+  content_mode: string;
+  comic_rating: string;
 }
 
 type Op =
@@ -175,7 +178,7 @@ export class Scanner {
     // ---- 阶段 0：请求
     const req = this.d.requests.take();
     const roots = db
-      .prepare('SELECT id, path, last_scan_at FROM library_roots WHERE enabled = 1 AND removed_at IS NULL ORDER BY id')
+      .prepare('SELECT id, path, last_scan_at, content_mode, comic_rating FROM library_roots WHERE enabled = 1 AND removed_at IS NULL ORDER BY id')
       .all() as RootRow[];
     const rootById = new Map(roots.map((r) => [r.id, r]));
     // 第一次扫描的文件夹：记下首次导入时间（开始时就写，首页能在扫描过程中进入「刚导入」状态）
@@ -303,10 +306,10 @@ export class Scanner {
     const stmts = {
       insert: db.prepare(`INSERT INTO images (root_id, rel_path, file_name, width, height, bytes, format, sha256,
           source_site, source_post_id, source_artist, source_url, added_at, modified_at,
-          camera, content_kind, content_kind_source, content_kind_evidence, content_kind_version)
+          camera, content_kind, content_kind_source, content_kind_evidence, content_kind_version, rating)
         VALUES (@rootId, @relPath, @fileName, @width, @height, @bytes, @format, @sha256,
           @site, @postId, @artist, @url, @addedAt, @modifiedAt,
-          @camera, @kind, @kindSource, @kindEvidence, @kindVersion)`),
+          @camera, @kind, @kindSource, @kindEvidence, @kindVersion, @rating)`),
       // 内容变了要重新识别：标签、主题、质量分都清空；手动改过的类型保留（BI-14 ②：按没有标签重判）
       content: db.prepare(`UPDATE images SET width=@width, height=@height, bytes=@bytes, format=@format, sha256=@sha256, modified_at=@modifiedAt,
           dhash=NULL, dominant_color=NULL, thumb_at=NULL, decode_error=NULL, tagged_at=NULL, tagger_model=NULL,
@@ -413,6 +416,7 @@ export class Scanner {
         format: probe.format,
         camera: probe.camera,
         tags: null,
+        comicRoot: root.content_mode === 'comic',
       });
       const kindCols = { camera: probe.camera, kind: cls.kind, kindSource: cls.source, kindEvidence: cls.evidence, kindVersion: CLASSIFIER_VERSION };
       if (item.kind === 'changed') {
@@ -442,6 +446,8 @@ export class Scanner {
               artist: src?.artist ?? null,
               url: src?.url ?? null,
               addedAt,
+              // 按漫画导入的不识别，分级用导入时选的
+              rating: root.content_mode === 'comic' ? root.comic_rating : 'general',
             },
           });
           summary.added++;

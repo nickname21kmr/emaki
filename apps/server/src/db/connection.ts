@@ -28,3 +28,11 @@ export function closeDatabase(db: Db): void {
     db.close();
   }
 }
+
+/**
+ * 在事务里跑 fn。已经在事务里（比如 ctx.mutate 的回调）就直接跑：better-sqlite3 的嵌套事务是 SAVEPOINT，
+ * 同一事务里先大批改过行、再在 savepoint 里逐行写，会慢几十倍（几万行时卡几十秒）
+ */
+export function transact<T>(db: Db, fn: () => T): T {
+  return db.inTransaction ? fn() : db.transaction(fn)();
+}

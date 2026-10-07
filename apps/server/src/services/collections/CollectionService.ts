@@ -12,9 +12,21 @@
  * - 手动合集的文件夹改名后跟着搬（≥ 80% 的页落在同一个新目录）。
  * - 被排除、进回收站、丢失的页离开合集；其余页按页序重新从 1 编号，不留空号。
  */
-import type { Db } from '../../db/connection.ts';
-import { autoKind, bookLeaf, decideCollection, dirFeatures, DETECTOR_VERSION, evidenceOf, isJudged, orderPages, type DirPage, type PageOrder } from './detect.ts';
-import { parseFolderName } from './parseName.ts';
+import { transact, type Db } from '../../db/connection.ts';
+import {
+  autoKind,
+  bookLeaf,
+  decideCollection,
+  decideComicCollection,
+  dirFeatures,
+  DETECTOR_VERSION,
+  evidenceOf,
+  isJudged,
+  orderPages,
+  type DirPage,
+  type PageOrder,
+} from './detect.ts';
+import { parseComicDir, parseFolderName } from './parseName.ts';
 
 interface Row {
   id: number;
@@ -30,6 +42,9 @@ interface Row {
   tagged_at: string | null;
   collection_id: number | null;
   page_no: number | null;
+  /** 所在图库文件夹按漫画导入（1） */
+  comic_root: number;
+  root_path: string;
 }
 
 export interface CollectionRow {
@@ -64,6 +79,9 @@ interface Group {
   rootId: number;
   dir: string;
   pages: (DirPage & { row: Row })[];
+  /** 按漫画导入的文件夹里的：每个子文件夹都成一本（根目录直接放页的也算一本） */
+  comic: boolean;
+  rootPath: string;
 }
 
 /**
@@ -83,7 +101,7 @@ export interface RefreshResult {
 
 /** 条件字面包含 trashed_at IS NULL AND missing = 0（T22 的部分索引） */
 const ROW_SQL = `SELECT i.id, i.root_id, i.rel_path, i.file_name, i.width, i.height, i.modified_at, i.content_kind, i.content_kind_source,
-    i.content_kind_manual, i.tagged_at, i.collection_id, i.page_no
+    i.content_kind_manual, i.tagged_at, i.collection_id, i.page_no, r.content_mode = 'comic' AS comic_root, r.path AS root_path
   FROM images i JOIN library_roots r ON r.id = i.root_id
   WHERE r.enabled = 1 AND r.removed_at IS NULL AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL`;
 
@@ -122,13 +140,13 @@ export class CollectionService {
 
   refreshAll(): RefreshResult {
     const t0 = performance.now();
-    const res = this.db.transaction(() => {
+    const res = transact(this.db, () => {
       const groups = this.group(this.db.prepare(ROW_SQL).all() as Row[]);
       const existing = new Map<string, CollectionRow>();
       for (const c of this.db.prepare('SELECT * FROM collections').all() as CollectionRow[]) existing.set(keyOf(c.root_id, c.rel_dir), c);
       this.followRenames(groups, existing);
       return this.apply(groups, existing, null);
-    })();
+    });
     return { ...res, ms: performance.now() - t0 };
   }
 
@@ -136,19 +154,22 @@ export class CollectionService {
   refreshDirs(imageIds: number[]): RefreshResult {
     const t0 = performance.now();
     if (!imageIds.length) return { active: 0, created: 0, removed: 0, updated: 0, pagesChanged: 0, ms: 0 };
-    const res = this.db.transaction(() => {
+    const res = transact(this.db, () => {
       const dirs = this.db
         .prepare(
           `SELECT DISTINCT root_id AS rootId, substr(rel_path, 1, length(rel_path) - length(file_name) - 1) AS dir
            FROM images WHERE id IN (SELECT value FROM json_each(?))`,
         )
         .all(JSON.stringify(imageIds)) as { rootId: number; dir: string }[];
-      const scope = new Set(dirs.filter((d) => d.dir).map((d) => keyOf(d.rootId, d.dir)));
+      // 按漫画导入的文件夹根目录直接放页时，根目录也是一本
+      const comicRoots = new Set(this.db.prepare("SELECT id FROM library_roots WHERE content_mode = 'comic'").pluck().all() as number[]);
+      const books = dirs.filter((d) => d.dir || comicRoots.has(d.rootId));
+      const scope = new Set(books.map((d) => keyOf(d.rootId, d.dir)));
       const rows: Row[] = [];
       const stmt = this.db.prepare(
         `${ROW_SQL} AND i.root_id = @rootId AND substr(i.rel_path, 1, length(@prefix)) = @prefix AND instr(substr(i.rel_path, length(@prefix) + 1), '/') = 0`,
       );
-      for (const d of dirs) if (d.dir) rows.push(...(stmt.all({ rootId: d.rootId, prefix: `${d.dir}/` }) as Row[]));
+      for (const d of books) rows.push(...(stmt.all({ rootId: d.rootId, prefix: d.dir ? `${d.dir}/` : '' }) as Row[]));
       const existing = new Map<string, CollectionRow>();
       const byKey = this.db.prepare('SELECT * FROM collections WHERE root_id = ? AND rel_dir = ?');
       for (const d of dirs) {
@@ -156,7 +177,7 @@ export class CollectionService {
         if (c) existing.set(keyOf(c.root_id, c.rel_dir), c);
       }
       return this.apply(this.group(rows), existing, scope);
-    })();
+    });
     return { ...res, ms: performance.now() - t0 };
   }
 
@@ -164,12 +185,12 @@ export class CollectionService {
   assignPages(collectionId: number): number[] {
     const c = this.db.prepare('SELECT * FROM collections WHERE id = ?').get(collectionId) as CollectionRow | undefined;
     if (!c) return [];
-    return this.db.transaction(() => {
+    return transact(this.db, () => {
       const rows = this.db
         .prepare(
           `${ROW_SQL} AND i.root_id = @rootId AND substr(i.rel_path, 1, length(@prefix)) = @prefix AND instr(substr(i.rel_path, length(@prefix) + 1), '/') = 0`,
         )
-        .all({ rootId: c.root_id, prefix: `${c.rel_dir}/` }) as Row[];
+        .all({ rootId: c.root_id, prefix: c.rel_dir ? `${c.rel_dir}/` : '' }) as Row[];
       const g = this.group(rows).get(keyOf(c.root_id, c.rel_dir));
       const keep = c.state === 'active' && g ? this.number(c.id, g, c.page_order) : { ids: [] as number[], changed: 0 };
       this.db
@@ -178,7 +199,7 @@ export class CollectionService {
         )
         .run(c.id, JSON.stringify(keep.ids));
       return keep.ids;
-    })();
+    });
   }
 
   // ---------------------------------------------------------------- 内部
@@ -187,10 +208,10 @@ export class CollectionService {
     const groups = new Map<string, Group>();
     for (const r of rows) {
       const dir = dirOf(r.rel_path, r.file_name);
-      if (!dir) continue; // 根目录本身不成册
+      if (!dir && !r.comic_root) continue; // 根目录本身不成册（按漫画导入的除外）
       const key = keyOf(r.root_id, dir);
       let g = groups.get(key);
-      if (!g) groups.set(key, (g = { rootId: r.root_id, dir, pages: [] }));
+      if (!g) groups.set(key, (g = { rootId: r.root_id, dir, pages: [], comic: r.comic_root === 1, rootPath: r.root_path }));
       g.pages.push({
         id: r.id,
         fileName: r.file_name,
@@ -237,7 +258,10 @@ export class CollectionService {
     let created = 0;
     let removed = 0;
     let updated = 0;
-    const del = db.prepare('DELETE FROM collections WHERE id = ?');
+    // 删书时页码一起清掉（外键 ON DELETE SET NULL 只清 collection_id）
+    const unpage = db.prepare('UPDATE images SET collection_id = NULL, page_no = NULL WHERE collection_id = ?');
+    const delRow = db.prepare('DELETE FROM collections WHERE id = ?');
+    const del = { run: (id: number) => (unpage.run(id), delRow.run(id)) };
     const ins = db.prepare(`INSERT INTO collections (root_id, rel_dir, kind, kind_source, title, event, circle, artist, parody, translator,
         series_key, volume_no, page_order, origin, state, evidence, detector_version, created_at, updated_at)
       VALUES (@root_id, @rel_dir, @kind, @kind_source, @title, @event, @circle, @artist, @parody, @translator,
@@ -250,16 +274,18 @@ export class CollectionService {
       if (ex?.state === 'dismissed') continue;
       const leaf = leafOf(g.dir);
       const f = dirFeatures(g.pages);
-      const parsed = parseFolderName(leaf);
+      // 按漫画导入：不看 A / B / C，卷号、系列名从各级目录名里找
+      const decide = () => (g.comic ? decideComicCollection(f) : decideCollection(leaf, f));
+      const parsed = g.comic ? parseComicDir(g.dir, g.rootPath) : parseFolderName(leaf);
       if (ex?.origin === 'manual') {
-        const decided = decideCollection(leaf, f);
+        const decided = decide();
         const k = autoKind(leaf, f, decided?.rule ?? null);
         const next = this.fieldsFor(ex, k, parsed, evidenceOf(decided?.rule ?? null, f, k, leaf));
         if (this.update(ex, next, now)) updated++;
         active.set(ex.id, { c: ex, g });
         continue;
       }
-      const d = decideCollection(leaf, f);
+      const d = decide();
       if (!d) {
         if (ex) {
           del.run(ex.id);
@@ -336,7 +362,7 @@ export class CollectionService {
   /** 自动判定给出的字段；手动改过的类型、标题、系列保留原值 */
   private fieldsFor(
     ex: CollectionRow | null,
-    k: { kind: string; source: 'pages' | 'name' },
+    k: { kind: string; source: 'pages' | 'name' | 'root' },
     p: ReturnType<typeof parseFolderName>,
     evidence: string,
   ): AutoFields {

@@ -129,11 +129,38 @@ export function settingsContract(make: ContractFactory, name: Name) {
 
     it('停用文件夹可撤销', async () => {
       const e = env();
-      const r = await e.ds.updateLibraryRoot(e.id('root', 'root1'), false);
+      const r = await e.ds.updateLibraryRoot(e.id('root', 'root1'), { enabled: false });
       expect(r.undoToken).toBeTruthy();
       expect((await e.ds.getSettings()).libraryRoots[0]!.enabled).toBe(false);
       await e.ds.undo(r.undoToken!);
       expect((await e.ds.getSettings()).libraryRoots[0]!.enabled).toBe(true);
+    });
+
+    it('按漫画导入：文件夹里的图归漫画，不算未识别、不等识别，没识别过的用选的分级；可撤销', async () => {
+      const e = env();
+      const before = await e.ds.getStats();
+      const untagged = e.id('image', 'i30');
+      const tagged = e.id('image', 'i1');
+      const look = async (id: string) => {
+        const d = (await e.ds.getImage(id))!;
+        return { kind: d.kind, kindSource: d.kindSource, kindReason: d.kindReason, rating: d.rating };
+      };
+      const [u0, t0] = [await look(untagged), await look(tagged)];
+      expect(before.pendingTagCount).toBeGreaterThan(0);
+      const r = await e.ds.updateLibraryRoot(e.id('root', 'root1'), { mode: 'comic', comicRating: 'sensitive' });
+      expect(r.message).toMatch(/^已改成按漫画导入：\d+ 张归到漫画，不再识别$/);
+      expect((await e.ds.getSettings()).libraryRoots[0]).toMatchObject({ mode: 'comic', comicRating: 'sensitive' });
+      const s = await e.ds.getStats();
+      expect([s.unrecognizedCount, s.untaggedCount, s.pendingTagCount]).toEqual([0, 0, 0]);
+      // 「未识别」页和统计一致：漫画文件夹的页都不在里面
+      expect((await e.ds.unrecognizedSummary()).art.total).toBe(0);
+      expect(await look(untagged)).toEqual({ kind: 'comic', kindSource: 'folder', kindReason: '按漫画导入的文件夹', rating: 'sensitive' });
+      // 识别过的页分级不动
+      expect(await look(tagged)).toEqual({ ...t0, kind: 'comic', kindSource: 'folder', kindReason: '按漫画导入的文件夹' });
+      await e.ds.undo(r.undoToken!);
+      expect([await look(untagged), await look(tagged)]).toEqual([u0, t0]);
+      expect((await e.ds.getStats()).unrecognizedCount).toBe(before.unrecognizedCount);
+      expect((await e.ds.getSettings()).libraryRoots[0]).toMatchObject({ mode: 'auto', comicRating: 'general' });
     });
 
     it('移除文件夹可撤销', async () => {

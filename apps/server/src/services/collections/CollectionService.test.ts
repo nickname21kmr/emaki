@@ -24,7 +24,7 @@ function add(dir: string, files: string[], o: { w?: number; h?: number; kind?: s
     const id = nextId++;
     ins.run({
       id,
-      rel: `${dir}/${file}`,
+      rel: dir ? `${dir}/${file}` : file,
       file,
       w: o.w ?? 1200,
       h: o.h ?? 1700,
@@ -125,5 +125,44 @@ describe('refreshDirs / assignPages', () => {
     const id = db.prepare('SELECT id FROM collections').pluck().get() as number;
     db.prepare("UPDATE collections SET page_order = 'mtime'").run();
     expect(svc.assignPages(id)).toEqual([...ids].reverse());
+  });
+});
+
+describe('按漫画导入的文件夹', () => {
+  beforeEach(() => {
+    db.prepare("UPDATE library_roots SET content_mode = 'comic', path = 'D:/漫画/某漫画'").run();
+  });
+  const books = () =>
+    db.prepare('SELECT rel_dir, kind, kind_source, title, series_key, volume_no, page_order, evidence FROM collections ORDER BY rel_dir').all();
+
+  it('每个子文件夹都成一本本子（不看页码和尺寸规则），卷号、系列名从各级目录名里找；根目录直接放的页也成一本', () => {
+    add('某漫画 Vol.01/pics', ['zerobyw1-0.jpg', 'zerobyw1-2.jpg', 'zerobyw1-10.jpg']);
+    add('某漫画 Vol.04/6卷', ['img_0.jpg', 'img_1.jpg']);
+    add('番外', ['a.jpg']);
+    const root = add('', ['p1.jpg', 'p2.jpg']);
+    svc.refreshAll();
+    expect(books()).toEqual([
+      { rel_dir: '', kind: 'doujin', kind_source: 'root', title: '某漫画', series_key: null, volume_no: null, page_order: 'name', evidence: '按漫画导入的文件夹' },
+      { rel_dir: '某漫画 Vol.01/pics', kind: 'doujin', kind_source: 'root', title: '某漫画', series_key: '某漫画', volume_no: 1, page_order: 'name', evidence: '按漫画导入的文件夹' },
+      { rel_dir: '某漫画 Vol.04/6卷', kind: 'doujin', kind_source: 'root', title: '某漫画', series_key: '某漫画', volume_no: 6, page_order: 'name', evidence: '按漫画导入的文件夹' },
+    ]);
+    // 一页的文件夹不成册；页序按文件名自然序
+    const vol1 = db.prepare("SELECT file_name FROM images i JOIN collections c ON c.id = i.collection_id WHERE c.rel_dir = '某漫画 Vol.01/pics' ORDER BY page_no").pluck().all();
+    expect(vol1).toEqual(['zerobyw1-0.jpg', 'zerobyw1-2.jpg', 'zerobyw1-10.jpg']);
+    expect(pageNos(root).map((x) => x.p)).toEqual([1, 2]);
+
+    // 改回普通文件夹：这些小目录不够成册，自动合集都撤掉
+    db.prepare("UPDATE library_roots SET content_mode = 'auto'").run();
+    svc.refreshAll();
+    expect(books()).toEqual([]);
+  });
+
+  it('只重算部分目录（refreshDirs）也认根目录那一本', () => {
+    const ids = add('', ['p1.jpg', 'p2.jpg', 'p3.jpg']);
+    svc.refreshAll();
+    db.prepare("INSERT INTO exclusions (id, kind, target, label, created_at) VALUES (1, 'image', ?, 'x', 'x')").run(String(ids[0]));
+    db.prepare('UPDATE images SET excluded_by = 1 WHERE id = ?').run(ids[0]);
+    svc.refreshDirs([ids[0]!]);
+    expect(pageNos(ids).map((x) => x.p)).toEqual([null, 1, 2]);
   });
 });

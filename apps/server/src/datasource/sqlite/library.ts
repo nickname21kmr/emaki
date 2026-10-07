@@ -20,7 +20,7 @@ import {
 import type { SqliteContext } from './context.ts';
 import { COVER_CANDIDATE_COLS, loadCoverTags, scoreCoverCandidates, type CharacterRec, type CoverCandidate, type Derived, type WorkRec } from './derived.ts';
 import { loadImageItems } from './hydrate.ts';
-import { ART_KINDS_SQL, DAY, LIVE_IMAGES, DEFAULT_DOMINANT, iso, paginateOffset, parseId, QUEUE, RECENT_DAYS, toId, UNRECOGNIZED, UNTAGGED_UNRECOGNIZED } from './sql.ts';
+import { ART_KINDS_SQL, COMIC_ROOT_IDS, DAY, LIVE_IMAGES, DEFAULT_DOMINANT, iso, paginateOffset, parseId, QUEUE, RECENT_DAYS, toId, UNRECOGNIZED, UNTAGGED_UNRECOGNIZED } from './sql.ts';
 
 const zhCollator = new Intl.Collator('zh');
 
@@ -100,7 +100,7 @@ export class LibraryQueries {
           (SELECT MAX(last_scan_at) FROM library_roots WHERE removed_at IS NULL) AS last_scan_at,
           COALESCE(SUM(i.excluded_by IS NULL AND ${UNTAGGED_UNRECOGNIZED}), 0) AS untagged_count,
           MAX(CASE WHEN i.excluded_by IS NULL AND i.content_kind = 'illustration' THEN i.added_at END) AS last_added_at,
-          COALESCE(SUM(i.excluded_by IS NULL AND i.tagged_at IS NULL), 0) AS pending_tag_count,
+          COALESCE(SUM(i.excluded_by IS NULL AND i.tagged_at IS NULL AND i.root_id NOT IN ${COMIC_ROOT_IDS}), 0) AS pending_tag_count,
           COALESCE(SUM(i.excluded_by IS NULL AND ${ART_KINDS_SQL} AND ${UNRECOGNIZED} AND i.collection_id IS NULL
              AND i.shelved_at IS NOT NULL), 0) AS shelved_count,
           COALESCE(SUM(i.excluded_by IS NULL AND i.original_at IS NOT NULL), 0) AS original_count,

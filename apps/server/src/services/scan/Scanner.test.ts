@@ -60,6 +60,14 @@ describe('Scanner', () => {
     rmSync(data, { recursive: true, force: true });
   });
 
+  it('按漫画导入的文件夹：入库就归漫画，分级用导入时选的', async () => {
+    db.prepare("UPDATE library_roots SET content_mode = 'comic', comic_rating = 'sensitive'").run();
+    await scan();
+    expect(db.prepare('SELECT DISTINCT content_kind, content_kind_source, content_kind_evidence, rating FROM images').all()).toEqual([
+      { content_kind: 'comic', content_kind_source: 'folder', content_kind_evidence: '按漫画导入的文件夹', rating: 'sensitive' },
+    ]);
+  });
+
   it('新增', async () => {
     const s = await scan();
     expect(s).toMatchObject({ added: 3, missing: 0, errors: 0 });

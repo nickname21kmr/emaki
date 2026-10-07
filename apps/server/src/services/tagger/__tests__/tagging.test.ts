@@ -484,6 +484,22 @@ describe('tagJob', () => {
     expect(stage.pendingCount()).toBe(1); // 退避过了照常重试
   });
 
+  it('按漫画导入的文件夹不识别：不算待识别，也不会挑到', async () => {
+    const stage = createTagStage({
+      db,
+      bus: new EventBus(),
+      modelsDir: 'X:/models',
+      getTaggerSettings: () => ({ model: REPO, device: 'dml', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true, artists: false }),
+      clientFactory: vi.fn(),
+    });
+    expect(stage.pendingCount()).toBeGreaterThan(0);
+    db.prepare("UPDATE library_roots SET content_mode = 'comic'").run();
+    expect(stage.pendingCount()).toBe(0);
+    const factory = vi.fn(async () => scripted('dml', () => null));
+    expect(await runner(factory)(ctxOf())).toBe('没有需要识别的图片');
+    expect(factory).not.toHaveBeenCalled();
+  });
+
   it('PixAI 唯一一张图每次都崩：要真的在 CPU 上试过也崩，才记成失败（不能刚切到 CPU 就下结论）', async () => {
     freshDb(1);
     const tried: string[] = [];

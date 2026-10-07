@@ -108,8 +108,14 @@ const OPS: Op[] = [
   { name: '删除排除规则：标签', run: () => ds.deleteExclusion(id('exclusion', 'x2')) },
 
   // ---------------------------------------------------------------- 图库文件夹（T02）
-  { name: '启用文件夹', run: () => ds.updateLibraryRoot(id('root', 'root2'), true) },
-  { name: '停用文件夹', run: () => ds.updateLibraryRoot(id('root', 'root1'), false) },
+  { name: '启用文件夹', run: () => ds.updateLibraryRoot(id('root', 'root2'), { enabled: true }) },
+  { name: '停用文件夹', run: () => ds.updateLibraryRoot(id('root', 'root1'), { enabled: false }) },
+  { name: '改成按漫画导入', run: () => ds.updateLibraryRoot(id('root', 'root1'), { mode: 'comic', comicRating: 'sensitive' }) },
+  {
+    name: '改回按插画识别',
+    setup: () => ds.updateLibraryRoot(id('root', 'root1'), { mode: 'comic' }),
+    run: () => ds.updateLibraryRoot(id('root', 'root1'), { mode: 'auto' }),
+  },
   { name: '移除文件夹', run: () => ds.removeLibraryRoot(id('root', 'root1')) },
 
   // ---------------------------------------------------------------- 角色（T14，characters.test.ts 另有更细的用例）

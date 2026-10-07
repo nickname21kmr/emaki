@@ -23,6 +23,7 @@ import type {
   ImageStatus,
   Job,
   JobKind,
+  LibraryRootMode,
   LibraryStats,
   Rating,
   Settings,
@@ -525,6 +526,17 @@ export interface AddLibraryRootBody {
   path: string;
   /** 新文件夹包含图库里已有的文件夹时，确认合并成一个（不传则返回 needs_confirm） */
   merge?: boolean;
+  /** comic = 按漫画导入（跳过识别）；不传 = auto */
+  mode?: LibraryRootMode;
+  /** 按漫画导入时页面的分级；不传 = general */
+  comicRating?: Rating;
+}
+
+/** PATCH /api/library-roots/:id */
+export interface UpdateLibraryRootBody {
+  enabled?: boolean;
+  mode?: LibraryRootMode;
+  comicRating?: Rating;
 }
 
 // ---------------------------------------------------------------- 后台任务

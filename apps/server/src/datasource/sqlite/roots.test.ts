@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, utimesSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../../core/events.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
+import { sharp } from '../../services/image/sharpConfig.ts';
 import { relUnder } from './roots.ts';
 import { SqliteDataSource } from './SqliteDataSource.ts';
 
@@ -37,7 +38,7 @@ describe('添加父文件夹：合并已有的图库文件夹', () => {
     // 添加文件夹会排扫描：等它跑完再写夹具，免得扫描把下面写的记录当成丢失
     while ((await ds.listJobs()).some((j) => j.status === 'queued' || j.status === 'running')) await new Promise((r) => setTimeout(r, 10));
     db.prepare("UPDATE library_roots SET imported_at = '2025-01-01T00:00:00.000Z'").run();
-    await ds.updateLibraryRoot(String(rootId(sub('C2'))), false);
+    await ds.updateLibraryRoot(String(rootId(sub('C2'))), { enabled: false });
     addImage(1, rootId(sub('C1')), 'a.png');
     addImage(2, rootId(sub('C1')), 'book/01.png');
     addImage(3, rootId(sub('C2')), 'b.png');
@@ -106,5 +107,93 @@ describe('添加父文件夹：合并已有的图库文件夹', () => {
     expect(rowOf(10)).toEqual({ root_id: p, rel_path: 'C1/a.png' });
     expect(rowOf(1)).toBeUndefined();
     expect(rowOf(4)).toEqual({ root_id: p, rel_path: 'C3/c.png' });
+  });
+});
+
+describe('按漫画导入', () => {
+  let dir: string;
+  let ds: SqliteDataSource;
+  const idle = async () => {
+    while ((await ds.listJobs()).some((j) => j.status === 'queued' || j.status === 'running')) await new Promise((r) => setTimeout(r, 10));
+  };
+  beforeEach(async () => {
+    dir = makeTmpDir('comic');
+    ds = await SqliteDataSource.open(new EventBus(), path.join(dir, 'data'), { memory: true, autoJobs: false, importDict: false });
+  });
+  afterEach(async () => {
+    await ds.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('添加时选漫画：每卷一本本子、都归漫画、不等识别；改回插画后要识别，可撤销', async () => {
+    const M = path.join(dir, '某漫画');
+    const files: [string, number][] = [
+      ['某漫画 Vol.01/pics/p-0.png', 1],
+      ['某漫画 Vol.01/pics/p-1.png', 2],
+      ['某漫画 Vol.02/2卷/a.png', 3],
+      ['某漫画 Vol.02/2卷/b.png', 4],
+    ];
+    const old = new Date('2025-01-01');
+    for (const [rel, seed] of files) {
+      const p = path.join(M, rel);
+      mkdirSync(path.dirname(p), { recursive: true });
+      await sharp({ create: { width: 40 + seed, height: 60, channels: 3, background: { r: seed * 20, g: 100, b: 100 } } }).png().toFile(p);
+      utimesSync(p, old, old);
+    }
+    await ds.addLibraryRoot({ path: M.replace(/\\/g, '/'), mode: 'comic', comicRating: 'sensitive' });
+    await idle();
+    const s = await ds.getStats();
+    expect([s.imageCount, s.kindCounts.comic, s.pendingTagCount, s.unrecognizedCount]).toEqual([4, 4, 0, 0]);
+    const books = await ds.listCollections({ kind: 'doujin' });
+    expect(books.map((b) => [b.title, b.seriesKey, b.volumeNo, b.pageCount, b.pending, b.coverTagged])).toEqual([
+      ['某漫画', '某漫画', 1, 2, false, true],
+      ['某漫画', '某漫画', 2, 2, false, true],
+    ]);
+    const page = (await ds.getCollection(books[0]!.id))!.pages[0]!;
+    expect(page).toMatchObject({ kind: 'comic', rating: 'sensitive', tagged: true });
+
+    const root = (await ds.getSettings()).libraryRoots[0]!;
+    expect(root).toMatchObject({ mode: 'comic', comicRating: 'sensitive' });
+    const r = await ds.updateLibraryRoot(root.id, { mode: 'auto' });
+    expect((await ds.getStats()).pendingTagCount).toBe(4);
+    expect(await ds.listCollections({ kind: 'doujin' })).toEqual([]);
+    await ds.undo(r.undoToken!);
+    expect((await ds.getStats()).pendingTagCount).toBe(0);
+    expect((await ds.listCollections({ kind: 'doujin' })).map((b) => b.volumeNo)).toEqual([1, 2]);
+
+    // 改回插画后有一页识别过了（分级 explicit），再撤销：这页的识别结果不被盖回旧快照，类型回到漫画
+    const db = ds.ctx.db;
+    const r2 = await ds.updateLibraryRoot(root.id, { mode: 'auto' });
+    const pageId = db.prepare("SELECT id FROM images WHERE file_name = 'a.png'").pluck().get() as number;
+    db.prepare("UPDATE images SET tagged_at = 'x', rating = 'explicit', content_kind = 'illustration', content_kind_source = 'tags' WHERE id = ?").run(pageId);
+    await ds.undo(r2.undoToken!);
+    expect(db.prepare('SELECT content_kind, rating FROM images WHERE id = ?').get(pageId)).toEqual({ content_kind: 'comic', rating: 'explicit' });
+    expect(db.prepare("SELECT DISTINCT rating FROM images WHERE tagged_at IS NULL").pluck().all()).toEqual(['sensitive']);
+
+    // 只撤销停用：导入方式不跟着变
+    await ds.updateLibraryRoot(root.id, { comicRating: 'general' });
+    const off = await ds.updateLibraryRoot(root.id, { enabled: false });
+    await ds.updateLibraryRoot(root.id, { mode: 'auto' });
+    await ds.undo(off.undoToken!);
+    expect((await ds.getSettings()).libraryRoots[0]).toMatchObject({ enabled: true, mode: 'auto' });
+  });
+
+  it('添加后、扫描前改成漫画：扫描结束时按现在的设置判；漫画文件夹根目录直接放的页也成一本', async () => {
+    const M = path.join(dir, '单行本');
+    mkdirSync(M, { recursive: true });
+    const old = new Date('2025-01-01');
+    for (const seed of [1, 2, 3]) {
+      const p = path.join(M, `${seed}.png`);
+      await sharp({ create: { width: 40 + seed, height: 60, channels: 3, background: { r: seed * 30, g: 50, b: 50 } } }).png().toFile(p);
+      utimesSync(p, old, old);
+    }
+    await ds.addLibraryRoot({ path: M.replace(/\\/g, '/') });
+    // 扫描排上了但还没跑完就改了导入方式（扫描按开始时读到的设置判，结束时 syncRootModes 再纠正）
+    ds.ctx.db.prepare("UPDATE library_roots SET content_mode = 'comic', comic_rating = 'questionable'").run();
+    await idle();
+    expect(ds.ctx.db.prepare('SELECT DISTINCT content_kind, rating FROM images').all()).toEqual([{ content_kind: 'comic', rating: 'questionable' }]);
+    const books = await ds.listCollections({ kind: 'doujin' });
+    expect(books.map((b) => [b.title, b.pageCount, b.pending])).toEqual([['单行本', 3, false]]);
+    expect((await ds.unrecognizedSummary()).art.total).toBe(0);
   });
 });

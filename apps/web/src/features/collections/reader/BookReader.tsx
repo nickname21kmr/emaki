@@ -8,7 +8,7 @@ import { Button, Spinner } from '@/components/ui';
 import { imageUrl } from '@/lib/api';
 import { shouldBlur } from '@/lib/blur';
 import { cn } from '@/lib/cn';
-import { COLLECTION_META, displayTitle, readProgress } from '@/lib/collections';
+import { COLLECTION_META, displayTitle, readProgress, unitWord } from '@/lib/collections';
 import { useHotkey } from '@/lib/hotkeys';
 import { useCollection } from '@/lib/queries';
 import { useBlurPrefs, useLightbox, usePrefs } from '@/lib/stores';
@@ -188,7 +188,7 @@ function Reader({ data }: { data: GetCollectionResponse }) {
                 </Button>
                 {nextVolume && (
                   <Button variant="primary" onClick={() => navigate(`/collections/${nextVolume.id}/read?p=1`)}>
-                    下一话：{displayTitle(nextVolume)}（第 {nextVolume.volumeNo} 话）
+                    下一{unitWord(data.series)}：{displayTitle(nextVolume)}（第 {nextVolume.volumeNo} {unitWord(data.series)}）
                   </Button>
                 )}
               </div>

@@ -73,11 +73,13 @@ export const UNRECOGNIZED = '(NOT EXISTS (SELECT 1 FROM image_characters ic WHER
 export const ART_KINDS_SQL = `i.content_kind IN ('illustration','comic')`;
 /** 别册：既不是插画也不是漫画 */
 export const ANNEX_KINDS_SQL = `i.content_kind IN ('screenshot','text','photo','meme','animated')`;
+/** 按漫画导入的图库文件夹（不识别、不找角色） */
+export const COMIC_ROOT_IDS = "(SELECT id FROM library_roots WHERE content_mode = 'comic')";
 /**
  * 逐张「未识别」队列：插画和漫画、没有放下、没有角色。getStats、分段、侧栏共用这一份（MG-9）。
- * 合集里的页不逐张进队列（T38c），在「成册待整理」里整本处理。
+ * 合集里的页不逐张进队列（T38c），在「成册待整理」里整本处理；按漫画导入的文件夹不找角色，不进队列。
  */
-export const QUEUE = `${ART_KINDS_SQL} AND i.shelved_at IS NULL AND ${UNRECOGNIZED} AND i.collection_id IS NULL`;
+export const QUEUE = `${ART_KINDS_SQL} AND i.shelved_at IS NULL AND ${UNRECOGNIZED} AND i.collection_id IS NULL AND i.root_id NOT IN ${COMIC_ROOT_IDS}`;
 /** 「待识别」：队列里还没跑过识别的；漫画不算（它按本处理，RV-T-1 ③） */
 export const UNTAGGED_UNRECOGNIZED = `i.tagged_at IS NULL AND i.content_kind <> 'comic' AND ${QUEUE}`;
 /** 图片所在目录（带末尾的 /） */

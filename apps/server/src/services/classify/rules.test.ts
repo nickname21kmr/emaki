@@ -79,4 +79,11 @@ describe('classifyContent', () => {
     const t = classifyContent({ fileName: 'a.png', relPath: 'a.png', width: 1200, height: 1700, format: 'png', camera: null, tags: new Map([['comic', 0.93]]) });
     expect(t.evidence).toBe('识别标签 comic 0.93');
   });
+
+  it('按漫画导入的文件夹：不看文件名、尺寸、标签，都是漫画', () => {
+    for (const [fileName, tags] of [['Screenshot_1.png', null], ['a.png', new Map([['1girl', 0.99]])]] as const) {
+      const r = classifyContent({ fileName, relPath: `Vol.01/${fileName}`, width: 1080, height: 2400, format: 'png', camera: null, tags, comicRoot: true });
+      expect(r).toEqual({ kind: 'comic', source: 'folder', evidence: '按漫画导入的文件夹' });
+    }
+  });
 });

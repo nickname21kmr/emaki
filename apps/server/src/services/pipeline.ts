@@ -175,6 +175,15 @@ export class Pipeline {
   }
 
   /**
+   * 有图需要识别了（比如图库文件夹从「按漫画导入」改回来）：模型在、用户没暂停、有待识别的图时排上；
+   * 正在识别也再排一轮（这一轮的游标可能已经走过这些图）
+   */
+  requestTag(): void {
+    const t = this.d.tag;
+    if (t?.isReady() && !this.tagPaused && t.pendingCount() > 0) this.d.jobs().enqueue('tag', { requeueIfRunning: true });
+  }
+
+  /**
    * 有图改回了自动识别画师：能自动续补时（开着、模型在、用户没暂停）排一轮；正在跑也再排一轮，
    * 游标已经走过的图这一轮挑不到。用户暂停过就等他手动点「补跑」
    */

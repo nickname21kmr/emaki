@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseFolderName } from './parseName.ts';
+import { parseComicDir, parseFolderName } from './parseName.ts';
 
 describe('parseFolderName', () => {
   it('① 汉化组、展会、社团、作者、原作', () => {
@@ -76,5 +76,46 @@ describe('画集名后面只有卷号、括号里是备注', () => {
   it('括号里是自整理、页数、日期的不算原作；真正的原作照旧', () => {
     expect(parseFolderName('PIXIV 全投稿作品集 (自整理 703P 截止2022.01.04)').parody).toBeNull();
     expect(parseFolderName('某本子 (東方Project)').parody).toBe('東方Project');
+  });
+});
+
+describe('parseComicDir（按漫画导入的文件夹）', () => {
+  const root = 'F:/新建文件夹/魔都精兵的奴隶';
+  const A = '[タカヒロ×竹村洋平][魔都精兵的奴隶][东立][Vol.01-Vol.11][未完].zip';
+  it.each([
+    [`${A}/魔都精兵的奴隶 Vol.01/pics`, '魔都精兵的奴隶', 1],
+    [`${A}/魔都精兵的奴隶 Vol.04/6卷`, '魔都精兵的奴隶', 6],
+    [`${A}/魔都精兵的奴隶 Vol.10/第10卷`, '魔都精兵的奴隶', 10],
+    ['Series A/第12话', 'Series A', 12],
+    ['某漫画 (2)', '某漫画', 2],
+    ['第3话', '魔都精兵的奴隶', 3],
+    ['one-shot', 'one-shot', null],
+    ['', '魔都精兵的奴隶', null],
+    // 范围（整套）不是卷号，书名去掉方括号
+    [A, '魔都精兵的奴隶', null],
+    [`${A}/pics`, '魔都精兵的奴隶', null],
+    [`${A}/魔都精兵的奴隶_Vol.04`, '魔都精兵的奴隶', 4],
+    ['某漫画 全10卷/01', '某漫画', 1],
+    ['某漫画 第1-5卷/第3卷', '某漫画', 3],
+    ['作品 1-11卷', '作品', null],
+    // 话数优先、副标题不当系列名、纯数字目录、中文数字、Chapter / v04 / 小数
+    ['某漫画/第001话 出会い', '某漫画', 1],
+    ['X Vol.04/X Vol.04 第28话', 'X', 28],
+    ['某漫画 Vol.04/彩页', '某漫画', 4],
+    ['某漫画/001', '某漫画', 1],
+    ['某漫画/第十二话', '某漫画', 12],
+    ['某漫画/卷01', '某漫画', 1],
+    ['S/Chapter 12', 'S', 12],
+    ['S/VOL_03', 'S', 3],
+    ['S/v04', 'S', 4],
+    ['番外 第3.5话', '番外', 3.5],
+    ['Vol.01/Chapter 001', '魔都精兵的奴隶', 1],
+    ['[作者][作品][东立][Vol.01].zip', '作品', 1],
+  ])('%s → %s 第 %s 卷', (dir, title, vol) => {
+    const p = parseComicDir(dir, root);
+    expect([p.title, p.volumeNo, p.seriesKey]).toEqual([title, vol, vol === null ? null : title]);
+  });
+  it('作者从外层的 [作者] 里取', () => {
+    expect(parseComicDir(`${A}/魔都精兵的奴隶 Vol.01/pics`, root).circle).toBe('タカヒロ×竹村洋平');
   });
 });

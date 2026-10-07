@@ -211,8 +211,8 @@ export function buildContractDb(now: number): MockDb {
 
   const settings: Settings = {
     libraryRoots: [
-      { id: 'root1', path: 'D:/Pics', enabled: true, imageCount: 0, lastScanAt: new Date(now - 2 * 3_600_000).toISOString(), importedAt: null },
-      { id: 'root2', path: 'E:/Old', enabled: false, imageCount: 0, lastScanAt: new Date(now - 10 * DAY).toISOString(), importedAt: null },
+      { id: 'root1', path: 'D:/Pics', enabled: true, imageCount: 0, lastScanAt: new Date(now - 2 * 3_600_000).toISOString(), importedAt: null, mode: 'auto', comicRating: 'general' },
+      { id: 'root2', path: 'E:/Old', enabled: false, imageCount: 0, lastScanAt: new Date(now - 10 * DAY).toISOString(), importedAt: null, mode: 'auto', comicRating: 'general' },
     ],
     tagger: {
       model: 'A1yCE/pixai-tagger-v1.0-onnx-fp16',

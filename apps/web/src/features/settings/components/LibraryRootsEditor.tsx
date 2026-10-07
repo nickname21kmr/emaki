@@ -1,13 +1,13 @@
-import type { LibraryRoot } from '@emaki/shared';
-import { FolderInput, FolderOpen, FolderSearch, FolderX, Trash } from 'lucide-react';
+import type { LibraryRoot, LibraryRootMode, Rating, UpdateLibraryRootBody } from '@emaki/shared';
+import { BookOpen, ChevronDown, FolderInput, FolderOpen, FolderSearch, FolderX, Trash } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { Button, IconButton, Input, Switch } from '@/components/ui';
+import { Badge, Button, IconButton, Input, Menu, MenuLabel, MenuRadioGroup, MenuRadioItem, MenuSeparator, Segmented, Switch } from '@/components/ui';
 import { api, ApiRequestError } from '@/lib/api';
 import { cn } from '@/lib/cn';
-import { formatCount, formatDateTime, formatPercent, formatRelative } from '@/lib/format';
+import { formatCount, formatDateTime, formatPercent, formatRelative, RATING_LABEL } from '@/lib/format';
 import { errorMessage, useMutate } from '@/lib/queries';
-import { useRemoveRoot, useToggleRoot } from '../hooks';
+import { useRemoveRoot, useUpdateRoot } from '../hooks';
 import { EASE_OUT } from '@/lib/motion';
 
 /**
@@ -50,31 +50,39 @@ export function AddFolderForm({
   const [path, setPath] = useState('');
   const [serverError, setServerError] = useState<string | null>(null);
   // 新文件夹包含已有的文件夹：后端返回要问的话，确认后带 merge 重发
-  const [confirm, setConfirm] = useState<{ path: string; question: string } | null>(null);
+  const [confirm, setConfirm] = useState<{ path: string; question: string; mode: LibraryRootMode; comicRating: Rating } | null>(null);
   const [picking, setPicking] = useState(false);
-  const lastPath = useRef('');
-  const add = useMutate(({ p, merge }: { p: string; merge?: boolean }) => api.addLibraryRoot({ path: p, merge }), {
-    onError: (message, err) => {
-      if (err instanceof ApiRequestError && err.code === 'needs_confirm') setConfirm({ path: lastPath.current, question: message });
-      else setServerError(message);
+  // 导入方式：插画（识别角色）/ 漫画（跳过识别，每个子文件夹一本）；漫画要先选分级（不识别就不知道）
+  const [mode, setMode] = useState<LibraryRootMode>('auto');
+  const [comicRating, setComicRating] = useState<Rating>('general');
+  // 这次发出去的路径和导入方式：要确认合并时照原样重发
+  const lastSend = useRef<{ path: string; mode: LibraryRootMode; comicRating: Rating }>({ path: '', mode: 'auto', comicRating: 'general' });
+  const add = useMutate(
+    (v: { p: string; merge?: boolean; mode: LibraryRootMode; comicRating: Rating }) =>
+      api.addLibraryRoot({ path: v.p, merge: v.merge, mode: v.mode, comicRating: v.comicRating }),
+    {
+      onError: (message, err) => {
+        if (err instanceof ApiRequestError && err.code === 'needs_confirm') setConfirm({ ...lastSend.current, question: message });
+        else setServerError(message);
+      },
+      onSuccess: () => {
+        setPath('');
+        setConfirm(null);
+        onDone?.();
+      },
     },
-    onSuccess: () => {
-      setPath('');
-      setConfirm(null);
-      onDone?.();
-    },
-  });
+  );
 
   const trimmed = unquote(path);
   const duplicate = trimmed !== '' && roots.some((r) => normalize(r.path) === normalize(trimmed));
   const relative = trimmed !== '' && !ABSOLUTE.test(trimmed);
   const problem = duplicate ? '这个文件夹已经在图库里了' : relative ? '需要完整路径，例如 D:\\Pictures\\插画' : serverError;
 
-  const send = (p: string, merge?: boolean) => {
-    lastPath.current = p;
+  const send = (p: string, merge?: boolean, how = { mode, comicRating }) => {
+    lastSend.current = { path: p, ...how };
     setServerError(null);
     setConfirm(null);
-    add.mutate({ p, merge });
+    add.mutate({ p, merge, ...how });
   };
 
   const submit = (e?: FormEvent) => {
@@ -101,6 +109,23 @@ export function AddFolderForm({
 
   return (
     <form onSubmit={submit}>
+      <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <Segmented<LibraryRootMode>
+          size="sm"
+          value={mode}
+          onChange={setMode}
+          options={[
+            { value: 'auto', label: '插画 · 识别角色' },
+            { value: 'comic', label: '漫画 · 跳过识别', icon: <BookOpen className="size-3.5" /> },
+          ]}
+        />
+        {mode === 'comic' && (
+          <div className="flex animate-fade-in items-center gap-2">
+            <span className="text-xs text-fg-subtle">分级</span>
+            <Segmented<Rating> size="sm" value={comicRating} onChange={setComicRating} options={RATINGS.map((r) => ({ value: r, label: RATING_LABEL[r] }))} />
+          </div>
+        )}
+      </div>
       <div className="flex items-center gap-2">
         <Input
           autoFocus={autoFocus}
@@ -137,7 +162,7 @@ export function AddFolderForm({
               variant="primary"
               icon={<FolderInput />}
               loading={add.isPending}
-              onClick={() => send(confirm.path, true)}
+              onClick={() => send(confirm.path, true, { mode: confirm.mode, comicRating: confirm.comicRating })}
             >
               合并成一个
             </Button>
@@ -145,7 +170,10 @@ export function AddFolderForm({
         </div>
       )}
       <p id="add-folder-hint" hidden={!!confirm} className={cn('mt-2 pl-4 text-xs', problem ? 'text-danger' : 'text-fg-subtle')}>
-        {problem ?? '支持本地磁盘和网络路径（\\\\NAS\\共享文件夹）。可以从资源管理器地址栏复制，或点「浏览…」选择。'}
+        {problem ??
+          (mode === 'comic'
+            ? '漫画：每个子文件夹算一本（按卷号排），页面直接归到别册 · 漫画，不跑识别、不找角色。没识别就不知道分级，先按上面选的显示。'
+            : '支持本地磁盘和网络路径（\\\\NAS\\共享文件夹）。可以从资源管理器地址栏复制，或点「浏览…」选择。')}
       </p>
       {actions({ disabled: !trimmed || !!problem || !!confirm, loading: add.isPending })}
     </form>
@@ -154,7 +182,7 @@ export function AddFolderForm({
 
 /** 已添加的文件夹：路径、张数、上次扫描、启用开关、移除（toast 可撤销） */
 export function RootList({ roots, className }: { roots: LibraryRoot[]; className?: string }) {
-  const toggle = useToggleRoot();
+  const update = useUpdateRoot();
   const remove = useRemoveRoot();
   const total = roots.reduce((sum, r) => sum + (r.enabled ? r.imageCount : 0), 0);
   return (
@@ -165,7 +193,7 @@ export function RootList({ roots, className }: { roots: LibraryRoot[]; className
             key={root.id}
             root={root}
             share={roots.length > 1 && total > 0 && root.enabled ? root.imageCount / total : null}
-            onToggle={(enabled) => toggle(root.id, enabled)}
+            onUpdate={(body) => update(root.id, body)}
             onRemove={() => remove(root.id)}
           />
         ))}
@@ -173,6 +201,8 @@ export function RootList({ roots, className }: { roots: LibraryRoot[]; className
     </ul>
   );
 }
+
+const RATINGS = Object.keys(RATING_LABEL) as Rating[];
 
 /** 引导页用：上面一行添加表单，下面列表 */
 export function LibraryRootsEditor({ roots }: { roots: LibraryRoot[] }) {
@@ -208,15 +238,16 @@ function splitPath(path: string): { parent: string; leaf: string } {
 function RootRow({
   root,
   share,
-  onToggle,
+  onUpdate,
   onRemove,
 }: {
   root: LibraryRoot;
   /** 占全部已启用张数的比例；只有一个文件夹时不显示 */
   share: number | null;
-  onToggle: (enabled: boolean) => void;
+  onUpdate: (body: UpdateLibraryRootBody) => void;
   onRemove: () => void;
 }) {
+  const comic = root.mode === 'comic';
   const { parent, leaf } = splitPath(root.path);
   const off = !root.enabled;
   return (
@@ -238,9 +269,16 @@ function RootRow({
       </span>
 
       <div className={cn('min-w-0 flex-1 transition-opacity duration-300', off && 'opacity-55')}>
-        <div className="truncate text-sm font-medium" title={root.path}>
-          <span className="text-fg-subtle">{parent}</span>
-          {leaf}
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="truncate text-sm font-medium" title={root.path}>
+            <span className="text-fg-subtle">{parent}</span>
+            {leaf}
+          </div>
+          {comic && (
+            <Badge tone="ink" className="shrink-0">
+              漫画 · {RATING_LABEL[root.comicRating]}
+            </Badge>
+          )}
         </div>
         <div className="mt-1 truncate text-xs text-fg-muted">
           {off ? (
@@ -261,7 +299,8 @@ function RootRow({
       </div>
 
       <div className="flex items-center gap-1 pl-2">
-        <Switch checked={root.enabled} onCheckedChange={onToggle} label={`启用 ${root.path}`} />
+        <ModeMenu root={root} onUpdate={onUpdate} />
+        <Switch checked={root.enabled} onCheckedChange={(enabled) => onUpdate({ enabled })} label={`启用 ${root.path}`} />
         <IconButton
           label="移除（不会删除磁盘上的文件）"
           onClick={onRemove}
@@ -271,5 +310,45 @@ function RootRow({
         </IconButton>
       </div>
     </motion.li>
+  );
+}
+
+/** 导入方式：插画（识别角色）/ 漫画（跳过识别，每个子文件夹一本）；漫画再选分级。改了可以撤销 */
+function ModeMenu({ root, onUpdate }: { root: LibraryRoot; onUpdate: (body: UpdateLibraryRootBody) => void }) {
+  const comic = root.mode === 'comic';
+  return (
+    <Menu
+      align="end"
+      width={248}
+      trigger={
+        <button
+          type="button"
+          aria-label={`导入方式：${comic ? '漫画' : '插画'}`}
+          className="inline-flex h-8 items-center gap-1 rounded-full px-2.5 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg data-[state=open]:bg-hover data-[state=open]:text-fg"
+        >
+          {comic ? '漫画' : '插画'}
+          <ChevronDown className="size-3.5 opacity-60" />
+        </button>
+      }
+    >
+      <MenuLabel>导入方式</MenuLabel>
+      <MenuRadioGroup value={root.mode} onValueChange={(v) => onUpdate({ mode: v as LibraryRootMode })}>
+        <MenuRadioItem value="auto">插画 · 识别角色</MenuRadioItem>
+        <MenuRadioItem value="comic">漫画 · 跳过识别，每个子文件夹一本</MenuRadioItem>
+      </MenuRadioGroup>
+      {comic && (
+        <>
+          <MenuSeparator />
+          <MenuLabel>没识别过的页按这个分级</MenuLabel>
+          <MenuRadioGroup value={root.comicRating} onValueChange={(v) => onUpdate({ comicRating: v as Rating })}>
+            {RATINGS.map((r) => (
+              <MenuRadioItem key={r} value={r}>
+                {RATING_LABEL[r]}
+              </MenuRadioItem>
+            ))}
+          </MenuRadioGroup>
+        </>
+      )}
+    </Menu>
   );
 }

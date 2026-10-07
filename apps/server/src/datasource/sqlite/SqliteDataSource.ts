@@ -46,6 +46,8 @@ import type {
   UpdateCharacterBody,
   UpdateImageBody,
   UpdateSettingsBody,
+  UpdateLibraryRootBody,
+  Rating,
   Work,
 } from '@emaki/shared';
 import { access, mkdir, rm, stat } from 'node:fs/promises';
@@ -53,7 +55,7 @@ import path from 'node:path';
 import type { EventBus } from '../../core/events.ts';
 import { JobQueue } from '../../core/jobs.ts';
 import { done, UndoStack } from '../../core/undo.ts';
-import { closeDatabase, openDatabase, type Db } from '../../db/connection.ts';
+import { closeDatabase, openDatabase, transact, type Db } from '../../db/connection.ts';
 import { migrate } from '../../db/migrate.ts';
 import { refreshPlannerStats } from '../../db/plannerStats.ts';
 import { SoftCache } from './softCache.ts';
@@ -69,6 +71,7 @@ import { Scanner } from '../../services/scan/Scanner.ts';
 import { ScanRequests } from '../../services/scan/ScanRequests.ts';
 import { backfillSources } from '../../services/source/backfill.ts';
 import { backfillClassification } from '../../services/classify/backfill.ts';
+import { syncRootModes } from '../../services/classify/rootMode.ts';
 import { CollectionService, type CollectionsHook } from '../../services/collections/CollectionService.ts';
 import { shutdownTagger } from '../../services/tagger/client.ts';
 import { ARTIST_MODEL, artistPendingCount, createArtistJobRunner } from '../../services/tagger/artists.ts';
@@ -88,7 +91,7 @@ import { config } from '../../config.ts';
 import { hydrateImages, IMAGE_COLS, type ImageRow } from './hydrate.ts';
 import { listImages } from './queries/listImages.ts';
 import { loadSuggestions } from './suggestions.ts';
-import { BulkOps } from './bulk.ts';
+import { BulkOps, RATING_LABEL } from './bulk.ts';
 import { CollectionQueries } from './collections.ts';
 import { assertKindValue, KIND_LABEL, setKindInTx, type KindDeps } from './kinds.ts';
 import { describeKindReason } from './hydrate.ts';
@@ -108,6 +111,10 @@ import { imageArtists, listArtists as listArtistsQuery } from './artists.ts';
 import { mergeChildRoots, type ChildRoot } from './roots.ts';
 import { applySettingsPatch, getDanbooruApiKey, isInside, normalizeRootPath, patchSettingsInternal, readSettings, samePath } from './settings.ts';
 import { iso, MIME, parseId, toId, VISIBLE } from './sql.ts';
+
+/** 改图库文件夹的导入方式会改这些列（撤销用） */
+const ROOT_MODE_COLS = ['content_kind', 'content_kind_source', 'content_kind_evidence', 'content_kind_version', 'theme', 'art_score', 'rating'];
+type RootImageSnap = { id: number; tagged_at: string | null } & Record<string, unknown>;
 
 export interface SqliteOpenOptions {
   /** 内存库（测试用） */
@@ -156,6 +163,7 @@ export class SqliteDataSource implements DataSource {
       console.log(`合集：${r.active} 本（新建 ${r.created} · 删除 ${r.removed} · 更新 ${r.updated}）· ${Math.round(r.ms)} ms`);
     }
     if (opts.autoJobs !== false) ds.startWatching();
+    ds.autoTag = opts.autoJobs !== false;
     // 识别角色（T10）。T11 / T20 之后在这里继续 register
     // 角色 → 作品的完整回退链 + 标签规范化（改名、服装变体归本体）来自 Danbooru 缓存（T11）
     const danbooru = new DanbooruCatalog(db, CopyrightResolver.fromAsset(db));
@@ -234,7 +242,10 @@ export class SqliteDataSource implements DataSource {
       },
       // 扫描有变化才重算合集（RV-C-9）：延后重扫大约 3 秒一次，没变化时不要全量读库
       afterScan: (s) => {
-        if (s.added + s.updated + s.moved + s.missing + s.restored > 0) ds.refreshCollections('scan');
+        // 扫描按开始时的导入方式判类型：中途切换过的、在磁盘上移进移出漫画文件夹的，按现在的设置改过来
+        const synced = syncRootModes(db);
+        if (synced) ds.ctx.invalidate('all');
+        if (synced || s.added + s.updated + s.moved + s.missing + s.restored > 0) ds.refreshCollections('scan');
       },
     });
     const roots = db.prepare('SELECT COUNT(*) FROM library_roots WHERE enabled = 1 AND removed_at IS NULL').pluck().get() as number;
@@ -363,6 +374,11 @@ export class SqliteDataSource implements DataSource {
 
   /** 文件监听（T08）；测试里 autoJobs=false 时不启动 */
   private watcher: LibraryWatcher | null = null;
+  /** 改回插画后自动排识别；测试里（autoJobs=false）不排，免得在测试里加载真的识别模型 */
+  private autoTag = true;
+  private requestTag(): void {
+    if (this.autoTag) this.pipeline.requestTag();
+  }
 
   private watchedRoots(): WatchedRoot[] {
     return (this.ctx.db.prepare('SELECT id, path FROM library_roots WHERE enabled = 1 AND removed_at IS NULL').all() as { id: number; path: string }[]).map(
@@ -670,8 +686,12 @@ export class SqliteDataSource implements DataSource {
     const dest = { rootId: root.id, rootPath: root.path, dir };
     const out = moveImageFiles(this.ctx.db, rows, dest);
     const ids = out.moved.map((m) => m.id);
-    // 移进了被排除的文件夹：照规则排除
-    if (ids.length) this.ctx.db.transaction(() => applyExclusionRules(this.ctx, { imageIds: ids }))();
+    // 移进了被排除的文件夹：照规则排除；移进 / 移出按漫画导入的文件夹：类型、分级跟着文件夹
+    if (ids.length)
+      this.ctx.db.transaction(() => {
+        applyExclusionRules(this.ctx, { imageIds: ids });
+        syncRootModes(this.ctx.db, ids);
+      })();
     this.ctx.touch();
 
     const where = dir ? toAbs(root.path, dir).replace(/\\/g, '/') : root.path;
@@ -690,6 +710,7 @@ export class SqliteDataSource implements DataSource {
         throw new ConflictError('正在扫描图库，等扫描结束再撤销');
       }
       const back = moveBack(this.ctx.db, out.moved);
+      syncRootModes(this.ctx.db, ids);
       this.ctx.touch();
       if (back.failed.length) throw new ConflictError(`移回了 ${back.restored} 张，${back.failed.length} 张没能移回（文件或位置已经变了）`);
     });
@@ -779,14 +800,23 @@ export class SqliteDataSource implements DataSource {
   async getSettings(): Promise<Settings> {
     const rows = this.ctx
       .stmt(
-        `SELECT r.id, r.path, r.enabled, r.last_scan_at, r.imported_at,
+        `SELECT r.id, r.path, r.enabled, r.last_scan_at, r.imported_at, r.content_mode, r.comic_rating,
            (SELECT COUNT(*) FROM images i
              WHERE i.root_id = r.id AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL) AS image_count
          FROM library_roots r
          WHERE r.removed_at IS NULL
          ORDER BY r.id`,
       )
-      .all() as { id: number; path: string; enabled: number; last_scan_at: string | null; imported_at: string | null; image_count: number }[];
+      .all() as {
+      id: number;
+      path: string;
+      enabled: number;
+      last_scan_at: string | null;
+      imported_at: string | null;
+      content_mode: string;
+      comic_rating: string;
+      image_count: number;
+    }[];
     return {
       libraryRoots: rows.map((r) => ({
         id: toId(r.id),
@@ -795,6 +825,8 @@ export class SqliteDataSource implements DataSource {
         imageCount: r.image_count,
         lastScanAt: r.last_scan_at,
         importedAt: r.imported_at,
+        mode: r.content_mode === 'comic' ? 'comic' : 'auto',
+        comicRating: r.comic_rating as Rating,
       })),
       ...readSettings(this.ctx.db),
     };
@@ -860,8 +892,11 @@ export class SqliteDataSource implements DataSource {
     }
 
     const db = this.ctx.db;
-    const rows = db.prepare('SELECT id, path, enabled, removed_at, imported_at FROM library_roots').all() as (ChildRoot & {
+    const mode = body.mode === 'comic' ? 'comic' : 'auto';
+    const comicRating = body.comicRating ?? 'general';
+    const rows = db.prepare('SELECT id, path, enabled, removed_at, imported_at, content_mode FROM library_roots').all() as (ChildRoot & {
       enabled: number;
+      content_mode: string;
     })[];
     const active = rows.filter((r) => r.removed_at === null);
     if (active.some((r) => samePath(r.path, p))) throw new BadRequestError('这个文件夹已经在图库里了');
@@ -876,9 +911,11 @@ export class SqliteDataSource implements DataSource {
     if (activeChildren.length && !body.merge) {
       const names = activeChildren.map((r) => `「${r.path}」`).join('');
       const disabled = activeChildren.filter((r) => !r.enabled).map((r) => `「${r.path}」`);
+      const comics = activeChildren.filter((r) => r.content_mode === 'comic').map((r) => `「${r.path}」`);
       throw new NeedsConfirmError(
         `这个文件夹包含图库里已有的${names}，合并成一个吗？原来的识别和整理结果都会保留。` +
-          (disabled.length ? `其中${disabled.join('')}现在是停用的，合并后会重新显示。` : ''),
+          (disabled.length ? `其中${disabled.join('')}现在是停用的，合并后会重新显示。` : '') +
+          (comics.length && mode !== 'comic' ? `${comics.join('')}原来是按漫画导入的，合并后会和其他图一样识别。` : ''),
       );
     }
     // 合并前照例备份（VACUUM INTO 不能在事务里，目标文件已存在会报错）
@@ -894,14 +931,23 @@ export class SqliteDataSource implements DataSource {
     db.transaction(() => {
       if (removed) {
         // 复活：旧图和识别结果全部回来
-        db.prepare('UPDATE library_roots SET removed_at = NULL, enabled = 1, path = ? WHERE id = ?').run(p, removed.id);
+        db.prepare('UPDATE library_roots SET removed_at = NULL, enabled = 1, path = ?, content_mode = ?, comic_rating = ? WHERE id = ?').run(
+          p,
+          mode,
+          comicRating,
+          removed.id,
+        );
         rootId = removed.id;
       } else {
-        rootId = Number(db.prepare('INSERT INTO library_roots (path, enabled) VALUES (?, 1)').run(p).lastInsertRowid);
+        rootId = Number(
+          db.prepare('INSERT INTO library_roots (path, enabled, content_mode, comic_rating) VALUES (?, 1, ?, ?)').run(p, mode, comicRating).lastInsertRowid,
+        );
       }
       if (children.length) merged = mergeChildRoots(db, rootId, p, children).images;
+      // 复活、合并进来的旧图按这次的设置重判类型（按漫画导入：归漫画、用选的分级）
+      if (removed || children.length) this.applyRootMode(rootId);
     })();
-    if (children.length) this.collectionsHook(null, 'all');
+    if (children.length || removed) this.collectionsHook(null, 'all');
     this.ctx.touch();
     this.notifyRoots();
     // 只扫新文件夹；扫描正在跑时也再排一次，别丢了这个请求
@@ -910,22 +956,114 @@ export class SqliteDataSource implements DataSource {
     return done(
       activeChildren.length
         ? `已合并成一个文件夹（保留了 ${merged} 张图的整理结果），开始扫描其余部分：${p}`
-        : `已添加文件夹，开始扫描：${p}`,
+        : mode === 'comic'
+          ? `已按漫画导入，开始扫描（不识别，每个子文件夹成一本）：${p}`
+          : `已添加文件夹，开始扫描：${p}`,
     );
   }
 
-  async updateLibraryRoot(id: ID, enabled: boolean): Promise<MutationResult> {
+  /** 按图库文件夹的设置重判这个文件夹里所有图的类型；按漫画导入的，没识别过、没手动改过分级的页用选的分级。在事务里调用 */
+  private applyRootMode(rootId: number): number[] {
+    const db = this.ctx.db;
+    const ids = db.prepare('SELECT id FROM images WHERE root_id = ?').pluck().all(rootId) as number[];
+    if (ids.length) backfillClassification(db, { ids });
+    const r = db.prepare('SELECT content_mode, comic_rating FROM library_roots WHERE id = ?').get(rootId) as { content_mode: string; comic_rating: string };
+    if (r.content_mode === 'comic') {
+      db.prepare('UPDATE images SET rating = ? WHERE root_id = ? AND tagged_at IS NULL AND rating_manual = 0').run(r.comic_rating, rootId);
+    }
+    return ids;
+  }
+
+  async updateLibraryRoot(id: ID, body: UpdateLibraryRootBody): Promise<MutationResult> {
     const root = this.requireRoot(id);
-    const set = this.ctx.db.prepare('UPDATE library_roots SET enabled = ? WHERE id = ?');
-    set.run(enabled ? 1 : 0, root.id);
+    const db = this.ctx.db;
+    const cur = db.prepare('SELECT enabled, content_mode, comic_rating FROM library_roots WHERE id = ?').get(root.id) as {
+      enabled: number;
+      content_mode: string;
+      comic_rating: string;
+    };
+    const enabled = body.enabled === undefined ? cur.enabled : body.enabled ? 1 : 0;
+    const mode = body.mode ?? (cur.content_mode === 'comic' ? 'comic' : 'auto');
+    const rating = body.comicRating ?? cur.comic_rating;
+    const modeChanged = mode !== cur.content_mode;
+    const ratingChanged = rating !== cur.comic_rating;
+    const cols = [enabled !== cur.enabled && 'enabled', modeChanged && 'content_mode', ratingChanged && 'comic_rating'].filter(
+      (c): c is string => !!c,
+    );
+    if (!cols.length) return done('没有变化');
+    const touchesImages = modeChanged || (ratingChanged && mode === 'comic');
+    // 撤销用：改之前这个文件夹里每张图的类型、分级（连同当时的识别时间，见 restoreRootImages）
+    const snap = touchesImages
+      ? (db.prepare(`SELECT id, tagged_at, ${ROOT_MODE_COLS.join(', ')} FROM images WHERE root_id = ?`).all(root.id) as RootImageSnap[])
+      : [];
+    const result = this.ctx.mutate((u) => {
+      u.columns('library_roots', cols, [root.id]);
+      db.prepare('UPDATE library_roots SET enabled = ?, content_mode = ?, comic_rating = ? WHERE id = ?').run(enabled, mode, rating, root.id);
+      if (touchesImages) this.applyRootMode(root.id);
+      // 撤销时先由上面的 columns 恢复文件夹设置，再恢复图片、重算合集、同步监听、需要的话接着识别
+      u.onUndo(() => {
+        if (snap.length) this.restoreRootImages(root.id, snap);
+        this.collectionsHook(null, 'all');
+        this.ctx.touch();
+        this.notifyRoots();
+        // 撤销「改成漫画」回到插画：没识别过的图接着识别
+        if (modeChanged && cur.content_mode !== 'comic') this.requestTag();
+      });
+      const message =
+        enabled !== cur.enabled
+          ? enabled
+            ? `已启用：${root.path}`
+            : `已停用：${root.path}`
+          : modeChanged
+            ? mode === 'comic'
+              ? `已改成按漫画导入：${snap.length} 张归到漫画，不再识别`
+              : `已改回按插画识别：没识别过的图会开始识别`
+            : `按漫画导入的分级改成了「${RATING_LABEL[rating as Rating]}」`;
+      return { message };
+    });
+    // 合集在事务提交之后重算：放在 mutate 里会变成嵌套事务，大文件夹逐行写页码会卡几十秒
     this.collectionsHook(null, 'all');
     this.ctx.touch();
     this.notifyRoots();
-    return this.ctx.undo.result(enabled ? `已启用：${root.path}` : `已停用：${root.path}`, () => {
-      set.run(root.enabled, root.id);
-      this.collectionsHook(null, 'all');
-      this.ctx.touch();
-      this.notifyRoots();
+    // 改回插画：没识别过的图接着识别（模型在、用户没暂停时；正在识别也再排一轮）
+    if (modeChanged && mode === 'auto') this.requestTag();
+    return result;
+  }
+
+  /**
+   * 撤销切换导入方式时恢复这个文件夹的图：期间没重新识别过的行按快照写回（手动改过的类型、分级不动）；
+   * 期间识别过的、新扫进来的行按现在（已经恢复）的设置重判，免得把新的识别结果盖回旧值
+   */
+  private restoreRootImages(rootId: number, snap: RootImageSnap[]): void {
+    const db = this.ctx.db;
+    transact(db, () => {
+      const now = new Map(
+        (
+          db.prepare('SELECT id, tagged_at, content_kind_manual, rating_manual FROM images WHERE root_id = ?').all(rootId) as {
+            id: number;
+            tagged_at: string | null;
+            content_kind_manual: number;
+            rating_manual: number;
+          }[]
+        ).map((r) => [r.id, r]),
+      );
+      const kindCols = ROOT_MODE_COLS.filter((c) => c !== 'rating');
+      const setKind = db.prepare(`UPDATE images SET ${kindCols.map((c) => `${c} = @${c}`).join(', ')} WHERE id = @id`);
+      const setRating = db.prepare('UPDATE images SET rating = @rating WHERE id = @id');
+      const recompute: number[] = [];
+      for (const s of snap) {
+        const n = now.get(s.id);
+        now.delete(s.id);
+        if (!n) continue;
+        if (n.tagged_at !== s.tagged_at) {
+          recompute.push(s.id);
+          continue;
+        }
+        if (!n.content_kind_manual) setKind.run(s);
+        if (!n.rating_manual) setRating.run(s);
+      }
+      recompute.push(...now.keys());
+      if (recompute.length) syncRootModes(db, recompute);
     });
   }
 

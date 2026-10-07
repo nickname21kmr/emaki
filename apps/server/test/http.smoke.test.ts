@@ -402,12 +402,21 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     const { status, json } = await call('POST', '/api/library-roots', { path: 'F:/NewPics' });
     expect([status, json]).toMatchObject([200, mutation]);
     expect((await call('POST', '/api/library-roots', { path: '' })).status).toBe(400);
+    const comic = await call('POST', '/api/library-roots', { path: 'F:/Manga', mode: 'comic', comicRating: 'questionable' });
+    expect(comic.status).toBe(200);
+    expect((await call('GET', '/api/settings')).json.libraryRoots.find((r: { path: string }) => r.path === 'F:/Manga')).toMatchObject({ mode: 'comic', comicRating: 'questionable' });
+    expect((await call('POST', '/api/library-roots', { path: 'F:/Manga2', mode: 'manga' })).status).toBe(400);
   });
 
   route('PATCH /api/library-roots/:id', async () => {
     const { status, json } = await call('PATCH', '/api/library-roots/root2', { enabled: true });
     expect([status, json]).toEqual([200, withUndo]);
     expect((await call('PATCH', '/api/library-roots/root2', { enabled: 'yes' })).status).toBe(400);
+    const comic = await call('PATCH', '/api/library-roots/root1', { mode: 'comic', comicRating: 'sensitive' });
+    expect([comic.status, comic.json]).toEqual([200, withUndo]);
+    expect((await call('PATCH', '/api/library-roots/root1', { mode: 'auto' })).status).toBe(200);
+    expect((await call('PATCH', '/api/library-roots/root1', {})).status).toBe(400);
+    expect((await call('PATCH', '/api/library-roots/root1', { comicRating: 'nsfw' })).status).toBe(400);
   });
 
   route('DELETE /api/library-roots/:id', async () => {

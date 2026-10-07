@@ -22,6 +22,8 @@ export interface ClassifyInput {
   camera: string | null;
   /** general 标签分数；null = 还没打标签 */
   tags: ReadonlyMap<string, number> | null;
+  /** 所在图库文件夹是「按漫画导入」的：每张都是漫画页 */
+  comicRoot?: boolean;
 }
 
 export interface ClassifyResult {
@@ -70,6 +72,8 @@ export const SIGNAL_TAGS: readonly string[] = [
   ]),
 ];
 
+export const COMIC_ROOT_EVIDENCE = '按漫画导入的文件夹';
+
 const fmt = (n: number) => n.toFixed(2).replace(/0$/, '');
 
 export function classifyContent(x: ClassifyInput): ClassifyResult {
@@ -87,6 +91,9 @@ export function classifyContent(x: ClassifyInput): ClassifyResult {
   const sized = `${x.width}×${x.height}`;
 
   const textHeavy = !!tags && (t('text_focus') >= 0.5 || t('wall_of_text') >= 0.4);
+
+  // 0 用户导入时说了这个文件夹是漫画
+  if (x.comicRoot) return { kind: 'comic', source: 'folder', evidence: COMIC_ROOT_EVIDENCE };
 
   // 1 强信号：文件名 / 文件夹 / 相机
   if (SCREENSHOT_NAME.test(x.fileName)) return { kind: 'screenshot', source: 'name', evidence: '文件名像截图' };
