@@ -73,6 +73,7 @@ import { MockCollections } from './collections.ts';
 import { hashString, placeholderSvg } from './placeholder.ts';
 import { mockDominantColor, workColorFromHue } from '../../util/color.ts';
 import { classifyContent, COMIC_ROOT_EVIDENCE } from '../../services/classify/rules.ts';
+import { comicAreaOf } from './comic.ts';
 import { artScore, classifyTheme, matchesBrowseTheme, resolveTheme } from '../../services/classify/theme.ts';
 import { describeKindReason } from '../sqlite/hydrate.ts';
 import { coverQuality, isUnfitCover } from '../../services/covers/quality.ts';
@@ -200,7 +201,7 @@ export class MockDataSource implements DataSource {
 
   /** 所在图库文件夹按漫画导入 */
   private inComicRoot(img: ImageRow): boolean {
-    return this.db.settings.libraryRoots.some((r) => r.id === img.libraryRootId && r.mode === 'comic');
+    return !!comicAreaOf(this.db.settings.libraryRoots, img.libraryRootId, img.relPath);
   }
 
   /** 图库文字搜索用：这张图的角色（名字、标签、别名）和作品（名字、标签、别名），同 sqlite 的 matchText */
@@ -1587,7 +1588,14 @@ export class MockDataSource implements DataSource {
     if (roots.some((r) => r.path === path)) throw new BadRequestError('这个文件夹已经在图库里了');
     const inside = (child: string, parent: string) => child.toLowerCase().startsWith(parent.toLowerCase().replace(/\/?$/, '/'));
     const parent = roots.find((r) => inside(path, r.path));
-    if (parent) throw new BadRequestError(`已经包含在「${parent.path}」里了，不用单独添加`);
+    // 同 sqlite：已有图库文件夹里面的子文件夹 + 漫画 = 把这个子文件夹按漫画导入
+    if (parent && body.mode === 'comic') {
+      // 同 sqlite 用磁盘上的大小写：mock 没有磁盘，照库里图片路径的写法
+      const rel = path.slice(parent.path.length).replace(/^\/+/, '');
+      const hit = [...this.db.images.values()].find((img) => img.libraryRootId === parent.id && img.relPath.toLowerCase().startsWith(`${rel.toLowerCase()}/`));
+      return this.setComicFolder(parent, hit ? hit.relPath.slice(0, rel.length) : rel, body.comicRating ?? 'general');
+    }
+    if (parent) throw new BadRequestError(`已经包含在「${parent.path}」里了，不用单独添加。要把它当漫画，选「漫画 · 跳过识别」再添加`);
     // 和 sqlite 一样：包含已有文件夹时先问，确认后把子文件夹的图接管过来（mock 没有「移除过的」文件夹）
     const children = roots.filter((r) => inside(r.path, path));
     if (children.length && !body.merge) {
@@ -1606,6 +1614,7 @@ export class MockDataSource implements DataSource {
       importedAt: new Date().toISOString(),
       mode: body.mode ?? 'auto',
       comicRating: body.comicRating ?? 'general',
+      comicFolders: [],
     };
     let merged = 0;
     for (const c of children) {
@@ -1621,6 +1630,9 @@ export class MockDataSource implements DataSource {
         col.rootId = root.id;
         col.relDir = col.relDir ? `${prefix}/${col.relDir}` : prefix;
       }
+      // 按漫画导入的设置跟着过来（同 sqlite 的 mergeChildRoots）
+      if (c.mode === 'comic') root.comicFolders.push({ relDir: prefix, comicRating: c.comicRating });
+      for (const cf of c.comicFolders) root.comicFolders.push({ relDir: `${prefix}/${cf.relDir}`, comicRating: cf.comicRating });
       roots.splice(roots.indexOf(c), 1);
       if (c.importedAt && root.importedAt && c.importedAt < root.importedAt) root.importedAt = c.importedAt;
     }
@@ -1636,6 +1648,12 @@ export class MockDataSource implements DataSource {
   async updateLibraryRoot(id: ID, body: UpdateLibraryRootBody): Promise<MutationResult> {
     const root = this.db.settings.libraryRoots.find((r) => r.id === id);
     if (!root) throw new NotFoundError('图库文件夹');
+    // 里面的漫画子文件夹：单独一步（同 sqlite）
+    if (body.comicFolder) {
+      const cur = root.comicFolders.find((x) => x.relDir === body.comicFolder!.relDir);
+      return this.setComicFolder(root, body.comicFolder.relDir, body.comicFolder.comicRating ?? cur?.comicRating ?? 'general');
+    }
+    if (body.removeComicFolder !== undefined) return this.setComicFolder(root, body.removeComicFolder, null);
     const before = { ...root };
     const next = { enabled: body.enabled ?? root.enabled, mode: body.mode ?? root.mode, comicRating: body.comicRating ?? root.comicRating };
     const modeChanged = next.mode !== root.mode;
@@ -1663,17 +1681,63 @@ export class MockDataSource implements DataSource {
   }
 
   /** 和 sqlite 的 applyRootMode 一样：按文件夹设置重判类型（手动改过的不动）；按漫画导入的，没识别过的页用选的分级 */
-  private applyRootMode(root: LibraryRoot): void {
-    for (const img of this.db.images.values()) {
-      if (img.libraryRootId !== root.id) continue;
+  private applyRootMode(root: LibraryRoot, relDir?: string): void {
+    for (const img of this.imagesUnder(root.id, relDir)) {
       if (!img.kindManual) {
         const a = this.autoKindOf(img);
         img.kind = a.kind;
         img.kindSource = a.source;
         img.kindEvidence = a.evidence;
       }
-      if (root.mode === 'comic' && !img.tagged && !img.ratingManual) img.rating = root.comicRating;
+      const area = comicAreaOf(this.db.settings.libraryRoots, img.libraryRootId, img.relPath);
+      if (area && !img.tagged && !img.ratingManual) img.rating = area.rating;
     }
+  }
+
+  /** 同 sqlite 的 syncRootModes：在不在漫画范围里和类型对不上的重判，范围里没识别过的页用范围的分级 */
+  private syncComic(imgs: ImageRow[]): void {
+    for (const img of imgs) {
+      if (!img.kindManual && this.inComicRoot(img) !== (img.kindEvidence === COMIC_ROOT_EVIDENCE)) {
+        const a = this.autoKindOf(img);
+        Object.assign(img, { kind: a.kind, kindSource: a.source, kindEvidence: a.evidence });
+      }
+      const area = comicAreaOf(this.db.settings.libraryRoots, img.libraryRootId, img.relPath);
+      if (area && !img.tagged && !img.ratingManual) img.rating = area.rating;
+    }
+  }
+
+  private imagesUnder(rootId: ID, relDir?: string): ImageRow[] {
+    return [...this.db.images.values()].filter((img) => img.libraryRootId === rootId && (!relDir || img.relPath.startsWith(`${relDir}/`)));
+  }
+
+  /** 同 sqlite 的 setComicFolder：图库文件夹里的子文件夹按漫画导入（rating = null：不再按漫画导入） */
+  private setComicFolder(root: LibraryRoot, rawDir: string, rating: Rating | null): MutationResult {
+    const relDir = rawDir.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    if (!relDir) throw new BadRequestError('要选图库文件夹里面的子文件夹');
+    const cur = root.comicFolders.find((x) => x.relDir === relDir);
+    if (rating === null && !cur) throw new NotFoundError('按漫画导入的子文件夹');
+    if (rating !== null) {
+      const area = comicAreaOf(this.db.settings.libraryRoots, root.id, relDir);
+      if (area && area.relDir !== relDir) throw new BadRequestError(`已经在按漫画导入的「${area.path}」里了`);
+      if (cur?.comicRating === rating) return done('没有变化');
+    }
+    const rows = this.imagesUnder(root.id, relDir);
+    const snap = rows.map((img) => ({ img, kind: img.kind, kindSource: img.kindSource, kindEvidence: img.kindEvidence, rating: img.rating }));
+    root.comicFolders = [...root.comicFolders.filter((x) => x !== cur), ...(rating === null ? [] : [{ relDir, comicRating: rating }])];
+    this.applyRootMode(root, relDir);
+    const where = `${root.path.replace(/\/+$/, '')}/${relDir}`;
+    const message =
+      rating === null
+        ? `「${where}」不再按漫画导入：没识别过的图会开始识别`
+        : cur
+          ? `「${where}」的分级改成了「${RATING_LABEL[rating]}」`
+          : `已把「${where}」按漫画导入：${rows.length} 张归到漫画，不再识别`;
+    return this.withUndo(message, () => {
+      // 只还原这一个子文件夹（同 sqlite：别的子文件夹可能是之后加的）
+      root.comicFolders = [...root.comicFolders.filter((x) => x.relDir !== relDir), ...(cur ? [cur] : [])];
+      for (const x of snap) Object.assign(x.img, { kind: x.kind, kindSource: x.kindSource, kindEvidence: x.kindEvidence, rating: x.rating });
+      this.syncComic(snap.map((x) => x.img));
+    });
   }
 
   async removeLibraryRoot(id: ID): Promise<MutationResult> {

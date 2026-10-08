@@ -453,8 +453,8 @@ export function buildMockDb(now = Date.now()): MockDb {
 
   const settings: Settings = {
     libraryRoots: [
-      { id: 'root1', path: 'D:/Pictures/插画', enabled: true, imageCount: 0, lastScanAt: new Date(now - 2 * 3600_000).toISOString(), importedAt: new Date(now - 200 * DAY).toISOString(), mode: 'auto', comicRating: 'general' },
-      { id: 'root2', path: 'E:/下载/pixiv', enabled: true, imageCount: 0, lastScanAt: new Date(now - 26 * 3600_000).toISOString(), importedAt: new Date(now - 200 * DAY).toISOString(), mode: 'auto', comicRating: 'general' },
+      { id: 'root1', path: 'D:/Pictures/插画', enabled: true, imageCount: 0, lastScanAt: new Date(now - 2 * 3600_000).toISOString(), importedAt: new Date(now - 200 * DAY).toISOString(), mode: 'auto', comicRating: 'general', comicFolders: [] },
+      { id: 'root2', path: 'E:/下载/pixiv', enabled: true, imageCount: 0, lastScanAt: new Date(now - 26 * 3600_000).toISOString(), importedAt: new Date(now - 200 * DAY).toISOString(), mode: 'auto', comicRating: 'general', comicFolders: [] },
     ],
     tagger: {
       model: 'A1yCE/pixai-tagger-v1.0-onnx-fp16',

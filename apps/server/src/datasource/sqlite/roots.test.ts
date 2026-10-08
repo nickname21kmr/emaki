@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, utimesSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, rmSync, utimesSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../../core/events.ts';
@@ -176,6 +176,102 @@ describe('按漫画导入', () => {
     await ds.updateLibraryRoot(root.id, { mode: 'auto' });
     await ds.undo(off.undoToken!);
     expect((await ds.getSettings()).libraryRoots[0]).toMatchObject({ enabled: true, mode: 'auto' });
+  });
+
+  it('已有图库文件夹里面的子文件夹按漫画导入：只有它归漫画、每卷一本；去掉后恢复识别；可撤销', async () => {
+    const R = path.join(dir, '收藏');
+    const old = new Date('2025-01-01');
+    const put = async (rel: string, seed: number) => {
+      const p = path.join(R, rel);
+      mkdirSync(path.dirname(p), { recursive: true });
+      await sharp({ create: { width: 40 + seed, height: 60, channels: 3, background: { r: seed * 20, g: 80, b: 120 } } }).png().toFile(p);
+      utimesSync(p, old, old);
+    };
+    await put('插画/a.png', 1);
+    await put('漫画/某漫画/某漫画 Vol.01/1.png', 2);
+    await put('漫画/某漫画/某漫画 Vol.01/2.png', 3);
+    await put('漫画/某漫画/某漫画 Vol.02/1.png', 4);
+    await put('漫画/某漫画/某漫画 Vol.02/2.png', 5);
+    const rootPath = R.replace(/\\/g, '/');
+    await ds.addLibraryRoot({ path: rootPath });
+    await idle();
+    expect((await ds.getStats()).pendingTagCount).toBe(5);
+
+    // 再「添加」里面的子文件夹并选漫画：不另加图库文件夹，而是把它按漫画导入
+    const r = await ds.addLibraryRoot({ path: `${rootPath}/漫画/某漫画`, mode: 'comic', comicRating: 'sensitive' });
+    expect(r.message).toBe(`已把「${rootPath}/漫画/某漫画」按漫画导入：4 张归到漫画，不再识别`);
+    const s = await ds.getSettings();
+    expect(s.libraryRoots).toHaveLength(1);
+    expect(s.libraryRoots[0]).toMatchObject({ mode: 'auto', comicFolders: [{ relDir: '漫画/某漫画', comicRating: 'sensitive' }] });
+    expect((await ds.getStats()).pendingTagCount).toBe(1);
+    const books = await ds.listCollections({ kind: 'doujin' });
+    expect(books.map((b) => [b.title, b.volumeNo, b.pageCount, b.pending])).toEqual([
+      ['某漫画', 1, 2, false],
+      ['某漫画', 2, 2, false],
+    ]);
+    const kinds = () => ds.ctx.db.prepare('SELECT file_name || rel_path AS k, content_kind, rating FROM images ORDER BY rel_path').all();
+    expect((kinds() as { content_kind: string }[]).map((x) => x.content_kind)).toEqual(['illustration', 'comic', 'comic', 'comic', 'comic']);
+    // 里面再加一层：已经在漫画里了
+    await expect(ds.addLibraryRoot({ path: `${rootPath}/漫画/某漫画/某漫画 Vol.01`, mode: 'comic' })).rejects.toMatchObject({ statusCode: 400 });
+    // 不选漫画添加子文件夹：照旧提示已经包含
+    await expect(ds.addLibraryRoot({ path: `${rootPath}/插画` })).rejects.toMatchObject({ statusCode: 400 });
+
+    const off = await ds.updateLibraryRoot(s.libraryRoots[0]!.id, { removeComicFolder: '漫画/某漫画' });
+    expect(off.message).toBe(`「${rootPath}/漫画/某漫画」不再按漫画导入：没识别过的图会开始识别`);
+    expect((await ds.getStats()).pendingTagCount).toBe(5);
+    expect(await ds.listCollections({ kind: 'doujin' })).toEqual([]);
+    await ds.undo(off.undoToken!);
+    expect((await ds.getStats()).pendingTagCount).toBe(1);
+    expect((await ds.listCollections({ kind: 'doujin' })).length).toBe(2);
+    await ds.undo(r.undoToken!);
+    expect((await ds.getSettings()).libraryRoots[0]!.comicFolders).toEqual([]);
+    expect((await ds.getStats()).pendingTagCount).toBe(5);
+  });
+
+  it('漫画子文件夹：手输大小写不对也能认；磁盘上改名后跟过去；先撤里层、外层还在时页还是漫画', async () => {
+    const R = path.join(dir, '收藏');
+    const old = new Date('2025-01-01');
+    const put = async (rel: string, seed: number) => {
+      const p = path.join(R, rel);
+      mkdirSync(path.dirname(p), { recursive: true });
+      await sharp({ create: { width: 40 + seed, height: 60, channels: 3, background: { r: seed * 20, g: 80, b: 120 } } }).png().toFile(p);
+      utimesSync(p, old, old);
+    };
+    await put('Manga/Foo/v1/1.png', 1);
+    await put('Manga/Foo/v1/2.png', 2);
+    await put('Manga/Foo/v2/1.png', 3);
+    await put('Manga/Foo/v2/2.png', 4);
+    const rootPath = R.replace(/\\/g, '/');
+    await ds.addLibraryRoot({ path: rootPath });
+    await idle();
+    const db = ds.ctx.db;
+    const kinds = () => db.prepare('SELECT DISTINCT content_kind FROM images').pluck().all();
+
+    // Windows 上路径不分大小写：按磁盘上的名字记
+    if (process.platform === 'win32') {
+      const r = await ds.addLibraryRoot({ path: `${rootPath}/manga/foo`, mode: 'comic' });
+      expect(r.message).toContain('4 张归到漫画');
+      expect((await ds.getSettings()).libraryRoots[0]!.comicFolders).toEqual([{ relDir: 'Manga/Foo', comicRating: 'general' }]);
+    } else {
+      await ds.addLibraryRoot({ path: `${rootPath}/Manga/Foo`, mode: 'comic' });
+    }
+    expect(kinds()).toEqual(['comic']);
+
+    // 整个文件夹在磁盘上改名：扫描后设置跟过去，页还是漫画、不进识别
+    renameSync(path.join(R, 'Manga/Foo'), path.join(R, 'Manga/Bar'));
+    await ds.startJob('scan');
+    await idle();
+    expect((await ds.getSettings()).libraryRoots[0]!.comicFolders).toEqual([{ relDir: 'Manga/Bar', comicRating: 'general' }]);
+    expect(kinds()).toEqual(['comic']);
+    expect((await ds.getStats()).pendingTagCount).toBe(0);
+
+    // 先把整个 Manga 设成漫画（外层），再撤销里层 Bar：Bar 的页还在外层里，还是漫画、用外层的分级
+    const rootId = (await ds.getSettings()).libraryRoots[0]!.id;
+    await ds.updateLibraryRoot(rootId, { removeComicFolder: 'Manga/Bar' });
+    const inner = await ds.updateLibraryRoot(rootId, { comicFolder: { relDir: 'Manga/Bar/v1', comicRating: 'sensitive' } });
+    await ds.updateLibraryRoot(rootId, { comicFolder: { relDir: 'Manga', comicRating: 'questionable' } });
+    await ds.undo(inner.undoToken!);
+    expect(db.prepare("SELECT DISTINCT content_kind || ' ' || rating FROM images").pluck().all()).toEqual(['comic questionable']);
   });
 
   it('添加后、扫描前改成漫画：扫描结束时按现在的设置判；漫画文件夹根目录直接放的页也成一本', async () => {

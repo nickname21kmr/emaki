@@ -1,5 +1,5 @@
 import type { LibraryRoot, LibraryRootMode, Rating, UpdateLibraryRootBody } from '@emaki/shared';
-import { BookOpen, ChevronDown, FolderInput, FolderOpen, FolderSearch, FolderX, Trash } from 'lucide-react';
+import { BookOpen, ChevronDown, FolderInput, FolderOpen, FolderSearch, FolderX, Trash, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Badge, Button, IconButton, Input, Menu, MenuLabel, MenuRadioGroup, MenuRadioItem, MenuSeparator, Segmented, Switch } from '@/components/ui';
@@ -172,7 +172,7 @@ export function AddFolderForm({
       <p id="add-folder-hint" hidden={!!confirm} className={cn('mt-2 pl-4 text-xs', problem ? 'text-danger' : 'text-fg-subtle')}>
         {problem ??
           (mode === 'comic'
-            ? '漫画：每个子文件夹算一本（按卷号排），页面直接归到别册 · 漫画，不跑识别、不找角色。没识别就不知道分级，先按上面选的显示。'
+            ? '漫画：每个子文件夹算一本（按卷号排），页面直接归到别册 · 漫画，不跑识别、不找角色。没识别就不知道分级，先按上面选的显示。也可以选已有图库文件夹里面的子文件夹。'
             : '支持本地磁盘和网络路径（\\\\NAS\\共享文件夹）。可以从资源管理器地址栏复制，或点「浏览…」选择。')}
       </p>
       {actions({ disabled: !trimmed || !!problem || !!confirm, loading: add.isPending })}
@@ -289,6 +289,32 @@ function RootRow({
             <span className="text-warn">还没有扫描过</span>
           )}
         </div>
+        {/* 里面按漫画导入的子文件夹：点 × 不再按漫画导入（可撤销） */}
+        {root.comicFolders.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {root.comicFolders.map((f) => (
+              <span
+                key={f.relDir}
+                className="inline-flex h-6 max-w-full items-center gap-1 rounded-full bg-sunken pr-1 pl-2.5 text-[11.5px] text-fg-muted"
+                title={`${root.path}/${f.relDir}`}
+              >
+                <BookOpen className="size-3 shrink-0" />
+                <span className="truncate">
+                  {f.relDir} · {RATING_LABEL[f.comicRating]}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`「${f.relDir}」不再按漫画导入`}
+                  title="不再按漫画导入"
+                  onClick={() => onUpdate({ removeComicFolder: f.relDir })}
+                  className="flex size-4 shrink-0 items-center justify-center rounded-full text-fg-subtle hover:bg-hover hover:text-fg"
+                >
+                  <X className="size-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className={cn('w-24 text-right transition-opacity duration-300', off && 'opacity-40')}>

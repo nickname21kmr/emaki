@@ -19,7 +19,8 @@ import {
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
 import type { CollectionRow, CollectionService } from '../../services/collections/CollectionService.ts';
 import { autoKind, bookLeaf, decideCollection, dirFeatures, isJudged, type DirPage } from '../../services/collections/detect.ts';
-import { parseComicDir, parseFolderName } from '../../services/collections/parseName.ts';
+import { parseBookDir, parseComicDir } from '../../services/collections/parseName.ts';
+import { ComicAreas } from '../../services/classify/comicAreas.ts';
 import { summarize } from '../../services/collections/summary.ts';
 import type { SqliteContext } from './context.ts';
 import type { Derived } from './derived.ts';
@@ -50,8 +51,8 @@ interface PageRow {
 }
 
 interface Loaded {
-  /** root_mode = 'comic'：按漫画导入的文件夹里的书，不找角色（不算待整理），页面分级可信（不强制模糊） */
-  row: CollectionRow & { root_path: string; root_mode: string };
+  /** comic：在按漫画导入的范围里的书，不找角色（不算待整理），页面分级可信（不强制模糊） */
+  row: CollectionRow & { root_path: string; comic: boolean };
   summary: CollectionSummary;
   pages: PageRow[];
   cast: { id: number; pageCount: number; manual: boolean }[];
@@ -86,10 +87,12 @@ export class CollectionQueries {
     const db = this.ctx.db;
     const rows = db
       .prepare(
-        `SELECT c.*, r.path AS root_path, r.content_mode AS root_mode FROM collections c JOIN library_roots r ON r.id = c.root_id
+        `SELECT c.*, r.path AS root_path FROM collections c JOIN library_roots r ON r.id = c.root_id
          WHERE c.state = 'active' AND r.enabled = 1 AND r.removed_at IS NULL`,
       )
-      .all() as (CollectionRow & { root_path: string; root_mode: string })[];
+      .all() as (CollectionRow & { root_path: string; comic: boolean })[];
+    const comics = ComicAreas.load(db);
+    for (const r of rows) r.comic = !!comics.of(r.root_id, r.rel_dir);
     const pagesBy = new Map<number, PageRow[]>();
     for (const p of db
       .prepare(
@@ -144,7 +147,7 @@ export class CollectionQueries {
     const out = new Map<number, Loaded>();
     for (const row of rows) {
       const pages = pagesBy.get(row.id) ?? [];
-      const comic = row.root_mode === 'comic';
+      const comic = row.comic;
       const s = summarize<number>({
         kind: row.kind as CollectionKind,
         coverImageId: row.cover_image_id,
@@ -239,7 +242,7 @@ export class CollectionQueries {
       rating: p.rating,
       kind: p.content_kind,
       dominantColor: p.dominant_color ?? DEFAULT_DOMINANT,
-      tagged: p.tagged_at !== null || l.row.root_mode === 'comic',
+      tagged: p.tagged_at !== null || l.row.comic,
     }));
     const series = l.row.series_key
       ? [...all.values()]
@@ -292,7 +295,7 @@ export class CollectionQueries {
     if (!img) throw new NotFoundError('图片');
     const dir = img.rel_path.length > img.file_name.length ? img.rel_path.slice(0, img.rel_path.length - img.file_name.length - 1) : '';
     // 按漫画导入的文件夹根目录直接放页时，根目录也能成一本
-    if (!dir && this.rootOf(img.root_id)?.content_mode !== 'comic') throw new BadRequestError('图库根目录里的图不能成册');
+    if (!dir && !ComicAreas.load(this.ctx.db).of(img.root_id, '')) throw new BadRequestError('图库根目录里的图不能成册');
     const db = this.ctx.db;
     const ex = db.prepare('SELECT * FROM collections WHERE root_id = ? AND rel_dir = ?').get(img.root_id, dir) as CollectionRow | undefined;
     if (ex?.state === 'active') throw new ConflictError('这个文件夹已经是合集');
@@ -353,7 +356,7 @@ export class CollectionQueries {
       if (body.kind === 'auto') {
         const members = this.members(c.root_id, c.rel_dir).map((m) => m.page);
         const f = dirFeatures(members);
-        const rule = this.rootOf(c.root_id)?.content_mode === 'comic' ? 'H' : members.length ? (decideCollection(leaf, f)?.rule ?? null) : null;
+        const rule = ComicAreas.load(db).of(c.root_id, c.rel_dir) ? 'H' : members.length ? (decideCollection(leaf, f)?.rule ?? null) : null;
         const k = autoKind(leaf, f, rule);
         Object.assign(set, { kind: k.kind, kind_source: k.source, kind_manual: 0 });
         notes.push(`已恢复自动判断（${KIND_LABEL[k.kind]}）`);
@@ -468,14 +471,10 @@ export class CollectionQueries {
 
   // ---------------------------------------------------------------- 内部
 
-  private rootOf(id: number): { path: string; content_mode: string } | undefined {
-    return this.ctx.db.prepare('SELECT path, content_mode FROM library_roots WHERE id = ?').get(id) as { path: string; content_mode: string } | undefined;
-  }
-
   /** 自动的书名、系列、卷号：按漫画导入的文件夹看各级目录名，其余看书名目录（跳过 images、pics 这类） */
   private parsedFor(rootId: number, dir: string) {
-    const r = this.rootOf(rootId);
-    return r?.content_mode === 'comic' ? parseComicDir(dir, r.path) : parseFolderName(bookLeaf(dir));
+    const area = ComicAreas.load(this.ctx.db).of(rootId, dir);
+    return area ? parseComicDir(ComicAreas.relIn(area, dir), area.path) : parseBookDir(dir, bookLeaf(dir));
   }
 
   private members(root: number, dir: string): { page: DirPage }[] {

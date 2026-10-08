@@ -550,6 +550,10 @@ export interface UpdateLibraryRootBody {
   enabled?: boolean;
   mode?: LibraryRootMode;
   comicRating?: Rating;
+  /** 把里面的一个子文件夹按漫画导入（已经是的话改分级） */
+  comicFolder?: { relDir: string; comicRating?: Rating };
+  /** 子文件夹不再按漫画导入 */
+  removeComicFolder?: string;
 }
 
 // ---------------------------------------------------------------- 后台任务

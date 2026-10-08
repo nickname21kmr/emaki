@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseComicDir, parseFolderName } from './parseName.ts';
+import { parseBookDir, parseComicDir, parseFolderName, VOLUME_NAME } from './parseName.ts';
 
 describe('parseFolderName', () => {
   it('① 汉化组、展会、社团、作者、原作', () => {
@@ -117,5 +117,38 @@ describe('parseComicDir（按漫画导入的文件夹）', () => {
   });
   it('作者从外层的 [作者] 里取', () => {
     expect(parseComicDir(`${A}/魔都精兵的奴隶 Vol.01/pics`, root).circle).toBe('タカヒロ×竹村洋平');
+  });
+});
+
+describe('卷号（v5）', () => {
+  it.each([
+    ['某漫画 Vol.03', '某漫画', 3],
+    ['某漫画 第3卷', '某漫画', 3],
+    ['[作者] 某漫画 2巻', '某漫画', 2],
+    ['FANTIA 作品集 2', 'FANTIA 作品集 2', 2],
+  ])('%s → 系列 %s 第 %s 卷', (leaf, series, vol) => {
+    const p = parseFolderName(leaf);
+    expect([p.seriesKey ?? p.title, p.volumeNo]).toEqual([series === 'FANTIA 作品集 2' ? 'FANTIA 作品集' : series, vol]);
+  });
+  it('整个名字就是卷号：书名取上一级（parseBookDir）', () => {
+    expect(parseBookDir('某漫画/6卷', '6卷')).toMatchObject({ title: '某漫画', seriesKey: '某漫画', volumeNo: 6 });
+    expect(parseBookDir('某漫画/Vol.2', 'Vol.2')).toMatchObject({ title: '某漫画', seriesKey: '某漫画', volumeNo: 2 });
+    // 上一级也没有书名：照旧
+    expect(parseBookDir('6卷', '6卷')).toMatchObject({ title: '6卷', volumeNo: null });
+    // 普通名字不受影响
+    expect(parseBookDir('x/某本子', '某本子')).toMatchObject({ title: '某本子', volumeNo: null });
+  });
+  it.each(['某漫画 全34卷', '某漫画 1-5卷', '某漫画 Vol.1-Vol.11', '某漫画 第1-3卷'])('整套范围不是某一卷：%s', (leaf) => {
+    expect(parseFolderName(leaf)).toMatchObject({ title: leaf, volumeNo: null });
+  });
+  it('范围后面还有卷号时只认卷号', () => {
+    expect(parseFolderName('某漫画 Vol.3 [完结]')).toMatchObject({ seriesKey: '某漫画', volumeNo: 3 });
+  });
+  it.each(['東方絵巻 3', '山水画卷 2', 'Evol 2'])('词里的卷、vol 不算卷号：%s', (leaf) => {
+    expect(parseFolderName(leaf)).toMatchObject({ title: leaf, volumeNo: null });
+    expect(VOLUME_NAME.test(leaf)).toBe(false);
+  });
+  it.each([['某漫画 卷3', 3], ['某漫画_卷3', 3], ['某漫画Vol.3', 3], ['Foo-vol3', 3]])('%s 还是认得', (leaf, vol) => {
+    expect(parseFolderName(leaf).volumeNo).toBe(vol);
   });
 });

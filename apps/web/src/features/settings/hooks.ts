@@ -68,7 +68,8 @@ export function useUpdateRoot() {
   const { mutate } = useMutate((v: { id: ID; body: UpdateLibraryRootBody }) => api.updateLibraryRoot(v.id, v.body));
   return useCallback(
     (id: ID, body: UpdateLibraryRootBody) => {
-      patchRoots(client, (roots) => roots.map((r) => (r.id === id ? { ...r, ...body } : r)));
+      const { comicFolder: _f, removeComicFolder: _r, ...own } = body;
+      patchRoots(client, (roots) => roots.map((r) => (r.id === id ? { ...r, ...own } : r)));
       mutate({ id, body }, { onError: () => void client.invalidateQueries({ queryKey: qk.settings }) });
     },
     [client, mutate],

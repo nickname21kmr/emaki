@@ -73,6 +73,7 @@ import { ScanRequests } from '../../services/scan/ScanRequests.ts';
 import { backfillSources } from '../../services/source/backfill.ts';
 import { backfillClassification } from '../../services/classify/backfill.ts';
 import { syncRootModes } from '../../services/classify/rootMode.ts';
+import { ComicAreas } from '../../services/classify/comicAreas.ts';
 import { CollectionService, type CollectionsHook } from '../../services/collections/CollectionService.ts';
 import { shutdownTagger } from '../../services/tagger/client.ts';
 import { ARTIST_MODEL, artistPendingCount, createArtistJobRunner } from '../../services/tagger/artists.ts';
@@ -110,7 +111,7 @@ import { TagResultWriter } from '../../services/tagger/writer.ts';
 import { moveBack, moveImageFiles, normalizeSubdir, type MoveRow } from './move.ts';
 import { artistNames, imageArtists, linkGroups, listArtists as listArtistsQuery, tagNames } from './artists.ts';
 import { artistLinksMessage, linkTags, planArtistLinks } from '../artistEdits.ts';
-import { mergeChildRoots, type ChildRoot } from './roots.ts';
+import { diskCaseRel, mergeChildRoots, relUnder, type ChildRoot } from './roots.ts';
 import { applySettingsPatch, getDanbooruApiKey, isInside, normalizeRootPath, patchSettingsInternal, readSettings, samePath } from './settings.ts';
 import { iso, MIME, parseId, toId, VISIBLE } from './sql.ts';
 
@@ -853,6 +854,11 @@ export class SqliteDataSource implements DataSource {
       comic_rating: string;
       image_count: number;
     }[];
+    const folders = this.ctx.db.prepare('SELECT root_id, rel_dir, comic_rating FROM comic_folders ORDER BY rel_dir').all() as {
+      root_id: number;
+      rel_dir: string;
+      comic_rating: Rating;
+    }[];
     return {
       libraryRoots: rows.map((r) => ({
         id: toId(r.id),
@@ -863,6 +869,7 @@ export class SqliteDataSource implements DataSource {
         importedAt: r.imported_at,
         mode: r.content_mode === 'comic' ? 'comic' : 'auto',
         comicRating: r.comic_rating as Rating,
+        comicFolders: folders.filter((f) => f.root_id === r.id).map((f) => ({ relDir: f.rel_dir, comicRating: f.comic_rating })),
       })),
       ...readSettings(this.ctx.db),
     };
@@ -937,7 +944,9 @@ export class SqliteDataSource implements DataSource {
     const active = rows.filter((r) => r.removed_at === null);
     if (active.some((r) => samePath(r.path, p))) throw new BadRequestError('这个文件夹已经在图库里了');
     const parent = active.find((r) => isInside(p, r.path));
-    if (parent) throw new BadRequestError(`已经包含在「${parent.path}」里了，不用单独添加`);
+    // 已有图库文件夹里面的子文件夹：选了漫画就把这个子文件夹按漫画导入，不另加图库文件夹
+    if (parent && mode === 'comic') return this.setComicFolder(parent, await diskCaseRel(parent.path, relUnder(parent.path, p)), comicRating);
+    if (parent) throw new BadRequestError(`已经包含在「${parent.path}」里了，不用单独添加。要把它当漫画，选「漫画 · 跳过识别」再添加`);
     const d = normalizeRootPath(this.ctx.dataDir);
     if (samePath(p, d) || isInside(p, d) || isInside(d, p)) throw new BadRequestError('不能把 Emaki 的数据目录加入图库');
 
@@ -951,7 +960,7 @@ export class SqliteDataSource implements DataSource {
       throw new NeedsConfirmError(
         `这个文件夹包含图库里已有的${names}，合并成一个吗？原来的识别和整理结果都会保留。` +
           (disabled.length ? `其中${disabled.join('')}现在是停用的，合并后会重新显示。` : '') +
-          (comics.length && mode !== 'comic' ? `${comics.join('')}原来是按漫画导入的，合并后会和其他图一样识别。` : ''),
+          (comics.length && mode !== 'comic' ? `${comics.join('')}按漫画导入的设置会保留（变成里面的漫画子文件夹）。` : ''),
       );
     }
     // 合并前照例备份（VACUUM INTO 不能在事务里，目标文件已存在会报错）
@@ -999,20 +1008,77 @@ export class SqliteDataSource implements DataSource {
   }
 
   /** 按图库文件夹的设置重判这个文件夹里所有图的类型；按漫画导入的，没识别过、没手动改过分级的页用选的分级。在事务里调用 */
-  private applyRootMode(rootId: number): number[] {
-    const db = this.ctx.db;
-    const ids = db.prepare('SELECT id FROM images WHERE root_id = ?').pluck().all(rootId) as number[];
-    if (ids.length) backfillClassification(db, { ids });
-    const r = db.prepare('SELECT content_mode, comic_rating FROM library_roots WHERE id = ?').get(rootId) as { content_mode: string; comic_rating: string };
-    if (r.content_mode === 'comic') {
-      db.prepare('UPDATE images SET rating = ? WHERE root_id = ? AND tagged_at IS NULL AND rating_manual = 0').run(r.comic_rating, rootId);
-    }
+  private applyRootMode(rootId: number, relDir?: string): number[] {
+    const ids = this.imagesUnder(rootId, relDir);
+    if (ids.length) syncRootModes(this.ctx.db, ids);
     return ids;
+  }
+
+  /** 图库文件夹里（relDir 给了就是这个子文件夹里）的全部图 */
+  private imagesUnder(rootId: number, relDir?: string): number[] {
+    const under = relDir ? "AND substr(rel_path, 1, length(@dir) + 1) = @dir || '/'" : '';
+    return this.ctx.db.prepare(`SELECT id FROM images WHERE root_id = @root ${under}`).pluck().all({ root: rootId, dir: relDir ?? '' }) as number[];
+  }
+
+  /**
+   * 图库文件夹里的子文件夹按漫画导入（rating = null：不再按漫画导入）；可撤销。
+   * 里面的图按新设置重判类型和分级，合集在事务之后重算；不再按漫画导入时没识别过的图接着识别
+   */
+  private setComicFolder(root: { id: number; path: string }, rawDir: string, rating: Rating | null): MutationResult {
+    const db = this.ctx.db;
+    const relDir = rawDir.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    if (!relDir) throw new BadRequestError('要选图库文件夹里面的子文件夹');
+    const cur = db.prepare('SELECT comic_rating FROM comic_folders WHERE root_id = ? AND rel_dir = ?').get(root.id, relDir) as { comic_rating: Rating } | undefined;
+    if (rating === null && !cur) throw new NotFoundError('按漫画导入的子文件夹');
+    if (rating !== null) {
+      const area = ComicAreas.load(db).of(root.id, relDir);
+      if (area && area.relDir !== relDir) throw new BadRequestError(`已经在按漫画导入的「${area.path}」里了`);
+      if (cur?.comic_rating === rating) return done('没有变化');
+    }
+    const snap = db
+      .prepare(`SELECT id, tagged_at, ${ROOT_MODE_COLS.join(', ')} FROM images WHERE root_id = @root AND substr(rel_path, 1, length(@dir) + 1) = @dir || '/'`)
+      .all({ root: root.id, dir: relDir }) as RootImageSnap[];
+    const where = `${root.path.replace(/\/+$/, '')}/${relDir}`;
+    const result = this.ctx.mutate((u) => {
+      u.set('comic_folders', 'root_id = ? AND rel_dir = ?', [root.id, relDir]);
+      if (rating === null) db.prepare('DELETE FROM comic_folders WHERE root_id = ? AND rel_dir = ?').run(root.id, relDir);
+      else
+        db.prepare(
+          'INSERT INTO comic_folders (root_id, rel_dir, comic_rating, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(root_id, rel_dir) DO UPDATE SET comic_rating = excluded.comic_rating',
+        ).run(root.id, relDir, rating, iso(this.ctx.clock()));
+      this.applyRootMode(root.id, relDir);
+      u.onUndo(() => {
+        if (snap.length) this.restoreRootImages(root.id, snap, relDir);
+        this.collectionsHook(null, 'all');
+        this.ctx.touch();
+        this.notifyRoots();
+        // 撤销「按漫画导入」：回到插画，没识别过的接着识别
+        if (rating !== null && !cur) this.requestTag();
+      });
+      const message =
+        rating === null
+          ? `「${where}」不再按漫画导入：没识别过的图会开始识别`
+          : cur
+            ? `「${where}」的分级改成了「${RATING_LABEL[rating]}」`
+            : `已把「${where}」按漫画导入：${snap.length} 张归到漫画，不再识别`;
+      return { message };
+    });
+    this.collectionsHook(null, 'all');
+    this.ctx.touch();
+    this.notifyRoots();
+    if (rating === null) this.requestTag();
+    return result;
   }
 
   async updateLibraryRoot(id: ID, body: UpdateLibraryRootBody): Promise<MutationResult> {
     const root = this.requireRoot(id);
     const db = this.ctx.db;
+    // 里面的漫画子文件夹：单独一步（各自可以撤销）
+    if (body.comicFolder) {
+      const cur = db.prepare('SELECT comic_rating FROM comic_folders WHERE root_id = ? AND rel_dir = ?').pluck().get(root.id, body.comicFolder.relDir) as Rating | undefined;
+      return this.setComicFolder(root, body.comicFolder.relDir, body.comicFolder.comicRating ?? cur ?? 'general');
+    }
+    if (body.removeComicFolder !== undefined) return this.setComicFolder(root, body.removeComicFolder, null);
     const cur = db.prepare('SELECT enabled, content_mode, comic_rating FROM library_roots WHERE id = ?').get(root.id) as {
       enabled: number;
       content_mode: string;
@@ -1070,12 +1136,13 @@ export class SqliteDataSource implements DataSource {
    * 撤销切换导入方式时恢复这个文件夹的图：期间没重新识别过的行按快照写回（手动改过的类型、分级不动）；
    * 期间识别过的、新扫进来的行按现在（已经恢复）的设置重判，免得把新的识别结果盖回旧值
    */
-  private restoreRootImages(rootId: number, snap: RootImageSnap[]): void {
+  private restoreRootImages(rootId: number, snap: RootImageSnap[], relDir?: string): void {
     const db = this.ctx.db;
+    const under = relDir ? "AND substr(rel_path, 1, length(@dir) + 1) = @dir || '/'" : '';
     transact(db, () => {
       const now = new Map(
         (
-          db.prepare('SELECT id, tagged_at, content_kind_manual, rating_manual FROM images WHERE root_id = ?').all(rootId) as {
+          db.prepare(`SELECT id, tagged_at, content_kind_manual, rating_manual FROM images WHERE root_id = @root ${under}`).all({ root: rootId, dir: relDir ?? '' }) as {
             id: number;
             tagged_at: string | null;
             content_kind_manual: number;
@@ -1099,7 +1166,8 @@ export class SqliteDataSource implements DataSource {
         if (!n.rating_manual) setRating.run(s);
       }
       recompute.push(...now.keys());
-      if (recompute.length) syncRootModes(db, recompute);
+      // 写回的行也对一遍：不按顺序撤销时（先撤里层的漫画子文件夹，外层的还在），快照里的「插画」已经不对了
+      syncRootModes(db, [...recompute, ...snap.map((x) => x.id)]);
     });
   }
 

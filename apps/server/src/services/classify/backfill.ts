@@ -8,6 +8,7 @@
  */
 import type { ContentKind, ContentKindSource, ImageFormat } from '@emaki/shared';
 import { transact, type Db, type Statement } from '../../db/connection.ts';
+import { IN_COMIC } from './comicAreas.ts';
 import { classifyContent, CLASSIFIER_VERSION, SIGNAL_TAGS } from './rules.ts';
 import { artScore, classifyTheme, THEME_TAG_NAMES, type StoredTheme } from './theme.ts';
 
@@ -33,9 +34,9 @@ export interface Classification {
   artScore: number | null;
 }
 
-/** 只能接在 FROM images 后面（不带别名）：comic_root 用相关子查询从图库文件夹取 */
+/** 只能接在 FROM images 后面（不带别名）：comic_root = 在按漫画导入的范围里（comicAreas.ts） */
 export const CLASS_COLS = `id, file_name, rel_path, width, height, format, camera, content_kind_manual, tagged_at,
-  COALESCE((SELECT r.content_mode = 'comic' FROM library_roots r WHERE r.id = images.root_id), 0) AS comic_root`;
+  ${IN_COMIC('images')} AS comic_root`;
 /** 分类、主题、质量分用到的全部标签名：回填只读这些（RV-T-6） */
 export const CLASSIFY_TAG_NAMES: readonly string[] = [...new Set([...SIGNAL_TAGS, ...THEME_TAG_NAMES])];
 

@@ -17,6 +17,7 @@ export type UndoTable =
   | 'image_copyrights'
   | 'image_artists'
   | 'artist_links'
+  | 'comic_folders'
   | 'character_suggestions'
   | 'exclusions'
   | 'library_roots'

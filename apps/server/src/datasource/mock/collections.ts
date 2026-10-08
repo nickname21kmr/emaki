@@ -18,8 +18,10 @@ import {
 } from '@emaki/shared';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
 import { autoKind, bookLeaf, decideCollection, dirFeatures, orderPages, type DirPage } from '../../services/collections/detect.ts';
-import { parseComicDir, parseFolderName } from '../../services/collections/parseName.ts';
+import { parseBookDir, parseComicDir } from '../../services/collections/parseName.ts';
 import { summarize } from '../../services/collections/summary.ts';
+import { ComicAreas } from '../../services/classify/comicAreas.ts';
+import { comicAreaOf } from './comic.ts';
 import { mockDominantColor } from '../../util/color.ts';
 import type { CharacterRow, CollectionRow, ImageRow, MockDb, WorkRow } from './fixtures.ts';
 
@@ -81,7 +83,7 @@ export class MockCollections {
       const root = this.d.db.settings.libraryRoots.find((r) => r.id === row.rootId);
       if (!root?.enabled) continue;
       // 按漫画导入的文件夹里的书：不找角色（不算待整理），分级可信（同 sqlite）
-      const comic = root.mode === 'comic';
+      const comic = !!comicAreaOf(this.d.db.settings.libraryRoots, row.rootId, row.relDir);
       const pages = (pagesBy.get(row.id) ?? []).sort((a, b) => (a.pageNo ?? 0) - (b.pageNo ?? 0));
       const charHits = new Map<ID, number>();
       const workHits = new Map<ID, number>();
@@ -181,7 +183,7 @@ export class MockCollections {
         rating: p.rating,
         kind: p.kind ?? 'illustration',
         dominantColor: mockDominantColor(p.hue, p.id),
-        tagged: p.tagged || root?.mode === 'comic',
+        tagged: p.tagged || !!comicAreaOf(this.d.db.settings.libraryRoots, l.row.rootId, l.row.relDir),
       })),
       cast: l.cast.flatMap((c) => {
         const row = this.d.db.characters.get(c.id);
@@ -277,14 +279,14 @@ export class MockCollections {
     return row;
   }
 
-  private isComicRoot(rootId: ID): boolean {
-    return this.d.db.settings.libraryRoots.some((r) => r.id === rootId && r.mode === 'comic');
+  private isComicRoot(rootId: ID, relDir = ''): boolean {
+    return !!comicAreaOf(this.d.db.settings.libraryRoots, rootId, relDir);
   }
 
   /** 自动的书名、系列、卷号（同 sqlite 的 CollectionQueries.parsedFor） */
   private parsedFor(rootId: ID, dir: string) {
-    const root = this.d.db.settings.libraryRoots.find((r) => r.id === rootId);
-    return root?.mode === 'comic' ? parseComicDir(dir, root.path) : parseFolderName(bookLeaf(dir));
+    const area = comicAreaOf(this.d.db.settings.libraryRoots, rootId, dir);
+    return area ? parseComicDir(ComicAreas.relIn(area, dir), area.path) : parseBookDir(dir, bookLeaf(dir));
   }
 
   create(body: { fromImageId: ID; kind: CollectionKind }): MutationResult & { collection: CollectionSummary } {
@@ -367,7 +369,7 @@ export class MockCollections {
       if (body.kind === 'auto') {
         const pages = this.members(c.rootId, c.relDir).map((m) => this.toDirPage(m));
         const f = dirFeatures(pages);
-        const rule = this.isComicRoot(c.rootId) ? 'H' : pages.length ? (decideCollection(leaf, f)?.rule ?? null) : null;
+        const rule = this.isComicRoot(c.rootId, c.relDir) ? 'H' : pages.length ? (decideCollection(leaf, f)?.rule ?? null) : null;
         const k = autoKind(leaf, f, rule);
         Object.assign(next, { kind: k.kind, kindSource: k.source, kindManual: false });
         notes.push(`已恢复自动判断（${KIND_LABEL[k.kind]}）`);

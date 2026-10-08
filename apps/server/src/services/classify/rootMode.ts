@@ -6,6 +6,7 @@
  */
 import type { Db } from '../../db/connection.ts';
 import { backfillClassification } from './backfill.ts';
+import { COMIC_RATING, IN_COMIC } from './comicAreas.ts';
 import { COMIC_ROOT_EVIDENCE } from './rules.ts';
 
 /** ids 不传 = 全库检查（一次全表扫描，扫描结束后用）；返回改了的行数 */
@@ -13,17 +14,14 @@ export function syncRootModes(db: Db, ids?: number[]): number {
   const scope = ids ? 'AND i.id IN (SELECT value FROM json_each(@ids))' : '';
   const p = { ids: JSON.stringify(ids ?? []), evidence: COMIC_ROOT_EVIDENCE };
   const stale = db
-    .prepare(
-      `SELECT i.id FROM images i JOIN library_roots r ON r.id = i.root_id
-       WHERE i.content_kind_manual = 0 AND (r.content_mode = 'comic') <> (i.content_kind_evidence IS @evidence) ${scope}`,
-    )
+    .prepare(`SELECT i.id FROM images i WHERE i.content_kind_manual = 0 AND (${IN_COMIC('i')}) <> (i.content_kind_evidence IS @evidence) ${scope}`)
     .pluck()
     .all(p) as number[];
   if (stale.length) backfillClassification(db, { ids: stale });
   const rated = db
     .prepare(
-      `UPDATE images AS i SET rating = r.comic_rating FROM library_roots r
-       WHERE r.id = i.root_id AND r.content_mode = 'comic' AND i.tagged_at IS NULL AND i.rating_manual = 0 AND i.rating <> r.comic_rating ${scope}`,
+      `UPDATE images AS i SET rating = ${COMIC_RATING('i')}
+       WHERE i.tagged_at IS NULL AND i.rating_manual = 0 AND ${IN_COMIC('i')} AND i.rating <> ${COMIC_RATING('i')} ${scope}`,
     )
     .run(p).changes;
   return stale.length + rated;

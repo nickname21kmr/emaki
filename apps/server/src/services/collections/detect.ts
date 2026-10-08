@@ -9,9 +9,9 @@
  * 三道排除：页数 < 8 或 > 2000、杂项目录名单、截图 / 照片 / 表情 / 动图页超过 20%。
  * 改规则要把 DETECTOR_VERSION 加一。
  */
-import { CHAPTER, TRANSLATOR } from './parseName.ts';
+import { CHAPTER, TRANSLATOR, VOLUME_NAME } from './parseName.ts';
 
-export const DETECTOR_VERSION = 4;
+export const DETECTOR_VERSION = 5;
 export const MIN_PAGES = 8;
 export const MAX_PAGES = 2000;
 
@@ -127,7 +127,8 @@ export function nameSignals(leaf: string): { doujin: boolean; artbook: boolean; 
   return {
     doujin: DOUJIN_EVENT.test(s) || TRANSLATOR.test(s) || LEAD_CIRCLE.test(s),
     artbook: ARTBOOK_NAME.test(s),
-    chapter: CHAPTER.test(s),
+    // 连载的话数、单行本的卷号（v5：「Vol.03」「第3卷」「6卷」）
+    chapter: CHAPTER.test(s) || VOLUME_NAME.test(s),
   };
 }
 

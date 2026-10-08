@@ -26,7 +26,8 @@ import {
   type DirPage,
   type PageOrder,
 } from './detect.ts';
-import { parseComicDir, parseFolderName } from './parseName.ts';
+import { parseBookDir, parseComicDir, type parseFolderName } from './parseName.ts';
+import { ComicAreas, type ComicArea } from '../classify/comicAreas.ts';
 
 interface Row {
   id: number;
@@ -42,9 +43,6 @@ interface Row {
   tagged_at: string | null;
   collection_id: number | null;
   page_no: number | null;
-  /** 所在图库文件夹按漫画导入（1） */
-  comic_root: number;
-  root_path: string;
 }
 
 export interface CollectionRow {
@@ -79,9 +77,8 @@ interface Group {
   rootId: number;
   dir: string;
   pages: (DirPage & { row: Row })[];
-  /** 按漫画导入的文件夹里的：每个子文件夹都成一本（根目录直接放页的也算一本） */
-  comic: boolean;
-  rootPath: string;
+  /** 在按漫画导入的范围里：每个子文件夹都成一本（范围的根目录直接放页的也算一本） */
+  comic: ComicArea | null;
 }
 
 /**
@@ -101,7 +98,7 @@ export interface RefreshResult {
 
 /** 条件字面包含 trashed_at IS NULL AND missing = 0（T22 的部分索引） */
 const ROW_SQL = `SELECT i.id, i.root_id, i.rel_path, i.file_name, i.width, i.height, i.modified_at, i.content_kind, i.content_kind_source,
-    i.content_kind_manual, i.tagged_at, i.collection_id, i.page_no, r.content_mode = 'comic' AS comic_root, r.path AS root_path
+    i.content_kind_manual, i.tagged_at, i.collection_id, i.page_no
   FROM images i JOIN library_roots r ON r.id = i.root_id
   WHERE r.enabled = 1 AND r.removed_at IS NULL AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL`;
 
@@ -162,8 +159,8 @@ export class CollectionService {
         )
         .all(JSON.stringify(imageIds)) as { rootId: number; dir: string }[];
       // 按漫画导入的文件夹根目录直接放页时，根目录也是一本
-      const comicRoots = new Set(this.db.prepare("SELECT id FROM library_roots WHERE content_mode = 'comic'").pluck().all() as number[]);
-      const books = dirs.filter((d) => d.dir || comicRoots.has(d.rootId));
+      const comics = ComicAreas.load(this.db);
+      const books = dirs.filter((d) => d.dir || comics.of(d.rootId, ''));
       const scope = new Set(books.map((d) => keyOf(d.rootId, d.dir)));
       const rows: Row[] = [];
       const stmt = this.db.prepare(
@@ -205,13 +202,15 @@ export class CollectionService {
   // ---------------------------------------------------------------- 内部
 
   private group(rows: Row[]): Map<string, Group> {
+    const comics = ComicAreas.load(this.db);
     const groups = new Map<string, Group>();
     for (const r of rows) {
       const dir = dirOf(r.rel_path, r.file_name);
-      if (!dir && !r.comic_root) continue; // 根目录本身不成册（按漫画导入的除外）
+      const comic = comics.of(r.root_id, dir);
+      if (!dir && !comic) continue; // 根目录本身不成册（整个按漫画导入的除外）
       const key = keyOf(r.root_id, dir);
       let g = groups.get(key);
-      if (!g) groups.set(key, (g = { rootId: r.root_id, dir, pages: [], comic: r.comic_root === 1, rootPath: r.root_path }));
+      if (!g) groups.set(key, (g = { rootId: r.root_id, dir, pages: [], comic }));
       g.pages.push({
         id: r.id,
         fileName: r.file_name,
@@ -276,7 +275,7 @@ export class CollectionService {
       const f = dirFeatures(g.pages);
       // 按漫画导入：不看 A / B / C，卷号、系列名从各级目录名里找
       const decide = () => (g.comic ? decideComicCollection(f) : decideCollection(leaf, f));
-      const parsed = g.comic ? parseComicDir(g.dir, g.rootPath) : parseFolderName(leaf);
+      const parsed = g.comic ? parseComicDir(ComicAreas.relIn(g.comic, g.dir), g.comic.path) : parseBookDir(g.dir, leaf);
       if (ex?.origin === 'manual') {
         const decided = decide();
         const k = autoKind(leaf, f, decided?.rule ?? null);

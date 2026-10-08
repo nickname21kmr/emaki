@@ -329,6 +329,14 @@ export interface LibraryRoot {
   mode: LibraryRootMode;
   /** 按漫画导入时，没识别过的页面用这个分级（导入时选，默认全年龄） */
   comicRating: Rating;
+  /** 里面按漫画导入的子文件夹（整个文件夹是漫画时不用） */
+  comicFolders: ComicFolder[];
+}
+
+export interface ComicFolder {
+  /** 相对图库文件夹的路径，如 漫画/魔都精兵的奴隶 */
+  relDir: string;
+  comicRating: Rating;
 }
 
 export type LibraryRootMode = 'auto' | 'comic';

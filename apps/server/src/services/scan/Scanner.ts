@@ -17,6 +17,7 @@ import { baseName, isoFromMs, parentRel, pathKey, toAbs } from '../fs/paths.ts';
 import { walkImages, type WalkEntry } from '../fs/walk.ts';
 import { probeImage } from '../image/probe.ts';
 import { backfillClassification } from '../classify/backfill.ts';
+import { ComicAreas } from '../classify/comicAreas.ts';
 import { classifyContent, CLASSIFIER_VERSION } from '../classify/rules.ts';
 import { backfillSources } from '../source/backfill.ts';
 import { parseSource } from '../source/parseSource.ts';
@@ -110,9 +111,6 @@ interface RootRow {
   id: number;
   path: string;
   last_scan_at: string | null;
-  /** 'comic' = 按漫画导入 */
-  content_mode: string;
-  comic_rating: string;
 }
 
 type Op =
@@ -178,9 +176,11 @@ export class Scanner {
     // ---- 阶段 0：请求
     const req = this.d.requests.take();
     const roots = db
-      .prepare('SELECT id, path, last_scan_at, content_mode, comic_rating FROM library_roots WHERE enabled = 1 AND removed_at IS NULL ORDER BY id')
+      .prepare('SELECT id, path, last_scan_at FROM library_roots WHERE enabled = 1 AND removed_at IS NULL ORDER BY id')
       .all() as RootRow[];
     const rootById = new Map(roots.map((r) => [r.id, r]));
+    // 按漫画导入的范围（整个图库文件夹或里面的子文件夹）：入库就归漫画、用选的分级
+    let comics = ComicAreas.load(db);
     // 第一次扫描的文件夹：记下首次导入时间（开始时就写，首页能在扫描过程中进入「刚导入」状态）
     const markImported = db.prepare('UPDATE library_roots SET imported_at = ? WHERE id = ? AND imported_at IS NULL');
     for (const r of roots) if (r.last_scan_at === null) markImported.run(isoFromMs(this.now()), r.id);
@@ -284,16 +284,20 @@ export class Scanner {
       quick.set(k, [...(quick.get(k) ?? []), r]);
     }
     const remainingFresh: DiskEntry[] = [];
+    const quickMoves: { row: DbRow; entry: DiskEntry }[] = [];
     for (const e of c.fresh) {
       const hits = quick.get(`${baseName(e.relPath)}\n${e.bytes}\n${isoFromMs(e.mtimeMs)}`)?.filter((r) => candidates.has(r.id));
       if (hits?.length === 1) {
         takeCandidate(hits[0]!);
         ops.push({ t: 'move', p: this.moveParams(hits[0]!.id, e) });
+        quickMoves.push({ row: hits[0]!, entry: e });
         summary.moved++;
       } else {
         remainingFresh.push(e);
       }
     }
+    // 按漫画导入的子文件夹整个改名、挪走了：设置跟过去，不然整本掉出漫画、被送去识别
+    if (followComicFolders(db, quickMoves, disk)) comics = ComicAreas.load(db);
 
     // ---- 阶段 6：读文件（sha256 + 文件头）
     const work: ({ kind: 'changed'; row: DbRow; entry: DiskEntry } | { kind: 'fresh'; entry: DiskEntry })[] = [
@@ -416,7 +420,7 @@ export class Scanner {
         format: probe.format,
         camera: probe.camera,
         tags: null,
-        comicRoot: root.content_mode === 'comic',
+        comicRoot: !!comics.of(e.rootId, e.relPath),
       });
       const kindCols = { camera: probe.camera, kind: cls.kind, kindSource: cls.source, kindEvidence: cls.evidence, kindVersion: CLASSIFIER_VERSION };
       if (item.kind === 'changed') {
@@ -447,7 +451,7 @@ export class Scanner {
               url: src?.url ?? null,
               addedAt,
               // 按漫画导入的不识别，分级用导入时选的
-              rating: root.content_mode === 'comic' ? root.comic_rating : 'general',
+              rating: comics.of(e.rootId, e.relPath)?.rating ?? 'general',
             },
           });
           summary.added++;
@@ -535,4 +539,39 @@ export class Scanner {
   private errorParams(e: DiskEntry, error: string, at: string) {
     return { rootId: e.rootId, relPath: e.relPath, bytes: e.bytes, modifiedAt: isoFromMs(e.mtimeMs), error, at };
   }
+}
+
+/**
+ * 按漫画导入的子文件夹（comic_folders）在磁盘上改名、挪位置时跟过去：按快速移动匹配到的页投票，
+ * 一半以上的页去了同一个文件夹、原来的文件夹这次一张都没有了才跟。返回改了几个
+ */
+export function followComicFolders(db: Db, moves: { row: DbRow; entry: DiskEntry }[], disk: Map<string, DiskEntry>): number {
+  if (!moves.length) return 0;
+  const folders = db.prepare('SELECT root_id, rel_dir FROM comic_folders').all() as { root_id: number; rel_dir: string }[];
+  if (!folders.length) return 0;
+  const live = db
+    .prepare("SELECT COUNT(*) FROM images WHERE root_id = ? AND missing = 0 AND trashed_at IS NULL AND substr(rel_path, 1, length(?) + 1) = ? || '/'")
+    .pluck();
+  const upd = db.prepare('UPDATE OR IGNORE comic_folders SET root_id = ?, rel_dir = ? WHERE root_id = ? AND rel_dir = ?');
+  let n = 0;
+  for (const f of folders) {
+    const prefix = `${f.rel_dir}/`;
+    const votes = new Map<string, { rootId: number; dir: string; n: number }>();
+    for (const { row, entry } of moves) {
+      if (row.root_id !== f.root_id || !row.rel_path.startsWith(prefix)) continue;
+      // 文件夹里面的相对位置不变，前面换了：'旧名/v1/1.png' → '新名/v1/1.png'
+      const rest = row.rel_path.slice(f.rel_dir.length);
+      if (!entry.relPath.endsWith(rest)) continue;
+      const dir = entry.relPath.slice(0, -rest.length);
+      const k = `${entry.rootId}\n${dir}`;
+      const v = votes.get(k) ?? { rootId: entry.rootId, dir, n: 0 };
+      v.n++;
+      votes.set(k, v);
+    }
+    const best = [...votes.values()].sort((a, b) => b.n - a.n)[0];
+    if (!best || best.n * 2 < (live.get(f.root_id, f.rel_dir, f.rel_dir) as number)) continue;
+    if ([...disk.values()].some((e) => e.rootId === f.root_id && e.relPath.startsWith(prefix))) continue;
+    n += upd.run(best.rootId, best.dir, f.root_id, f.rel_dir).changes;
+  }
+  return n;
 }

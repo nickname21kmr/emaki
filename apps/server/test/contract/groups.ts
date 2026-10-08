@@ -163,6 +163,34 @@ export function settingsContract(make: ContractFactory, name: Name) {
       expect((await e.ds.getSettings()).libraryRoots[0]).toMatchObject({ mode: 'auto', comicRating: 'general' });
     });
 
+    it('图库文件夹里的子文件夹按漫画导入：只影响这个子文件夹；改分级、去掉、撤销', async () => {
+      const e = env();
+      const root = e.id('root', 'root1');
+      const inDir = e.id('image', 'i30'); // 未整理/，没识别
+      const outDir = e.id('image', 'i1'); // 角色/
+      const look = async (id: string) => {
+        const d = (await e.ds.getImage(id))!;
+        return [d.kind, d.rating];
+      };
+      const [in0, out0] = [await look(inDir), await look(outDir)];
+      const before = await e.ds.getStats();
+      const r = await e.ds.updateLibraryRoot(root, { comicFolder: { relDir: '未整理', comicRating: 'questionable' } });
+      expect(r.message).toMatch(/^已把「D:\/Pics\/未整理」按漫画导入：\d+ 张归到漫画，不再识别$/);
+      expect((await e.ds.getSettings()).libraryRoots[0]!.comicFolders).toEqual([{ relDir: '未整理', comicRating: 'questionable' }]);
+      expect(await look(inDir)).toEqual(['comic', 'questionable']);
+      expect(await look(outDir)).toEqual(out0);
+      expect((await e.ds.getStats()).pendingTagCount).toBe(before.pendingTagCount - 1);
+      await expect(e.ds.updateLibraryRoot(root, { comicFolder: { relDir: '未整理/x' } })).rejects.toMatchObject({ statusCode: 400 });
+      const rr = await e.ds.updateLibraryRoot(root, { comicFolder: { relDir: '未整理', comicRating: 'general' } });
+      expect(rr.message).toBe('「D:/Pics/未整理」的分级改成了「全年龄」');
+      expect(await look(inDir)).toEqual(['comic', 'general']);
+      await e.ds.undo(rr.undoToken!);
+      await e.ds.undo(r.undoToken!);
+      expect([await look(inDir), await look(outDir)]).toEqual([in0, out0]);
+      expect((await e.ds.getSettings()).libraryRoots[0]!.comicFolders).toEqual([]);
+      await expect(e.ds.updateLibraryRoot(root, { removeComicFolder: '未整理' })).rejects.toMatchObject({ statusCode: 404 });
+    });
+
     it('移除文件夹可撤销', async () => {
       const e = env();
       const r = await e.ds.removeLibraryRoot(e.id('root', 'root2'));

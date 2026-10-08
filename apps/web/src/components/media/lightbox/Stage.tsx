@@ -318,6 +318,8 @@ function StageImage({
         src={imageUrl.thumb(id, 960)}
         alt=""
         draggable={false}
+        // 看图器里正在看的这张优先：网格里几十张缩略图同时在下载时，它不用排队
+        fetchPriority="high"
         onLoad={() => setThumbLoaded(true)}
         className={cn(
           imgClass,
@@ -333,6 +335,7 @@ function StageImage({
           alt={meta.fileName}
           draggable={false}
           decoding="async"
+          fetchPriority="high"
           onLoad={() => setFullLoaded(true)}
           onError={() => setFullFailed(true)}
           className={cn(imgClass, fullLoaded ? 'opacity-100' : 'opacity-0')}

@@ -120,8 +120,17 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
     const { id } = parse(idParam, req.params);
     const body = parse(
       z
-        .object({ enabled: z.boolean().optional(), mode: rootMode.optional(), comicRating: ratingSchema.optional() })
-        .refine((b) => b.enabled !== undefined || b.mode !== undefined || b.comicRating !== undefined, '没有要改的'),
+        .object({
+          enabled: z.boolean().optional(),
+          mode: rootMode.optional(),
+          comicRating: ratingSchema.optional(),
+          comicFolder: z.object({ relDir: z.string().min(1).max(1000), comicRating: ratingSchema.optional() }).optional(),
+          removeComicFolder: z.string().min(1).max(1000).optional(),
+        })
+        .refine(
+          (b) => b.enabled !== undefined || b.mode !== undefined || b.comicRating !== undefined || b.comicFolder !== undefined || b.removeComicFolder !== undefined,
+          '没有要改的',
+        ),
       req.body,
     );
     return ds.updateLibraryRoot(id, body);

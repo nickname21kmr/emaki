@@ -123,6 +123,7 @@ const OPS: Op[] = [
   // ---------------------------------------------------------------- 图库文件夹（T02）
   { name: '启用文件夹', run: () => ds.updateLibraryRoot(id('root', 'root2'), { enabled: true }) },
   { name: '停用文件夹', run: () => ds.updateLibraryRoot(id('root', 'root1'), { enabled: false }) },
+  { name: '子文件夹按漫画导入', run: () => ds.updateLibraryRoot(id('root', 'root1'), { comicFolder: { relDir: '未整理', comicRating: 'sensitive' } }) },
   { name: '改成按漫画导入', run: () => ds.updateLibraryRoot(id('root', 'root1'), { mode: 'comic', comicRating: 'sensitive' }) },
   {
     name: '改回按插画识别',

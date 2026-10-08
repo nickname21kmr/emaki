@@ -12,6 +12,7 @@ import { useHotkey } from '@/lib/hotkeys';
 import { useImage } from '@/lib/queries';
 import { useBlurPrefs, useLightbox } from '@/lib/stores';
 import { findCachedImage, preloadAhead, preloadNeighbors, whenDecoded } from './lightbox/cache';
+import { Filmstrip } from './lightbox/Filmstrip';
 import { InfoPanel } from './lightbox/InfoPanel';
 import { KindMenu } from './KindMenu';
 import { LbButton } from './lightbox/LbButton';
@@ -245,6 +246,15 @@ function LightboxView({
           onNext={() => go(1)}
           onBackdropClick={leave}
           slideshow={slideshow ? { crossfade: reduce ? 0.15 : 0.8, idle } : null}
+        />
+
+        <Filmstrip
+          ids={ids}
+          index={index}
+          // 放大时整块画面都要拖动、滚轮缩放，底边也不能让给胶片条
+          hidden={slideshow || !!returning || zoomApi.zoomed}
+          // 跳到别处：之前在等下一页时按的「下一张」作废，不然下一页到了会被往后挪一张
+          onPick={(i) => useLightbox.setState({ index: i, originRect: null, pendingNext: false })}
         />
 
         {slideshow && ids.length > 1 && (

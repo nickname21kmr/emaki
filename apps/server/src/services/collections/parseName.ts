@@ -29,6 +29,11 @@ const TRAIL_TAG = /^(.*\S)\s*\[([^\]]+)\]\s*$/;
 const VOLUME_TAIL = /^(.*?)\s*(?:[(（](\d{1,3})[)）]|\s(上|中|下|前編|後編|前篇|后篇|後篇))\s*$/;
 const PARODY_TAIL = /^(.*?)\s*[(（]\s*([^)）]+)\s*[)）]\s*$/;
 export const CHAPTER = /^(.*?)\s*(?:第\s*)?(\d{1,4})\s*[话話回章]\s*$/;
+/**
+ * 名字结尾是卷号：「某漫画 Vol.03」「某漫画 第3卷」「某漫画 3巻」（v5）；整个名字就是卷号（「6卷」）也算。
+ * vol 前面不能是字母（Evol 2），「卷3」的卷要在开头或分隔符后面（東方絵巻 3、山水画卷 2 不算）
+ */
+export const VOLUME_NAME = /^(.*?)[\s_\-]*(?:(?<![a-z])vol(?:ume)?\.?\s*(\d{1,4})|第\s*(\d{1,4})\s*[卷巻册冊]|(\d{1,4})\s*[卷巻册冊]|(?<![^\s_\-])[卷巻]\s*(\d{1,4}))\s*$/i;
 /** 括号里的备注：页数（159P）、下载来源、日期范围、自整理 / 截止 */
 const NOTE_IN_PARENS = /\d+\s*P\b|ex-?hentai|e-?hentai|nhentai|\d{4}[.\-/]\d{1,2}|自整理|截止|按.{0,8}排序/i;
 const ARTIST_ARTBOOK =/^(.{2,20}?)\s*(?:画集|畫集|イラスト集|作品集|原画集)\s*(.*)$/;
@@ -113,6 +118,15 @@ export function parseFolderName(leaf: string): ParsedFolderName {
     volumeNo = Number(ch[2]);
     seriesKey = ch[1].trim();
     s = ch[1];
+  }
+
+  // (9b) 卷：「某漫画 Vol.03」「某漫画 第3卷」。整套的范围（「全34卷」「1-5卷」「Vol.1-Vol.11」）不是某一卷，先去掉再看；
+  // 前面没有书名的（整个名字就是「6卷」）这里不拆，由 parseBookDir 往上一级找书名
+  const vt = volumeNo === null ? VOLUME_NAME.exec(s.replace(RANGE, ' ').trim()) : null;
+  if (vt && vt[1]!.trim()) {
+    volumeNo = Number(vt[2] ?? vt[3] ?? vt[4] ?? vt[5]);
+    seriesKey = vt[1]!.trim();
+    s = vt[1]!;
   }
 
   // (10)
@@ -283,4 +297,17 @@ export function parseComicDir(dir: string, rootPath: string): ParsedFolderName {
     seriesKey: volumeNo !== null ? series : null,
     volumeNo,
   };
+}
+
+/**
+ * 普通图库文件夹里一本的名字（按漫画导入的用 parseComicDir）。最内层目录名就是卷号（「某漫画/6卷」「某漫画/Vol.3」）时，
+ * 书名和系列取上一级目录名，卷号取这一级；其余照 parseFolderName
+ */
+export function parseBookDir(dir: string, leaf: string): ParsedFolderName {
+  const p = parseFolderName(leaf);
+  const vt = VOLUME_NAME.exec(leaf.normalize('NFC').trim());
+  if (p.volumeNo !== null || !vt || vt[1]!.trim()) return p;
+  const c = parseComicDir(dir, '');
+  if (!c.seriesKey) return p;
+  return { ...p, title: c.title, seriesKey: c.seriesKey, volumeNo: c.volumeNo, circle: p.circle ?? c.circle, artist: p.artist ?? c.artist };
 }

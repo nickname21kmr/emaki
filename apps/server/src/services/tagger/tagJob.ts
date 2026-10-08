@@ -17,6 +17,7 @@ import { ARTIST_THRESHOLD } from './artists.ts';
 import { ensureModelFiles, isModelReady } from './download.ts';
 import { clampBatch, findModel, TAGGER_MODELS, type TaggerModelSpec } from './models.ts';
 import type { HostItemResult, HostThresholds } from './protocol.ts';
+import { IN_COMIC } from '../classify/comicAreas.ts';
 import { NOT_SKIPPED, noteReadFailures, skipIds } from './readBackoff.ts';
 import { ResilientTagger } from './resilient.ts';
 import { TagResultWriter } from './writer.ts';
@@ -45,7 +46,7 @@ export interface TagJobDeps {
  *   以及用户在「未识别」里要求重新识别的（retag = 1，不管之前是哪个模型认的）
  * 两轮都跳过相机照片（@skipCamera = 1）和按漫画导入的文件夹。@before 为 NULL 时主模型轮覆盖全部。
  */
-const BASE = `r.enabled = 1 AND r.removed_at IS NULL AND r.content_mode <> 'comic' AND i.missing = 0 AND i.trashed_at IS NULL AND i.excluded_by IS NULL
+const BASE = `r.enabled = 1 AND r.removed_at IS NULL AND NOT ${IN_COMIC('i')} AND i.missing = 0 AND i.trashed_at IS NULL AND i.excluded_by IS NULL
   AND NOT (@skipCamera = 1 AND i.content_kind = 'photo' AND COALESCE(i.camera, '') <> '')`;
 const NEWER = '(@before IS NULL OR i.modified_at >= @before)';
 const WHERE_PRIMARY = `${BASE} AND (

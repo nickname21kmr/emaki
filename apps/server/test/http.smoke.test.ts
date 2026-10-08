@@ -424,6 +424,10 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     expect([comic.status, comic.json]).toEqual([200, withUndo]);
     expect((await call('PATCH', '/api/library-roots/root1', { mode: 'auto' })).status).toBe(200);
     expect((await call('PATCH', '/api/library-roots/root1', {})).status).toBe(400);
+    const sub = await call('PATCH', '/api/library-roots/root1', { comicFolder: { relDir: 'Manga', comicRating: 'sensitive' } });
+    expect([sub.status, sub.json]).toEqual([200, withUndo]);
+    expect((await call('PATCH', '/api/library-roots/root1', { removeComicFolder: 'Manga' })).status).toBe(200);
+    expect((await call('PATCH', '/api/library-roots/root1', { removeComicFolder: 'Manga' })).status).toBe(404);
     expect((await call('PATCH', '/api/library-roots/root1', { comicRating: 'nsfw' })).status).toBe(400);
   });
 
