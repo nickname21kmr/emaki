@@ -13,6 +13,7 @@ const CORE_TABLES: [table: string, orderBy: string][] = [
   ['image_characters', 'image_id, character_id'],
   ['image_copyrights', 'image_id, work_id'],
   ['image_artists', 'image_id, artist'],
+  ['artist_links', 'tag'],
   ['character_suggestions', 'image_id, danbooru_tag'],
   ['exclusions', 'id'],
   ['duplicate_groups', 'id'],

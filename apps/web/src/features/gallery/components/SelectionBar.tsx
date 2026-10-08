@@ -108,10 +108,20 @@ export function SelectionBar({
     },
     { enabled: active, preventDefault: false },
   );
-  useHotkey('mod+a', selectAll, { enabled: !lightboxOpen && images.length > 0 });
-  useHotkey('e', () => run({ type: 'exclude' }), { enabled: active && !pickerOpen && !kindOpen });
-  useHotkey('c', () => setKindOpen(true), { enabled: active && !pickerOpen });
-  useHotkey('f', () => run({ type: 'favorite', value: !allFavorite }), { enabled: active && !pickerOpen });
+  // 页面上别的对话框、菜单开着时（比如画师的拆开 / 合并）不响应，免得按 E 把选中的图排除了
+  const fromOverlay = (e: KeyboardEvent) => e.target instanceof Element && !!e.target.closest('[role="dialog"],[role="menu"]');
+  useHotkey(
+    'mod+a',
+    (e) => {
+      if (fromOverlay(e)) return;
+      e.preventDefault();
+      selectAll();
+    },
+    { enabled: !lightboxOpen && images.length > 0, preventDefault: false },
+  );
+  useHotkey('e', (e) => !fromOverlay(e) && run({ type: 'exclude' }), { enabled: active && !pickerOpen && !kindOpen });
+  useHotkey('c', (e) => !fromOverlay(e) && setKindOpen(true), { enabled: active && !pickerOpen });
+  useHotkey('f', (e) => !fromOverlay(e) && run({ type: 'favorite', value: !allFavorite }), { enabled: active && !pickerOpen });
 
   const pendingType = bulk.isPending ? bulk.variables?.action.type : undefined;
 

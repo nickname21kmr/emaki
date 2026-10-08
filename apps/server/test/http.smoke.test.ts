@@ -357,6 +357,14 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     expect([status, json]).toEqual([200, { path: 'D:/Picked' }]);
   });
 
+  route('POST /api/artists/links', async () => {
+    const r = await call('POST', '/api/artists/links', { tags: ['a_tag'], mode: 'split' });
+    expect([r.status, r.json]).toEqual([200, withUndo]);
+    expect((await call('POST', '/api/artists/links', { tags: [], mode: 'split' })).status).toBe(400);
+    expect((await call('POST', '/api/artists/links', { tags: ['a_tag'], mode: 'merge' })).status).toBe(400);
+    expect((await call('POST', '/api/artists/links', { tags: ['a_tag'], mode: 'auto' })).status).toBe(200);
+  });
+
   route('GET /api/artists', async () => {
     const { status, json } = await call('GET', '/api/artists');
     expect([status, json]).toEqual([200, []]); // 演示数据没有画师

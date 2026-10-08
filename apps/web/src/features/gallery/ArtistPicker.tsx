@@ -1,4 +1,4 @@
-import type { Artist } from '@emaki/shared';
+import type { Artist, BulkImageAction, ID } from '@emaki/shared';
 import { Command } from 'cmdk';
 import { Check, CornerDownLeft, Plus, Search } from 'lucide-react';
 import { Popover } from 'radix-ui';
@@ -7,7 +7,8 @@ import { Thumb } from '@/components/media/Thumb';
 import { Kbd, Spinner } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
-import { useArtists } from '@/lib/queries';
+import { api } from '@/lib/api';
+import { useArtists, useMutate } from '@/lib/queries';
 
 /**
  * 画师选择器（带搜索的弹出框）：从认出过的画师里挑，名字、标签、别名、推特都能搜；
@@ -82,17 +83,28 @@ export function ArtistPicker({
 /** 不分大小写，下划线和空格算一样 */
 const norm = (s: string) => s.toLowerCase().replace(/[\s_]+/g, ' ').trim();
 const keysOf = (a: Artist) => [a.name, a.tag, ...a.tags, ...a.aliases, a.twitter ?? ''].filter(Boolean).map(norm);
+/** 不选中任何一项（cmdk 的值为空时会自动选第一项，所以用一个不存在的值） */
+const NO_PICK = '__none__';
 /** 没输入时列出的常见画师数；输入后最多列出的条数 */
 const TOP = 30;
 const MAX = 60;
 
-function ArtistPickerPanel({
+/** 选择器本体（不带弹出框）：合并画师的对话框里直接用它。allowNew = 可以用输入的名字当新画师 */
+export function ArtistPickerPanel({
   onPick,
   selectedTags,
   title,
   meta,
   actions,
-}: Pick<ArtistPickerProps, 'onPick' | 'selectedTags' | 'title' | 'meta' | 'actions'>) {
+  allowNew = true,
+  selectedLabel = '已有',
+  autoHighlight = true,
+}: Pick<ArtistPickerProps, 'onPick' | 'selectedTags' | 'title' | 'meta' | 'actions'> & {
+  allowNew?: boolean;
+  selectedLabel?: string;
+  /** false = 输入之前不默认选中第一位（合并画师：打开就按回车不会误合并） */
+  autoHighlight?: boolean;
+}) {
   const { data, isPending } = useArtists();
   const [text, setText] = useState('');
   const q = norm(text);
@@ -113,11 +125,11 @@ function ArtistPickerPanel({
       .map((x) => x.a);
   }, [data, q]);
   // 输入的名字和哪位画师都对不上：可以当新画师
-  const fresh = text.trim() && !(data ?? []).some((a) => keysOf(a).includes(q)) ? text.trim() : null;
+  const fresh = allowNew && text.trim() && !(data ?? []).some((a) => keysOf(a).includes(q)) ? text.trim() : null;
   const has = (a: Artist) => selected.has(a.tag) || a.tags.some((t) => selected.has(t));
   // 默认高亮第一位能选的画师（没有再是「用这个名字」）
   const firstRow = rows.find((a) => !has(a));
-  const first = firstRow ? `artist:${firstRow.tag}` : fresh ? `new:${fresh}` : '';
+  const first = !autoHighlight && !q ? NO_PICK : firstRow ? `artist:${firstRow.tag}` : fresh ? `new:${fresh}` : '';
   const [active, setActive] = useState('');
   useEffect(() => setActive(first), [first]);
 
@@ -137,7 +149,7 @@ function ArtistPickerPanel({
             value={text}
             onValueChange={setText}
             autoFocus
-            placeholder="搜名字、日文名或推特，或输入新名字"
+            placeholder={allowNew ? '搜名字、日文名或推特，或输入新名字' : '搜名字、日文名或推特'}
             className="h-full min-w-0 flex-1 bg-transparent text-[13.5px] outline-none placeholder:text-fg-subtle"
           />
           {isPending && <Spinner className="size-3.5 text-fg-subtle" />}
@@ -172,7 +184,7 @@ function ArtistPickerPanel({
                 {has(a) ? (
                   <span className="flex shrink-0 items-center gap-1 text-[11px] text-fg-subtle">
                     <Check className="size-3.5" />
-                    已有
+                    {selectedLabel}
                   </span>
                 ) : (
                   <CornerDownLeft className={ENTER} />
@@ -196,7 +208,9 @@ function ArtistPickerPanel({
         )}
 
         {!isPending && !rows.length && !fresh && (
-          <div className="px-4 py-8 text-center text-xs leading-relaxed text-fg-subtle">还没有认出过画师，输入名字就能加。</div>
+          <div className="px-4 py-8 text-center text-xs leading-relaxed text-fg-subtle">
+            {q ? '没有找到这位画师' : allowNew ? '还没有认出过画师，输入名字就能加。' : '还没有认出过画师'}
+          </div>
         )}
       </Command.List>
 
@@ -243,3 +257,39 @@ const ITEM = cn(
 const ENTER = 'size-3.5 shrink-0 text-fg-subtle opacity-0 transition-opacity group-data-[selected=true]:opacity-100';
 const HEADING =
   '[&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:pt-2.5 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:text-fg-subtle';
+
+/**
+ * 角色、作品、合集页多选栏的「画师…」：那几个选择栏是按钮列表放不下弹出框，选择器挂在屏幕底部中间。
+ * 选一位 = 把选中的图都改成这位画师；下面两个操作：没有画师、改回自动识别。
+ */
+export function ArtistBulkPicker({
+  open,
+  onOpenChange,
+  ids,
+  onDone,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  ids: ID[];
+  onDone: () => void;
+}) {
+  const bulk = useMutate((v: { ids: ID[]; action: BulkImageAction }) => api.bulkImages(v), { onSuccess: onDone });
+  const run = (action: BulkImageAction) => bulk.mutate({ ids, action });
+  return (
+    <ArtistPicker
+      open={open}
+      onOpenChange={onOpenChange}
+      side="top"
+      align="center"
+      title="改画师"
+      meta={`${formatCount(ids.length)} 张`}
+      onPick={(tag) => run({ type: 'artist', mode: 'set', artists: [tag] })}
+      actions={[
+        { key: 'none', label: '没有画师 / 不知道是谁', hint: '去掉认出的画师，以后也不再自动认', onSelect: () => run({ type: 'artist', mode: 'set', artists: [] }) },
+        { key: 'auto', label: '改回自动识别', hint: '清掉手动改的，交给「识别画师」重新认', onSelect: () => run({ type: 'artist-auto' }) },
+      ]}
+    >
+      <span className="pointer-events-none fixed bottom-24 left-1/2" />
+    </ArtistPicker>
+  );
+}

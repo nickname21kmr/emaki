@@ -282,8 +282,21 @@ export interface Artist {
   imageCount: number;
   /** 封面：这位画师分数最高的一张 */
   cover: Pick<ImageItem, 'id' | 'dominantColor' | 'rating' | 'width' | 'height'> | null;
+  /** 用户手动拆开 / 合并过这个人的标签（可以恢复自动合并） */
+  manual: boolean;
 }
 export type ListArtistsResponse = Artist[];
+
+/**
+ * POST /api/artists/links —— 自动合并猜错了时手动改：
+ * split = 这些标签各自单独算一个人；merge = 这些标签并到 into 所在的人；auto = 去掉这些标签的手动设置
+ */
+export interface UpdateArtistLinksBody {
+  tags: string[];
+  mode: 'split' | 'merge' | 'auto';
+  /** merge 时：并到哪位画师（他的标签） */
+  into?: string;
+}
 
 // ---------------------------------------------------------------- 合集（T38）
 

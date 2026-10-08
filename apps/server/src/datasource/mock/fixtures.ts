@@ -146,6 +146,8 @@ export interface MockDb {
   exclusions: ExclusionRow[];
   settings: Settings;
   collections: Map<ID, CollectionRow>;
+  /** 画师手动拆开（null）/ 合并（并到的标签），同 artist_links */
+  artistLinks?: Map<string, string | null>;
 }
 
 const IMAGE_COUNT = 9000;

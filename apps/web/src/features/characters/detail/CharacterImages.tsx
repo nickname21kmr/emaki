@@ -1,5 +1,6 @@
 import type { Character, ID, ImageItem } from '@emaki/shared';
-import { FolderInput, Heart, HeartOff, ImageUp, UserRoundMinus } from 'lucide-react';
+import { FolderInput, Heart, HeartOff, ImageUp, Palette, UserRoundMinus } from 'lucide-react';
+import { ArtistBulkPicker } from '@/features/gallery/ArtistPicker';
 import { useCallback, useMemo, useState, type Ref } from 'react';
 import { useNavigate } from 'react-router';
 import { ImageGrid, ImageGridSkeleton } from '@/components/media/ImageGrid';
@@ -56,7 +57,8 @@ export function CharacterImages({
 
   const scope = `character:${character.id}`;
   const [moving, setMoving] = useState(false);
-  const selection = useScopedSelection(scope, images, dialogOpen || moving);
+  const [artistOpen, setArtistOpen] = useState(false);
+  const selection = useScopedSelection(scope, images, dialogOpen || moving || artistOpen);
 
   // 「新」只在默认视图（最近添加 · 降序 · 不筛分级）下可信：此时最前面的 N 张就是新图
   const newIds = useMemo(() => {
@@ -101,6 +103,7 @@ export function CharacterImages({
       disabled: busy,
       onClick: () => favorite.mutate({ ids: selection.ids, value: !allFavorite }),
     },
+    { key: 'artist', label: '画师…', icon: <Palette />, disabled: busy, onClick: () => setArtistOpen(true) },
     {
       key: 'move',
       label: '移动到文件夹',
@@ -187,6 +190,7 @@ export function CharacterImages({
     <section ref={sectionRef} aria-label="全部插画" className="scroll-mt-24">
       <ImagesToolbar total={total} filters={filters} otherCount={character.otherCount} />
       {body}
+      <ArtistBulkPicker open={artistOpen} onOpenChange={setArtistOpen} ids={selection.ids} onDone={selection.clear} />
       <SelectionBar count={selection.count} actions={actions} onClear={selection.clear} />
       <MoveImagesDialog
         open={moving}

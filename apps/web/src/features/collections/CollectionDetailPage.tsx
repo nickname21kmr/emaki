@@ -9,6 +9,7 @@ import {
   FolderOpen,
   ImageUp,
   Layers,
+  Palette,
   PencilLine,
   RotateCcw,
   ShieldHalf,
@@ -43,6 +44,7 @@ import { api } from '@/lib/api';
 import { byline, COLLECTION_META, displayTitle, readProgress, unitWord } from '@/lib/collections';
 import { formatCount, RATING_LABEL } from '@/lib/format';
 import { useCollection, useImagesInfinite, useMutate } from '@/lib/queries';
+import { ArtistBulkPicker } from '@/features/gallery/ArtistPicker';
 import { CharacterPicker } from '@/features/gallery/CharacterPicker';
 import { WorkPicker } from '@/features/characters/detail/WorkPicker';
 import { SelectionBar, type SelectionAction } from '@/features/characters/detail/SelectionBar';
@@ -303,7 +305,8 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
   const { fetchNextPage } = list;
   const loadMore = useCallback(() => void fetchNextPage({ cancelRefetch: false }), [fetchNextPage]);
   const scope = `collection:${c.id}`;
-  const selection = useScopedSelection(scope, images);
+  const [artistOpen, setArtistOpen] = useState(false);
+  const selection = useScopedSelection(scope, images, artistOpen);
   const assign = useMutate((v: { ids: ID[]; characterId: ID }) => api.bulkImages({ ids: v.ids, action: { type: 'assign', characterId: v.characterId } }), {
     onSuccess: selection.clear,
   });
@@ -318,6 +321,7 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
       ? [{ key: 'cover', label: '设为封面', icon: <ImageUp />, loading: cover.isPending, onClick: () => cover.mutate(selection.ids[0]!) }]
       : []),
     { key: 'assign', label: '归到角色…', icon: <UserRoundPlus />, onClick: () => setPickerOpen(true) },
+    { key: 'artist', label: '画师…', icon: <Palette />, onClick: () => setArtistOpen(true) },
     ...RATINGS.slice(0, 3).map((r) => ({
       key: `rating-${r}`,
       label: RATING_LABEL[r],
@@ -376,6 +380,7 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
       >
         <span className="pointer-events-none fixed bottom-24 left-1/2" />
       </CharacterPicker>
+      <ArtistBulkPicker open={artistOpen} onOpenChange={setArtistOpen} ids={selection.ids} onDone={selection.clear} />
       <SelectionBar count={selection.count} actions={actions} onClear={selection.clear} />
     </section>
   );

@@ -1,5 +1,6 @@
 import type { ID, ImageItem } from '@emaki/shared';
-import { EyeOff, Heart, HeartOff } from 'lucide-react';
+import { EyeOff, Heart, HeartOff, Palette } from 'lucide-react';
+import { ArtistBulkPicker } from '@/features/gallery/ArtistPicker';
 import { useCallback, useMemo, useState } from 'react';
 import { ImageGrid, ImageGridSkeleton } from '@/components/media/ImageGrid';
 import { Button, EmptyState, ErrorState, Segmented } from '@/components/ui';
@@ -47,7 +48,8 @@ export function WorkImages({ workId, gridKey, dialogOpen = false }: { workId: ID
   const total = query.data?.pages[0]?.total;
 
   const scope = `work:${workId}`;
-  const selection = useScopedSelection(scope, images, dialogOpen);
+  const [artistOpen, setArtistOpen] = useState(false);
+  const selection = useScopedSelection(scope, images, dialogOpen || artistOpen);
 
   const favorite = useMutate(
     ({ ids, value }: { ids: ID[]; value: boolean }) => api.bulkImages({ ids, action: { type: 'favorite', value } }),
@@ -70,6 +72,7 @@ export function WorkImages({ workId, gridKey, dialogOpen = false }: { workId: ID
       disabled: busy,
       onClick: () => favorite.mutate({ ids: selection.ids, value: !allFavorite }),
     },
+    { key: 'artist', label: '画师…', icon: <Palette />, disabled: busy, onClick: () => setArtistOpen(true) },
     {
       key: 'exclude',
       label: '排除',
@@ -146,6 +149,7 @@ export function WorkImages({ workId, gridKey, dialogOpen = false }: { workId: ID
       )}
       <ImagesToolbar total={total} filters={filters} otherCount={otherCount} />
       {body}
+      <ArtistBulkPicker open={artistOpen} onOpenChange={setArtistOpen} ids={selection.ids} onDone={selection.clear} />
       <SelectionBar count={selection.count} actions={actions} onClear={selection.clear} />
     </section>
   );

@@ -16,6 +16,7 @@ export type UndoTable =
   | 'image_characters'
   | 'image_copyrights'
   | 'image_artists'
+  | 'artist_links'
   | 'character_suggestions'
   | 'exclusions'
   | 'library_roots'

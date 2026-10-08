@@ -13,6 +13,8 @@ import {
   type AddLibraryRootBody,
   type LibraryRoot,
   type UpdateLibraryRootBody,
+  type UpdateArtistLinksBody,
+  type ImageArtist,
   type BulkCollectionsBody,
   type Artist,
   type BulkImagesBody,
@@ -75,7 +77,8 @@ import { artScore, classifyTheme, matchesBrowseTheme, resolveTheme } from '../..
 import { describeKindReason } from '../sqlite/hydrate.ts';
 import { coverQuality, isUnfitCover } from '../../services/covers/quality.ts';
 import { assertKindValue, KIND_LABEL } from '../sqlite/kinds.ts';
-import { artistAutoMessage, artistEditMessage, normArtists } from '../artistEdits.ts';
+import { artistAutoMessage, artistEditMessage, artistLinksMessage, linkTags, normArtists, planArtistLinks } from '../artistEdits.ts';
+import { resolveArtist } from '../../services/danbooru/artistNames.ts';
 import { normalizeSubdir } from '../sqlite/move.ts';
 
 const kindOf = (img: ImageRow): ContentKind => img.kind ?? 'illustration';
@@ -579,17 +582,20 @@ export class MockDataSource implements DataSource {
 
   /** 画师：mock 没有 Danbooru 资料，每个标签自成一位，名字 = 标签 */
   async listArtists(): Promise<Artist[]> {
-    const by = new Map<string, { n: number; best: ImageRow; score: number }>();
+    const links = this.db.artistLinks ?? new Map<string, string | null>();
+    const by = new Map<string, { ids: Set<ID>; tags: Set<string>; best: ImageRow; score: number }>();
     // 封面：全年龄优先，再按分数
     const better = (img: ImageRow, score: number, e: { best: ImageRow; score: number }) =>
       (img.rating === 'general') !== (e.best.rating === 'general') ? img.rating === 'general' : score > e.score;
     for (const img of this.idx.visible) {
       if (this.status(img) === 'excluded' || kindOf(img) !== 'illustration') continue;
       for (const a of img.artists ?? []) {
-        const e = by.get(a.tag);
-        if (!e) by.set(a.tag, { n: 1, best: img, score: a.score });
+        const g = this.artistGroupOf(a.tag);
+        const e = by.get(g);
+        if (!e) by.set(g, { ids: new Set([img.id]), tags: new Set([a.tag]), best: img, score: a.score });
         else {
-          e.n++;
+          e.ids.add(img.id);
+          e.tags.add(a.tag);
           if (better(img, a.score, e)) Object.assign(e, { best: img, score: a.score });
         }
       }
@@ -598,13 +604,67 @@ export class MockDataSource implements DataSource {
       .map(([tag, e]): Artist => ({
         tag,
         name: prettyTag(tag),
-        tags: [tag],
-        aliases: [],
+        tags: [...e.tags],
+        aliases: [...e.tags].filter((t) => t !== tag).map(prettyTag),
         twitter: null,
-        imageCount: e.n,
+        imageCount: e.ids.size,
         cover: { id: e.best.id, dominantColor: mockDominantColor(e.best.hue, e.best.id), rating: e.best.rating, width: e.best.width, height: e.best.height },
+        manual: links.has(tag) || [...e.tags].some((t) => links.has(t)),
       }))
       .sort((a, b) => b.imageCount - a.imageCount || a.tag.localeCompare(b.tag));
+  }
+
+  /** 一张图的画师：同一个人的几个标签合成一条（同 sqlite 的 imageArtists） */
+  private imageArtistsOf(row: ImageRow): ImageArtist[] {
+    const out = new Map<string, ImageArtist>();
+    for (const a of [...(row.artists ?? [])].sort((x, y) => y.score - x.score || (x.tag < y.tag ? -1 : x.tag > y.tag ? 1 : 0))) {
+      const g = this.artistGroupOf(a.tag);
+      const e = out.get(g);
+      if (e) e.tags.push(a.tag);
+      else out.set(g, { tag: g, name: prettyTag(g), tags: [a.tag] });
+    }
+    return [...out.values()];
+  }
+
+  /** 画师标签所在的人（mock 没有 Danbooru 资料，只看手动拆开 / 合并；绕成环时同 sqlite 取环里最小的） */
+  private artistGroupOf(tag: string): string {
+    const links = this.db.artistLinks;
+    return links ? resolveArtist(tag, (cur) => (links.has(cur) ? (links.get(cur) ?? null) : null)) : tag;
+  }
+
+  /** 标签 → 所在的人：认出来过的标签、手动设置里出现的标签，再加上 extra（同 sqlite 的 linkGroups） */
+  private artistGroupMap(extra: string[] = []): Map<string, string> {
+    const links = this.db.artistLinks ?? new Map<string, string | null>();
+    const all = new Set(extra);
+    for (const img of this.db.images.values()) for (const a of img.artists ?? []) all.add(a.tag);
+    for (const [t, g] of links) {
+      all.add(t);
+      if (g) all.add(g);
+    }
+    return new Map([...all].map((t) => [t, this.artistGroupOf(t)]));
+  }
+
+  async updateArtistLinks(body: UpdateArtistLinksBody): Promise<MutationResult> {
+    const into = body.mode === 'merge' ? body.into?.trim() : undefined;
+    if (body.mode === 'merge' && !into) throw new BadRequestError('要合并到哪位画师？');
+    const given = linkTags(body.tags, into);
+    const tags = planArtistLinks(body.mode, given, into, this.artistGroupMap([...given, ...(into ? [into] : [])]));
+    const names = body.mode === 'split' ? tags.map(prettyTag) : [...new Set(given.map((t) => this.artistGroupOf(t)))].map(prettyTag);
+    const intoName = into ? prettyTag(this.artistGroupOf(into)) : undefined;
+    const links = (this.db.artistLinks ??= new Map());
+    // 撤销只恢复这次动过的标签（同 sqlite 的 u.set），不整张表替换
+    const prev = tags.map((t) => [t, links.has(t), links.get(t) ?? null] as const);
+    for (const t of tags) {
+      if (body.mode === 'auto') links.delete(t);
+      else links.set(t, into ?? null);
+    }
+    return this.withUndo(artistLinksMessage(body.mode, names, intoName), () => {
+      const m = (this.db.artistLinks ??= new Map());
+      for (const [t, had, v] of prev) {
+        if (had) m.set(t, v);
+        else m.delete(t);
+      }
+    });
   }
 
   async listCollections(query: ListCollectionsQuery): Promise<CollectionSummary[]> {
@@ -812,6 +872,14 @@ export class MockDataSource implements DataSource {
   // ------------------------------------------------------------ 图片
 
   async listImages(query: ListImagesQuery): Promise<Page<ImageItem>> {
+    // 按画师筛：同 sqlite 的 tagsOfArtist（这个人的全部标签；给的是被并进去的标签时按它所在的人算）
+    let artistTags: Set<string> | null = null;
+    if (query.artist) {
+      const groups = this.artistGroupMap();
+      const rep = groups.get(query.artist) ?? query.artist;
+      const tags = [...groups].filter(([, g]) => g === rep).map(([t]) => t);
+      artistTags = new Set(tags.length ? tags : [query.artist]);
+    }
     const status = query.status;
     let rows = this.idx.visible.filter((img) => {
       const s = this.status(img);
@@ -821,7 +889,7 @@ export class MockDataSource implements DataSource {
       if (query.rating?.length && !query.rating.includes(img.rating)) return false;
       if (query.favorite !== undefined && img.favorite !== query.favorite) return false;
       if (query.original !== undefined && !!img.originalAt !== query.original) return false;
-      if (query.artist && !img.artists?.some((a) => a.tag === query.artist)) return false;
+      if (artistTags && !img.artists?.some((a) => artistTags.has(a.tag))) return false;
       if (Array.isArray(query.kind) && query.kind.length && !query.kind.includes(kindOf(img))) return false;
       if (query.rated && !img.tagged) return false;
       if (query.collectionId === 'none' && img.collectionId) return false;
@@ -880,9 +948,7 @@ export class MockDataSource implements DataSource {
       kindSource: row.kindManual ? 'manual' : (row.kindSource ?? 'default'),
       kindReason: row.kindManual ? null : describeKindReason(row.kindSource ?? 'default', row.kindEvidence ?? null),
       collection: this.collections.ofImage(row),
-      artists: [...(row.artists ?? [])]
-        .sort((a, b) => b.score - a.score || (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0))
-        .map((a) => ({ tag: a.tag, name: prettyTag(a.tag), tags: [a.tag] })),
+      artists: this.imageArtistsOf(row),
       artistsManual: !!row.artistsManual,
     };
   }
@@ -1116,12 +1182,14 @@ export class MockDataSource implements DataSource {
       case 'artist': {
         const tags = normArtists(action.mode, action.artists);
         for (const r of rows) {
-          const cur = action.mode === 'set' ? [] : (r.artists ?? []).filter((a) => action.mode !== 'remove' || !tags.includes(a.tag));
+          // 去掉时同一个人的其他标签一起去掉（同 sqlite）
+          const people = new Set(tags.map((t) => this.artistGroupOf(t)));
+          const cur = action.mode === 'set' ? [] : (r.artists ?? []).filter((a) => action.mode !== 'remove' || !people.has(this.artistGroupOf(a.tag)));
           const add = action.mode === 'remove' ? [] : tags.filter((t) => !cur.some((a) => a.tag === t)).map((tag) => ({ tag, score: 1 }));
           r.artists = [...cur, ...add];
           r.artistsManual = true;
         }
-        message = artistEditMessage(action.mode, n, tags.map(prettyTag));
+        message = artistEditMessage(action.mode, n, [...new Set(tags.map((t) => this.artistGroupOf(t)))].map(prettyTag));
         break;
       }
       case 'artist-auto': {

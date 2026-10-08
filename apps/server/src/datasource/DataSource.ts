@@ -1,6 +1,7 @@
 import type {
   AddLibraryRootBody,
   UpdateLibraryRootBody,
+  UpdateArtistLinksBody,
   BulkCollectionsBody,
   Artist,
   BulkImagesBody,
@@ -91,6 +92,7 @@ export interface DataSource {
   listCollections(query: ListCollectionsQuery): Promise<CollectionSummary[]>;
   /** 识别出来的画师（认不出的不在里面），按张数从多到少 */
   listArtists(): Promise<Artist[]>;
+  updateArtistLinks(body: UpdateArtistLinksBody): Promise<MutationResult>;
   getCollection(id: ID): Promise<GetCollectionResponse | null>;
   createCollection(body: CreateCollectionBody): Promise<MutationResult & { collection: CollectionSummary }>;
   updateCollection(id: ID, body: UpdateCollectionBody): Promise<MutationResult>;

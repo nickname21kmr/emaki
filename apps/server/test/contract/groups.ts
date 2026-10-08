@@ -923,6 +923,60 @@ export function bulkContract(make: ContractFactory, name: Name) {
       await expect(e.ds.bulkImages({ ids: [a], action: { type: 'artist', mode: 'add', artists: ['  '] } })).rejects.toMatchObject({ statusCode: 400 });
     });
 
+    it('画师手动合并 / 拆开 / 恢复自动：列表、筛图、看图器都按人算；可撤销', async () => {
+      const e = env();
+      const [a, b] = [e.id('image', 'i1'), e.id('image', 'i2')];
+      await e.ds.bulkImages({ ids: [a], action: { type: 'artist', mode: 'add', artists: ['kantoku'] } });
+      await e.ds.bulkImages({ ids: [b], action: { type: 'artist', mode: 'add', artists: ['afterschool'] } });
+      const people = async () => (await e.ds.listArtists()).map((x) => [x.tag, [...x.tags].sort(), x.imageCount, x.manual]);
+      const r = await e.ds.updateArtistLinks({ tags: ['afterschool'], mode: 'merge', into: 'kantoku' });
+      expect(r.message).toBe('已把「afterschool」合并到「kantoku」');
+      expect(await people()).toEqual([['kantoku', ['afterschool', 'kantoku'], 2, true]]);
+      expect((await e.ds.listImages({ artist: 'kantoku' })).total).toBe(2);
+      expect((await e.ds.getImage(b))!.artists).toEqual([{ tag: 'kantoku', name: 'kantoku', tags: ['afterschool'] }]);
+      await expect(e.ds.updateArtistLinks({ tags: ['kantoku'], mode: 'merge', into: 'afterschool' })).rejects.toMatchObject({ statusCode: 400 });
+
+      const s = await e.ds.updateArtistLinks({ tags: ['afterschool'], mode: 'split' });
+      expect(s.message).toBe('已拆开：afterschool 单独算一位画师');
+      expect(await people()).toEqual([
+        ['afterschool', ['afterschool'], 1, true],
+        ['kantoku', ['kantoku'], 1, false],
+      ]);
+      await e.ds.undo(s.undoToken!);
+      expect((await people())[0]).toEqual(['kantoku', ['afterschool', 'kantoku'], 2, true]);
+      const auto = await e.ds.updateArtistLinks({ tags: ['afterschool'], mode: 'auto' });
+      expect(auto.message).toBe('已恢复自动合并（kantoku）');
+      expect((await people()).map((x) => x[3])).toEqual([false, false]);
+    });
+
+    it('画师手动设置的边界：拆代表标签报错；按被并进去的标签筛图算整个人；并过去再并回来不会绕成环；乱序撤销只恢复动过的标签', async () => {
+      const e = env();
+      const [a, b, c] = [e.id('image', 'i1'), e.id('image', 'i2'), e.id('image', 'i3')];
+      await e.ds.bulkImages({ ids: [a], action: { type: 'artist', mode: 'add', artists: ['kantoku'] } });
+      await e.ds.bulkImages({ ids: [b], action: { type: 'artist', mode: 'add', artists: ['afterschool'] } });
+      await e.ds.bulkImages({ ids: [c], action: { type: 'artist', mode: 'add', artists: ['mignon'] } });
+      const m1 = await e.ds.updateArtistLinks({ tags: ['afterschool'], mode: 'merge', into: 'kantoku' });
+      await expect(e.ds.updateArtistLinks({ tags: ['kantoku'], mode: 'split' })).rejects.toMatchObject({ statusCode: 400 });
+      expect((await e.ds.listImages({ artist: 'afterschool' })).total).toBe(2);
+      // 把 kantoku 这个人并到 mignon：afterschool 跟着过去
+      const m2 = await e.ds.updateArtistLinks({ tags: ['kantoku'], mode: 'merge', into: 'mignon' });
+      expect((await e.ds.listArtists()).map((x) => [x.tag, x.imageCount])).toEqual([['mignon', 3]]);
+      // 已经是同一个人：不能再并（防止环）
+      await expect(e.ds.updateArtistLinks({ tags: ['mignon'], mode: 'merge', into: 'afterschool' })).rejects.toMatchObject({ statusCode: 400 });
+      // 乱序撤销：先撤第一步，afterschool 回到第一步之前（不归任何人）；kantoku 仍在 mignon 下
+      await e.ds.undo(m1.undoToken!);
+      expect((await e.ds.listArtists()).map((x) => [x.tag, x.imageCount])).toEqual([
+        ['mignon', 2],
+        ['afterschool', 1],
+      ]);
+      // 再撤第二步：kantoku、afterschool 回到第二步之前（afterschool 并在 kantoku 下）
+      await e.ds.undo(m2.undoToken!);
+      expect((await e.ds.listArtists()).map((x) => [x.tag, x.imageCount])).toEqual([
+        ['kantoku', 2],
+        ['mignon', 1],
+      ]);
+    });
+
     it('restore：规则排除的和单张排除的都恢复；可撤销', async () => {
       const e = env();
       const ids = [e.id('image', 'i31'), e.id('image', 'i33')];

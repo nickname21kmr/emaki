@@ -49,7 +49,8 @@ export function toShelfUnits(list: CollectionSummary[]): ShelfUnit[] {
 }
 
 /** 连载按「话」，其余按「册」 */
-export const unitWord = (items: CollectionSummary[]) => (items.some((c) => /[话話回章]\s*$/.test(c.folderName)) ? '话' : '册');
+export const unitOfFolder = (folderName: string) => (/[话話回章]\s*$/.test(folderName) ? '话' : '册');
+export const unitWord = (items: Pick<CollectionSummary, 'folderName'>[]) => (items.some((c) => unitOfFolder(c.folderName) === '话') ? '话' : '册');
 
 const KEY = (id: string) => `emaki.read.v1.${id}`;
 export const readProgress = {

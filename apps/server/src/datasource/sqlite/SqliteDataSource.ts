@@ -47,6 +47,7 @@ import type {
   UpdateImageBody,
   UpdateSettingsBody,
   UpdateLibraryRootBody,
+  UpdateArtistLinksBody,
   Rating,
   Work,
 } from '@emaki/shared';
@@ -107,7 +108,8 @@ import { applyExclusionRules, ExclusionQueries } from './exclusions.ts';
 import { LibraryQueries } from './library.ts';
 import { TagResultWriter } from '../../services/tagger/writer.ts';
 import { moveBack, moveImageFiles, normalizeSubdir, type MoveRow } from './move.ts';
-import { imageArtists, listArtists as listArtistsQuery } from './artists.ts';
+import { artistNames, imageArtists, linkGroups, listArtists as listArtistsQuery, tagNames } from './artists.ts';
+import { artistLinksMessage, linkTags, planArtistLinks } from '../artistEdits.ts';
 import { mergeChildRoots, type ChildRoot } from './roots.ts';
 import { applySettingsPatch, getDanbooruApiKey, isInside, normalizeRootPath, patchSettingsInternal, readSettings, samePath } from './settings.ts';
 import { iso, MIME, parseId, toId, VISIBLE } from './sql.ts';
@@ -424,6 +426,29 @@ export class SqliteDataSource implements DataSource {
     return listArtistsQuery(this.ctx.db);
   }
 
+  /** 自动合并猜错了：手动拆开 / 合并画师，或者恢复自动（可撤销） */
+  async updateArtistLinks(body: UpdateArtistLinksBody): Promise<MutationResult> {
+    const db = this.ctx.db;
+    const into = body.mode === 'merge' ? body.into?.trim() : undefined;
+    if (body.mode === 'merge' && !into) throw new BadRequestError('要合并到哪位画师？');
+    const given = linkTags(body.tags, into);
+    const { groups } = linkGroups(db, [...given, ...(into ? [into] : [])]);
+    const tags = planArtistLinks(body.mode, given, into, groups);
+    const names = body.mode === 'split' ? tagNames(db, tags) : artistNames(db, given);
+    const intoName = into ? artistNames(db, [into])[0] : undefined;
+    const json = JSON.stringify(tags);
+    const now = iso(this.ctx.clock());
+    return this.ctx.mutate((u) => {
+      u.set('artist_links', 'tag IN (SELECT value FROM json_each(?))', [json]);
+      db.prepare('DELETE FROM artist_links WHERE tag IN (SELECT value FROM json_each(?))').run(json);
+      if (body.mode !== 'auto') {
+        const ins = db.prepare('INSERT INTO artist_links (tag, group_tag, created_at) VALUES (?, ?, ?)');
+        for (const t of tags) ins.run(t, into ?? null, now);
+      }
+      return { message: artistLinksMessage(body.mode, names, intoName) };
+    });
+  }
+
   // T38c 合集
   async listCollections(query: ListCollectionsQuery): Promise<CollectionSummary[]> {
     return this.collectionQueries.list(query);
@@ -542,13 +567,24 @@ export class SqliteDataSource implements DataSource {
   private imageCollection(imageId: number): ImageDetail['collection'] {
     const r = this.ctx
       .stmt(
-        `SELECT c.id, c.kind, c.title,
+        `SELECT c.id, c.kind, c.title, c.volume_no, c.rel_dir,
            (SELECT COUNT(*) FROM v_counted_images x WHERE x.collection_id = c.id AND x.page_no <= i.page_no) AS ord,
            (SELECT COUNT(*) FROM v_counted_images x WHERE x.collection_id = c.id) AS n
          FROM images i JOIN collections c ON c.id = i.collection_id WHERE i.id = ? AND c.state = 'active'`,
       )
-      .get(imageId) as { id: number; kind: 'doujin' | 'artbook'; title: string | null; ord: number; n: number } | undefined;
-    return r ? { id: toId(r.id), kind: r.kind, title: r.title, pageNo: Math.max(1, r.ord), pageCount: r.n } : null;
+      .get(imageId) as
+      | { id: number; kind: 'doujin' | 'artbook'; title: string | null; volume_no: number | null; rel_dir: string; ord: number; n: number }
+      | undefined;
+    if (!r) return null;
+    return {
+      id: toId(r.id),
+      kind: r.kind,
+      title: r.title,
+      pageNo: Math.max(1, r.ord),
+      pageCount: r.n,
+      volumeNo: r.volume_no,
+      folderName: r.rel_dir.slice(r.rel_dir.lastIndexOf('/') + 1),
+    };
   }
 
   async updateImage(id: ID, body: UpdateImageBody): Promise<MutationResult> {

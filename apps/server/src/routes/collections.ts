@@ -28,6 +28,17 @@ export function collectionRoutes(app: FastifyInstance, ds: DataSource): void {
   });
 
   app.get('/api/artists', (): Promise<ListArtistsResponse> => ds.listArtists());
+  app.post('/api/artists/links', (req) => {
+    const body = parse(
+      z.object({
+        tags: z.array(z.string().min(1).max(200)).min(1).max(50),
+        mode: z.enum(['split', 'merge', 'auto']),
+        into: z.string().min(1).max(200).optional(),
+      }),
+      req.body,
+    );
+    return ds.updateArtistLinks(body);
+  });
 
   app.post('/api/collections/bulk', (req) => {
     const body = parse(

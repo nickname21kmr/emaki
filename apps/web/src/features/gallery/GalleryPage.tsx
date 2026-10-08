@@ -13,6 +13,7 @@ import { cn } from '@/lib/cn';
 import { formatBytes, formatCount } from '@/lib/format';
 import { useArtists, useImagesInfinite, useStats } from '@/lib/queries';
 import { usePrefs, useSelection } from '@/lib/stores';
+import { ArtistMenu } from './components/ArtistMenu';
 import { GalleryToolbar } from './components/GalleryToolbar';
 import { GridFooter } from './components/GridStates';
 import { SelectionBar } from './components/SelectionBar';
@@ -28,8 +29,14 @@ export function GalleryPage() {
   const { filters, query, update, hasFilters, clearFilters, customThemes } = useGalleryParams();
   // 按画师看时标题用显示名（日文名），列表里没有就用标签
   const artistsQ = useArtists(!!filters.artist);
-  const artist = filters.artist ? artistsQ.data?.find((a) => a.tag === filters.artist) : undefined;
+  // 地址里的标签可能已经不是谁的代表了（恢复自动合并、撤销拆开、Danbooru 同步后重新归组）：按它现在所在的人显示，并改地址
+  const exact = filters.artist ? artistsQ.data?.find((a) => a.tag === filters.artist) : undefined;
+  const owner = filters.artist && !exact ? artistsQ.data?.find((a) => a.tags.includes(filters.artist!)) : undefined;
+  const artist = exact ?? owner;
   const artistName = artist?.name;
+  useEffect(() => {
+    if (owner && !artistsQ.isPlaceholderData) update({ artist: owner.tag });
+  }, [owner, artistsQ.isPlaceholderData, update]);
   const { data: stats } = useStats();
   const rowHeight = usePrefs((s) => s.gridRowHeight);
   const list = useImagesInfinite(query);
@@ -148,6 +155,7 @@ export function GalleryPage() {
           ) : undefined
         }
         title={filters.artist ? (artistName ?? filters.artist.replace(/_/g, ' ')) : '图库'}
+        actions={artist ? <ArtistMenu artist={artist} onMoved={(tag) => update({ artist: tag })} /> : undefined}
         subtitle={
           <Subtitle
             stats={stats}

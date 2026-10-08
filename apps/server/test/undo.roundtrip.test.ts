@@ -70,6 +70,19 @@ const OPS: Op[] = [
     run: () => ds.bulkImages({ ids: img('i1', 'i2'), action: { type: 'artist', mode: 'remove', artists: ['kantoku'] } }),
   },
   {
+    name: '合并画师',
+    setup: () => ds.bulkImages({ ids: img('i1', 'i2'), action: { type: 'artist', mode: 'add', artists: ['kantoku', 'mignon'] } }),
+    run: () => ds.updateArtistLinks({ tags: ['mignon'], mode: 'merge', into: 'kantoku' }),
+  },
+  {
+    name: '拆开画师',
+    setup: async () => {
+      await ds.bulkImages({ ids: img('i1'), action: { type: 'artist', mode: 'add', artists: ['kantoku', 'mignon'] } });
+      await ds.updateArtistLinks({ tags: ['mignon'], mode: 'merge', into: 'kantoku' });
+    },
+    run: () => ds.updateArtistLinks({ tags: ['mignon'], mode: 'split' }),
+  },
+  {
     name: 'bulk 画师改回自动',
     setup: () => ds.bulkImages({ ids: img('i1'), action: { type: 'artist', mode: 'add', artists: ['kantoku'] } }),
     run: () => ds.bulkImages({ ids: img('i1', 'i2'), action: { type: 'artist-auto' } }),

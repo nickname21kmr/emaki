@@ -171,7 +171,17 @@ export interface ImageDetail extends ImageItem {
   /** 给人看的判定依据，例如「文件夹「表情包2」」「识别标签 comic 0.93」；手动设置时为 null */
   kindReason: string | null;
   /** 所在合集（T38c）；pageNo 是可见页里的序号，恒在 1..pageCount 之间（RV-C-8） */
-  collection: { id: ID; kind: CollectionKind; title: string | null; pageNo: number; pageCount: number } | null;
+  collection: {
+    id: ID;
+    kind: CollectionKind;
+    title: string | null;
+    pageNo: number;
+    pageCount: number;
+    /** 第几卷 / 第几话（系列里的书才有） */
+    volumeNo: number | null;
+    /** 合集文件夹的最后一级名字（判断按「话」还是按「册」） */
+    folderName: string;
+  } | null;
   /** 画师（识别的或手动改的）；同一个人的几个标签合成一条 */
   artists: ImageArtist[];
   /** 用户手动改过画师：识别、补跑都不再动 */

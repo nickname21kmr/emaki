@@ -20,17 +20,35 @@ function loadMeta(db: Db): Map<string, ArtistMeta> {
   );
 }
 
+/** 用户手动拆开（null）/ 合并（并到的标签）的画师标签 */
+export function loadLinks(db: Db): Map<string, string | null> {
+  const rows = db.prepare('SELECT tag, group_tag FROM artist_links').all() as { tag: string; group_tag: string | null }[];
+  return new Map(rows.map((r) => [r.tag, r.group_tag]));
+}
+
 /** 标签 → 组的代表标签（只看认出来过的标签） */
 export function artistGroupMap(db: Db): Map<string, string> {
   const present = db.prepare('SELECT DISTINCT artist FROM image_artists').pluck().all() as string[];
-  return artistGroups(present, loadMeta(db));
+  return artistGroups(present, loadMeta(db), loadLinks(db));
 }
 
-/** 按画师筛图时要包含的全部标签（同一个人的不同标签） */
+/** 按画师筛图时要包含的全部标签（同一个人的不同标签）；给的是被并进去的标签时按它所在的人算 */
 export function tagsOfArtist(db: Db, artist: string): string[] {
   const groups = artistGroupMap(db);
-  const tags = [...groups].filter(([, c]) => c === artist).map(([t]) => t);
+  const rep = groups.get(artist) ?? artist;
+  const tags = [...groups].filter(([, c]) => c === rep).map(([t]) => t);
   return tags.length ? tags : [artist];
+}
+
+/**
+ * 手动拆开 / 合并时用的分组：除了认出来过的标签，还算上手动设置里出现的标签和这次要改的标签
+ * （有的标签只出现在漫画页上、或者暂时没有图，也要跟着这个人一起改）
+ */
+export function linkGroups(db: Db, extra: string[]): { groups: Map<string, string>; links: Map<string, string | null> } {
+  const links = loadLinks(db);
+  const present = db.prepare('SELECT DISTINCT artist FROM image_artists').pluck().all() as string[];
+  const all = [...new Set([...present, ...links.keys(), ...[...links.values()].filter((v): v is string => !!v), ...extra])];
+  return { groups: artistGroups(all, loadMeta(db), links), links };
 }
 
 const pretty = (tag: string) => tag.replace(/_/g, ' ');
@@ -55,13 +73,20 @@ export function imageArtists(db: Db, imageId: number): ImageArtist[] {
 export function artistNames(db: Db, tags: string[]): string[] {
   const meta = loadMeta(db);
   const present = db.prepare('SELECT DISTINCT artist FROM image_artists').pluck().all() as string[];
-  const groups = artistGroups([...new Set([...present, ...tags])], meta);
+  const groups = artistGroups([...new Set([...present, ...tags])], meta, loadLinks(db));
   return [...new Set(tags.map((t) => groups.get(t) ?? t))].map((g) => meta.get(g)?.display ?? pretty(g));
+}
+
+/** 每个标签自己的显示名（拆开时说清楚拆出来的是谁） */
+export function tagNames(db: Db, tags: string[]): string[] {
+  const meta = loadMeta(db);
+  return tags.map((t) => meta.get(t)?.display ?? pretty(t));
 }
 
 export function listArtists(db: Db): Artist[] {
   const meta = loadMeta(db);
-  const groups = artistGroups(db.prepare('SELECT DISTINCT artist FROM image_artists').pluck().all() as string[], meta);
+  const links = loadLinks(db);
+  const groups = artistGroups(db.prepare('SELECT DISTINCT artist FROM image_artists').pluck().all() as string[], meta, links);
   const rows = db
     .prepare(
       `SELECT ia.artist, ia.score, i.id, i.dominant_color, i.rating, i.width, i.height
@@ -107,6 +132,7 @@ export function listArtists(db: Db): Artist[] {
       twitter: m?.twitter ?? null,
       imageCount: e.ids.size,
       cover: b ? { id: toId(b.id) as ID, dominantColor: b.dominant_color ?? '#888888', rating: b.rating, width: b.width, height: b.height } : null,
+      manual: links.has(tag) || [...e.tags].some((t) => links.has(t)),
     });
   }
   return out.sort((a, b) => b.imageCount - a.imageCount || a.tag.localeCompare(b.tag));

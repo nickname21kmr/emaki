@@ -12,6 +12,7 @@ import {
 } from '@/lib/format';
 import { CONTENT_KINDS } from '@emaki/shared';
 import { cn } from '@/lib/cn';
+import { unitOfFolder } from '@/lib/collections';
 import { KIND_GLYPH, KIND_HINT, KIND_LABEL } from '@/lib/kinds';
 import { PanelArtists } from './PanelArtists';
 import { PanelCharacters } from './PanelCharacters';
@@ -59,7 +60,7 @@ export function InfoPanel({
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-[20px] bg-sheet text-fg shadow-pop ring-1 ring-line">
       <div key={base?.id} className="min-h-0 flex-1 animate-fade-in overflow-y-auto overscroll-contain scrollbar-thin">
-        <Header base={base} artists={detail?.artists} />
+        <Header base={base} artists={detail?.artists} collection={detail?.collection} />
 
         <div className="grid grid-cols-5 gap-1 px-3 pb-4">
           <ActionTile
@@ -194,7 +195,15 @@ function KindSection({ detail, actions }: { detail: ImageDetail; actions: ImageA
   );
 }
 
-function Header({ base, artists }: { base: ImageItem | undefined; artists?: ImageDetail['artists'] }) {
+function Header({
+  base,
+  artists,
+  collection,
+}: {
+  base: ImageItem | undefined;
+  artists?: ImageDetail['artists'];
+  collection?: ImageDetail['collection'];
+}) {
   if (!base) {
     return (
       <div className="space-y-2.5 px-5 pt-6 pb-5">
@@ -208,6 +217,8 @@ function Header({ base, artists }: { base: ImageItem | undefined; artists?: Imag
   const art = base.kind === 'illustration' || base.kind === 'comic';
   // 认出（或手动改）的画师优先，没有再用文件名、元数据里的
   const artist = artists?.length ? artists.map((a) => a.name).join('、') : base.source?.artist;
+  // 成册的漫画页（比如按漫画导入的）不找角色：头部写书名和第几页，不显示「未识别」
+  const book = names.length === 0 && base.kind === 'comic' && collection ? collection : null;
   return (
     <div className="px-5 pt-5 pb-4">
       {names.length > 0 ? (
@@ -222,6 +233,16 @@ function Header({ base, artists }: { base: ImageItem | undefined; artists?: Imag
               {names.join('、')}
             </h2>
             {artist && <div className="truncate text-[12.5px] text-fg-muted">画师 {artist}</div>}
+          </div>
+        </div>
+      ) : book ? (
+        <div>
+          <h2 className="line-clamp-2 text-[16px] leading-snug font-semibold tracking-tight">
+            {book.title ?? '无题'}
+            {book.volumeNo !== null && ` 第 ${book.volumeNo} ${unitOfFolder(book.folderName)}`}
+          </h2>
+          <div className="mt-0.5 text-xs text-fg-subtle tabular">
+            第 {book.pageNo} / {book.pageCount} 页{artist ? ` · 画师 ${artist}` : ''}
           </div>
         </div>
       ) : (
@@ -250,7 +271,7 @@ function Header({ base, artists }: { base: ImageItem | undefined; artists?: Imag
         <Dot />
         <span className="uppercase">{base.format}</span>
       </div>
-      {base.status !== 'recognized' ? (
+      {base.status === 'excluded' || (base.status === 'unrecognized' && !book) ? (
         <Badge tone={base.status === 'excluded' ? 'danger' : 'warn'} dot className="mt-3">
           {base.status === 'excluded' ? '已排除' : '未识别'}
         </Badge>

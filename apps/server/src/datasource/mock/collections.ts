@@ -10,6 +10,7 @@ import {
   type CollectionSummary,
   type GetCollectionResponse,
   type ID,
+  type ImageDetail,
   type ListCollectionsQuery,
   type MutationResult,
   type UpdateCollectionBody,
@@ -215,12 +216,20 @@ export class MockCollections {
   }
 
   /** 看图器「收录于」：pageNo 是可见页里的序号 */
-  ofImage(img: ImageRow): { id: ID; kind: CollectionKind; title: string | null; pageNo: number; pageCount: number } | null {
+  ofImage(img: ImageRow): ImageDetail['collection'] {
     if (!img.collectionId) return null;
     const l = this.loadAll().get(img.collectionId);
     if (!l) return null;
     const i = l.pages.findIndex((p) => p.id === img.id);
-    return { id: l.row.id, kind: l.row.kind, title: l.row.title, pageNo: Math.max(1, i + 1), pageCount: l.pages.length };
+    return {
+      id: l.row.id,
+      kind: l.row.kind,
+      title: l.row.title,
+      pageNo: Math.max(1, i + 1),
+      pageCount: l.pages.length,
+      volumeNo: l.row.volumeNo,
+      folderName: leafOf(l.row.relDir),
+    };
   }
 
   // ---------------------------------------------------------------- 修改
