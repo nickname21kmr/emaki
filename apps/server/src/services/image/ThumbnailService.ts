@@ -120,7 +120,9 @@ export class ThumbnailService {
   private async backfillOne(row: ThumbRow): Promise<string | null> {
     const f480 = thumbPath(this.d.thumbsRoot, row.sha256, 480);
     const f240 = thumbPath(this.d.thumbsRoot, row.sha256, 240);
-    if (!existsSync(f480) || !existsSync(f240)) return this.generate(row, 480);
+    if (!existsSync(f480)) return this.generate(row, 480);
+    // 只有 480 没有 240（写完 480 进程就被打断）：generate(480) 会直接返回，得先从 480 缩出 240
+    if (!existsSync(f240)) await this.generate(row, 240);
     const [c, h] = await Promise.all([computeDominantColor(await readFile(f240)), computeDHash(await readFile(f480))]);
     this.d.db
       .prepare('UPDATE images SET dominant_color=@c, dhash=@h, thumb_at=@now, decode_error=NULL WHERE sha256=@sha')
