@@ -130,6 +130,37 @@ describe('v2：网页另存的画集（书名/xxx_files/images/00002.jpeg）', (
   });
 });
 
+describe('v6：相机 / 手机的流水号不算页码', () => {
+  const seqHits = (list: string[]) => dirFeatures(mk(list.length, { names: list })).seqHits;
+  it('手机截图、照片、存图混在一起的 4月 → 不成册', () => {
+    // 截图 1170×2532、照片 3024×4032、存下来的图尺寸各不相同，扩展名大小写混着
+    const ext = ['PNG', 'JPG', 'JPEG', 'PNG'];
+    const pages = mk(40, {
+      names: names(40, (i) => `IMG_${8098 + i}.${ext[i % 4]}`),
+      w: (i) => [1170, 3024, 800 + i * 13, 1080][i % 4]!,
+      h: (i) => [2532, 4032, 1100 + i * 7, 1920][i % 4]!,
+    });
+    expect(dirFeatures(pages).seqHits).toBe(0);
+    expect(run('4月', pages)).toBeNull();
+  });
+  it('各家相机、手机的文件名都不算', () => {
+    const cam = ['IMG_1234', 'IMG_E1234', 'IMG_1234 2', 'IMG_1234(1)', 'DSC_0001', 'DSCN0001', 'DSCF0001', '_DSC0001'];
+    const dated = ['PXL_20240101_123456789', 'MVIMG_20240101_123456', 'IMG_20240101_123456', 'Screenshot_20240101-123456', '微信图片_20240101123456', 'mmexport1690000000000'];
+    expect(seqHits([...cam, ...dated].map((s) => `${s}.jpg`))).toBe(0);
+  });
+  it('扫描仪、下载器起的页码照旧算', () => {
+    const list = ['001', 'p001', 'page_01', 'img001', 'img_001', 'img_0001', 'img_1', 'ScanImage02', 'image05', 'pic_12'];
+    expect(seqHits(list.map((s) => `${s}.jpg`))).toBe(list.length);
+  });
+  it('小写 img_001 命名的本子还是 A', () => {
+    expect(run('Book', mk(20, { names: names(20, (i) => `img_${pad(i + 1)}.jpg`) }))?.rule).toBe('A');
+  });
+  it('扫描仪出的 IMG_0001：版心统一、书页比例的还能按 B 成册', () => {
+    const pages = mk(30, { names: names(30, (i) => `IMG_${pad(i + 1, 4)}.jpg`), w: 2480, h: 3508 });
+    expect(run('Scan', pages)).toMatchObject({ rule: 'B', pageOrder: 'name' });
+  });
+});
+
 describe('v3：名字写明画集 / 作品集的，不要求尺寸统一', () => {
   // pixiv 作品号命名、尺寸各不相同的画师作品合集
   const pages = mk(40, { names: Array.from({ length: 40 }, (_, k) => `${52804833 + k * 977}_p0.png`), w: (i) => 700 + (i % 7) * 90, h: 1500 });

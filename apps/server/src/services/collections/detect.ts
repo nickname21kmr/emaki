@@ -11,13 +11,20 @@
  */
 import { CHAPTER, TRANSLATOR, VOLUME_NAME } from './parseName.ts';
 
-export const DETECTOR_VERSION = 5;
+// v6：相机 / 手机的流水号（IMG_8098）不算页码
+export const DETECTOR_VERSION = 6;
 export const MIN_PAGES = 8;
 export const MAX_PAGES = 2000;
 
 const MISC_DIR =
   /^(qq_?images?|tieba|screenshots?|screen ?shots?|pixiv|downloads?|browser|weibo|weixin|wechat|dcim|camera|pictures?|images?|pics?|photos?|tmp|temp|twitter|bili(bili)?|nga|知乎|.*相册|表情.*|二维码|qq|taobao|icons?|share|bdshare|baidunetdisk|bluetooth|截图|截屏|屏幕截图)$/i;
 const PAGE_STEM = /^(?:(?:p|page|img|image|scan ?image|pic|scan)[ _-]?)?(\d{1,4}|0\d{4})(?:(?:[ _-]{1,2}|_[a-z]{1,4}_\d+_)(\d{1,4}))?[a-z]?$/i;
+/**
+ * 相机 / 手机的流水号（DCF 规范，大写）：IMG_1234、IMG_E1234（iPhone 编辑过）、DSC_0001、DSCN0001、DSCF0001、_DSC0001，
+ * 后面可以带重名后缀（IMG_1234 2、IMG_1234(1)）。计数器一直往上走，不是页码（v6）；小写的 img_0001 多半是下载器起的，照旧算页码。
+ * 带日期的手机文件名（PXL_20240101_…、MVIMG_…、Screenshot_…、微信图片_…、mmexport…）本来就不像页码
+ */
+const CAMERA_STEM = /^(?:IMG_E?|DSC[_NF]|_DSC)\d{4}(?:[ _-]\d{1,2}|\s?\(\d{1,2}\))?$/;
 const MACHINE_STEM = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,40}|-?\d{6,})$/i;
 export const ARTBOOK_NAME =
   /画集|畫集|画册|畫冊|原画集|設定資料集|设定集|設定集|イラスト集|作品集|ビジュアルファンブック|ビジュアルコレクション|visual ?fan ?book|visual ?collection|art ?book|artworks?|illustrations?|fanbook|ファンブック/i;
@@ -66,6 +73,8 @@ export interface DirFeatures {
   n: number;
   seqHits: number;
   seq: number;
+  /** 文件名本身带顺序的比例（页码 + 相机流水号）：够高就按文件名排页 */
+  named: number;
   coverage: number;
   uniform: number;
   medianW: number;
@@ -84,15 +93,19 @@ export function dirFeatures(pages: DirPage[]): DirFeatures {
   const n = pages.length;
   const nums = new Set<number>();
   let seqHits = 0;
+  let cameraHits = 0;
   let machine = 0;
   for (const p of pages) {
     const stem = stemOf(p.fileName);
-    const m = PAGE_STEM.exec(stem);
+    const camera = CAMERA_STEM.test(stem);
+    if (camera) cameraHits++;
+    const m = camera ? null : PAGE_STEM.exec(stem);
     if (m) {
       seqHits++;
       nums.add(Number(m[1]));
     }
-    if (m || MACHINE_STEM.test(stem)) machine++;
+    // 相机流水号还算编号式文件名：扫描仪出的 IMG_0001（版心统一、书页比例）照样能按 B 成册
+    if (m || camera || MACHINE_STEM.test(stem)) machine++;
   }
   const sorted = [...nums].sort((a, b) => a - b);
   const coverage = sorted.length ? sorted.length / (sorted.at(-1)! - sorted[0]! + 1) : 0;
@@ -110,6 +123,7 @@ export function dirFeatures(pages: DirPage[]): DirFeatures {
     n,
     seqHits,
     seq: seqHits / n,
+    named: (seqHits + cameraHits) / n,
     coverage,
     uniform,
     medianW,
@@ -150,7 +164,8 @@ export function decideCollection(leaf: string, f: DirFeatures): { rule: Collecti
     else if (STRONG_ARTBOOK.test(leaf.normalize('NFC')) && f.portrait >= 0.5) rule = 'C';
   }
   if (!rule) return null;
-  return { rule, pageOrder: f.seq >= 0.8 ? 'name' : 'mtime' };
+  // 相机流水号不算页码，但顺序还是对的：扫描仪出的 IMG_0001… 按文件名排，重扫过的一页不会跑到最后
+  return { rule, pageOrder: f.named >= 0.8 ? 'name' : 'mtime' };
 }
 
 /** 本子还是画集：已判定页够多就看漫画是否过半，否则按目录名暂定（识别后自动更正） */
