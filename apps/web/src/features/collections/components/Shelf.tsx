@@ -89,8 +89,17 @@ function Caption({ kicker, name, title, children }: { kicker: string; name: stri
 const PAGE = 120;
 
 /** 书架（书架页和别册·漫画共用）：1440 宽一行 4 本；单元太多时先渲染 120 个 */
-export function CollectionShelf({ list, meta }: { list: CollectionSummary[]; meta?: (c: CollectionSummary) => ReactNode }) {
-  const units = toShelfUnits(list);
+export function CollectionShelf({
+  list,
+  meta,
+  keepOrder,
+}: {
+  list: CollectionSummary[];
+  meta?: (c: CollectionSummary) => ReactNode;
+  /** 照 list 的顺序摆（系列页已按第几话排好） */
+  keepOrder?: boolean;
+}) {
+  const units = toShelfUnits(list, { keepOrder });
   const [all, setAll] = useState(false);
   const shown = all ? units : units.slice(0, PAGE);
   return (

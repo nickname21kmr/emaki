@@ -75,6 +75,20 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
         description="文件名是页码（001.jpg…），或一组同尺寸的扫描页，扫描后会自动成册；也可以在看图器的信息面板里点「成册」。"
       />
     );
+  // 只看一类时这一类是空的（搜索只命中了别的类，或这一类本来就没有）：不能留一片空白
+  else if (kind && !by(kind).length)
+    body = (
+      <EmptyState
+        glyph={COLLECTION_META[kind].glyph}
+        title={debounced ? `「${COLLECTION_META[kind].label}」里没有找到「${debounced}」` : `还没有${COLLECTION_META[kind].label}`}
+        description={debounced ? '别的类别里有搜索结果，切到「全部」能看到。' : '切到「全部」能看到别的类别。'}
+        action={
+          <Button variant="secondary" size="sm" onClick={() => set('kind', null)}>
+            看全部
+          </Button>
+        }
+      />
+    );
   else
     body = (
       <div className="space-y-14">
@@ -176,7 +190,11 @@ function SeriesView({ seriesKey }: { seriesKey: string }) {
         ) : list.isError ? (
           <ErrorState error={list.error} onRetry={() => void list.refetch()} />
         ) : (
-          <CollectionShelf list={items.map((c) => ({ ...c, seriesKey: null }))} meta={(c) => `第 ${c.volumeNo ?? '?'} ${word} · ${formatCount(c.pageCount)} 页`} />
+          <CollectionShelf
+            keepOrder
+            list={items.map((c) => ({ ...c, seriesKey: null }))}
+            meta={(c) => `第 ${c.volumeNo ?? '?'} ${word} · ${formatCount(c.pageCount)} 页`}
+          />
         )}
       </PageBody>
     </div>

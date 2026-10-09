@@ -73,7 +73,7 @@ export function ModelPicker({ value, onChange }: { value: string; onChange: (rep
             ))}
           </M.RadioGroup>
           <div className="mx-2.5 mt-1 border-t border-line pt-2 pb-1 text-[11.5px] leading-relaxed text-fg-subtle">
-            没下载的模型会在下次识别时自动下载。换模型后再运行识别，之前没认出角色的图会用新模型再认一遍，已经认出的不动。
+            没下载的模型会在下次点「运行识别」时下载（后台自动识别不下载）。换模型后再运行识别，之前没认出角色的图会用新模型再认一遍，已经认出的不动。
           </div>
         </M.Content>
       </M.Portal>

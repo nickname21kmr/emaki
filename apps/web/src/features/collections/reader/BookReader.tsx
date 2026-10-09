@@ -12,6 +12,7 @@ import { COLLECTION_META, displayTitle, readProgress, unitWord } from '@/lib/col
 import { useHotkey } from '@/lib/hotkeys';
 import { useCollection } from '@/lib/queries';
 import { useBlurPrefs, useLightbox, usePrefs } from '@/lib/stores';
+import { previousPath } from './previousPath';
 import { buildSpreads, spreadIndexOf } from './spreads';
 
 /**
@@ -133,12 +134,17 @@ function Reader({ data }: { data: GetCollectionResponse }) {
   };
 
   const openLightbox = () => useLightbox.getState().show(pages.map((x) => x.imageId), Math.max(0, p - 1), `reader:${c.id}`);
-  const back = () => navigate(`/collections/${c.id}`);
+  // 关掉阅读器不多一条历史：从扉页进来的就退回去，别的地方进来的换成扉页（后退不会又回到阅读器）
+  const back = () => {
+    const detail = `/collections/${c.id}`;
+    if (previousPath() === detail) navigate(-1);
+    else navigate(detail, { replace: true });
+  };
   const on = !lightboxOpen;
-  useHotkey(['arrowright'], () => (rtl ? prev() : next()), { enabled: on });
-  useHotkey(['arrowleft'], () => (rtl ? next() : prev()), { enabled: on });
-  useHotkey(['space', 'pagedown'], () => next(), { enabled: on });
-  useHotkey(['shift+space', 'pageup'], () => prev(), { enabled: on });
+  useHotkey(['arrowright'], () => (rtl ? prev() : next()), { enabled: on, repeat: true });
+  useHotkey(['arrowleft'], () => (rtl ? next() : prev()), { enabled: on, repeat: true });
+  useHotkey(['space', 'pagedown'], () => next(), { enabled: on, repeat: true });
+  useHotkey(['shift+space', 'pageup'], () => prev(), { enabled: on, repeat: true });
   useHotkey('home', () => goTo(0), { enabled: on });
   useHotkey('end', () => goTo(spreads.length - 1), { enabled: on });
   useHotkey('d', () => setSpread(c.kind, !spreadPref), { enabled: on });
@@ -179,7 +185,8 @@ function Reader({ data }: { data: GetCollectionResponse }) {
       <main className={cn('relative flex min-h-0 flex-1 items-center justify-center px-6', rtl && 'flex-row-reverse')}>
         <AnimatePresence mode="wait" initial={false}>
           {ended ? (
-            <motion.div key="end" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.18 }} className="rounded-[14px] bg-white/5 px-8 py-6 text-center ring-1 ring-white/10">
+            // 叠在两侧翻页热区上面：窗口窄时按钮会落进热区里，点不到
+            <motion.div key="end" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.18 }} className="relative z-10 rounded-[14px] bg-white/5 px-8 py-6 text-center ring-1 ring-white/10">
               <div className="font-serif-cjk text-[22px] font-semibold tracking-[.08em] text-white/90">读完了</div>
               <div className="mt-1 text-[12.5px] text-white/50">{displayTitle(c)} · {n} 页</div>
               <div className="mt-5 flex justify-center gap-2">
@@ -204,7 +211,8 @@ function Reader({ data }: { data: GetCollectionResponse }) {
               {group.map((no) => {
                 const pg = pages[no - 1];
                 if (!pg) return null;
-                const size = cn('object-contain', group.length > 1 ? 'max-w-[calc(50vw-24px)]' : 'max-w-[92vw]', 'max-h-[calc(100vh-7.5rem)]');
+                // 高度扣掉顶栏 48 和底部进度条 + 胶片条 98，不盖住它们
+                const size = cn('object-contain', group.length > 1 ? 'max-w-[calc(50vw-24px)]' : 'max-w-[92vw]', 'max-h-[calc(100vh-146px)]');
                 return blurred(pg) ? (
                   <button
                     key={pg.imageId}
@@ -212,7 +220,7 @@ function Reader({ data }: { data: GetCollectionResponse }) {
                     aria-label="显示这一页"
                     onClick={() => setRevealed((s) => new Set(s).add(pg.imageId))}
                     className="overflow-hidden"
-                    style={{ aspectRatio: `${pg.width} / ${pg.height}`, height: 'calc(100vh - 7.5rem)', maxWidth: group.length > 1 ? 'calc(50vw - 24px)' : '92vw' }}
+                    style={{ aspectRatio: `${pg.width} / ${pg.height}`, height: 'calc(100vh - 146px)', maxWidth: group.length > 1 ? 'calc(50vw - 24px)' : '92vw' }}
                   >
                     <Thumb image={{ id: pg.imageId, rating: pg.rating, dominantColor: pg.dominantColor }} width={960} forceBlur blurBadge="center" className="size-full" />
                   </button>

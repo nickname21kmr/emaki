@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import { useMutate, useSettings } from '@/lib/queries';
+import { resolveMoveDir } from './moveDir';
 
 /** 角色名当默认文件夹名：去掉 Windows 不允许的字符 */
 export function folderNameOf(name: string): string {
@@ -52,9 +53,15 @@ export function MoveImagesDialog({
     setDir(defaultDir);
     setError(null);
   }, [open, defaultDir]);
-  const root = roots.find((r) => r.id === rootId) ?? roots[0];
+  // 粘贴的完整路径换算成「哪个图库文件夹 + 里面的相对路径」
+  const resolved = resolveMoveDir(dir, roots);
+  const pathError = resolved.error ?? null;
+  const subdir = resolved.error === undefined ? resolved.dir : dir;
+  const pastedRootId = resolved.error === undefined ? resolved.rootId : null;
+  const root = roots.find((r) => r.id === (pastedRootId ?? rootId)) ?? roots[0];
+  const canMove = !!root && !pathError;
 
-  const move = useMutate(() => api.moveImages({ ...target, rootId: root!.id, dir }), {
+  const move = useMutate(() => api.moveImages({ ...target, rootId: root!.id, dir: subdir }), {
     onError: setError,
     onSuccess: () => {
       onOpenChange(false);
@@ -62,8 +69,8 @@ export function MoveImagesDialog({
     },
   });
 
-  const clean = dir.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').trim();
-  const dest = root ? (clean ? `${root.path.replace(/\/$/, '')}/${clean}` : root.path) : '';
+  const clean = subdir.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').trim();
+  const dest = root && !pathError ? (clean ? `${root.path.replace(/\/$/, '')}/${clean}` : root.path) : '';
 
   return (
     <Dialog
@@ -81,7 +88,11 @@ export function MoveImagesDialog({
             type="button"
             role="radio"
             aria-checked={r.id === root?.id}
-            onClick={() => setRootId(r.id)}
+            onClick={() => {
+              // 输入框里是粘贴的完整路径时，先换成相对路径，不然选了也会被它盖回去
+              if (pastedRootId) setDir(subdir);
+              setRootId(r.id);
+            }}
             className={cn(
               'flex items-center gap-2.5 rounded-lg px-3 py-2 text-left font-mono text-[12.5px] transition-colors',
               r.id === root?.id ? 'bg-shu-soft text-shu-fg' : 'text-fg-muted hover:bg-hover',
@@ -109,11 +120,13 @@ export function MoveImagesDialog({
         spellCheck={false}
         autoComplete="off"
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && root && !move.isPending) move.mutate(undefined);
+          if (e.key === 'Enter' && canMove && !move.isPending) move.mutate(undefined);
         }}
       />
-      <p className={cn('mt-2 text-xs leading-relaxed', error ? 'text-danger' : 'text-fg-subtle')}>
-        {error ?? '可以写多层，比如「角色/未花」。文件夹不存在会新建；重名的文件会改成「名字 (1)」；合集（本子、画集）里的页不会移动。'}
+      <p className={cn('mt-2 text-xs leading-relaxed', error || pathError ? 'text-danger' : 'text-fg-subtle')}>
+        {error ??
+          pathError ??
+          '可以写多层，比如「角色/未花」，也可以粘贴图库文件夹里的完整路径。文件夹不存在会新建；重名的文件会改成「名字 (1)」；合集（本子、画集）里的页不会移动。'}
       </p>
 
       {dest && (
@@ -127,7 +140,7 @@ export function MoveImagesDialog({
         <Button variant="ghost" onClick={() => onOpenChange(false)}>
           取消
         </Button>
-        <Button variant="primary" icon={<FolderInput />} disabled={!root} loading={move.isPending} onClick={() => move.mutate(undefined)}>
+        <Button variant="primary" icon={<FolderInput />} disabled={!canMove} loading={move.isPending} onClick={() => move.mutate(undefined)}>
           移动 {formatCount(count)} 张
         </Button>
       </DialogFooter>

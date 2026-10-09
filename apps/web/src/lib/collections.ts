@@ -23,8 +23,9 @@ export type ShelfUnit = { type: 'single'; c: CollectionSummary } | { type: 'seri
 /**
  * 书架单元：同一系列 ≥ 2 本合成一个系列卡。
  * 排序（RV-C-5）：无题的排最后；其余按单元总页数降序，相同再按标题。
+ * keepOrder：调用方已经排好了（系列页按第几话），不再按页数重排。
  */
-export function toShelfUnits(list: CollectionSummary[]): ShelfUnit[] {
+export function toShelfUnits(list: CollectionSummary[], { keepOrder = false } = {}): ShelfUnit[] {
   const series = new Map<string, CollectionSummary[]>();
   for (const c of list) if (c.seriesKey) series.set(c.seriesKey, [...(series.get(c.seriesKey) ?? []), c]);
   const units: ShelfUnit[] = [];
@@ -37,7 +38,8 @@ export function toShelfUnits(list: CollectionSummary[]): ShelfUnit[] {
       units.push({ type: 'series', key: c.seriesKey!, items: [...items].sort((a, b) => (a.volumeNo ?? 1e9) - (b.volumeNo ?? 1e9)) });
     } else units.push({ type: 'single', c });
   }
-  const first = (u: ShelfUnit) => (u.type === 'single' ? u.c : u.items[0]!);
+  if (keepOrder) return units;
+  const first =(u: ShelfUnit) => (u.type === 'single' ? u.c : u.items[0]!);
   const pages = (u: ShelfUnit) => (u.type === 'single' ? u.c.pageCount : u.items.reduce((n, c) => n + c.pageCount, 0));
   const collator = new Intl.Collator('ja', { numeric: true });
   return units.sort(

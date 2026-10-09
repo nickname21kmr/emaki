@@ -57,6 +57,10 @@ export const SOURCE_LABEL: Record<ContentKindSource, string> = {
   default: '默认',
 };
 
+/** 当前看的这几类一共多少张；'all' 就是全库 */
+export const kindTotal = (counts: Record<ContentKind, number>, total: number, kind: ContentKind[] | 'all') =>
+  kind === 'all' ? total : kind.reduce((n, k) => n + (counts[k] ?? 0), 0);
+
 /** 别册总数 = 非插画之和 */
 export const annexTotal = (counts: Record<ContentKind, number> | undefined) =>
   counts ? Object.entries(counts).reduce((n, [k, v]) => (k === 'illustration' ? n : n + v), 0) : 0;

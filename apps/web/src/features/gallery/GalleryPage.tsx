@@ -6,12 +6,12 @@ import { PageBody, PageHeader } from '@/components/layout/PageHeader';
 import { useScrollContainer } from '@/components/layout/ScrollContainer';
 import { ImageGrid, ImageGridSkeleton } from '@/components/media/ImageGrid';
 import { KindBadge } from '@/components/media/KindBadge';
-import { annexTotal, KIND_LABEL } from '@/lib/kinds';
+import { annexTotal, KIND_LABEL, kindTotal } from '@/lib/kinds';
 import { KindIndex } from '@/features/annex/KindIndex';
 import { Button, EmptyState, ErrorState, Skeleton } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { formatBytes, formatCount } from '@/lib/format';
-import { useArtists, useImagesInfinite, useStats } from '@/lib/queries';
+import { useArtists, useImagesInfinite, useSettings, useStats } from '@/lib/queries';
 import { usePrefs, useSelection } from '@/lib/stores';
 import { ArtistMenu } from './components/ArtistMenu';
 import { GalleryToolbar } from './components/GalleryToolbar';
@@ -38,6 +38,7 @@ export function GalleryPage() {
     if (owner && !artistsQ.isPlaceholderData) update({ artist: owner.tag });
   }, [owner, artistsQ.isPlaceholderData, update]);
   const { data: stats } = useStats();
+  const { data: settings } = useSettings();
   const rowHeight = usePrefs((s) => s.gridRowHeight);
   const list = useImagesInfinite(query);
   const images = useMemo(() => list.data?.pages.flatMap((p) => p.items) ?? [], [list.data]);
@@ -66,6 +67,9 @@ export function GalleryPage() {
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   const libraryEmpty = stats?.imageCount === 0 && !hasFilters;
+  // 文件夹都在，只是全停用了：别再叫人「添加文件夹」
+  const roots = settings?.libraryRoots ?? [];
+  const allRootsDisabled = roots.length > 0 && roots.every((r) => !r.enabled);
   const onlyIllust = Array.isArray(filters.kind) && filters.kind.length === 1 && filters.kind[0] === 'illustration';
   // 混着看好几类时，非插画带类型小标记
   const showKind = !onlyIllust && !(Array.isArray(filters.kind) && filters.kind.length === 1);
@@ -76,7 +80,18 @@ export function GalleryPage() {
   } else if (list.isPending) {
     body = <ImageGridSkeleton rows={Math.max(3, Math.ceil(900 / rowHeight))} rowHeight={rowHeight} />;
   } else if (images.length === 0) {
-    body = libraryEmpty ? (
+    body = libraryEmpty && allRootsDisabled ? (
+      <EmptyState
+        glyph="停"
+        title="图库文件夹都停用了"
+        description="停用的文件夹不参与浏览、统计和扫描。到设置里重新启用，原来的图和整理结果都还在。"
+        action={
+          <Button variant="primary" onClick={() => navigate('/settings#library')}>
+            去启用
+          </Button>
+        }
+      />
+    ) : libraryEmpty ? (
       <EmptyState
         glyph="画"
         title="图库还是空的"
@@ -223,6 +238,9 @@ function Subtitle({
   total: number | null;
 }) {
   if (!stats) return <Skeleton className="mt-1.5 h-3 w-36 rounded-full" />;
+  // 分母跟着当前看的类型走：只看插画时是插画总数，不是连别册一起的全库
+  const n = kindTotal(stats.kindCounts, stats.imageCount, kind);
+  const noun = kind !== 'all' && kind.length === 1 ? KIND_LABEL[kind[0]!] : '';
   if (filtered) {
     return (
       <span className="animate-fade-in">
@@ -233,7 +251,7 @@ function Subtitle({
             筛选出 <span className="font-medium text-fg">{formatCount(total)}</span> 张
           </>
         )}
-        <span className="text-fg-subtle"> · 共 {formatCount(stats.imageCount)} 张</span>
+        <span className="text-fg-subtle"> · 共 {formatCount(n)} 张{noun}</span>
       </span>
     );
   }
@@ -244,12 +262,11 @@ function Subtitle({
       </span>
     );
   }
-  const n = kind.reduce((a, k) => a + stats.kindCounts[k], 0);
   const annex = annexTotal(stats.kindCounts);
   const onlyIllust = kind.length === 1 && kind[0] === 'illustration';
   return (
     <span>
-      {formatCount(n)} 张{kind.length === 1 ? KIND_LABEL[kind[0]!] : ''}
+      {formatCount(n)} 张{noun}
       {onlyIllust && annex > 0 && (
         <>
           {' · '}

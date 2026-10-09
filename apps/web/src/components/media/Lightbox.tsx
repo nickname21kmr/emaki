@@ -4,7 +4,7 @@ import { Pause, PanelRight, Play, Shapes, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Dialog as D } from 'radix-ui';
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { imageUrl } from '@/lib/api';
 import { blurLabel, blurReason } from '@/lib/blur';
 import { formatCount } from '@/lib/format';
@@ -13,6 +13,7 @@ import { useImage } from '@/lib/queries';
 import { useBlurPrefs, useLightbox } from '@/lib/stores';
 import { findCachedImage, preloadAhead, preloadNeighbors, whenDecoded } from './lightbox/cache';
 import { Filmstrip } from './lightbox/Filmstrip';
+import { entryKey, isLightboxEntry, markLightboxEntry, popAction, setLightboxPopHandler } from './lightbox/history';
 import { InfoPanel } from './lightbox/InfoPanel';
 import { KindMenu } from './KindMenu';
 import { LbButton } from './lightbox/LbButton';
@@ -52,6 +53,8 @@ export function Lightbox() {
     if (open && ids.length === 0) close();
   }, [open, ids.length, close]);
 
+  useLightboxHistory(open);
+
   const id = ids[index];
 
   return (
@@ -88,6 +91,67 @@ export function Lightbox() {
       </D.Portal>
     </D.Root>
   );
+}
+
+// 模块级：StrictMode 下挂载 effect 会跑两次，连着两次 back() 会退两条
+let reloadChecked = false;
+
+/**
+ * 看图器和浏览器历史：打开时推一条同地址的记录，浏览器后退只关看图器，页面、筛选和滚动位置都不动；
+ * Esc、×、点背景关掉时把这条退掉；换了页面（点链接、命令面板跳转）就直接关掉。
+ * popstate 在路由之前接住（见 lightbox/history.ts），看图器那条和前面那条之间来回不让路由知道。
+ */
+function useLightboxHistory(open: boolean) {
+  const { key } = useLocation();
+  // 路由当前显示的那条记录的 key
+  const routerKey = useRef(key);
+  const opened = useRef(false);
+
+  useEffect(() => {
+    setLightboxPopHandler((e) => {
+      const state = window.history.state;
+      const s = useLightbox.getState();
+      const nav = (window as { navigation?: { canGoForward?: boolean } }).navigation;
+      const act = popAction(routerKey.current, state, s.open, nav?.canGoForward);
+      if (act.kind === 'pass') {
+        routerKey.current = entryKey(state);
+        return;
+      }
+      e.stopImmediatePropagation();
+      if (act.kind === 'skip') window.history.go(act.step);
+      else if (act.putBack) s.putBack(); // 后退：只关看图器（飞回原来那一格）
+    });
+    // 刷新 / 跨文档回到看图器那条记录：看图器已经没了，退回前面那条同地址同 key 的记录，免得多按一次后退
+    if (!reloadChecked) {
+      reloadChecked = true;
+      if (isLightboxEntry(window.history.state) && !useLightbox.getState().open) window.history.back();
+    }
+    return () => setLightboxPopHandler(null);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    opened.current = true;
+    // 不经过路由：地址和 key 都照抄，路由和滚动位置的记录都把它当成同一页
+    if (!isLightboxEntry(window.history.state)) window.history.pushState(markLightboxEntry(window.history.state), '');
+  }, [open]);
+
+  useEffect(() => {
+    if (open || !opened.current) return;
+    // 晚一拍再看：关掉的同时跳去了别的页面（点标签、点角色），路由已经换掉了当前记录，就不用退
+    const t = window.setTimeout(() => {
+      if (!useLightbox.getState().open && isLightboxEntry(window.history.state)) window.history.back();
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, [open]);
+
+  // 换了页面就关掉，不然看图器会浮在新页面上继续翻旧列表
+  useEffect(() => {
+    routerKey.current = key;
+    const s = useLightbox.getState();
+    if (s.open) s.close();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在换页时执行
+  }, [key]);
 }
 
 function LightboxView({
@@ -158,8 +222,8 @@ function LightboxView({
     if (e.target instanceof Element && e.target.closest('[data-radix-popper-content-wrapper]')) return;
     fn();
   };
-  useHotkey('arrowleft', guard(() => go(-1)));
-  useHotkey('arrowright', guard(() => go(1)));
+  useHotkey('arrowleft', guard(() => go(-1)), { repeat: true });
+  useHotkey('arrowright', guard(() => go(1)), { repeat: true });
   useHotkey('i', guard(togglePanel));
   useHotkey('f', guard(actions.toggleFavorite));
   useHotkey('e', guard(actions.exclude));

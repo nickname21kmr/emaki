@@ -3,7 +3,7 @@
  */
 import type { CollectionKind, ContentKind, ID } from '@emaki/shared';
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { createJSONStorage, persist } from 'zustand/middleware';
 import { useShallow } from 'zustand/react/shallow';
 import type { BlurLevel, BlurPrefs } from './blur';
 
@@ -250,19 +250,37 @@ export const useSelection = create<SelectionState>((set, get) => ({
 interface UndoEntry {
   token: string;
   label: string;
+  /** 记下时后端的启动 id：后端重启后服务端的撤销栈就空了，这条也跟着作废 */
+  boot?: string;
 }
 
 interface UndoState {
   entries: UndoEntry[];
+  /** 当前连着的后端的启动 id（SSE 连上时从 /api/health 拿，断开时清空） */
+  boot: string | null;
   push: (e: UndoEntry) => void;
   remove: (token: string) => void;
+  /** 连上后端：丢掉别的启动留下的记录，没连上时记下的归到这次启动 */
+  setBoot: (boot: string | null) => void;
 }
 
-export const useUndoStore = create<UndoState>((set) => ({
-  entries: [],
-  push: (e) => set((s) => ({ entries: [e, ...s.entries].slice(0, 20) })),
-  remove: (token) => set((s) => ({ entries: s.entries.filter((e) => e.token !== token) })),
-}));
+// 按标签页存在 sessionStorage：刷新后顶栏撤销和 Ctrl+Z 还能接着用（服务端的撤销栈在后端重启前一直在）
+export const useUndoStore = create<UndoState>()(
+  persist(
+    (set) => ({
+      entries: [],
+      boot: null,
+      push: (e) => set((s) => ({ entries: [{ ...e, ...(s.boot ? { boot: s.boot } : {}) }, ...s.entries].slice(0, 20) })),
+      remove: (token) => set((s) => ({ entries: s.entries.filter((e) => e.token !== token) })),
+      setBoot: (boot) =>
+        set((s) => ({
+          boot,
+          entries: boot ? s.entries.filter((e) => !e.boot || e.boot === boot).map((e) => (e.boot ? e : { ...e, boot })) : s.entries,
+        })),
+    }),
+    { name: 'emaki.undo', storage: createJSONStorage(() => sessionStorage), partialize: (s) => ({ entries: s.entries }) },
+  ),
+);
 
 // ------------------------------------------------------------------ 全局弹层
 

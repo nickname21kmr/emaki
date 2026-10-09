@@ -75,8 +75,8 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
       if (entries[k]!.count > 0) return pickEntry(entries[k]!.key);
     }
   };
-  useHotkey('[', () => stepGroup(-1), { enabled: keysOn && !!entries });
-  useHotkey(']', () => stepGroup(1), { enabled: keysOn && !!entries });
+  useHotkey('[', () => stepGroup(-1), { enabled: keysOn && !!entries, repeat: true });
+  useHotkey(']', () => stepGroup(1), { enabled: keysOn && !!entries, repeat: true });
   usePriorityKeys(['/'], () => searchRef.current?.focus(), keysOn && sheet.batch);
 
   // 切组时回到顶部

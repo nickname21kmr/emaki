@@ -90,14 +90,15 @@ export function PageHeader({
       <header
         ref={headRef}
         className={cn(
-          'px-8 pb-4',
+          'px-8 pb-4 @container/head',
           stuck.value ? 'pt-3' : chapter ? 'pt-7' : 'pt-6',
           sticky && 'sticky top-0 z-20 bg-sheet paper',
           stuck.value && 'shadow-[0_1px_0_var(--c-line)]',
           className,
         )}
       >
-        <div className="flex items-start justify-between gap-6">
+        {/* 很窄时右边那排按钮换到标题下一行，不被挤出纸外 */}
+        <div className="flex items-start justify-between gap-6 @max-[400px]/head:flex-wrap @max-[400px]/head:gap-y-3">
           {chapter ? (
             <div className="min-w-0 animate-fade-in">
               {showChapter && (
@@ -122,7 +123,7 @@ export function PageHeader({
               {subtitle && !stuck.value && <div className="mt-1 text-[13px] text-fg-muted tabular">{subtitle}</div>}
             </div>
           )}
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="ml-auto flex shrink-0 items-center gap-1.5 @max-[400px]/head:shrink @max-[400px]/head:flex-wrap @max-[400px]/head:justify-end">
             {actions}
             <GlobalActions />
           </div>
@@ -173,13 +174,15 @@ export function GlobalActions() {
 
   return (
     <>
+      {/* 页头窄时（半屏以下）缩成一个圆按钮，给后面的撤销、帮助让位 */}
       <button
         onClick={() => setCommandOpen(true)}
-        className="group ml-1 flex h-9 w-52 items-center gap-2 rounded-full bg-sunken pr-1.5 pl-3.5 text-[13px] text-fg-subtle transition-colors hover:bg-hover hover:text-fg-muted"
+        aria-label="跳到角色"
+        className="group ml-1 flex h-9 w-52 shrink-0 items-center gap-2 rounded-full bg-sunken pr-1.5 pl-3.5 text-[13px] text-fg-subtle transition-colors hover:bg-hover hover:text-fg-muted @max-[600px]/head:w-9 @max-[600px]/head:justify-center @max-[600px]/head:px-0"
       >
         <Search className="size-4" />
-        <span className="flex-1 text-left">跳到角色</span>
-        <Kbd>{modKeyLabel === '⌘' ? '⌘K' : 'Ctrl K'}</Kbd>
+        <span className="flex-1 text-left @max-[600px]/head:hidden">跳到角色</span>
+        <Kbd className="@max-[600px]/head:hidden">{modKeyLabel === '⌘' ? '⌘K' : 'Ctrl K'}</Kbd>
       </button>
       <IconButton label={blur ? `显示${what}` : `模糊${what}`} shortcut="B" active={blur} onClick={toggleBlur}>
         {blur ? <EyeOff /> : <Eye />}

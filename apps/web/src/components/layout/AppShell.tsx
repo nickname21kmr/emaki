@@ -53,7 +53,8 @@ export function AppShell() {
 
   return (
     <ScrollContainerContext.Provider value={scrollRef}>
-      <div className="flex h-full bg-canvas">
+      {/* 文档本身永远不滚：只有侧栏和纸各自滚 */}
+      <div className="flex h-full overflow-hidden bg-canvas">
         <Sidebar />
         <main className="min-w-0 flex-1 py-2 pr-2">
           <div

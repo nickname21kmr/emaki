@@ -40,6 +40,7 @@ export function CharacterHero({
   onMerge,
   onMove,
   onExclude,
+  onRestoreExcluded,
   onChangeCover,
   onRestoreCover,
 }: {
@@ -56,6 +57,8 @@ export function CharacterHero({
   /** 移到图库里的某个文件夹（issue #1） */
   onMove: () => void;
   onExclude: () => void;
+  /** 这个角色已经被排除时才有：菜单里换成「恢复这个角色」 */
+  onRestoreExcluded?: () => void;
   /** 打开「换封面」候选面板（CB-7） */
   onChangeCover: () => void;
   /** 手动设过封面时：交还给自动选图（MG-14） */
@@ -210,9 +213,15 @@ export function CharacterHero({
               </MenuItem>
             )}
             <MenuSeparator />
-            <MenuItem icon={<Ban />} danger onSelect={() => afterMenuClose(onExclude)}>
-              排除这个角色…
-            </MenuItem>
+            {onRestoreExcluded ? (
+              <MenuItem icon={<RotateCcw />} onSelect={onRestoreExcluded}>
+                恢复这个角色
+              </MenuItem>
+            ) : (
+              <MenuItem icon={<Ban />} danger onSelect={() => afterMenuClose(onExclude)}>
+                排除这个角色…
+              </MenuItem>
+            )}
           </Menu>
         </motion.div>
       </section>

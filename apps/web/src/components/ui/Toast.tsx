@@ -9,7 +9,7 @@ import { modKeyLabel } from '@/lib/hotkeys';
 import { useUndoStore } from '@/lib/stores';
 import { Kbd } from './Kbd';
 import { Spinner } from './Button';
-import { errorMessage } from '@/lib/queries';
+import { errorMessage, forgetFailedUndo } from '@/lib/queries';
 
 /** 正在显示的可撤销 toast：Ctrl+Z 优先交给它，胶囊原地变成「已撤销」 */
 const live = new Map<string, () => void>();
@@ -61,6 +61,7 @@ function ResultToast({ id, message, undoToken, client }: { id: string | number; 
       void client.invalidateQueries();
       window.setTimeout(() => toast.dismiss(id), 1400);
     } catch (err) {
+      forgetFailedUndo(undoToken, err);
       setError(errorMessage(err));
       setPhase('failed');
       window.setTimeout(() => toast.dismiss(id), 3200);

@@ -2,7 +2,21 @@ import type { LibraryRoot, LibraryRootMode, Rating, UpdateLibraryRootBody } from
 import { BookOpen, ChevronDown, FolderInput, FolderOpen, FolderSearch, FolderX, Trash, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { Badge, Button, IconButton, Input, Menu, MenuLabel, MenuRadioGroup, MenuRadioItem, MenuSeparator, Segmented, Switch } from '@/components/ui';
+import {
+  Badge,
+  Button,
+  Dialog,
+  DialogFooter,
+  IconButton,
+  Input,
+  Menu,
+  MenuLabel,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  Segmented,
+  Switch,
+} from '@/components/ui';
 import { api, ApiRequestError } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { formatCount, formatDateTime, formatPercent, formatRelative, RATING_LABEL } from '@/lib/format';
@@ -180,25 +194,57 @@ export function AddFolderForm({
   );
 }
 
-/** 已添加的文件夹：路径、张数、上次扫描、启用开关、移除（toast 可撤销） */
-export function RootList({ roots, className }: { roots: LibraryRoot[]; className?: string }) {
+/**
+ * 已添加的文件夹：路径、张数、上次扫描、启用开关、移除（toast 可撤销）。
+ * 移除最后一个有图的文件夹会立刻跳到首次使用引导，所以先问一句（引导页里不用问）。
+ */
+export function RootList({ roots, className, confirmLast = true }: { roots: LibraryRoot[]; className?: string; confirmLast?: boolean }) {
   const update = useUpdateRoot();
   const remove = useRemoveRoot();
+  const [asking, setAsking] = useState<LibraryRoot | null>(null);
   const total = roots.reduce((sum, r) => sum + (r.enabled ? r.imageCount : 0), 0);
   return (
-    <ul className={cn('relative divide-y divide-line', className)}>
-      <AnimatePresence mode="popLayout" initial={false}>
-        {roots.map((root) => (
-          <RootRow
-            key={root.id}
-            root={root}
-            share={roots.length > 1 && total > 0 && root.enabled ? root.imageCount / total : null}
-            onUpdate={(body) => update(root.id, body)}
-            onRemove={() => remove(root.id)}
-          />
-        ))}
-      </AnimatePresence>
-    </ul>
+    <>
+      <ul className={cn('relative divide-y divide-line', className)}>
+        <AnimatePresence mode="popLayout" initial={false}>
+          {roots.map((root) => (
+            <RootRow
+              key={root.id}
+              root={root}
+              share={roots.length > 1 && total > 0 && root.enabled ? root.imageCount / total : null}
+              onUpdate={(body) => update(root.id, body)}
+              onRemove={() => (confirmLast && roots.length === 1 && root.imageCount > 0 ? setAsking(root) : remove(root.id))}
+            />
+          ))}
+        </AnimatePresence>
+      </ul>
+      <Dialog
+        open={asking !== null}
+        onOpenChange={(o) => !o && setAsking(null)}
+        title="移除唯一的图库文件夹？"
+        description={asking ? `${asking.path} · ${formatCount(asking.imageCount)} 张` : undefined}
+        width={440}
+      >
+        <p className="text-[13px] leading-relaxed text-fg-muted">
+          移除后图库就空了，会回到首次使用引导。磁盘上的文件不会删，移除后也能撤销。
+          {asking?.enabled && '只想暂时不看的话，用右边的开关停用就好。'}
+        </p>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => setAsking(null)}>
+            取消
+          </Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              if (asking) remove(asking.id);
+              setAsking(null);
+            }}
+          >
+            移除
+          </Button>
+        </DialogFooter>
+      </Dialog>
+    </>
   );
 }
 
@@ -221,7 +267,7 @@ export function LibraryRootsEditor({ roots }: { roots: LibraryRoot[] }) {
       />
       {roots.length > 0 && (
         <div className="mt-5 rounded-xl bg-raised px-4 ring-1 ring-line">
-          <RootList roots={roots} />
+          <RootList roots={roots} confirmLast={false} />
         </div>
       )}
     </div>

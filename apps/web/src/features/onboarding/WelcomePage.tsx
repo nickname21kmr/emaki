@@ -5,6 +5,7 @@ import { sectionNumber } from '@/features/settings/sections';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Button, Progress, Segmented, Skeleton, Switch } from '@/components/ui';
+import { useUndoHotkey } from '@/components/layout/useGlobalHotkeys';
 import { LibraryRootsEditor } from '@/features/settings/components/LibraryRootsEditor';
 import { useMergedJobs } from '@/features/settings/hooks';
 import { isActiveJob, jobFraction, JOB_LABEL } from '@/features/settings/jobMeta';
@@ -35,7 +36,10 @@ const STRICTNESS: Record<Strictness, { characterThreshold: number; autoAcceptThr
 export function WelcomePage() {
   // AppShell 之外的页面也要订阅 SSE，第三步的进度才会动
   useServerEvents();
+  // toast 上写着 Ctrl Z：从设置里移除最后一个文件夹被带到这里时，也要按得动（路径框自动聚焦，空框里也算）
+  useUndoHotkey({ inEmptyInputs: true });
   const settings = useSettings().data;
+  const imageCount = useStats().data?.imageCount ?? 0;
   const [step, setStep] = useState(0);
 
   return (
@@ -56,7 +60,7 @@ export function WelcomePage() {
             {!settings ? (
               <Skeleton className="h-40 w-full rounded-xl" />
             ) : step === 0 ? (
-              <FoldersStep roots={settings.libraryRoots} onNext={() => setStep(1)} />
+              <FoldersStep roots={settings.libraryRoots} hasImages={imageCount > 0} onNext={() => setStep(1)} />
             ) : step === 1 ? (
               <TaggerStep settings={settings} onBack={() => setStep(0)} onNext={() => setStep(2)} />
             ) : (
@@ -112,7 +116,8 @@ function StepFooter({ children }: { children: React.ReactNode }) {
 
 // ---------------------------------------------------------------- 一
 
-function FoldersStep({ roots, onNext }: { roots: LibraryRoot[]; onNext: () => void }) {
+function FoldersStep({ roots, hasImages, onNext }: { roots: LibraryRoot[]; hasImages: boolean; onNext: () => void }) {
+  const navigate = useNavigate();
   return (
     <div>
       <h2 className="text-[17px] font-semibold tracking-tight">存放插画的文件夹</h2>
@@ -122,9 +127,17 @@ function FoldersStep({ roots, onNext }: { roots: LibraryRoot[]; onNext: () => vo
       <LibraryRootsEditor roots={roots} />
       <StepFooter>
         <span className="text-xs text-fg-subtle">{roots.length ? `已添加 ${roots.length} 个文件夹` : '至少添加一个文件夹'}</span>
-        <Button variant="primary" trailing={<ArrowRight />} disabled={!roots.length} onClick={onNext}>
-          下一步
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* 图库里已经有图（比如刚撤销了移除）：不用再走一遍引导 */}
+          {hasImages && roots.length > 0 && (
+            <Button variant="ghost" onClick={() => navigate('/')}>
+              直接进入 Emaki
+            </Button>
+          )}
+          <Button variant="primary" trailing={<ArrowRight />} disabled={!roots.length} onClick={onNext}>
+            下一步
+          </Button>
+        </div>
       </StepFooter>
     </div>
   );

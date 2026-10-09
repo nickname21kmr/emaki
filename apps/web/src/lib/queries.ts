@@ -247,8 +247,17 @@ export async function undo(token: string, client: QueryClient) {
     toast(res.message);
     await invalidateAll(client);
   } catch (err) {
+    forgetFailedUndo(token, err);
     toast.error(errorMessage(err));
   }
+}
+
+/**
+ * 撤销失败：只要后端回了话（不是网络错误），这个 token 在后端就已经没了（过期、重启过，或者 revert 前已经删掉），
+ * 从撤销栈里拿掉，免得 Ctrl+Z 一直卡在它上面、更早的轮不到。连不上时留着，下次还能再试
+ */
+export function forgetFailedUndo(token: string, err: unknown) {
+  if (err instanceof ApiRequestError && err.code !== 'network') useUndoStore.getState().remove(token);
 }
 
 /**

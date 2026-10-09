@@ -54,8 +54,8 @@ export function WorkChips({
     const next = order[Math.min(Math.max((i < 0 ? 0 : i) + delta, 0), order.length - 1)];
     if (next !== undefined && next !== selected) onSelect(next);
   };
-  useHotkey('[', () => step(-1), { enabled: hotkeysEnabled });
-  useHotkey(']', () => step(1), { enabled: hotkeysEnabled });
+  useHotkey('[', () => step(-1), { enabled: hotkeysEnabled, repeat: true });
+  useHotkey(']', () => step(1), { enabled: hotkeysEnabled, repeat: true });
 
   // ---------------------------------------------------------------- 横向滚动
   const rowRef = useRef<HTMLDivElement>(null);

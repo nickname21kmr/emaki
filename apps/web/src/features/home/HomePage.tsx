@@ -2,7 +2,7 @@ import type { LibraryStats } from '@emaki/shared';
 import { PageBody, PageHeader } from '@/components/layout/PageHeader';
 import { ErrorState } from '@/components/ui';
 import { formatCount, formatRelative } from '@/lib/format';
-import { useStats } from '@/lib/queries';
+import { useSettings, useStats } from '@/lib/queries';
 import { AnnexIndex } from './components/AnnexIndex';
 import { JobBanner } from './components/JobBanner';
 import { LatestImages, LatestImagesSkeleton } from './components/LatestImages';
@@ -61,10 +61,13 @@ export function HomePage() {
 
 /** 「晚上好 · 本周新收 312 张 · 上次扫描 2 小时前」 */
 function Subtitle({ stats, phase }: { stats: LibraryStats; phase: ImportPhase }) {
+  const roots = useSettings().data?.libraryRoots ?? [];
   const week = sum(stats.addedLast7Days);
   const summary =
     stats.imageCount === 0
-      ? '图库还是空的'
+      ? roots.length > 0 && roots.every((r) => !r.enabled)
+        ? '图库文件夹都停用了'
+        : '图库还是空的'
       : phase && stats.recentImport
         ? `刚导入 ${formatCount(stats.recentImport.count)} 张${phase === 'tagging' ? '，正在识别角色' : ''}`
         : week

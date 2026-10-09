@@ -174,8 +174,8 @@ export function DuplicatesPage() {
   useHotkey('z', () => setLensGroup((cur) => (cur && cur === groups[activeIndex]?.id ? null : (groups[activeIndex]?.id ?? null))), {
     enabled: keysOn,
   });
-  useHotkey('j', () => moveTo(activeIndex + 1), { enabled: keysOn });
-  useHotkey('k', () => moveTo(activeIndex - 1), { enabled: keysOn });
+  useHotkey('j', () => moveTo(activeIndex + 1), { enabled: keysOn, repeat: true });
+  useHotkey('k', () => moveTo(activeIndex - 1), { enabled: keysOn, repeat: true });
   useHotkey(
     'enter',
     (e) => {

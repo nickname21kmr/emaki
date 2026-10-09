@@ -8,7 +8,7 @@ import { CollectionsStrip } from '@/components/media/CollectionsStrip';
 import { Thumb } from '@/components/media/Thumb';
 import { Button, EmptyState, ErrorState, Skeleton } from '@/components/ui';
 import { api, ApiRequestError } from '@/lib/api';
-import { useCharacter, useMutate } from '@/lib/queries';
+import { useCharacter, useExclusions, useMutate } from '@/lib/queries';
 import { CharacterHero, CharacterHeroSkeleton } from './CharacterHero';
 import { CharacterImages } from './CharacterImages';
 import { CoverPickerDialog } from './CoverPickerDialog';
@@ -37,6 +37,11 @@ export function CharacterDetail({ id }: { id: ID }) {
 
   const pin = useMutate((pinned: boolean) => api.updateCharacter(id, { pinned }));
   const restoreCover = useMutate(() => api.updateCharacter(id, { coverImageId: null }));
+  // 已经排除过的角色：页面要说明并给「恢复」，菜单里不再出现「排除」
+  const exclusions = useExclusions();
+  const excludedRule = exclusions.data?.find((e) => e.kind === 'character' && e.target === id) ?? null;
+  const unexclude = useMutate((ruleId: ID) => api.deleteExclusion(ruleId));
+  const restoreExcluded = excludedRule ? () => unexclude.mutate(excludedRule.id) : undefined;
 
   const character = data?.character;
   const mainWork = data?.works[0];
@@ -134,6 +139,7 @@ export function CharacterDetail({ id }: { id: ID }) {
           onMerge={() => setDialog('merge')}
           onMove={() => setDialog('move')}
           onExclude={() => setDialog('exclude')}
+          onRestoreExcluded={restoreExcluded}
           onChangeCover={() => setDialog('cover')}
           onRestoreCover={() => restoreCover.mutate()}
         />
@@ -145,6 +151,11 @@ export function CharacterDetail({ id }: { id: ID }) {
           newSinceLastVisit={newSinceLastVisit}
           sectionRef={imagesRef}
           dialogOpen={dialog !== null}
+          excluded={
+            excludedRule && restoreExcluded
+              ? { imageCount: excludedRule.imageCount, restoring: unexclude.isPending, onRestore: restoreExcluded }
+              : null
+          }
         />
       </PageBody>
 

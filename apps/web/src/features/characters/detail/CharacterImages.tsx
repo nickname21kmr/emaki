@@ -10,6 +10,7 @@ import { Button, EmptyState, ErrorState } from '@/components/ui';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { themeQuery } from '@/lib/customTheme';
+import { formatCount } from '@/lib/format';
 import { useImagesInfinite, useMutate } from '@/lib/queries';
 import { shouldBlur } from '@/lib/blur';
 import { useBlurPrefs, usePrefs } from '@/lib/stores';
@@ -27,6 +28,7 @@ export function CharacterImages({
   newSinceLastVisit,
   sectionRef,
   dialogOpen,
+  excluded,
 }: {
   character: Character;
   /** 进入页面时的「+N」：默认排序下给最新的 N 张打上「新」角标 */
@@ -34,6 +36,8 @@ export function CharacterImages({
   sectionRef?: Ref<HTMLElement>;
   /** 有弹窗时暂停本区的快捷键 */
   dialogOpen: boolean;
+  /** 这个角色有排除规则时：空状态说明已排除，给「恢复」而不是「去归类」 */
+  excluded?: { imageCount: number; restoring: boolean; onRestore: () => void } | null;
 }) {
   const filters = useImageFilters();
   const blurPrefs = useBlurPrefs();
@@ -127,7 +131,18 @@ export function CharacterImages({
   } else if (query.isError) {
     body = <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
   } else if (images.length === 0) {
-    body = filters.rating.length || filters.theme || filters.custom ? (
+    body = excluded ? (
+      <EmptyState
+        glyph="隐"
+        title="这个角色已排除"
+        description={`TA 的 ${formatCount(excluded.imageCount)} 张插画已从图库和统计里隐藏，文件还在。恢复后会重新出现在这里。`}
+        action={
+          <Button variant="primary" size="sm" loading={excluded.restoring} onClick={excluded.onRestore}>
+            恢复这个角色
+          </Button>
+        }
+      />
+    ) : filters.rating.length || filters.theme || filters.custom ? (
       <EmptyState
         glyph="筛"
         title="没有符合筛选的插画"

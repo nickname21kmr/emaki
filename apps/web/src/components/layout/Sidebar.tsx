@@ -79,7 +79,8 @@ export function Sidebar() {
   ];
 
   return (
-    <aside className="flex w-[76px] shrink-0 flex-col items-center py-4">
+    // 窗口矮（768 的笔记本、计数和任务环都在）时侧栏自己滚，不把整个页面撑高
+    <aside className="flex w-[76px] shrink-0 flex-col items-center overflow-x-hidden overflow-y-auto py-4 scrollbar-none">
       <Logo />
 
       <nav className="mt-6 flex flex-col items-center gap-1">
@@ -88,7 +89,7 @@ export function Sidebar() {
         ))}
       </nav>
 
-      <div className="my-4 h-px w-8 bg-line-strong" />
+      <div className="my-4 h-px w-8 shrink-0 bg-line-strong" />
 
       <nav className="flex flex-col items-center gap-1">
         {triage.map((item) => (

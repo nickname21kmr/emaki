@@ -117,7 +117,8 @@ export function SelectionBar({
       e.preventDefault();
       selectAll();
     },
-    { enabled: !lightboxOpen && images.length > 0, preventDefault: false },
+    // 按住时也要每次拦下浏览器的全选
+    { enabled: !lightboxOpen && images.length > 0, preventDefault: false, repeat: true },
   );
   useHotkey('e', (e) => !fromOverlay(e) && run({ type: 'exclude' }), { enabled: active && !pickerOpen && !kindOpen });
   useHotkey('c', (e) => !fromOverlay(e) && setKindOpen(true), { enabled: active && !pickerOpen });
@@ -126,7 +127,7 @@ export function SelectionBar({
   const pendingType = bulk.isPending ? bulk.variables?.action.type : undefined;
 
   return (
-    <div className="pointer-events-none sticky bottom-6 z-30 flex h-0 justify-center">
+    <div className="pointer-events-none sticky bottom-6 z-30 flex h-0 justify-center @container/bar">
       <AnimatePresence>
         {count > 0 && (
           <motion.div
@@ -136,7 +137,8 @@ export function SelectionBar({
             animate={{ opacity: 1, y: lifted ? -64 : 0, scale: 1 }}
             exit={{ opacity: 0, y: 12, scale: 0.97, transition: { duration: 0.18 } }}
             transition={{ duration: 0.42, ease: EASE_OUT }}
-            className="pointer-events-auto absolute bottom-0 left-1/2 flex h-[52px] w-max -translate-x-1/2 items-center gap-0.5 rounded-full bg-ink pr-2 pl-1.5 text-fg-inverse shadow-pop"
+            // 纸窄（半屏窗口）时按钮只留图标；再窄就在胶囊里横向滚动，两头的按钮都够得着
+            className="pointer-events-auto absolute bottom-0 left-1/2 flex h-[52px] w-max max-w-[calc(100%-24px)] -translate-x-1/2 items-center gap-0.5 overflow-x-auto rounded-full bg-ink pr-2 pl-1.5 text-fg-inverse shadow-pop scrollbar-none *:shrink-0"
           >
             <Tooltip content="取消选择" shortcut="Esc" side="top">
               <button
@@ -319,7 +321,8 @@ const BarButton = forwardRef<HTMLButtonElement, BarButtonProps>(function BarButt
       {...rest}
     >
       {pending ? <Spinner className="size-4" /> : icon}
-      {children}
+      {/* 纸窄于 900px 时文字只给读屏 */}
+      <span className="@max-[900px]/bar:sr-only">{children}</span>
       {trailing && <span className="-mr-1 opacity-50 [&_svg]:size-3.5">{trailing}</span>}
     </button>
   );

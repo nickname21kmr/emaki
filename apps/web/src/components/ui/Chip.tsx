@@ -20,13 +20,15 @@ export interface ChipProps extends ButtonHTMLAttributes<HTMLButtonElement> {
  * 筛选 chip。选中态是「墨色实心」，和截图里的「总览」一致。
  */
 export const Chip = forwardRef<HTMLButtonElement, ChipProps>(function Chip(
-  { selected, leading, count, size = 'md', ink, className, children, ...rest },
+  { selected, leading, count, size = 'md', ink, type = 'button', className, children, ...rest },
   ref,
 ) {
   const reduce = useReducedMotion();
   return (
     <button
       ref={ref}
+      // 默认 button：放在表单里时，输入框回车不能点到 chip 上（会悄悄移除作品）
+      type={type}
       aria-pressed={selected}
       className={cn(
         'group inline-flex shrink-0 items-center rounded-full font-medium whitespace-nowrap select-none',

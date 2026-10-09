@@ -15,7 +15,7 @@ const STEPS = [
  * 空库时的首次使用引导。左边一枚印章 + 一句话 + 主按钮，右边三步说明。
  * 刻意不做居中大标题 hero，保持和其他页面一样的左对齐节奏。
  *
- * 三种情况：还没加文件夹 / 加了但没扫描 / 正在扫描（顶部横幅同时显示进度）。
+ * 四种情况：还没加文件夹 / 加了但没扫描 / 文件夹全停用了 / 正在扫描（顶部横幅同时显示进度）。
  */
 export function Onboarding() {
   const navigate = useNavigate();
@@ -23,11 +23,14 @@ export function Onboarding() {
   const job = useRunningJob();
   const scan = useStartJob(() => '已开始扫描图库');
 
-  const hasRoots = (settings.data?.libraryRoots.length ?? 0) > 0;
+  const roots = settings.data?.libraryRoots ?? [];
+  const hasRoots = roots.length > 0;
+  // 全停用时扫描什么也不做，不能再让人点「立即扫描」
+  const allDisabled = hasRoots && roots.every((r) => !r.enabled);
   const scanning = job?.kind === 'scan' || job?.kind === 'thumbnail' || job?.kind === 'tag';
-  const stage = scanning ? 'scanning' : hasRoots ? 'ready' : 'empty';
+  const stage = scanning ? 'scanning' : allDisabled ? 'disabled' : hasRoots ? 'ready' : 'empty';
   // 当前进行到第几步，用朱色数字标出来
-  const current = stage === 'empty' ? 0 : 1;
+  const current = stage === 'empty' || stage === 'disabled' ? 0 : 1;
 
   const copy = {
     empty: {
@@ -39,6 +42,11 @@ export function Onboarding() {
       glyph: '扫',
       title: '文件夹已添加，还没有扫描',
       body: '扫描会生成缩略图并识别角色，第一次可能要几分钟。之后新存的图会自动入库。',
+    },
+    disabled: {
+      glyph: '停',
+      title: '图库文件夹都停用了',
+      body: '停用的文件夹不参与浏览、统计和扫描。到设置里重新启用，原来的图和整理结果都还在。',
     },
     scanning: {
       glyph: '待',
@@ -70,6 +78,10 @@ export function Onboarding() {
                 管理文件夹
               </Button>
             </>
+          ) : stage === 'disabled' ? (
+            <Button variant="primary" size="lg" onClick={() => navigate('/settings#library')}>
+              去启用
+            </Button>
           ) : stage === 'empty' ? (
             <>
               <Button

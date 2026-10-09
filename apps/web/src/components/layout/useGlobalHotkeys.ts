@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router';
-import { useHotkey } from '@/lib/hotkeys';
+import { isTypingTarget, useHotkey } from '@/lib/hotkeys';
 import { undo } from '@/lib/queries';
 import { useLightbox, useOverlays, usePrefs, useUndoStore } from '@/lib/stores';
 
@@ -10,7 +10,6 @@ import { useLightbox, useOverlays, usePrefs, useUndoStore } from '@/lib/stores';
  */
 export function useGlobalHotkeys() {
   const navigate = useNavigate();
-  const client = useQueryClient();
   const overlays = useOverlays();
   const lightboxOpen = useLightbox((s) => s.open);
   // 未识别页把数字键和 / 用于「采纳建议」和「搜索角色」，全局的跳页 / 命令面板要让路
@@ -24,10 +23,7 @@ export function useGlobalHotkeys() {
   useHotkey('mod+k', () => overlays.setCommandOpen(!overlays.commandOpen), { allowInInputs: true, enabled: !lightboxOpen });
   useHotkey('/', () => overlays.setCommandOpen(true), { enabled: pageKeys });
   useHotkey('shift+?', () => overlays.setHelpOpen(true), { enabled: !lightboxOpen });
-  useHotkey('mod+z', () => {
-    const top = useUndoStore.getState().entries[0];
-    if (top) void undo(top.token, client);
-  });
+  useUndoHotkey();
   useHotkey('b', () => usePrefs.getState().toggleBlurSensitive(), { enabled: !lightboxOpen && !onReader });
 
   // g 然后 数字 太复杂了，直接用数字键跳转
@@ -38,3 +34,23 @@ export function useGlobalHotkeys() {
   useHotkey('5', () => navigate('/duplicates'), { enabled: pageKeys });
   useHotkey('6', () => navigate('/annex'), { enabled: pageKeys });
 }
+
+/**
+ * Ctrl+Z 撤销最近一步。可撤销的 toast 上都写着这个键，所以 AppShell 之外的页面（/welcome）也要挂上。
+ * inEmptyInputs：焦点在空输入框里也撤销（/welcome 一进来就聚焦路径框）；框里有字时仍让给浏览器撤销打字。
+ */
+export function useUndoHotkey({ inEmptyInputs = false } = {}) {
+  const client = useQueryClient();
+  useHotkey(
+    'mod+z',
+    (e) => {
+      if (isTypingTarget(e.target) && !(inEmptyInputs && isEmptyField(e.target))) return;
+      e.preventDefault();
+      const top = useUndoStore.getState().entries[0];
+      if (top) void undo(top.token, client);
+    },
+    { allowInInputs: true, preventDefault: false },
+  );
+}
+
+const isEmptyField = (t: EventTarget | null) => (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) && t.value === '';

@@ -15,7 +15,16 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      '/api': { target: `http://127.0.0.1:${API_PORT}`, changeOrigin: false },
+      '/api': {
+        target: `http://127.0.0.1:${API_PORT}`,
+        changeOrigin: false,
+        // 后端重启时把已经在推送的响应（/api/events）也断掉。vite 默认只给还没发响应头的请求回 502，
+        // 正在推的 SSE 会一直挂着，EventSource 既不报错也不重连
+        configure: (proxy) =>
+          proxy.on('error', (_err, _req, res) => {
+            if ('headersSent' in res && res.headersSent) res.destroy();
+          }),
+      },
     },
   },
 });

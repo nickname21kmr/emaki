@@ -71,8 +71,8 @@ export function TriageBody({
 
   // ---------------------------------------------------------------- 快捷键
   // 多选时 J/K 仍然移动队列里的当前项，配合 X 就能纯键盘挑一批
-  useHotkey(['j', 'arrowright'], () => triage.next(), { enabled: on });
-  useHotkey(['k', 'arrowleft'], () => triage.prev(), { enabled: on });
+  useHotkey(['j', 'arrowright'], () => triage.next(), { enabled: on, repeat: true });
+  useHotkey(['k', 'arrowleft'], () => triage.prev(), { enabled: on, repeat: true });
   // 会改数据的键忽略按住不放的自动重复，免得一口气处理掉好几张
   useHotkey('e', (e) => !e.repeat && triage.exclude(), { enabled: on });
   useHotkey('o', (e) => !e.repeat && triage.markOriginal(), { enabled: on });

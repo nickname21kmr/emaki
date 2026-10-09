@@ -61,7 +61,8 @@ export function CollectionDetailPage() {
   const q = useCollection(id);
   if (q.isError) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />;
   if (!q.data) return <DetailSkeleton />;
-  return <Detail data={q.data} />;
+  // 按 id 重新挂载：在系列里跳来跳去时，弹窗、选择这些局部状态不带到下一本
+  return <Detail key={id} data={q.data} />;
 }
 
 function Detail({ data }: { data: GetCollectionResponse }) {
@@ -397,16 +398,33 @@ function RenameDialog({
   current: string | null;
   onSave: (title: string | null) => void;
 }) {
-  const [v, setV] = useState(current ?? '');
   return (
     <Dialog open={open} onOpenChange={onOpenChange} title="改名" description="只改显示的名字，不会改磁盘上的文件夹。">
+      {/* 输入框放在弹窗内容里：每次打开都从当前标题开始，取消掉的草稿不留 */}
+      <RenameForm current={current} onSave={onSave} onDone={() => onOpenChange(false)} />
+    </Dialog>
+  );
+}
+
+function RenameForm({
+  current,
+  onSave,
+  onDone,
+}: {
+  current: string | null;
+  onSave: (title: string | null) => void;
+  onDone: () => void;
+}) {
+  const [v, setV] = useState(current ?? '');
+  return (
+    <>
       <Input value={v} onChange={(e) => setV(e.target.value)} placeholder="书名" autoFocus />
       <DialogFooter>
         <Button
           variant="ghost"
           onClick={() => {
             onSave(null);
-            onOpenChange(false);
+            onDone();
           }}
         >
           恢复自动名称
@@ -416,13 +434,13 @@ function RenameDialog({
           disabled={!v.trim()}
           onClick={() => {
             onSave(v.trim());
-            onOpenChange(false);
+            onDone();
           }}
         >
           保存
         </Button>
       </DialogFooter>
-    </Dialog>
+    </>
   );
 }
 
@@ -439,10 +457,29 @@ function SeriesDialog({
   volumeNo: number | null;
   onSave: (seriesKey: string | null, volumeNo: number | null) => void;
 }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange} title="归入系列" description="系列名相同的几本会在书架上叠成一张卡。">
+      {/* 同上：每次打开都取这一本当前的系列和卷号，不沿用上一本的 */}
+      <SeriesForm seriesKey={seriesKey} volumeNo={volumeNo} onSave={onSave} onDone={() => onOpenChange(false)} />
+    </Dialog>
+  );
+}
+
+function SeriesForm({
+  seriesKey,
+  volumeNo,
+  onSave,
+  onDone,
+}: {
+  seriesKey: string | null;
+  volumeNo: number | null;
+  onSave: (seriesKey: string | null, volumeNo: number | null) => void;
+  onDone: () => void;
+}) {
   const [key, setKey] = useState(seriesKey ?? '');
   const [no, setNo] = useState(volumeNo === null ? '' : String(volumeNo));
   return (
-    <Dialog open={open} onOpenChange={onOpenChange} title="归入系列" description="系列名相同的几本会在书架上叠成一张卡。">
+    <>
       <div className="grid grid-cols-[minmax(0,1fr)_6rem] gap-3">
         <Input value={key} onChange={(e) => setKey(e.target.value)} placeholder="系列名" />
         <Input value={no} onChange={(e) => setNo(e.target.value.replace(/[^\d.]/g, ''))} placeholder="第几话 / 第几册" inputMode="decimal" />
@@ -453,7 +490,7 @@ function SeriesDialog({
           icon={<CalendarClock className="size-3.5" />}
           onClick={() => {
             onSave(null, null);
-            onOpenChange(false);
+            onDone();
           }}
         >
           恢复自动
@@ -463,13 +500,13 @@ function SeriesDialog({
           disabled={!key.trim()}
           onClick={() => {
             onSave(key.trim(), no ? Number(no) : null);
-            onOpenChange(false);
+            onDone();
           }}
         >
           保存
         </Button>
       </DialogFooter>
-    </Dialog>
+    </>
   );
 }
 
