@@ -18,6 +18,7 @@ import {
   type Work,
 } from '@emaki/shared';
 import type { SqliteContext } from './context.ts';
+import { readSettings } from './settings.ts';
 import { COVER_CANDIDATE_COLS, loadCoverTags, scoreCoverCandidates, type CharacterRec, type CoverCandidate, type Derived, type WorkRec } from './derived.ts';
 import { loadImageItems } from './hydrate.ts';
 import { ART_KINDS_SQL, IN_COMIC_I, DAY, LIVE_IMAGES, DEFAULT_DOMINANT, iso, paginateOffset, parseId, QUEUE, RECENT_DAYS, toId, UNRECOGNIZED, UNTAGGED_UNRECOGNIZED } from './sql.ts';
@@ -100,14 +101,18 @@ export class LibraryQueries {
           (SELECT MAX(last_scan_at) FROM library_roots WHERE removed_at IS NULL) AS last_scan_at,
           COALESCE(SUM(i.excluded_by IS NULL AND ${UNTAGGED_UNRECOGNIZED}), 0) AS untagged_count,
           MAX(CASE WHEN i.excluded_by IS NULL AND i.content_kind = 'illustration' THEN i.added_at END) AS last_added_at,
-          COALESCE(SUM(i.excluded_by IS NULL AND i.tagged_at IS NULL AND NOT ${IN_COMIC_I}), 0) AS pending_tag_count,
+          -- 和识别任务领图的条件一致（tagJob 的 BASE）：设置里跳过的相机照片永远不会识别，不算待识别
+          -- camera 不在 idx_images_live_stats 里：只在照片这一支读，免得每行回表
+          COALESCE(SUM(CASE WHEN i.excluded_by IS NULL AND i.tagged_at IS NULL AND NOT ${IN_COMIC_I}
+             THEN CASE WHEN @skipCamera = 1 AND i.content_kind = 'photo' THEN COALESCE(i.camera, '') = '' ELSE 1 END
+             ELSE 0 END), 0) AS pending_tag_count,
           COALESCE(SUM(i.excluded_by IS NULL AND ${ART_KINDS_SQL} AND ${UNRECOGNIZED} AND i.collection_id IS NULL
              AND i.shelved_at IS NOT NULL), 0) AS shelved_count,
           COALESCE(SUM(i.excluded_by IS NULL AND i.original_at IS NOT NULL), 0) AS original_count,
           ${kindSums}
          FROM images i INDEXED BY idx_images_live_stats WHERE ${LIVE_IMAGES}`,
       )
-      .get() as Record<`k_${ContentKind}`, number> & {
+      .get({ skipCamera: readSettings(db).tagger.skipCameraPhotos === false ? 0 : 1 }) as Record<`k_${ContentKind}`, number> & {
       image_count: number;
       excluded_count: number;
       unrecognized_count: number;
