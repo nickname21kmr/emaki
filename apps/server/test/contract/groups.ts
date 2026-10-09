@@ -191,6 +191,18 @@ export function settingsContract(make: ContractFactory, name: Name) {
       await expect(e.ds.updateLibraryRoot(root, { removeComicFolder: '未整理' })).rejects.toMatchObject({ statusCode: 404 });
     });
 
+    it('按漫画导入时清掉页上识别器认的角色，撤销后回来', async () => {
+      const e = env();
+      const root = e.id('root', 'root1');
+      const img = e.id('image', 'i1'); // 角色/，认出了 c1
+      const chars = async () => (await e.ds.getImage(img))!.characterIds.map((c) => e.back('character', c));
+      expect(await chars()).toEqual(['c1']);
+      const r = await e.ds.updateLibraryRoot(root, { comicFolder: { relDir: '角色', comicRating: 'general' } });
+      expect(await chars()).toEqual([]);
+      await e.ds.undo(r.undoToken!);
+      expect(await chars()).toEqual(['c1']);
+    });
+
     it('移除文件夹可撤销', async () => {
       const e = env();
       const r = await e.ds.removeLibraryRoot(e.id('root', 'root2'));

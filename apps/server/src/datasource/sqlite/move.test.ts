@@ -112,6 +112,34 @@ describe('移动到文件夹（真的移动文件）', () => {
     expect(rowOf(1)).toEqual({ root_id: 1, rel_path: 'x/a.png', file_name: 'a.png' });
   });
 
+  it('移进漫画文件夹：识别器认的角色去掉、标重新识别；撤销后放回，角色这期间被删掉的不报错、留着重新识别', async () => {
+    const db = ds.ctx.db;
+    db.prepare("INSERT INTO comic_folders (root_id, rel_dir, comic_rating, created_at) VALUES (1, 'C', 'general', 'x')").run();
+    db.prepare("INSERT INTO characters (id, name, source, created_at) VALUES (8, 'A', 'custom', 'x')").run();
+    db.prepare("INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (1, 8, 'tagger', 0.9, 'x')").run();
+    // 识别过、没有角色的页：撤销后不该被标重新识别
+    db.prepare('DELETE FROM image_characters WHERE image_id = 3').run();
+    const state = (id: number) => ({
+      kind: db.prepare('SELECT content_kind FROM images WHERE id = ?').pluck().get(id),
+      retag: db.prepare('SELECT retag FROM images WHERE id = ?').pluck().get(id),
+      chars: db.prepare('SELECT character_id || origin FROM image_characters WHERE image_id = ? ORDER BY 1').pluck().all(id),
+    });
+    const before = [state(1), state(3)];
+
+    const r = await ds.moveImages({ ids: ['1', '3'], rootId: '1', dir: 'C' });
+    expect(state(1)).toEqual({ kind: 'comic', retag: 1, chars: ['7manual'] });
+    expect(state(3)).toMatchObject({ kind: 'comic', retag: 0 });
+    await ds.undo(r.undoToken!);
+    expect([state(1), state(3)]).toEqual(before);
+
+    // 再移进去，期间角色 A 被删掉：撤销照常，那页留着重新识别
+    const r2 = await ds.moveImages({ ids: ['1'], rootId: '1', dir: 'C' });
+    db.prepare('DELETE FROM characters WHERE id = 8').run();
+    await ds.undo(r2.undoToken!);
+    expect(rowOf(1)).toEqual({ root_id: 1, rel_path: 'x/a.png', file_name: 'a.png' });
+    expect(state(1)).toEqual({ kind: before[0]!.kind, retag: 1, chars: ['7manual'] });
+  });
+
   it('停用的图库文件夹不能当目标', async () => {
     ds.ctx.db.prepare('UPDATE library_roots SET enabled = 0 WHERE id = 2').run();
     await expect(ds.moveImages({ ids: ['1'], rootId: '2', dir: '' })).rejects.toThrow('停用');

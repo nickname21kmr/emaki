@@ -72,8 +72,9 @@ import { Scanner } from '../../services/scan/Scanner.ts';
 import { ScanRequests } from '../../services/scan/ScanRequests.ts';
 import { backfillSources } from '../../services/source/backfill.ts';
 import { backfillClassification } from '../../services/classify/backfill.ts';
-import { syncRootModes } from '../../services/classify/rootMode.ts';
-import { ComicAreas } from '../../services/classify/comicAreas.ts';
+import { recordRootModeUndo, syncRootModes } from '../../services/classify/rootMode.ts';
+import type { UndoRecorder } from './undo.ts';
+import { ComicAreas, IN_COMIC } from '../../services/classify/comicAreas.ts';
 import { CollectionService, type CollectionsHook } from '../../services/collections/CollectionService.ts';
 import { shutdownTagger } from '../../services/tagger/client.ts';
 import { ARTIST_MODEL, artistPendingCount, createArtistJobRunner } from '../../services/tagger/artists.ts';
@@ -695,8 +696,8 @@ export class SqliteDataSource implements DataSource {
     const root = this.requireRoot(body.rootId);
     if (!root.enabled) throw new BadRequestError('这个图库文件夹停用了，先启用再移动');
     const dir = normalizeSubdir(body.dir);
-    const cols = `i.id, i.root_id, i.rel_path, i.file_name, i.collection_id, i.tagged_at, i.retag, r.path AS root_path`;
-    let rows: (MoveRow & { tagged_at: string | null; retag: number })[];
+    const cols = `i.id, i.root_id, i.rel_path, i.file_name, i.collection_id, i.tagged_at, i.retag, ${IN_COMIC('i')} AS in_comic, r.path AS root_path`;
+    let rows: (MoveRow & { tagged_at: string | null; retag: number; in_comic: number })[];
     if (body.characterId !== undefined) {
       const c = this.requireCharacterId(body.characterId);
       rows = this.ctx
@@ -716,13 +717,17 @@ export class SqliteDataSource implements DataSource {
     // 扫描、识别正在读这些文件时不能移（扫描会把移走的图当成丢失）
     const running = (await this.ctx.jobs.list()).filter((j) => j.status === 'running').map((j) => j.kind);
     if (running.includes('scan')) throw new ConflictError('正在扫描图库，等扫描结束再移动');
-    if (running.includes('tag') && rows.some((r) => r.tagged_at === null || r.retag)) {
+    if (running.includes('tag') && rows.some((r) => !r.in_comic && (r.tagged_at === null || r.retag))) {
       throw new ConflictError('正在识别，选中的图里有还没识别完的，等识别结束再移动');
     }
 
     const dest = { rootId: root.id, rootPath: root.path, dir };
     const out = moveImageFiles(this.ctx.db, rows, dest);
     const ids = out.moved.map((m) => m.id);
+    // 移进漫画文件夹会清掉识别器认的角色、移出会标重新识别：撤销时放回去
+    const json = JSON.stringify(ids);
+    const charSnap = this.ctx.db.prepare("SELECT * FROM image_characters WHERE origin = 'tagger' AND image_id IN (SELECT value FROM json_each(?))").all(json);
+    const retagSnap = this.ctx.db.prepare('SELECT id, retag FROM images WHERE id IN (SELECT value FROM json_each(?))').all(json);
     // 移进了被排除的文件夹：照规则排除；移进 / 移出按漫画导入的文件夹：类型、分级跟着文件夹
     if (ids.length)
       this.ctx.db.transaction(() => {
@@ -747,7 +752,19 @@ export class SqliteDataSource implements DataSource {
         throw new ConflictError('正在扫描图库，等扫描结束再撤销');
       }
       const back = moveBack(this.ctx.db, out.moved);
-      syncRootModes(this.ctx.db, ids);
+      this.ctx.db.transaction(() => {
+        // 角色这期间被删掉、合并掉的不插（外键会报错），这几页留着重新识别
+        const ins = this.ctx.db.prepare(
+          `INSERT OR IGNORE INTO image_characters (image_id, character_id, origin, score, added_at)
+           SELECT @image_id, @character_id, @origin, @score, @added_at WHERE EXISTS (SELECT 1 FROM characters WHERE id = @character_id)`,
+        );
+        const lost = new Set<number>();
+        for (const r of charSnap as { image_id: number }[]) if (!ins.run(r).changes) lost.add(r.image_id);
+        syncRootModes(this.ctx.db, ids);
+        // 重新识别的标记最后按移动前写回（同步可能刚标过）
+        const setRetag = this.ctx.db.prepare('UPDATE images SET retag = @retag WHERE id = @id');
+        for (const r of retagSnap as { id: number; retag: number }[]) setRetag.run({ id: r.id, retag: lost.has(r.id) ? 1 : r.retag });
+      })();
       this.ctx.touch();
       if (back.failed.length) throw new ConflictError(`移回了 ${back.restored} 张，${back.failed.length} 张没能移回（文件或位置已经变了）`);
     });
@@ -767,7 +784,7 @@ export class SqliteDataSource implements DataSource {
   async retagUnrecognized(): Promise<RetagResult> {
     this.unrecognized.markRetag();
     // 之前标过、还没跑完的也算：只要有等着重新识别的，就启动识别任务
-    const pending = this.ctx.stmt('SELECT COUNT(*) AS n FROM images WHERE retag = 1').get() as { n: number };
+    const pending = this.ctx.stmt(`SELECT COUNT(*) AS n FROM images i WHERE i.retag = 1 AND NOT ${IN_COMIC('i')}`).get() as { n: number };
     return { marked: pending.n, job: pending.n ? await this.startJob('tag') : null };
   }
 
@@ -958,7 +975,7 @@ export class SqliteDataSource implements DataSource {
       const disabled = activeChildren.filter((r) => !r.enabled).map((r) => `「${r.path}」`);
       const comics = activeChildren.filter((r) => r.content_mode === 'comic').map((r) => `「${r.path}」`);
       throw new NeedsConfirmError(
-        `这个文件夹包含图库里已有的${names}，合并成一个吗？原来的识别和整理结果都会保留。` +
+        `这个文件夹包含图库里已有的${names}，合并成一个吗？${mode === 'comic' ? '原来的整理结果都会保留；按漫画导入后，里面识别器认出的角色会去掉（手动加的留着），以后改回插画会重新识别。' : '原来的识别和整理结果都会保留。'}` +
           (disabled.length ? `其中${disabled.join('')}现在是停用的，合并后会重新显示。` : '') +
           (comics.length && mode !== 'comic' ? `${comics.join('')}按漫画导入的设置会保留（变成里面的漫画子文件夹）。` : ''),
       );
@@ -1008,8 +1025,9 @@ export class SqliteDataSource implements DataSource {
   }
 
   /** 按图库文件夹的设置重判这个文件夹里所有图的类型；按漫画导入的，没识别过、没手动改过分级的页用选的分级。在事务里调用 */
-  private applyRootMode(rootId: number, relDir?: string): number[] {
+  private applyRootMode(rootId: number, relDir?: string, u?: UndoRecorder): number[] {
     const ids = this.imagesUnder(rootId, relDir);
+    if (u) recordRootModeUndo(u, ids);
     if (ids.length) syncRootModes(this.ctx.db, ids);
     return ids;
   }
@@ -1046,7 +1064,7 @@ export class SqliteDataSource implements DataSource {
         db.prepare(
           'INSERT INTO comic_folders (root_id, rel_dir, comic_rating, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(root_id, rel_dir) DO UPDATE SET comic_rating = excluded.comic_rating',
         ).run(root.id, relDir, rating, iso(this.ctx.clock()));
-      this.applyRootMode(root.id, relDir);
+      this.applyRootMode(root.id, relDir, u);
       u.onUndo(() => {
         if (snap.length) this.restoreRootImages(root.id, snap, relDir);
         this.collectionsHook(null, 'all');
@@ -1101,7 +1119,7 @@ export class SqliteDataSource implements DataSource {
     const result = this.ctx.mutate((u) => {
       u.columns('library_roots', cols, [root.id]);
       db.prepare('UPDATE library_roots SET enabled = ?, content_mode = ?, comic_rating = ? WHERE id = ?').run(enabled, mode, rating, root.id);
-      if (touchesImages) this.applyRootMode(root.id);
+      if (touchesImages) this.applyRootMode(root.id, undefined, u);
       // 撤销时先由上面的 columns 恢复文件夹设置，再恢复图片、重算合集、同步监听、需要的话接着识别
       u.onUndo(() => {
         if (snap.length) this.restoreRootImages(root.id, snap);

@@ -6,6 +6,7 @@ import { makeTmpDir } from '../../../test/helpers/tmp.ts';
 import { sharp } from '../../services/image/sharpConfig.ts';
 import { relUnder } from './roots.ts';
 import { SqliteDataSource } from './SqliteDataSource.ts';
+import { syncRootModes } from '../../services/classify/rootMode.ts';
 
 it('relUnder', () => {
   expect(relUnder('D:/', 'D:/a/b')).toBe('a/b');
@@ -272,6 +273,51 @@ describe('按漫画导入', () => {
     await ds.updateLibraryRoot(rootId, { comicFolder: { relDir: 'Manga', comicRating: 'questionable' } });
     await ds.undo(inner.undoToken!);
     expect(db.prepare("SELECT DISTINCT content_kind || ' ' || rating FROM images").pluck().all()).toEqual(['comic questionable']);
+  });
+
+  it('改成漫画前识别过的页：识别器认的角色清掉并标重新识别、手动加的留着；都能撤销', async () => {
+    const R = path.join(dir, '收藏');
+    const old = new Date('2025-01-01');
+    for (const [rel, seed] of [['某漫画/v1/1.png', 1], ['某漫画/v1/2.png', 2]] as const) {
+      const p = path.join(R, rel);
+      mkdirSync(path.dirname(p), { recursive: true });
+      await sharp({ create: { width: 40 + seed, height: 60, channels: 3, background: { r: seed * 20, g: 80, b: 120 } } }).png().toFile(p);
+      utimesSync(p, old, old);
+    }
+    const rootPath = R.replace(/\\/g, '/');
+    await ds.addLibraryRoot({ path: rootPath });
+    await idle();
+    const db = ds.ctx.db;
+    // 两页都识别过：第一页被误认成 A（识别器），第二页用户手动加了 B
+    const [p1, p2] = db.prepare('SELECT id FROM images ORDER BY rel_path').pluck().all() as number[];
+    db.prepare("UPDATE images SET tagged_at = 'x', tagger_model = 'm'").run();
+    db.prepare("INSERT INTO characters (id, name, danbooru_tag, source, created_at) VALUES (901, 'A', 'a_(x)', 'danbooru', 'x'), (902, 'B', 'b_(x)', 'custom', 'x')").run();
+    db.prepare("INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, 901, 'tagger', 0.9, 'x'), (?, 902, 'manual', NULL, 'x')").run(p1, p2);
+    const links = () => db.prepare('SELECT image_id, character_id, origin FROM image_characters ORDER BY image_id').all();
+    const retag = () => db.prepare('SELECT retag FROM images ORDER BY rel_path').pluck().all();
+    const before = links();
+    const rootId = (await ds.getSettings()).libraryRoots[0]!.id;
+
+    const on = await ds.updateLibraryRoot(rootId, { comicFolder: { relDir: '某漫画', comicRating: 'general' } });
+    // 清掉角色的那页标重新识别（在漫画里识别任务不领，离开后才认），只剩手动角色的那页不用
+    expect(links()).toEqual([{ image_id: p2, character_id: 902, origin: 'manual' }]);
+    expect(retag()).toEqual([1, 0]);
+    expect((await ds.getStats()).pendingTagCount).toBe(0);
+    await ds.undo(on.undoToken!);
+    expect(links()).toEqual(before);
+    expect(retag()).toEqual([0, 0]);
+
+    // 再改成漫画，然后去掉：标记留着，识别任务会去重新认那一页
+    await ds.updateLibraryRoot(rootId, { comicFolder: { relDir: '某漫画', comicRating: 'general' } });
+    const off = await ds.updateLibraryRoot(rootId, { removeComicFolder: '某漫画' });
+    expect(retag()).toEqual([1, 0]);
+    await ds.undo(off.undoToken!);
+    expect(retag()).toEqual([1, 0]);
+
+    // 扫描结束后的全库检查也会清（升级前就改成漫画的库）
+    db.prepare("INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, 901, 'tagger', 0.9, 'x')").run(p1);
+    expect(syncRootModes(db)).toBeGreaterThan(0);
+    expect(links()).toEqual([{ image_id: p2, character_id: 902, origin: 'manual' }]);
   });
 
   it('添加后、扫描前改成漫画：扫描结束时按现在的设置判；漫画文件夹根目录直接放的页也成一本', async () => {

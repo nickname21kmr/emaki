@@ -1046,7 +1046,7 @@ export class MockDataSource implements DataSource {
     }
     if (!rows.length) throw new BadRequestError('没有可以移动的图');
     const used = new Set([...this.db.images.values()].filter((i) => i.libraryRootId === root.id).map((i) => i.relPath.toLowerCase()));
-    const before = rows.map((r) => ({ r, rootId: r.libraryRootId, relPath: r.relPath, fileName: r.fileName }));
+    const before = rows.map((r) => ({ r, rootId: r.libraryRootId, relPath: r.relPath, fileName: r.fileName, kind: r.kind, kindSource: r.kindSource, kindEvidence: r.kindEvidence, rating: r.rating, characterIds: r.characterIds }));
     let moved = 0;
     let inCollection = 0;
     let alreadyThere = 0;
@@ -1074,8 +1074,11 @@ export class MockDataSource implements DataSource {
     const notes = [alreadyThere && `${alreadyThere} 张本来就在这里`, inCollection && `合集里的 ${inCollection} 张没动`].filter(Boolean);
     const message = `已移动 ${moved} 张到 ${where}${notes.length ? `（${notes.join('；')}）` : ''}`;
     if (!moved) return done(message);
+    // 同 sqlite：移进 / 移出按漫画导入的文件夹，类型、分级跟着文件夹
+    this.syncComic(rows);
     return this.withUndo(message, () => {
-      for (const b of before) Object.assign(b.r, { libraryRootId: b.rootId, relPath: b.relPath, fileName: b.fileName });
+      for (const { r, ...b } of before)
+        Object.assign(r, { libraryRootId: b.rootId, relPath: b.relPath, fileName: b.fileName, kind: b.kind, kindSource: b.kindSource, kindEvidence: b.kindEvidence, rating: b.rating, characterIds: b.characterIds });
     });
   }
 
@@ -1601,7 +1604,7 @@ export class MockDataSource implements DataSource {
     if (children.length && !body.merge) {
       const disabled = children.filter((r) => !r.enabled).map((r) => `「${r.path}」`);
       throw new NeedsConfirmError(
-        `这个文件夹包含图库里已有的${children.map((r) => `「${r.path}」`).join('')}，合并成一个吗？原来的识别和整理结果都会保留。` +
+        `这个文件夹包含图库里已有的${children.map((r) => `「${r.path}」`).join('')}，合并成一个吗？${body.mode === 'comic' ? '原来的整理结果都会保留；按漫画导入后，里面识别器认出的角色会去掉（手动加的留着），以后改回插画会重新识别。' : '原来的识别和整理结果都会保留。'}` +
           (disabled.length ? `其中${disabled.join('')}现在是停用的，合并后会重新显示。` : ''),
       );
     }
@@ -1660,7 +1663,7 @@ export class MockDataSource implements DataSource {
     const ratingChanged = next.comicRating !== root.comicRating;
     if (next.enabled === root.enabled && !modeChanged && !ratingChanged) return done('没有变化');
     const rows = [...this.db.images.values()].filter((img) => img.libraryRootId === root.id);
-    const snap = rows.map((img) => ({ img, kind: img.kind, kindSource: img.kindSource, kindEvidence: img.kindEvidence, rating: img.rating }));
+    const snap = rows.map((img) => ({ img, kind: img.kind, kindSource: img.kindSource, kindEvidence: img.kindEvidence, rating: img.rating, characterIds: img.characterIds }));
     Object.assign(root, next);
     const touches = modeChanged || (ratingChanged && next.mode === 'comic');
     if (touches) this.applyRootMode(root);
@@ -1676,13 +1679,14 @@ export class MockDataSource implements DataSource {
           : `按漫画导入的分级改成了「${RATING_LABEL[next.comicRating]}」`;
     return this.withUndo(message, () => {
       Object.assign(root, before);
-      for (const s of snap) Object.assign(s.img, { kind: s.kind, kindSource: s.kindSource, kindEvidence: s.kindEvidence, rating: s.rating });
+      for (const s of snap) Object.assign(s.img, { kind: s.kind, kindSource: s.kindSource, kindEvidence: s.kindEvidence, rating: s.rating, characterIds: s.characterIds });
     });
   }
 
   /** 和 sqlite 的 applyRootMode 一样：按文件夹设置重判类型（手动改过的不动）；按漫画导入的，没识别过的页用选的分级 */
   private applyRootMode(root: LibraryRoot, relDir?: string): void {
     for (const img of this.imagesUnder(root.id, relDir)) {
+      this.dropComicCharacters(img);
       if (!img.kindManual) {
         const a = this.autoKindOf(img);
         img.kind = a.kind;
@@ -1697,6 +1701,7 @@ export class MockDataSource implements DataSource {
   /** 同 sqlite 的 syncRootModes：在不在漫画范围里和类型对不上的重判，范围里没识别过的页用范围的分级 */
   private syncComic(imgs: ImageRow[]): void {
     for (const img of imgs) {
+      this.dropComicCharacters(img);
       if (!img.kindManual && this.inComicRoot(img) !== (img.kindEvidence === COMIC_ROOT_EVIDENCE)) {
         const a = this.autoKindOf(img);
         Object.assign(img, { kind: a.kind, kindSource: a.source, kindEvidence: a.evidence });
@@ -1704,6 +1709,14 @@ export class MockDataSource implements DataSource {
       const area = comicAreaOf(this.db.settings.libraryRoots, img.libraryRootId, img.relPath);
       if (area && !img.tagged && !img.ratingManual) img.rating = area.rating;
     }
+  }
+
+  /**
+   * 同 sqlite：漫画范围里的页不挂识别器认的角色。mock 不记角色来源，全当识别器认的；
+   * 只在刚进范围（类型还没按漫画文件夹判）时清，之后手动加的留着
+   */
+  private dropComicCharacters(img: ImageRow): void {
+    if (img.characterIds.length && img.kindEvidence !== COMIC_ROOT_EVIDENCE && this.inComicRoot(img)) img.characterIds = [];
   }
 
   private imagesUnder(rootId: ID, relDir?: string): ImageRow[] {
@@ -1722,7 +1735,7 @@ export class MockDataSource implements DataSource {
       if (cur?.comicRating === rating) return done('没有变化');
     }
     const rows = this.imagesUnder(root.id, relDir);
-    const snap = rows.map((img) => ({ img, kind: img.kind, kindSource: img.kindSource, kindEvidence: img.kindEvidence, rating: img.rating }));
+    const snap = rows.map((img) => ({ img, kind: img.kind, kindSource: img.kindSource, kindEvidence: img.kindEvidence, rating: img.rating, characterIds: img.characterIds }));
     root.comicFolders = [...root.comicFolders.filter((x) => x !== cur), ...(rating === null ? [] : [{ relDir, comicRating: rating }])];
     this.applyRootMode(root, relDir);
     const where = `${root.path.replace(/\/+$/, '')}/${relDir}`;
@@ -1735,7 +1748,7 @@ export class MockDataSource implements DataSource {
     return this.withUndo(message, () => {
       // 只还原这一个子文件夹（同 sqlite：别的子文件夹可能是之后加的）
       root.comicFolders = [...root.comicFolders.filter((x) => x.relDir !== relDir), ...(cur ? [cur] : [])];
-      for (const x of snap) Object.assign(x.img, { kind: x.kind, kindSource: x.kindSource, kindEvidence: x.kindEvidence, rating: x.rating });
+      for (const x of snap) Object.assign(x.img, { kind: x.kind, kindSource: x.kindSource, kindEvidence: x.kindEvidence, rating: x.rating, characterIds: x.characterIds });
       this.syncComic(snap.map((x) => x.img));
     });
   }
