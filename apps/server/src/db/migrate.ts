@@ -3,7 +3,7 @@
  *
  * - `schema.sql` 是 v1；之后的改动放在 `migrations/NNN_名字.sql`，NNN 就是版本号（从 002 开始，连续不重复）。
  * - 用 `PRAGMA user_version` 记录当前版本；每个迁移在一个事务里执行，失败回滚并抛错（启动失败比数据损坏好）。
- * - 升级前（已有库）用 VACUUM INTO 备份一份。
+ * - 升级前（已有库）用 VACUUM INTO 备份一份；成功后只留这份和之前最近的一份，更早的 emaki.v<N>.bak.sqlite 删掉。
  * - 迁移文件第一行是 `-- @foreign-keys-off` 时，在事务外关掉外键（重建表时需要），跑完做 foreign_key_check。
  */
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
@@ -18,6 +18,34 @@ export interface Migration {
 }
 
 const FILE_RE = /^(\d{3})_.+\.sql$/;
+const BACKUP_RE = /^emaki\.v(\d+)\.bak\.sqlite$/;
+
+/**
+ * 每次升级都留一份几百 MB 的备份，不清理会越积越多。
+ * 版本号比 current 小的只留最新一份，其余删掉；比 current 新的（恢复过旧库时会有）不动。
+ * 尽力而为：删不掉只记一行日志，不影响迁移。
+ */
+function pruneBackups(dir: string, current: number, log?: (msg: string) => void): void {
+  let old: { file: string; version: number }[];
+  try {
+    old = readdirSync(dir)
+      .map((name) => ({ file: path.join(dir, name), version: Number(BACKUP_RE.exec(name)?.[1] ?? NaN) }))
+      .filter((b) => b.version < current) // 不匹配的是 NaN，比较结果为 false
+      .sort((a, b) => b.version - a.version)
+      .slice(1); // 留之前最近的一份
+  } catch (e) {
+    log?.(`清理旧备份失败：${(e as Error).message}`);
+    return;
+  }
+  for (const b of old) {
+    try {
+      rmSync(b.file, { force: true });
+      log?.(`已删除旧备份：${b.file}`);
+    } catch (e) {
+      log?.(`删除旧备份失败：${b.file}（${(e as Error).message}）`);
+    }
+  }
+}
 
 export function loadMigrations(dir = import.meta.dirname): Migration[] {
   const list: Migration[] = [];
@@ -68,6 +96,7 @@ export function migrate(
     // VACUUM 不能在事务里执行
     db.exec(`VACUUM INTO '${backup.replace(/\\/g, '/').replace(/'/g, "''")}'`);
     opts.log?.(`已备份数据库：${backup}`);
+    pruneBackups(opts.backupDir, current, opts.log);
   }
 
   for (const m of pending) {

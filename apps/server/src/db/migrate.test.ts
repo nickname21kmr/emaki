@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase, type Db } from './connection.ts';
@@ -6,6 +6,13 @@ import { makeTmpDir } from '../../test/helpers/tmp.ts';
 import { loadMigrations, migrate } from './migrate.ts';
 
 const latest = loadMigrations().at(-1)!.version;
+
+/** 把 v1..v<upTo> 的迁移复制到 dir，用来让库停在旧版本或在后面追加迁移 */
+function copyMigrations(dir: string, upTo = latest): void {
+  copyFileSync(path.join(import.meta.dirname, 'schema.sql'), path.join(dir, 'schema.sql'));
+  mkdirSync(path.join(dir, 'migrations'));
+  for (const m of loadMigrations().slice(1, upTo)) writeFileSync(path.join(dir, 'migrations', m.name), m.sql);
+}
 
 describe('migrate', () => {
   let db: Db;
@@ -35,10 +42,7 @@ describe('migrate', () => {
 
   it('坏迁移整体回滚，user_version 不变', () => {
     // 复制一份迁移目录，追加一个会失败的迁移
-    const src = path.join(import.meta.dirname);
-    copyFileSync(path.join(src, 'schema.sql'), path.join(dir, 'schema.sql'));
-    mkdirSync(path.join(dir, 'migrations'));
-    for (const m of loadMigrations().slice(1)) writeFileSync(path.join(dir, 'migrations', m.name), m.sql);
+    copyMigrations(dir);
     const bad = String(latest + 1).padStart(3, '0');
     writeFileSync(path.join(dir, 'migrations', `${bad}_bad.sql`), 'CREATE TABLE ok_table (x);\nSELECT * FROM no_such_table;');
     migrate(db);
@@ -51,5 +55,81 @@ describe('migrate', () => {
     migrate(db);
     db.pragma('user_version = 99');
     expect(() => migrate(db)).toThrow(/比程序支持的/);
+  });
+});
+
+describe('升级前备份', () => {
+  let db: Db;
+  let dir: string;
+  let dataDir: string;
+  let migDir: string;
+  let logs: string[];
+  const bak = (v: number) => `emaki.v${v}.bak.sqlite`;
+  const others = [
+    'emaki.before-merge.bak.sqlite',
+    'emaki.before-restore.bak.sqlite',
+    'emaki.sqlite',
+    'emaki.sqlite-shm',
+    'emaki.sqlite-wal',
+    'emaki.v10.bak.sqlite-wal',
+  ];
+
+  beforeEach(() => {
+    db = openDatabase(':memory:');
+    dir = makeTmpDir('migrate-bak');
+    dataDir = path.join(dir, 'data');
+    migDir = path.join(dir, 'mig');
+    mkdirSync(dataDir);
+    mkdirSync(migDir);
+    for (let v = 10; v <= 16; v++) writeFileSync(path.join(dataDir, bak(v)), 'old');
+    for (const f of others) writeFileSync(path.join(dataDir, f), 'keep');
+    logs = [];
+  });
+  afterEach(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const run = (o: { dir?: string } = {}) => migrate(db, { ...o, backupDir: dataDir, log: (m) => logs.push(m) });
+
+  it('只留刚做的和之前最近的一份，别的文件不动', () => {
+    expect(latest).toBeGreaterThan(16);
+    migrate(db);
+    copyMigrations(migDir);
+    const next = String(latest + 1).padStart(3, '0');
+    writeFileSync(path.join(migDir, 'migrations', `${next}_probe.sql`), 'CREATE TABLE probe (x);');
+
+    expect(run({ dir: migDir })).toEqual({ from: latest, to: latest + 1 });
+    expect(readdirSync(dataDir).sort()).toEqual([...others, bak(16), bak(latest)].sort());
+    // 新备份是真的库，不是占位文件
+    const copy = openDatabase(path.join(dataDir, bak(latest)));
+    expect(copy.pragma('user_version', { simple: true })).toBe(latest);
+    copy.close();
+    for (let v = 10; v <= 15; v++) expect(logs.some((m) => m.includes('已删除旧备份') && m.includes(bak(v)))).toBe(true);
+  });
+
+  it('比当前版本新的备份不动（恢复过旧库）', () => {
+    copyMigrations(migDir, 12);
+    migrate(db, { dir: migDir });
+    run();
+    expect(readdirSync(dataDir).sort()).toEqual([...others, bak(11), bak(12), bak(13), bak(14), bak(15), bak(16)].sort());
+  });
+
+  it('删不掉不影响迁移', () => {
+    // 同名目录让 rmSync 报错
+    rmSync(path.join(dataDir, bak(10)));
+    mkdirSync(path.join(dataDir, bak(10)));
+    writeFileSync(path.join(dataDir, bak(10), 'x'), 'x');
+    copyMigrations(migDir, 12);
+    migrate(db, { dir: migDir });
+
+    expect(run()).toEqual({ from: 12, to: latest });
+    expect(existsSync(path.join(dataDir, bak(10), 'x'))).toBe(true);
+    expect(logs.some((m) => m.includes('删除旧备份失败'))).toBe(true);
+  });
+
+  it('没有待执行的迁移时不备份也不清理', () => {
+    migrate(db);
+    run();
+    expect(readdirSync(dataDir).sort()).toEqual([...others, ...[10, 11, 12, 13, 14, 15, 16].map(bak)].sort());
   });
 });
