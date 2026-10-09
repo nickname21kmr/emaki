@@ -153,4 +153,98 @@ describe('Scanner', () => {
     expect((await scan()).errors).toBe(0);
     expect(db.prepare('SELECT count(*) FROM scan_errors').pluck().get()).toBe(1);
   });
+
+  // 遍历时起点目录读不了（EPERM）
+  const denied: typeof walkImages = async function* (_rootPath, o) {
+    o?.onDirError?.(o.startRel ?? '', Object.assign(new Error('EPERM'), { code: 'EPERM' }));
+    yield* [];
+  };
+  const scanDenied = () => new Scanner({ db, bus: new EventBus(), dataDir: data, requests, settleMs: 0, walk: denied }).scan(ctx());
+  const dirty = (...dirs: string[]) => {
+    for (const relDir of dirs) requests.addDirty({ rootId: 1, relDir, recursive: true });
+  };
+
+  it('运行中整个文件夹改名（监听报上旧名和新名）：按移动处理，id 不变', async () => {
+    await scan();
+    const ids = [row('one.png')!.id, row('two.png')!.id];
+    await rename(path.join(root, 'a'), path.join(root, 'c'));
+    dirty('a', 'c');
+    expect(await scan()).toMatchObject({ added: 0, moved: 2, missing: 0 });
+    expect([row('one.png'), row('two.png')]).toMatchObject([
+      { id: ids[0], rel_path: 'c/one.png', missing: 0 },
+      { id: ids[1], rel_path: 'c/two.png', missing: 0 },
+    ]);
+  });
+
+  it('运行中整个文件夹被删除：下面的行标丢失；读不了（不是不在了）的照样不标', async () => {
+    await scan();
+    dirty('a');
+    expect((await scanDenied()).missing).toBe(0);
+    await rm(path.join(root, 'a'), { recursive: true });
+    dirty('a');
+    expect((await scan()).missing).toBe(2);
+    expect([row('one.png')?.missing, row('two.png')?.missing, row('three.png')?.missing]).toEqual([1, 1, 0]);
+  });
+
+  it('文件夹改成 . 开头藏起来（监听报上旧名和新名）：里面的图不入库，原来的行标丢失', async () => {
+    await scan();
+    await rename(path.join(root, 'a'), path.join(root, '.a'));
+    dirty('a', '.a');
+    expect(await scan()).toMatchObject({ added: 0, moved: 0, missing: 2 });
+    expect(db.prepare("SELECT count(*) FROM images WHERE rel_path GLOB '.a/*'").pluck().get()).toBe(0);
+  });
+
+  const win = it.runIf(process.platform === 'win32');
+
+  win('Windows：文件夹只改了大小写（a → A）：按移动处理，不产生重复行，之后全量扫描也没有变化', async () => {
+    await scan();
+    const ids = [row('one.png')!.id, row('two.png')!.id];
+    await rename(path.join(root, 'a'), path.join(root, 'A'));
+    dirty('a', 'A');
+    expect(await scan()).toMatchObject({ added: 0, moved: 2, missing: 0 });
+    expect([row('one.png'), row('two.png')]).toMatchObject([
+      { id: ids[0], rel_path: 'A/one.png', missing: 0 },
+      { id: ids[1], rel_path: 'A/two.png', missing: 0 },
+    ]);
+    expect(await scan()).toMatchObject({ added: 0, updated: 0, moved: 0, missing: 0 });
+    expect(db.prepare('SELECT count(*) FROM images').pluck().get()).toBe(3);
+  });
+
+  // SQLite 的 NOCASE 只认 ASCII，Ä/ä 这种以前读库时读不到旧写法的行，会另外入库，全量扫描再把带收藏的原行标丢失
+  win('Windows：非 ASCII 字母只改大小写（Äpfel → äpfel）：同样按移动处理，收藏还在', async () => {
+    await rename(path.join(root, 'a'), path.join(root, 'Äpfel'));
+    await scan();
+    db.prepare("UPDATE images SET favorite = 1 WHERE rel_path GLOB 'Äpfel/*'").run();
+    const ids = [row('one.png')!.id, row('two.png')!.id];
+    await rename(path.join(root, 'Äpfel'), path.join(root, 'äpfel'));
+    dirty('Äpfel', 'äpfel');
+    expect(await scan()).toMatchObject({ added: 0, moved: 2, missing: 0 });
+    expect(await scan()).toMatchObject({ added: 0, updated: 0, moved: 0, missing: 0 });
+    expect(db.prepare('SELECT id, rel_path, missing, favorite FROM images WHERE file_name IN (?, ?) ORDER BY file_name').all('one.png', 'two.png')).toEqual([
+      { id: ids[0], rel_path: 'äpfel/one.png', missing: 0, favorite: 1 },
+      { id: ids[1], rel_path: 'äpfel/two.png', missing: 0, favorite: 1 },
+    ]);
+    expect(db.prepare('SELECT count(*) FROM images').pluck().get()).toBe(3);
+  });
+
+  win('Windows：以前留下的大小写重复行：全量扫描把旧写法的那行标丢失', async () => {
+    await scan();
+    await rename(path.join(root, 'a'), path.join(root, 'A'));
+    // 修复前的增量扫描会按新写法另外入库一份
+    db.prepare(
+      `INSERT INTO images (root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
+       SELECT root_id, 'A/' || file_name, file_name, width, height, bytes, format, sha256, added_at, modified_at FROM images WHERE rel_path GLOB 'a/*'`,
+    ).run();
+    const old = db.prepare("SELECT id FROM images WHERE rel_path GLOB 'a/*' ORDER BY id").pluck().all();
+    expect((await scan()).missing).toBe(2);
+    expect(db.prepare('SELECT id FROM images WHERE missing = 1 ORDER BY id').pluck().all()).toEqual(old);
+  });
+
+  win('Windows：旧写法的行所在的目录读不了：不标丢失', async () => {
+    await scan();
+    await rename(path.join(root, 'a'), path.join(root, 'A'));
+    dirty('A');
+    expect((await scanDenied()).missing).toBe(0);
+    expect([row('one.png')?.missing, row('two.png')?.missing]).toEqual([0, 0]);
+  });
 });

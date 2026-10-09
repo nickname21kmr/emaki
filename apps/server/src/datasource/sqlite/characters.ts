@@ -29,6 +29,8 @@ export function insertDanbooruCharacter(
     }
     u.inserted('characters', r.id);
     u.sql("DELETE FROM aliases WHERE owner_type = 'character' AND owner_id = ?", [r.id]);
+    // 同 create：合并掉以后编号可能被新角色拿走，按建立时间认是不是原来那个
+    u.guard('SELECT 1 FROM characters WHERE id = ? AND created_at <> ?', [r.id, opts.now], `无法撤销：新建的角色 ${tag} 已经合并掉了，原来的编号给了之后新建的角色`);
   }
   return { id: r.id, created: r.created };
 }
@@ -123,6 +125,9 @@ export class CharacterMutations {
       );
       u.inserted('characters', id);
       u.sql("DELETE FROM aliases WHERE owner_type = 'character' AND owner_id = ?", [id]); // aliases 没有外键，撤销时手动删
+      // id 不是 AUTOINCREMENT：这个角色被合并掉、编号又给了识别器新建的角色时，撤销会把新角色删掉。
+      // created_at 建了就不改，对不上就整个拒绝（最后记录，最先检查）
+      u.guard('SELECT 1 FROM characters WHERE id = ? AND created_at <> ?', [id, now], `无法撤销：「${name}」已经合并掉了，原来的编号给了之后新建的角色`);
       this.writeCharacterWorks(id, workIds);
       this.writeUserAliases(id, normalizeAliases(body.aliases));
       u.onUndo(() => recomputeCustomMatches(this.db, this.danbooru(), [id]));
@@ -195,18 +200,40 @@ export class CharacterMutations {
     const p = { from: from.id, to: to.id };
 
     const result = this.ctx.mutate((u) => {
+      // 目标这边只记合并搬过去的行：撤销时只删这些，合并之后识别器等给目标新加的关联、别名都留着
+      const list = (sql: string, ...args: unknown[]) => JSON.stringify(this.db.prepare(sql).pluck().all(...args));
+      const movedImages = list(
+        'SELECT image_id FROM image_characters WHERE character_id = @from AND image_id NOT IN (SELECT image_id FROM image_characters WHERE character_id = @to)',
+        p,
+      );
+      const movedCollections = list(
+        'SELECT collection_id FROM collection_characters WHERE character_id = @from AND collection_id NOT IN (SELECT collection_id FROM collection_characters WHERE character_id = @to)',
+        p,
+      );
+      const newAliases = list(
+        `SELECT alias FROM (SELECT @name AS alias UNION SELECT alias FROM aliases WHERE owner_type = 'character' AND owner_id = @from)
+         WHERE alias NOT IN (SELECT alias FROM aliases WHERE owner_type = 'character' AND owner_id = @to)`,
+        { ...p, name: from.name },
+      );
+      const redirected = list('SELECT tag FROM danbooru_tag_redirects WHERE character_id = ?', from.id);
+
       // 严格按此顺序记录（撤销逆序：先还原目标的标签，再插回被合并的角色，再恢复各子表）
-      u.set('image_characters', 'character_id = ?', [to.id]);
+      u.sql('DELETE FROM image_characters WHERE character_id = ? AND image_id IN (SELECT value FROM json_each(?))', [to.id, movedImages]);
       u.set('image_characters', 'character_id = ?', [from.id]);
       // 合集的整本关联（T38b，RV-C-6）：必须在 characters 之前记录，撤销时 characters 先插回，外键才不失败
-      u.set('collection_characters', 'character_id = ?', [to.id]);
+      u.sql('DELETE FROM collection_characters WHERE character_id = ? AND collection_id IN (SELECT value FROM json_each(?))', [to.id, movedCollections]);
       u.set('collection_characters', 'character_id = ?', [from.id]);
-      u.set('aliases', "owner_type = 'character' AND owner_id IN (?, ?)", [from.id, to.id]);
+      u.sql("DELETE FROM aliases WHERE owner_type = 'character' AND owner_id = ? AND alias IN (SELECT value FROM json_each(?))", [to.id, newAliases]);
+      u.set('aliases', "owner_type = 'character' AND owner_id = ?", [from.id]);
       u.set('character_works', 'character_id = ?', [from.id]);
-      u.set('danbooru_tag_redirects', 'character_id IN (?, ?)', [from.id, to.id]);
+      u.sql('UPDATE danbooru_tag_redirects SET character_id = ? WHERE character_id = ? AND tag IN (SELECT value FROM json_each(?))', [from.id, to.id, redirected]);
+      if (from.danbooru_tag && to.danbooru_tag) u.set('danbooru_tag_redirects', 'tag = ?', [from.danbooru_tag]);
       u.set('custom_character_matches', 'character_id IN (?, ?) OR existing_character_id IN (?, ?)', [from.id, to.id, from.id, to.id]);
       u.set('characters', 'id = ?', [from.id]);
-      u.columns('characters', ['danbooru_tag', 'source'], [to.id]); // 必须在上一行之后，避免撤销时 UNIQUE 冲突
+      // 必须在上一行之后，避免撤销时 UNIQUE 冲突；目标的标签之后又改过就不动
+      if (from.danbooru_tag && !to.danbooru_tag) {
+        u.sql('UPDATE characters SET danbooru_tag = NULL, source = ? WHERE id = ? AND danbooru_tag = ?', [to.source, to.id, from.danbooru_tag]);
+      }
 
       // 1 关联搬家（目标已有的保持目标自己的）
       this.db
@@ -247,6 +274,8 @@ export class CharacterMutations {
       this.db.prepare("DELETE FROM aliases WHERE owner_type = 'character' AND owner_id = ?").run(from.id);
       // 5 删除（级联 image_characters / character_works / custom_character_matches）
       this.db.prepare('DELETE FROM characters WHERE id = ?').run(from.id);
+      // id 不是 AUTOINCREMENT：删掉的是最大 id 时，识别器之后新建的角色会拿到它。撤销时最先查，被占了就整个拒绝，免得删掉新角色
+      u.guard('SELECT 1 FROM characters WHERE id = ?', [from.id], `无法撤销：「${from.name}」原来的编号已经给了之后新建的角色`);
       u.onUndo(() => recomputeCustomMatches(this.db, this.danbooru(), [from.id, to.id]));
       return { message: `已把「${from.name}」合并进「${to.name}」（${n} 张）` };
     });

@@ -91,6 +91,20 @@ describe('UndoRecorder', () => {
     expect(calls).toEqual(['b', 'a']);
   });
 
+  it('onUndoLast 等所有 onUndo 跑完再按记录顺序执行', async () => {
+    const calls: string[] = [];
+    const u = new UndoRecorder(db);
+    u.onUndoLast(() => void calls.push('last1'));
+    u.onUndo(() => void calls.push('a'));
+    u.onUndoLast(() => void calls.push('last2'));
+    u.onUndo(() => void calls.push('b'));
+    await u.build()();
+    expect(calls).toEqual(['b', 'a', 'last1', 'last2']);
+    const only = new UndoRecorder(db);
+    only.onUndoLast(() => {});
+    expect(only.isEmpty).toBe(false);
+  });
+
   it('撤销时约束冲突 → ConflictError，库保持撤销前状态', async () => {
     const revert = act(db, (u) => {
       u.set('image_characters', 'image_id = ?', [1]);

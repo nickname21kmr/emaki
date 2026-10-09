@@ -1,5 +1,5 @@
 import type { ImageSort, ListImagesQuery, Rating } from '@emaki/shared';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { openDatabase, type Db } from '../../../db/connection.ts';
 import { migrate } from '../../../db/migrate.ts';
 import { listImages } from './listImages.ts';
@@ -230,4 +230,51 @@ it('按标签筛（画面、自定义画面）只看识别过的图：文件内�
   expect(ids({ tagsNone: ['comic'] })).toEqual(['1']);
   expect(listImages(d, { tagsAll: ['thighhighs'] }).total).toBe(1);
   expect(ids({ theme: 'legs' })).toEqual(['1']);
+});
+
+describe('按角色翻页', () => {
+  it.each<[string, ListImagesQuery]>([
+    ['角色 + 收藏', { characterId: '1', favorite: true }],
+    ['角色 + 排除', { characterId: '3', status: 'excluded' }],
+    ['角色 + 作品', { characterId: '1', workId: '1' }],
+    ['角色 + 标签搜索', { characterId: '2', q: 'blue' }],
+    ['角色 + 文件名升序', { characterId: '3', sort: 'fileName', order: 'asc' }],
+  ])('%s：翻完所有页和 mock 规则一致', (_name, q) => {
+    const want = expected(q).map((x) => x.id);
+    const got = pageAll(q);
+    expect([...got].sort((a, b) => a - b)).toEqual([...want].sort((a, b) => a - b));
+    expect(listImages(db, q).total).toBe(want.length);
+  });
+
+  it('翻页查询先按角色取图（idx_ic_character_image），不沿排序索引逐张探测全库', () => {
+    // 计划看统计信息：造一个两万张、这个角色只有 20 张的库再 ANALYZE，比例接近真实库
+    const d = openDatabase(':memory:');
+    migrate(d);
+    d.exec(`INSERT INTO library_roots (id, path, enabled) VALUES (1, 'D:/a', 1);
+      INSERT INTO characters (id, name, source, created_at) VALUES (1, 'A', 'custom', 'x'), (2, 'B', 'custom', 'x');`);
+    const img = d.prepare(`INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
+      VALUES (?, 1, ?, 'a.png', 1, 1, 1, 'png', ?, ?, 'x')`);
+    const ic = d.prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (?, ?, 'tagger', 'x')");
+    d.transaction(() => {
+      for (let id = 1; id <= 20_000; id++) {
+        img.run(id, `${id}.png`, `s${id}`, new Date(Date.UTC(2026, 0, 1) + id * 60_000).toISOString());
+        if (id % 1000 === 0) ic.run(id, 1);
+        else if (id % 3 === 0) ic.run(id, 2);
+      }
+    })();
+    d.exec('ANALYZE');
+    const sqls: string[] = [];
+    const prepare = d.prepare.bind(d);
+    const spy = vi.spyOn(d, 'prepare').mockImplementation(((sql: string) => {
+      sqls.push(sql);
+      return prepare(sql);
+    }) as typeof d.prepare);
+    const page = listImages(d, { characterId: '1', limit: 5 });
+    spy.mockRestore();
+    expect(page.items.map((i) => i.id)).toEqual(['20000', '19000', '18000', '17000', '16000']);
+    const sql = sqls.find((s) => s.includes('LIMIT @lim'))!;
+    const plan = (d.prepare(`EXPLAIN QUERY PLAN ${sql}`).all({ cid: 1, lim: 6 }) as { detail: string }[]).map((r) => r.detail).join('\n');
+    expect(plan).toContain('idx_ic_character_image');
+    expect(plan).not.toMatch(/SCAN i\b/);
+  });
 });

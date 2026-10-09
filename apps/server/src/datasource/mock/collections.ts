@@ -275,7 +275,9 @@ export class MockCollections {
 
   private requireActive(id: ID): CollectionRow {
     const row = this.d.db.collections.get(id);
-    if (!row || row.state !== 'active') throw new NotFoundError('合集');
+    // 同 sqlite：文件夹停用、移除期间当作不存在
+    const root = row && this.d.db.settings.libraryRoots.find((r) => r.id === row.rootId);
+    if (!row || row.state !== 'active' || !root?.enabled) throw new NotFoundError('合集');
     return row;
   }
 

@@ -6,6 +6,7 @@
  */
 import { readdir } from 'node:fs/promises';
 import type { Db } from '../../db/connection.ts';
+import { toAbs } from '../../services/fs/paths.ts';
 
 export interface ChildRoot {
   id: number;
@@ -21,16 +22,21 @@ export function relUnder(parent: string, child: string): string {
 
 /**
  * 手输的子文件夹路径换成磁盘上的大小写：Windows 找文件不分大小写，但图片的 rel_path 是按磁盘上的名字记的，
- * 漫画子文件夹按前缀比较时要一致（'x/manga' 对不上 'X/Manga/1.jpg'）
+ * 漫画子文件夹按前缀比较时要一致（'x/manga' 对不上 'X/Manga/1.jpg'）。
+ * 读不了目录、找不到的段原样保留。cache：一次要换很多路径时（扫描器），同一个目录只读一次
  */
-export async function diskCaseRel(rootPath: string, rel: string): Promise<string> {
-  let cur = rootPath.replace(/\/+$/, '');
+export async function diskCaseRel(rootPath: string, rel: string, cache?: Map<string, Promise<string[]>>): Promise<string> {
   const out: string[] = [];
   for (const seg of rel.split('/').filter(Boolean)) {
-    const names = await readdir(cur).catch(() => [] as string[]);
-    const hit = names.find((n) => n === seg) ?? names.find((n) => n.toLowerCase() === seg.toLowerCase()) ?? seg;
-    out.push(hit);
-    cur = `${cur}/${hit}`;
+    // 用 toAbs 拼：盘符根 'D:/' 去掉斜杠变成 'D:'，读到的是 D 盘的当前目录
+    const dir = toAbs(rootPath, out.join('/'));
+    let names = cache?.get(dir);
+    if (!names) {
+      names = readdir(dir).catch(() => [] as string[]);
+      cache?.set(dir, names);
+    }
+    const list = await names;
+    out.push(list.find((n) => n === seg) ?? list.find((n) => n.toLowerCase() === seg.toLowerCase()) ?? seg);
   }
   return out.join('/');
 }
@@ -72,5 +78,45 @@ export function mergeChildRoots(db: Db, parentId: number, parentPath: string, ch
     .filter((x): x is string => x !== null)
     .sort()[0];
   if (first) db.prepare('UPDATE library_roots SET imported_at = MIN(COALESCE(imported_at, @first), @first) WHERE id = @id').run({ id: parentId, first });
+  return { images };
+}
+
+/**
+ * 反过来：在移除过的父文件夹里面添加子文件夹时，把父文件夹在这个子文件夹下的旧记录接管过来（去掉前缀）。
+ * 图片 id 不变，角色、收藏、合集、重复组都找回来；以后再加回父文件夹，合并回去也不会和新记录冲突。
+ * parents 由内往外排，prefix 用磁盘上的大小写；同一个相对路径只接管第一份。必须在事务内调用。
+ */
+export function adoptFromRemovedParents(db: Db, rootId: number, parents: (Pick<ChildRoot, 'id' | 'imported_at'> & { prefix: string })[]): { images: number } {
+  let images = 0;
+  let first: string | null = null;
+  for (const a of parents) {
+    const p = { root: rootId, from: a.id, prefix: a.prefix };
+    for (const [table, col] of [
+      ['images', 'rel_path'],
+      ['scan_errors', 'rel_path'],
+      ['collections', 'rel_dir'],
+      ['comic_folders', 'rel_dir'],
+    ] as const) {
+      // 合集还要接管正好在这个子文件夹上的那本（单独加回一本书的文件夹）：新文件夹里它在 ''，同 mergeChildRoots 反过来。
+      // comic_folders 不用：加回时选的导入方式本来就管整个文件夹
+      const withDir = table === 'collections';
+      const rest = withDir
+        ? `CASE WHEN rel_dir = @prefix THEN '' ELSE substr(rel_dir, length(@prefix) + 2) END`
+        : `substr(${col}, length(@prefix) + 2)`;
+      const match = `substr(${col}, 1, length(@prefix) + 1) = @prefix || '/'`;
+      const n = db
+        .prepare(
+          `UPDATE ${table} SET root_id = @root, ${col} = ${rest}
+           WHERE root_id = @from AND ${withDir ? `(rel_dir = @prefix OR ${match})` : match}
+             AND ${rest} NOT IN (SELECT ${col} FROM ${table} WHERE root_id = @root)`,
+        )
+        .run(p).changes;
+      if (table !== 'images' || !n) continue;
+      images += n;
+      if (a.imported_at && (!first || a.imported_at < first)) first = a.imported_at;
+    }
+  }
+  // 同 mergeChildRoots：接管回来的图不算新导入
+  if (first) db.prepare('UPDATE library_roots SET imported_at = MIN(COALESCE(imported_at, @first), @first) WHERE id = @id').run({ id: rootId, first });
   return { images };
 }

@@ -10,8 +10,10 @@ const DRIFT = 1.5;
  * 首次导入后的库（几千张时采的统计，现在 8 万张）会一直走错计划：首页先把全表排序一遍，慢 1000 倍（T22 实测）。
  * 这里在行数偏差超过 1.5 倍时完整地重新 ANALYZE（8 万张图、240 万条标签约 1.2 秒，只在行数大变时跑）。
  * 不用 analysis_limit 限量采样：实测会把「excluded_by IS NULL」估成两百行（实际八万），首页又去走排除索引、整表排序。返回是否重新统计了。
+ * skipImageTags：不精确数 image_tags（330 万行，冷启动时要把 70 MB 的主键索引整个读一遍，2 秒多）。
+ * 启动时用：它只随识别任务变多，识别跑完和每小时那次会照常数
  */
-export function refreshPlannerStats(db: Db, opts: { force?: boolean } = {}): boolean {
+export function refreshPlannerStats(db: Db, opts: { force?: boolean; skipImageTags?: boolean } = {}): boolean {
   const recorded = new Map<string, number>();
   try {
     for (const r of db.prepare('SELECT tbl, stat FROM sqlite_stat1 WHERE idx IS NOT NULL').all() as { tbl: string; stat: string }[]) {
@@ -20,9 +22,10 @@ export function refreshPlannerStats(db: Db, opts: { force?: boolean } = {}): boo
   } catch {
     // 还没有 sqlite_stat1：下面一定会采样
   }
+  const tables = opts.skipImageTags ? TABLES.filter((t) => t !== 'image_tags') : TABLES;
   const stale =
     opts.force ||
-    TABLES.some((t) => {
+    tables.some((t) => {
       const actual = db.prepare(`SELECT count(*) FROM ${t}`).pluck().get() as number;
       const was = recorded.get(t);
       if (was === undefined) return actual > 1000;

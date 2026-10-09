@@ -17,9 +17,10 @@ export async function pickFolder(): Promise<string | null> {
   try {
     const ps = [
       "$ErrorActionPreference = 'Stop'",
+      // 放最前面：Add-Type 出错时报错信息也是 UTF-8
+      '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
       'Add-Type -AssemblyName System.Windows.Forms',
       `Add-Type -LiteralPath '${fileURLToPath(new URL('./FolderPicker.cs', import.meta.url)).replace(/'/g, "''")}'`,
-      '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
       "$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $true; Text = 'Emaki — 选择图片文件夹'; Width = 420; Height = 120; StartPosition = 'CenterScreen'; MinimizeBox = $false; MaximizeBox = $false }",
       "$label = New-Object System.Windows.Forms.Label -Property @{ Text = '请在文件夹选择窗口中选择图片目录。'; AutoSize = $true; Left = 20; Top = 20 }",
       '$owner.Controls.Add($label)',
@@ -30,14 +31,39 @@ export async function pickFolder(): Promise<string | null> {
     ].join('; ');
     // -EncodedCommand 要 UTF-16LE 的 Base64：中文和引号都不用转义
     const encoded = Buffer.from(ps, 'utf16le').toString('base64');
-    const { stdout } = await promisify(execFile)('powershell.exe', ['-NoProfile', '-STA', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded], {
-      encoding: 'utf8',
-      // 让 PowerShell 隐藏控制台，保留 WinForms 窗口的正常显示。
-      windowsHide: false,
-      timeout: 10 * 60_000,
-    });
-    return stdout.trim() || null;
+    try {
+      const { stdout } = await promisify(execFile)('powershell.exe', ['-NoProfile', '-STA', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded], {
+        encoding: 'utf8',
+        // 让 PowerShell 隐藏控制台，保留 WinForms 窗口的正常显示。
+        windowsHide: false,
+        timeout: 10 * 60_000,
+      });
+      return stdout.trim() || null;
+    } catch (err) {
+      // execFile 的报错开头是整条命令行（几 KB 的 Base64），不能原样显示在界面上
+      const e = err as { killed?: boolean; code?: unknown; stderr?: string };
+      if (e.killed) throw new Error('选择窗口开得太久，已经自动关掉了，请重新选择', { cause: err });
+      const detail = psErrorLine(e.stderr ?? '') || (e.code === 'ENOENT' ? '找不到 powershell.exe' : '');
+      throw new Error(`打不开选择文件夹的窗口，请直接粘贴文件夹路径${detail ? `。原因：${detail}` : ''}`, { cause: err });
+    }
   } finally {
     busy = false;
   }
+}
+
+/** PowerShell 的报错取第一行。用 -EncodedCommand 时 stderr 是 CLIXML，要先把 <S S="Error"> 里的文字拼回来 */
+export function psErrorLine(stderr: string): string {
+  const text = stderr.startsWith('#< CLIXML')
+    ? [...stderr.matchAll(/<S S="Error">([\s\S]*?)<\/S>/g)]
+        .map((m) => m[1]!)
+        .join('')
+        .replace(/_x([0-9a-f]{4})_/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&amp;/g, '&')
+    : stderr;
+  const line = text.split(/\r?\n/).map((s) => s.trim()).find(Boolean) ?? '';
+  return line.length > 200 ? `${line.slice(0, 200)}…` : line;
 }

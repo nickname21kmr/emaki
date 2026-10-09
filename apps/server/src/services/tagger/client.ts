@@ -204,10 +204,13 @@ export async function startTagger(o: TaggerStartOptions): Promise<TaggerClient> 
     c.info.fallbackReason = `DirectML 子进程崩溃：${err.message}`;
     return c;
   }
+  // 子进程这次真的拿缓存的适配器试过 DirectML（模型走 DML、没要求跳过）
+  const triedDml = findModel(o.repo)?.gpu === 'dml' && !o.noDml;
   if (client.info.device === 'dml' && id === 'probe' && client.info.dmlDeviceId !== null) {
     writeFileSync(dmlCacheFile(o.modelsDir), JSON.stringify({ deviceId: client.info.dmlDeviceId }));
-  } else if (client.info.device === 'cpu' && cached !== null && id === cached) {
-    rmSync(dmlCacheFile(o.modelsDir), { force: true }); // 缓存的适配器失效了，下次重新探测
+  } else if (client.info.device !== 'dml' && triedDml && cached !== null && id === cached) {
+    // 缓存的适配器失效了（落到了 WebGPU 或 CPU），下次重新探测
+    rmSync(dmlCacheFile(o.modelsDir), { force: true });
   }
   return client;
 }
@@ -216,6 +219,8 @@ export async function startTagger(o: TaggerStartOptions): Promise<TaggerClient> 
 
 let current: { key: string; client: Promise<TaggerClient> } | null = null;
 let idleTimer: NodeJS.Timeout | null = null;
+/** 正在关的子进程（比如还在加载时任务被取消、空闲定时器去关它，要等加载完才关得掉）：起新的之前等它退出 */
+let closing: Promise<void> = Promise.resolve();
 
 export function acquireTagger(o: TaggerStartOptions): Promise<TaggerClient> {
   if (idleTimer) clearTimeout(idleTimer);
@@ -223,8 +228,8 @@ export function acquireTagger(o: TaggerStartOptions): Promise<TaggerClient> {
   const key = `${o.repo}|${o.device}|${o.batchSize}|${o.noDml ? 'nodml' : ''}`;
   if (!current || current.key !== key) {
     // 换模型 / 换设备：等旧子进程退出、显存放掉再起新的（两个大模型同时在显存里，8 GB 不够）
-    const closing = current ? shutdownTagger() : Promise.resolve();
-    const client = closing.then(() => startTagger(o));
+    const prev = current ? shutdownTagger() : closing;
+    const client = prev.then(() => startTagger(o));
     current = { key, client };
     // 启动失败不要把 rejected 的 promise 一直缓存着
     client.catch(() => {
@@ -248,5 +253,6 @@ export function releaseTagger(idleMs = 60_000): void {
 export async function shutdownTagger(): Promise<void> {
   const c = current;
   current = null;
-  if (c) await c.client.then((x) => x.dispose()).catch(() => {});
+  if (c) closing = c.client.then((x) => x.dispose()).catch(() => {});
+  await closing;
 }

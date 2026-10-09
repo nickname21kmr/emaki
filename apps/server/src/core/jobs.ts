@@ -175,7 +175,11 @@ export class JobQueue {
           : `${JOB_LABELS[job.kind]}：${job.status === 'done' ? (yielded ? '已让出，稍后继续' : '完成') : '已取消'}`;
     } catch (err) {
       job.status = controller.signal.aborted ? 'cancelled' : 'failed';
-      job.message = `${JOB_LABELS[job.kind]}失败：${err instanceof Error ? err.message : String(err)}`;
+      // 取消时抛出的（下载被中断「This operation was aborted」之类）不算失败
+      job.message =
+        job.status === 'cancelled'
+          ? `${JOB_LABELS[job.kind]}：已取消`
+          : `${JOB_LABELS[job.kind]}失败：${err instanceof Error ? err.message : String(err)}`;
     } finally {
       job.finishedAt = new Date().toISOString();
       this.controllers.delete(job.id);

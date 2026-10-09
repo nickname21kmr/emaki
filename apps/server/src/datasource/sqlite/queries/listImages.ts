@@ -70,7 +70,8 @@ export type CountCache = (key: string, compute: () => number) => number;
 
 export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Page<ImageItem> {
   // 翻页查询和数总数用两套写法（T22）：翻页沿排序索引走，用 EXISTS 找够一页就停；
-  // 数总数要看完所有命中的图，用 IN（先按角色 / 标签索引把命中的图 id 找出来）快得多。其余条件两边一样
+  // 数总数要看完所有命中的图，用 IN（先按作品 / 标签索引把命中的图 id 找出来）快得多。其余条件两边一样。
+  // 只对命中很多的条件这样分；角色命中的图很少，两边都用 IN
   const where = [LIVE_IMAGES];
   const countWhere = [LIVE_IMAGES];
   const both = (...conds: string[]) => {
@@ -101,8 +102,9 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
   if (q.characterId) {
     const cid = parseId(q.characterId);
     if (cid === null) return EMPTY_PAGE;
-    where.push('EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id AND ic.character_id = @cid)');
-    countWhere.push('i.id IN (SELECT image_id FROM image_characters WHERE character_id = @cid)');
+    // 翻页也用 IN：一个角色最多一千多张，先按 idx_ic_character_image 取出来再排序是毫秒级；
+    // 沿排序索引逐张探测，小角色或加了画面 / 搜索时每一页都要扫遍全库（0.1–1.3 秒）
+    both('i.id IN (SELECT image_id FROM image_characters WHERE character_id = @cid)');
     p.cid = cid;
   }
   if (q.workId) {

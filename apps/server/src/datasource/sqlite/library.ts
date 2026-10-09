@@ -152,12 +152,30 @@ export class LibraryQueries {
       )
       .get({ since }) as { at: string | null; count: number };
 
-    const data = this.derived.get();
+    // 有插画的角色 / 作品数，口径同 Derived 的 imageCount > 0。不用 derived.get()：每次用户操作都会让它整份重建（真实库 1.5 秒以上），
+    // 侧栏统计一直在拉，等于每点一次收藏就重建一次。EXISTS 走索引，各几毫秒。
+    // 作品拆成两支 EXISTS，不套 v_image_works（UNION 会被整个物化，约 200 ms）
+    const characterCount = db
+      .prepare(
+        `SELECT COUNT(*) FROM characters c
+         WHERE EXISTS (SELECT 1 FROM image_characters ic JOIN v_illust_images i ON i.id = ic.image_id WHERE ic.character_id = c.id)`,
+      )
+      .pluck()
+      .get() as number;
+    const workCount = db
+      .prepare(
+        `SELECT COUNT(*) FROM works w
+         WHERE EXISTS (SELECT 1 FROM image_copyrights x JOIN v_illust_images i ON i.id = x.image_id WHERE x.work_id = w.id)
+            OR EXISTS (SELECT 1 FROM character_works cw JOIN image_characters ic ON ic.character_id = cw.character_id
+                       JOIN v_illust_images i ON i.id = ic.image_id WHERE cw.work_id = w.id)`,
+      )
+      .pluck()
+      .get() as number;
     const originalWork = db.prepare("SELECT id FROM works WHERE danbooru_tag = 'original'").pluck().get() as number | undefined;
     return {
       imageCount: row.image_count,
-      characterCount: [...data.characters.values()].filter((c) => c.imageCount > 0).length,
-      workCount: [...data.works.values()].filter((w) => w.imageCount > 0).length,
+      characterCount,
+      workCount,
       unrecognizedCount: row.unrecognized_count,
       duplicateGroupCount: row.duplicate_group_count,
       excludedCount: row.excluded_count,

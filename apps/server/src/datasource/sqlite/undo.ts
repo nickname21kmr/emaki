@@ -34,11 +34,13 @@ type Op =
   | { t: 'columns'; table: UndoTable; rows: Row[] }
   | { t: 'set'; table: UndoTable; where: string; params: unknown[]; rows: Row[] }
   | { t: 'inserted'; table: UndoTable; ids: number[] }
-  | { t: 'sql'; sql: string; params: unknown[] };
+  | { t: 'sql'; sql: string; params: unknown[] }
+  | { t: 'guard'; sql: string; params: unknown[]; message: string };
 
 export class UndoRecorder {
   private readonly ops: Op[] = [];
   private readonly after: (() => void | Promise<void>)[] = [];
+  private readonly afterLast: (() => void | Promise<void>)[] = [];
 
   constructor(private readonly db: Db) {}
 
@@ -67,19 +69,30 @@ export class UndoRecorder {
     this.ops.push({ t: 'sql', sql, params });
   }
 
+  /** 撤销到这一步时 sql 查得到行就拒绝撤销（整个撤销回滚）。要最先检查的放在最后记录 */
+  guard(sql: string, params: unknown[], message: string): void {
+    this.ops.push({ t: 'guard', sql, params, message });
+  }
+
   /** 非数据库的补偿，在撤销事务提交后执行 */
   onUndo(fn: () => void | Promise<void>): void {
     this.after.push(fn);
   }
 
-  get isEmpty(): boolean {
-    return this.ops.length === 0 && this.after.length === 0;
+  /** 同 onUndo，但等所有 onUndo 都跑完再按记录顺序执行：合集重算要看到排除规则等补偿之后的状态 */
+  onUndoLast(fn: () => void | Promise<void>): void {
+    this.afterLast.push(fn);
   }
 
-  /** 生成撤销函数：一个事务内逆序执行所有 op，然后逆序执行 onUndo 回调 */
+  get isEmpty(): boolean {
+    return this.ops.length === 0 && this.after.length === 0 && this.afterLast.length === 0;
+  }
+
+  /** 生成撤销函数：一个事务内逆序执行所有 op，然后逆序执行 onUndo 回调，最后执行 onUndoLast 回调 */
   build(): () => Promise<void> {
     const ops = [...this.ops].reverse();
     const after = [...this.after].reverse();
+    const afterLast = [...this.afterLast];
     const db = this.db;
 
     const apply = (op: Op) => {
@@ -103,6 +116,9 @@ export class UndoRecorder {
         case 'sql':
           db.prepare(op.sql).run(...op.params);
           break;
+        case 'guard':
+          if (db.prepare(op.sql).get(...op.params)) throw new ConflictError(op.message);
+          break;
       }
     };
 
@@ -118,6 +134,7 @@ export class UndoRecorder {
         throw err;
       }
       for (const fn of after) await fn();
+      for (const fn of afterLast) await fn();
     };
   }
 }

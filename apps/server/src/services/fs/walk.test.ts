@@ -57,12 +57,26 @@ it('从子目录开始', async () => {
   expect(await collect({ startRel: 'sub' })).toEqual(['sub/b.jpg_large']);
 });
 
-it('读不了的目录交给 onDirError', async () => {
-  const errors: string[] = [];
-  for await (const _ of walkImages(root.replace(/\\/g, '/'), { startRel: 'no-such-dir', onDirError: (d) => errors.push(d) })) {
-    /* 不会有文件 */
-  }
-  expect(errors).toEqual(['no-such-dir']);
+it('读不了的目录交给 onDirError；起点子目录不在了（删掉、改名走了）不算读失败', async () => {
+  const errorsOf = async (rootPath: string, o = {}) => {
+    const errors: string[] = [];
+    for await (const _ of walkImages(rootPath, { ...o, onDirError: (d) => errors.push(d) })) {
+      /* 不会有文件 */
+    }
+    return errors;
+  };
+  expect(await errorsOf(root.replace(/\\/g, '/'), { startRel: 'no-such-dir' })).toEqual([]);
+  expect(await errorsOf(root.replace(/\\/g, '/'), { startRel: 'a.png' })).toEqual([]); // 同名的变成了文件
+  expect(await errorsOf(`${root.replace(/\\/g, '/')}/no-such-root`)).toEqual(['']); // 根读不了照常报
+});
+
+it('起点本身或父目录是不进的目录、dataDir、嵌套的图库根：什么都不列', async () => {
+  expect(await collect({ startRel: '.hidden' })).toEqual([]);
+  expect(await collect({ startRel: '$RECYCLE.BIN' })).toEqual([]);
+  expect(await collect({ startRel: 'node_modules' })).toEqual([]);
+  expect(await collect({ startRel: 'sub', skipAbs: [path.join(root, 'sub')] })).toEqual([]);
+  expect(await collect({ startRel: `deep/${long}`, skipAbs: [path.join(root, 'deep')] })).toEqual([]);
+  expect(await collect({ startRel: 'sub', skipAbs: [path.join(root, 'deep')] })).toEqual(['sub/b.jpg_large']);
 });
 
 it('列出来却读不到信息的文件：所在目录交给 onDirError（不能当成文件没了），其它文件照常', async () => {

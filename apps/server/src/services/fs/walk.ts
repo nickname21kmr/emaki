@@ -14,7 +14,7 @@ export interface WalkEntry {
 }
 
 export interface WalkOptions {
-  /** 从哪个子目录开始（相对根，'' = 根） */
+  /** 从哪个子目录开始（相对根，'' = 根）。这个目录不存在时什么都不列，不报 onDirError */
   startRel?: string;
   /** false = 只列 startRel 这一层 */
   recursive?: boolean;
@@ -28,7 +28,15 @@ const STAT_BATCH = 16;
 
 export async function* walkImages(rootPath: string, o: WalkOptions = {}): AsyncGenerator<WalkEntry> {
   const skip = new Set((o.skipAbs ?? []).map(pathKey));
-  const stack = [o.startRel ?? ''];
+  const start = o.startRel ?? '';
+  if (start) {
+    // 起点本身或它的某一层父目录是不进的目录（.r18、$RECYCLE.BIN、@eaDir）、dataDir、嵌套的图库根：什么都不列。
+    // 监听器会把这种目录的新建、改名报上来，全量扫描不进的地方增量扫描也不能进
+    const segs = start.split('/');
+    if (segs.some(isSkippedDirName)) return;
+    for (let i = 1; i <= segs.length; i++) if (skip.has(pathKey(toAbs(rootPath, segs.slice(0, i).join('/'))))) return;
+  }
+  const stack = [start];
   while (stack.length) {
     if (o.signal?.aborted) return;
     const rel = stack.pop()!;
@@ -36,7 +44,10 @@ export async function* walkImages(rootPath: string, o: WalkOptions = {}): AsyncG
     try {
       entries = await readdir(toAbs(rootPath, rel), { withFileTypes: true });
     } catch (err) {
-      // EPERM / EACCES / ENOENT：跳过这个目录，由调用方记下来（它下面的行不能判成丢失）
+      const code = (err as NodeJS.ErrnoException).code;
+      // 起点（不是根）不在了：文件夹被删掉或改名走了，不算读取失败，调用方会把它下面的行判成不在（标丢失前还会逐个确认）
+      if (rel === start && start && (code === 'ENOENT' || code === 'ENOTDIR')) continue;
+      // EPERM / EACCES、根目录读不了、遍历途中子目录没了：跳过这个目录，由调用方记下来（它下面的行这次不判丢失）
       o.onDirError?.(rel, err as NodeJS.ErrnoException);
       continue;
     }

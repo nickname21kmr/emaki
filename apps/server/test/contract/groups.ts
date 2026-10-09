@@ -457,6 +457,17 @@ export function characterMutationsContract(make: ContractFactory, name: Name) {
       expect((await e.ds.getCharacter(e.id('character', 'c3')))!.character.imageCount).toBe(3);
     });
 
+    it('撤销合并只回退合并本身：合并之后归到目标的图还在', async () => {
+      const e = env();
+      const c3 = e.id('character', 'c3');
+      const r = await e.ds.mergeCharacter(e.id('character', 'c1'), c3);
+      await e.ds.bulkImages({ ids: [e.id('image', 'i24')], action: { type: 'assign', characterId: c3 } });
+      await e.ds.undo(r.undoToken!);
+      expect((await e.ds.getImage(e.id('image', 'i24')))!.characterIds.map((c) => e.back('character', c))).toEqual(['c3']);
+      expect((await e.ds.getCharacter(e.id('character', 'c1')))!.character.imageCount).toBe(8);
+      expect((await e.ds.getCharacter(c3))!.character.imageCount).toBe(4);
+    });
+
     it('markCharacterSeen 清掉 +N', async () => {
       const e = env();
       const id = e.id('character', 'c1');
@@ -693,6 +704,16 @@ export function exclusionsContract(make: ContractFactory, name: Name) {
       const e = env();
       await expect(e.ds.createExclusion({ kind: 'tag', target: '  ' })).rejects.toMatchObject({ code: 'bad_request' });
       await expect(e.ds.deleteExclusion(missing(e, 'x'))).rejects.toMatchObject({ code: 'not_found' });
+    });
+
+    it('错误：同一条规则建两次', async () => {
+      const e = env();
+      await e.ds.createExclusion({ kind: 'character', target: e.id('character', 'c5') });
+      await expect(e.ds.createExclusion({ kind: 'character', target: e.id('character', 'c5') })).rejects.toMatchObject({
+        code: 'conflict',
+      });
+      await expect(e.ds.createExclusion({ kind: 'tag', target: 'comic' })).rejects.toMatchObject({ code: 'conflict' });
+      expect(await e.ds.listExclusions()).toHaveLength(3);
     });
   });
 }
@@ -1257,6 +1278,25 @@ export function collectionsContract(make: ContractFactory, name: Name) {
       expect((await e.ds.getCollection(a.id))!.series.map((c) => c.id)).toEqual([a.id, b.id]);
       const st = await e.ds.getStats();
       expect(st.unrecognizedCount).toBeGreaterThanOrEqual(st.untaggedCount);
+    });
+
+    it('⑩ 文件夹停用、移除期间按 id 找不到也改不了；撤销后还是原来那本', async () => {
+      const e = env();
+      const { collection } = await e.ds.createCollection({ fromImageId: img(e, 'i1'), kind: 'artbook' });
+      const root = e.id('root', 'root1');
+      const hidden = async () => {
+        expect(await e.ds.listCollections({})).toEqual([]);
+        expect(await e.ds.getCollection(collection.id)).toBeNull();
+        await expect(e.ds.updateCollection(collection.id, { title: 'x' })).rejects.toMatchObject({ statusCode: 404 });
+      };
+      const off = await e.ds.updateLibraryRoot(root, { enabled: false });
+      await hidden();
+      await e.ds.undo(off.undoToken!);
+      expect((await e.ds.getCollection(collection.id))!.collection).toMatchObject({ id: collection.id, title: '角色' });
+      const rm = await e.ds.removeLibraryRoot(root);
+      await hidden();
+      await e.ds.undo(rm.undoToken!);
+      expect((await e.ds.getCollection(collection.id))!.collection).toMatchObject({ id: collection.id, title: '角色' });
     });
   });
 }

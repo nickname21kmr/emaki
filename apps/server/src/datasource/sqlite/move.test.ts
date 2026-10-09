@@ -15,7 +15,7 @@ describe('normalizeSubdir', () => {
     ['结尾的点.', '结尾的点'],
   ])('%j → %j', (input, out) => expect(normalizeSubdir(input)).toBe(out));
 
-  it.each(['..', 'a/../b', 'a:b', 'what?', 'CON', 'lpt1.txt', '.hidden', '$x', 'node_modules'])('%j 报错', (input) => {
+  it.each(['..', 'a/../b', 'a:b', 'what?', 'CON', 'lpt1.txt', '.hidden', '$x', 'node_modules', '. .', '. ./sorted', 'a/. ./b', 'a/. . ', 'x/ .. . /y'])('%j 报错', (input) => {
     expect(() => normalizeSubdir(input)).toThrow(BadRequestError);
   });
 });
@@ -103,6 +103,23 @@ describe('移动到文件夹（真的移动文件）', () => {
     await ds.createExclusion({ kind: 'folder', target: `${A()}/表情包` });
     await ds.moveImages({ ids: ['1'], rootId: '1', dir: '表情包' });
     expect(ds.ctx.db.prepare('SELECT excluded_by IS NOT NULL FROM images WHERE id = 1').pluck().get()).toBe(1);
+  });
+
+  it('移进被排除的文件夹再撤销：移回原位就放出来；撤销前新建、原位置命中的规则照样排除', async () => {
+    const db = ds.ctx.db;
+    const excludedBy = (id: number) => db.prepare('SELECT excluded_by FROM images WHERE id = ?').pluck().get(id);
+    const lastRule = () => db.prepare('SELECT max(id) FROM exclusions').pluck().get();
+    await ds.createExclusion({ kind: 'folder', target: `${A()}/表情包` });
+    const junk = lastRule();
+    const r = await ds.moveImages({ ids: ['1', '3'], rootId: '1', dir: '表情包' });
+    expect([excludedBy(1), excludedBy(3)]).toEqual([junk, junk]);
+    // 这时 1 在表情包里，新规则跳过它；移回 x/ 之后要照这条规则排除
+    await ds.createExclusion({ kind: 'folder', target: `${A()}/x` });
+    const x = lastRule();
+    await ds.undo(r.undoToken!);
+    expect(rowOf(3)).toEqual({ root_id: 2, rel_path: 'c.png', file_name: 'c.png' });
+    expect([excludedBy(1), excludedBy(3)]).toEqual([x, null]);
+    expect((await ds.listExclusions()).find((e) => e.id === String(junk))!.imageCount).toBe(0);
   });
 
   it('文件不见了：报失败，记录不动', async () => {

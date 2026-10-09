@@ -1,7 +1,9 @@
 /**
  * 重复组的查询与处理（T16）。组本身由 services/dedupe/DedupeService 生成。
  * resolve 把没选中的移到系统回收站（逐个核实），不可撤销；一张都没删（全部保留）时可撤销。
+ * 删之前把副本上手动做的整理（手动角色、收藏、原创、分级、画师）并到保留的图上，免得跟着副本一起没了。
  */
+import type { Db } from '../../db/connection.ts';
 import type { DuplicateGroup, ID, ListDuplicatesQuery, MutationResult } from '@emaki/shared';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
 import { parseDHash, popcount32 } from '../../services/dedupe/hamming.ts';
@@ -28,6 +30,47 @@ type MemberRow = ImageRow & { group_id: number; visible: number; root_path: stri
 export const SET_MAX_DISTANCE = 16;
 /** 超过这么多张的文件夹（手机备份根目录、QQ 缓存）里「同文件夹」说明不了什么，不归套 */
 export const SET_FOLDER_MAX = 500;
+
+/** 分级从松到严，副本上手动改过的分级不一样时取最严的 */
+const RATING_ORDER = `CASE d.rating WHEN 'explicit' THEN 3 WHEN 'questionable' THEN 2 WHEN 'sensitive' THEN 1 ELSE 0 END`;
+
+/**
+ * 移到回收站之前，把副本上用户手动做的整理并到保留的图上：手动归的角色、收藏、归为原创、手动分级、手动改的画师。
+ * 保留的图自己已有的不动（已有的角色、改过的分级和画师）。识别器认的不搬，保留的图自己会认。必须在事务内调用
+ */
+function carryOver(db: Db, keep: number[], gone: number[], now: string): void {
+  const p = { k: JSON.stringify(keep), g: JSON.stringify(gone), now };
+  const K = 'images.id IN (SELECT value FROM json_each(@k)) AND images.trashed_at IS NULL';
+  const G = 'd.id IN (SELECT value FROM json_each(@g))';
+  db.prepare(
+    `INSERT OR IGNORE INTO image_characters (image_id, character_id, origin, score, added_at)
+     SELECT images.id, ic.character_id, 'manual', ic.score, ic.added_at
+     FROM images JOIN image_characters ic ON ic.origin = 'manual' AND ic.image_id IN (SELECT value FROM json_each(@g))
+     WHERE ${K} ORDER BY ic.added_at`,
+  ).run(p);
+  db.prepare(`UPDATE images SET favorite = 1 WHERE ${K} AND favorite = 0 AND EXISTS (SELECT 1 FROM images d WHERE ${G} AND d.favorite = 1)`).run(p);
+  // 归为原创连「原创」作品的手动关联一起补上（同 bulk）：不然图算原创，原创作品页里却没有它。
+  // 要在改 original_at 之前：只补这次才变成原创的；识别器认出的那行（score 不为空）INSERT OR IGNORE 不动
+  db.prepare(
+    `INSERT OR IGNORE INTO image_copyrights (image_id, work_id, score)
+     SELECT images.id, w.id, NULL FROM images JOIN works w ON w.danbooru_tag = 'original'
+     WHERE ${K} AND images.original_at IS NULL AND EXISTS (SELECT 1 FROM images d WHERE ${G} AND d.original_at IS NOT NULL)`,
+  ).run(p);
+  db.prepare(`UPDATE images SET original_at = (SELECT min(d.original_at) FROM images d WHERE ${G}) WHERE ${K} AND original_at IS NULL`).run(p);
+  db.prepare(
+    `UPDATE images SET rating_manual = 1, rating = (SELECT d.rating FROM images d WHERE ${G} AND d.rating_manual = 1 ORDER BY ${RATING_ORDER} DESC LIMIT 1)
+     WHERE ${K} AND rating_manual = 0 AND EXISTS (SELECT 1 FROM images d WHERE ${G} AND d.rating_manual = 1)`,
+  ).run(p);
+  // 画师：取第一张手动改过的副本，整组照搬
+  const src = db.prepare(`SELECT d.id FROM images d WHERE ${G} AND d.artist_manual = 1 ORDER BY d.id LIMIT 1`).pluck().get(p) as number | undefined;
+  if (src === undefined) return;
+  const targets = db.prepare(`SELECT id FROM images WHERE ${K} AND artist_manual = 0`).pluck().all(p) as number[];
+  for (const t of targets) {
+    db.prepare('DELETE FROM image_artists WHERE image_id = ?').run(t);
+    db.prepare('INSERT INTO image_artists (image_id, artist, score) SELECT ?, artist, score FROM image_artists WHERE image_id = ?').run(t, src);
+    db.prepare('UPDATE images SET artist_manual = 1, artist_checked_at = COALESCE(artist_checked_at, ?) WHERE id = ?').run(now, t);
+  }
+}
 
 export class DuplicateQueries {
   constructor(
@@ -188,10 +231,13 @@ export class DuplicateQueries {
     const res = await moveToRecycleBin([...byPath.keys()], this.trashImpl);
     const done = [...res.trashed, ...res.alreadyGone].map((p) => byPath.get(p)!);
     if (!done.length) throw new ConflictError(`没有文件被移到回收站：${res.failed[0]?.reason ?? '未知原因'}`);
+    const kept = rows.filter((m) => keep.has(m.id)).map((m) => m.id);
     return this.ctx.write(() => {
       const db = this.ctx.db;
+      carryOver(db, kept, done, now);
       db.prepare('UPDATE images SET trashed_at = ? WHERE id IN (SELECT value FROM json_each(?))').run(now, JSON.stringify(done));
-      this.collections(null, done);
+      // 保留的图可能刚并进了角色，它所在的合集也要重算
+      this.collections(null, [...done, ...kept]);
       if (!res.failed.length) db.prepare('UPDATE duplicate_groups SET resolved_at = ? WHERE id = ?').run(now, g.id);
       const tail = res.failed.length ? `，${res.failed.length} 张失败（文件可能被占用）` : '';
       return `已保留 ${keep.size} 张，${done.length} 张移到回收站（可在系统回收站还原）${tail}`;

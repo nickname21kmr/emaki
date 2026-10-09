@@ -2,7 +2,10 @@
  * 设置的默认值、读写和图库路径工具。其他任务直接 import 这里的模块级函数（第一个参数是 db）。
  */
 import type { CustomTheme, Settings } from '@emaki/shared';
+import { realpath } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import type { Db } from '../../db/connection.ts';
 import { BadRequestError } from '../../http/errors.ts';
 
@@ -142,3 +145,22 @@ export const samePath = (a: string, b: string) => a.toLowerCase() === b.toLowerC
 
 export const isInside = (child: string, parent: string) =>
   child.toLowerCase().startsWith(parent.toLowerCase().replace(/[/]$/, '') + '/');
+
+const realpathNative = promisify(realpath.native);
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', os.hostname().toLowerCase()]);
+
+/**
+ * 比较「是不是同一个文件夹」用的路径：换成磁盘上的真实位置，联接点、subst 盘、\\?\ 前缀、8.3 短名都认得出来，
+ * 映射盘会变成 \\NAS\share 的形式，本机管理共享 \\localhost\F$ 换回 F:/。
+ * 只用来比较，不拿去存；文件夹不在或网络盘卡住（超过 2 秒）就按原样比较。参数要先过 normalizeRootPath
+ */
+export async function rootPathKey(p: string): Promise<string> {
+  let timer: NodeJS.Timeout | undefined;
+  const real = await Promise.race([
+    realpathNative(p).catch(() => null),
+    new Promise<null>((r) => (timer = setTimeout(r, 2000, null))),
+  ]).finally(() => clearTimeout(timer));
+  const key = normalizeRootPath(real ?? p);
+  const share = /^\/\/([^/]+)\/([a-z])\$(\/.*)?$/i.exec(key);
+  return share && LOCAL_HOSTS.has(share[1]!.toLowerCase()) ? normalizeRootPath(`${share[2]}:${share[3] ?? '/'}`) : key;
+}

@@ -91,4 +91,17 @@ describe('JobQueue', () => {
     await tick();
     expect(byKind(q, 'scan').status).toBe('cancelled');
   });
+
+  it('取消时 runner 抛错（比如下载被中断）：显示已取消，不显示失败', async () => {
+    const q = new JobQueue(
+      new EventBus(),
+      () => (ctx) =>
+        new Promise<void>((_, reject) => ctx.signal.addEventListener('abort', () => reject(new Error('This operation was aborted')))),
+    );
+    const job = q.enqueue('tag');
+    await tick();
+    q.cancel(job.id);
+    await tick();
+    expect(byKind(q, 'tag')).toMatchObject({ status: 'cancelled', message: '识别角色：已取消' });
+  });
 });

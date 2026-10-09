@@ -90,6 +90,23 @@ describe('防抖', () => {
     await w.close();
   });
 
+  it('. 开头、$RECYCLE.BIN、@eaDir 这种目录本身新建、改名过来都不管（扫描器不进）；. 开头的图片照常', async () => {
+    vi.useFakeTimers();
+    const requests = new ScanRequests();
+    const enqueueScan = vi.fn();
+    const w = new LibraryWatcher({ requests, enqueueScan, dataDir: 'Z:/nowhere', log: () => {}, quietMs: 100, rescanMinutes: 0 });
+    const inner = w as unknown as { onEvent: (r: object, f: string, e?: string) => void; unknown: Map<string, unknown> };
+    const root = { id: 1, path: 'Z:/lib', enabled: true };
+    for (const f of ['.r18', '$RECYCLE.BIN', path.join('share', '@eaDir'), path.join('a', '.stversions')]) inner.onEvent.call(w, root, f, 'rename');
+    expect(inner.unknown.size).toBe(0);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(enqueueScan).not.toHaveBeenCalled();
+    inner.onEvent.call(w, root, path.join('a', '.cover.png'), 'rename');
+    await vi.advanceTimersByTimeAsync(500);
+    expect(requests.take().scopes).toEqual([{ rootId: 1, relDir: 'a', recursive: false }]);
+    await w.close();
+  });
+
   it('持续有事件时最多等 maxWaitMs', async () => {
     vi.useFakeTimers();
     const enqueueScan = vi.fn();

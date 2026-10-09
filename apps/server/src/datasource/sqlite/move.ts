@@ -22,7 +22,8 @@ export function normalizeSubdir(input: string): string {
     .map((s) => s.trim())
     .filter(Boolean)
     .map((s) => {
-      if (/^\.+$/.test(s)) throw new BadRequestError('文件夹名不能只有点');
+      // '. .' 这种点和空格夹杂的也算：去掉结尾的点和空格后会变成空段，拼出 '/x'、'a//b'
+      if (/^[. ]+$/.test(s)) throw new BadRequestError('文件夹名不能只有点');
       // Windows 会悄悄去掉结尾的点和空格，先去掉，免得记录和磁盘对不上
       return s.replace(/[. ]+$/, '');
     });

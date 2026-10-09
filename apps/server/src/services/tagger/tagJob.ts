@@ -4,7 +4,7 @@
  */
 import type { ContentKind, Rating, Settings } from '@emaki/shared';
 import type { EventBus } from '../../core/events.ts';
-import type { JobRunner } from '../../core/jobs.ts';
+import type { JobContext } from '../../core/jobs.ts';
 import type { Db } from '../../db/connection.ts';
 import { CharacterCatalog } from '../catalog/characterCatalog.ts';
 import { CopyrightResolver, type CopyrightSource } from '../catalog/copyrights.ts';
@@ -37,6 +37,23 @@ export interface TagJobDeps {
   // 测试注入
   clientFactory?: (o: TaggerStartOptions) => Promise<TaggerLike>;
   ensureFiles?: typeof ensureModelFiles;
+  isModelReady?: typeof isModelReady;
+}
+
+/** manual：用户点了「运行识别」（不传时按手动算）。自动排上的不下载还没下载的旧图模型 */
+export type TagRunner = (ctx: JobContext, o?: { manual?: boolean }) => Promise<string>;
+
+/** 等 p；取消时马上返回 null，不等它（p 自己接着跑完，结果丢掉） */
+function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T | null> {
+  if (signal.aborted) {
+    p.catch(() => undefined);
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => resolve(null);
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
 }
 
 /**
@@ -105,13 +122,15 @@ function formatEta(sec: number): string {
   return `${(sec / 3600).toFixed(1)} 小时`;
 }
 
-export function createTagJobRunner(deps: TagJobDeps): JobRunner {
+export function createTagJobRunner(deps: TagJobDeps): TagRunner {
   const { db } = deps;
   const log = deps.log ?? (() => {});
   const factory = deps.clientFactory ?? acquireTagger;
   const ensure = deps.ensureFiles ?? ensureModelFiles;
+  const modelReady = deps.isModelReady ?? isModelReady;
 
-  return async (ctx) => {
+  return async (ctx, o = {}) => {
+    const manual = o.manual ?? true;
     const t = deps.getTaggerSettings();
     const passes = planPasses(t);
     const counts = passes.map((p) => (db.prepare(count(p.where)).get(passParams(t, p)) as { n: number }).n);
@@ -120,11 +139,30 @@ export function createTagJobRunner(deps: TagJobDeps): JobRunner {
     let doneAll = 0;
     const summaries: string[] = [];
     let yieldedAny = false;
+    /** 这一轮已经计进进度的张数（这一轮中途失败时补齐剩下的） */
+    let passAdvanced = 0;
+    const advance = (n: number, message?: string) => {
+      passAdvanced += n;
+      ctx.advance(n, message);
+    };
     ctx.setTotal(grand);
     for (let k = 0; k < passes.length; k++) {
       if (ctx.signal.aborted) break;
-      if (counts[k] === 0 && k < passes.length - 1) continue;
-      const r = await runPass(passes[k]!, counts[k]!);
+      const legacy = k < passes.length - 1;
+      if (counts[k] === 0 && legacy) continue;
+      passAdvanced = 0;
+      let r: Awaited<ReturnType<typeof runPass>>;
+      try {
+        r = await runPass(passes[k]!, counts[k]!, legacy);
+      } catch (err) {
+        // 旧图模型下载不了、起不来：跳过旧图这一轮，主模型那一轮照常跑
+        if (!legacy || ctx.signal.aborted) throw err;
+        const left = Math.max(0, counts[k]! - passAdvanced);
+        log(`旧图模型那一轮出错，跳过：${(err as Error).message}`);
+        summaries.push(`旧图模型用不了，跳过 ${left} 张旧图（${(err as Error).message}）`);
+        ctx.advance(left);
+        continue;
+      }
       if (r.message) summaries.push(r.message);
       if (r.yielded) {
         yieldedAny = true;
@@ -137,7 +175,7 @@ export function createTagJobRunner(deps: TagJobDeps): JobRunner {
     }
     return summaries.join('；') || '没有需要识别的图片';
 
-    async function runPass(pass: Pass, total: number): Promise<{ message: string | null; yielded: boolean }> {
+    async function runPass(pass: Pass, total: number, legacy: boolean): Promise<{ message: string | null; yielded: boolean }> {
     const spec = pass.spec;
     const params = passParams(t, pass);
     const selBatch = db.prepare(batch(pass.where));
@@ -166,6 +204,12 @@ export function createTagJobRunner(deps: TagJobDeps): JobRunner {
 
     if (total === 0) return { message: promoted ? `已按新阈值采纳 ${promoted} 条建议` : null, yielded: false };
 
+    // 自动排上的识别不在后台下载旧图模型（1 GB 多，离线时还会每次都失败）：这一轮先跳过，用户点「运行识别」才下
+    if (legacy && !manual && !modelReady(spec, deps.modelsDir)) {
+      advance(total);
+      return { message: `旧图模型（${spec.label.replace(/（.*$/, '')}）还没下载，跳过 ${total} 张旧图；点「运行识别」会下载`, yielded: false };
+    }
+
     ctx.setMessage('识别角色：检查模型文件…');
     const files = await ensure(spec, deps.modelsDir, {
       signal: ctx.signal,
@@ -193,9 +237,16 @@ export function createTagJobRunner(deps: TagJobDeps): JobRunner {
       }
       log(`tagger 子进程 pid=${c.info.pid} device=${c.device}${c.info.fallbackReason ? `（${c.info.fallbackReason}）` : ''}`);
     };
-    const first = await factory(opts);
+    // 加载模型可能要几分钟：取消时不等它，加载好的子进程交给空闲定时器关
+    const first = await untilAborted(factory(opts), ctx.signal);
+    if (!first) {
+      if (!deps.clientFactory) releaseTagger();
+      return { message: '识别角色：已取消', yielded: false };
+    }
     describe(first);
     const tagger = new ResilientTagger(first, opts, factory, { onSwitch: describe, log, signal: ctx.signal });
+    // 还没回来的请求数：取消时不为 0，子进程可能卡在 DML 里，不能留给下一次识别（不能看 queue，取消后它很快就空了）
+    let unsettled = 0;
 
     try {
       if (fallbackNote) ctx.setMessage(fallbackNote);
@@ -253,7 +304,7 @@ export function createTagJobRunner(deps: TagJobDeps): JobRunner {
             if (hits.length) backfillClassification(db, { ids: hits });
           })();
           if (!hits.length || !params.skipCamera) return rows;
-          ctx.advance(hits.length);
+          advance(hits.length);
           skipped += hits.length;
           const keep = rows.filter((r) => !hits.includes(r.id));
           if (keep.length) return keep;
@@ -269,7 +320,12 @@ export function createTagJobRunner(deps: TagJobDeps): JobRunner {
           const rows = await next();
           if (!rows.length) break;
           const p = tagger.tag(rows.map((r) => ({ id: r.id, path: toAbs(r.rootPath, r.relPath) })), th);
-          p.catch(() => undefined); // 必须加：排队中的 promise 被 reject 会触发 unhandledRejection，把服务进程带崩
+          // 两个回调都要有：排队中的 promise 被 reject 会触发 unhandledRejection，把服务进程带崩
+          unsettled++;
+          p.then(
+            () => unsettled--,
+            () => unsettled--,
+          );
           queue.push({ rows, p });
         }
       };
@@ -277,8 +333,9 @@ export function createTagJobRunner(deps: TagJobDeps): JobRunner {
       await fill();
       while (queue.length) {
         const { rows, p } = queue.shift()!;
-        // 出错原样抛出，任务 failed；取消时还在重试的请求会以「识别已停止」结束，不算失败
-        const results = await p.catch((err: unknown) => {
+        // 出错原样抛出，任务 failed；取消时还在重试的请求会以「识别已停止」结束，不算失败。
+        // 取消后不再等在途的请求（卡住的要等 5 分钟超时），子进程算完的结果丢掉，下次再认
+        const results = await untilAborted(p, ctx.signal).catch((err: unknown) => {
           if (ctx.signal.aborted) return null;
           throw err;
         });
@@ -292,7 +349,7 @@ export function createTagJobRunner(deps: TagJobDeps): JobRunner {
         const rate = done / ((performance.now() - t0) / 1000);
         // 剩余时间只按这一轮的速度估（旧模型快、新模型慢）；后面还有轮次时注明
         const later = counts.slice(passes.indexOf(pass) + 1).reduce((a, b) => a + b, 0);
-        ctx.advance(
+        advance(
           rows.length,
           `${tag}${done} / ${total} · ${deviceLabel} · ${rate.toFixed(1)} 张/秒 · 这一轮剩余约 ${formatEta((total - done) / rate)}${later ? ` · 之后还有 ${later} 张用新模型` : ''}`,
         );
@@ -311,7 +368,9 @@ export function createTagJobRunner(deps: TagJobDeps): JobRunner {
       tagger.close();
       // 换模型的轮次之间立刻释放（两个大模型同时占显存会爆）；最后一轮照旧空闲 60 秒后关
       if (!deps.clientFactory) {
-        if (passes.indexOf(pass) < passes.length - 1) await shutdownTagger();
+        // 取消时还有请求没回来：子进程可能卡住了，现在就关（不等，5 秒后强杀），下次识别起新的，不再拿到卡住的那个
+        if (ctx.signal.aborted && unsettled > 0) void shutdownTagger();
+        else if (passes.indexOf(pass) < passes.length - 1) await shutdownTagger();
         else releaseTagger();
       }
       log(`统计 ${JSON.stringify(writer.stats)}`);
@@ -330,7 +389,13 @@ export function createTagStage(deps: TagJobDeps): TagStage {
     pendingCount: () => {
       const t = deps.getTaggerSettings();
       const skip = skipIds();
-      return planPasses(t).reduce((n, p) => n + (deps.db.prepare(count(p.where)).get({ ...passParams(t, p), skip }) as { n: number }).n, 0);
+      const passes = planPasses(t);
+      const ready = deps.isModelReady ?? isModelReady;
+      // 旧图模型没下载时旧图不算：自动排上也不会去下，只为它们排任务是白跑
+      return passes.reduce((n, p, k) => {
+        if (k < passes.length - 1 && !ready(p.spec, deps.modelsDir)) return n;
+        return n + (deps.db.prepare(count(p.where)).get({ ...passParams(t, p), skip }) as { n: number }).n;
+      }, 0);
     },
     run: createTagJobRunner(deps),
   };

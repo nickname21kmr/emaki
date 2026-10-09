@@ -11,6 +11,7 @@
  *   state='dismissed' 的行表示「不成册」，自动判定不会再建。
  * - 手动合集的文件夹改名后跟着搬（≥ 80% 的页落在同一个新目录）。
  * - 被排除、进回收站、丢失的页离开合集；其余页按页序重新从 1 编号，不留空号。
+ * - 文件夹停用、移除期间它的合集不动（id 不变，阅读进度和链接还对得上）；启动时清理移除的文件夹才跟着删。
  */
 import { transact, type Db } from '../../db/connection.ts';
 import {
@@ -82,10 +83,11 @@ interface Group {
 }
 
 /**
- * 写操作之后重算合集（RV-C-8）：在 ctx.mutate 回调里调用（同一事务），并用 undo.onUndo 让撤销之后再算一次。
+ * 写操作之后重算合集（RV-C-8）：在 ctx.mutate 回调里调用（同一事务），并用 undo.onUndoLast 让撤销之后再算一次。
+ * 用 onUndoLast：要等放出排除等其他补偿都做完再算，不然撤销改类型时页会被踢出合集。
  * ids = 'all' 走全量（排除规则、文件夹启停这类影响面不定的操作）。
  */
-export type CollectionsHook = (undo: { onUndo(fn: () => void): void } | null, ids: number[] | 'all') => void;
+export type CollectionsHook = (undo: { onUndoLast(fn: () => void): void } | null, ids: number[] | 'all') => void;
 
 export interface RefreshResult {
   active: number;
@@ -266,6 +268,8 @@ export class CollectionService {
       VALUES (@root_id, @rel_dir, @kind, @kind_source, @title, @event, @circle, @artist, @parody, @translator,
         @series_key, @volume_no, @page_order, 'auto', 'active', @evidence, @detector_version, @now, @now)`);
     const active = new Map<number, { c: CollectionRow; g: Group }>();
+    // 停用、移除了的文件夹：它的图不在 groups 里，但合集原样留着（id、页码都不动），重新启用、撤销移除、加回来时接着用
+    const hidden = new Set(db.prepare('SELECT id FROM library_roots WHERE enabled = 0 OR removed_at IS NOT NULL').pluck().all() as number[]);
 
     for (const [key, g] of groups) {
       if (scope && !scope.has(key)) continue;
@@ -309,7 +313,7 @@ export class CollectionService {
 
     // (5b) 自动合集的目录已经没有可见页（改名、整本进回收站、目录删除）→ 删除（RV-C-14）
     for (const [key, ex] of existing) {
-      if (ex.origin !== 'auto' || groups.has(key) || (scope && !scope.has(key))) continue;
+      if (ex.origin !== 'auto' || hidden.has(ex.root_id) || groups.has(key) || (scope && !scope.has(key))) continue;
       del.run(ex.id);
       existing.delete(key);
       removed++;
@@ -331,14 +335,15 @@ export class CollectionService {
              WHERE collection_id IN (SELECT value FROM json_each(@colls)) AND id NOT IN (SELECT value FROM json_each(@keep))`,
           )
           .run({
-            colls: JSON.stringify([...existing.entries()].filter(([k]) => scope.has(k)).map(([, c]) => c.id)),
+            colls: JSON.stringify([...existing.entries()].filter(([k, c]) => scope.has(k) && !hidden.has(c.root_id)).map(([, c]) => c.id)),
             keep: keepJson,
           })
       : db
           .prepare(
-            'UPDATE images SET collection_id = NULL, page_no = NULL WHERE collection_id IS NOT NULL AND id NOT IN (SELECT value FROM json_each(?))',
+            `UPDATE images SET collection_id = NULL, page_no = NULL
+             WHERE collection_id IS NOT NULL AND id NOT IN (SELECT value FROM json_each(@keep)) AND root_id NOT IN (SELECT value FROM json_each(@hidden))`,
           )
-          .run(keepJson);
+          .run({ keep: keepJson, hidden: JSON.stringify([...hidden]) });
     pagesChanged += clear.changes;
     const total = db.prepare("SELECT COUNT(*) FROM collections WHERE state = 'active'").pluck().get() as number;
     return { active: total, created, removed, updated, pagesChanged };

@@ -198,4 +198,65 @@ describe('DedupeService + 接口（:memory:）', () => {
     expect(done!.images).toHaveLength(3); // 已处理的保留全部成员
     expect((await ds.getStats()).duplicateGroupCount).toBe(0);
   });
+
+  it('resolve：副本上手动做的整理并到保留的图上（手动角色、收藏、原创、分级、画师），识别器认的不搬', async () => {
+    const db = ds.ctx.db;
+    const a = addImage('a.png', 's1', H);
+    const b = addImage('a (1).png', 's1', H);
+    const LATER = '2026-02-01T00:00:00.000Z';
+    db.prepare("INSERT INTO characters (id, name, source, created_at) VALUES (1, '漂泊者', 'custom', ?), (2, '莫宁', 'custom', ?), (3, '识别的', 'custom', ?)").run(T, T, T);
+    const link = db.prepare('INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, ?, ?, ?, ?)');
+    link.run(a, 1, 'manual', null, T);
+    link.run(b, 2, 'manual', null, LATER);
+    link.run(b, 3, 'tagger', 0.9, T);
+    db.prepare("UPDATE images SET favorite = 1, original_at = ?, rating = 'questionable', rating_manual = 1, artist_manual = 1 WHERE id = ?").run(LATER, b);
+    db.prepare("INSERT INTO image_artists (image_id, artist, score) VALUES (?, 'kantoku', 1), (?, 'someone', 0.8)").run(b, a);
+    ds.dedupe.runOnce();
+    const [g] = await ds.listDuplicates({});
+    expect(g!.suggestedKeepId).toBe(String(a));
+    await ds.resolveDuplicate(g!.id, [String(a)]);
+
+    expect(db.prepare('SELECT character_id, origin, added_at FROM image_characters WHERE image_id = ? ORDER BY character_id').all(a)).toEqual([
+      { character_id: 1, origin: 'manual', added_at: T },
+      { character_id: 2, origin: 'manual', added_at: LATER },
+    ]);
+    expect(db.prepare('SELECT favorite, original_at, rating, rating_manual, artist_manual FROM images WHERE id = ?').get(a)).toEqual({
+      favorite: 1,
+      original_at: LATER,
+      rating: 'questionable',
+      rating_manual: 1,
+      artist_manual: 1,
+    });
+    expect(db.prepare('SELECT artist FROM image_artists WHERE image_id = ?').pluck().all(a)).toEqual(['kantoku']);
+    expect((await ds.getImage(String(a)))!.characterIds.sort()).toEqual(['1', '2']);
+  });
+
+  it('resolve：副本归为原创时，保留的图也挂到「原创」作品上（原创页里看得到）', async () => {
+    const db = ds.ctx.db;
+    const a = addImage('a.png', 's1', H);
+    const b = addImage('a (1).png', 's1', H);
+    await ds.bulkImages({ ids: [String(b)], action: { type: 'original', value: true } });
+    ds.dedupe.runOnce();
+    const [g] = await ds.listDuplicates({});
+    await ds.resolveDuplicate(g!.id, [String(a)]);
+    const wid = (await ds.getStats()).originalWorkId!;
+    expect(db.prepare('SELECT score FROM image_copyrights WHERE image_id = ? AND work_id = ?').all(a, Number(wid))).toEqual([{ score: null }]);
+    expect((await ds.getImage(String(a)))!.original).toBe(true);
+    expect((await ds.listImages({ workId: wid })).items.map((x) => x.id)).toEqual([String(a)]);
+    expect((await ds.listWorks({})).find((w) => w.id === wid)!.imageCount).toBe(1);
+  });
+
+  it('resolve：保留的图自己改过的分级、画师不被副本覆盖', async () => {
+    const db = ds.ctx.db;
+    const a = addImage('a.png', 's1', H);
+    const b = addImage('a (1).png', 's1', H);
+    db.prepare("UPDATE images SET rating = 'general', rating_manual = 1, artist_manual = 1 WHERE id = ?").run(a);
+    db.prepare("UPDATE images SET rating = 'explicit', rating_manual = 1, artist_manual = 1 WHERE id = ?").run(b);
+    db.prepare("INSERT INTO image_artists (image_id, artist, score) VALUES (?, 'kantoku', 1)").run(b);
+    ds.dedupe.runOnce();
+    const [g] = await ds.listDuplicates({});
+    await ds.resolveDuplicate(g!.id, [String(a)]);
+    expect(db.prepare('SELECT rating, favorite FROM images WHERE id = ?').get(a)).toEqual({ rating: 'general', favorite: 0 });
+    expect(db.prepare('SELECT count(*) FROM image_artists WHERE image_id = ?').pluck().get(a)).toBe(0);
+  });
 });

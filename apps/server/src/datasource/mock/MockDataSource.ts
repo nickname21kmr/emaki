@@ -853,7 +853,8 @@ export class MockDataSource implements DataSource {
     if (id === targetId) throw new BadRequestError('不能合并到自己');
     const from = this.requireCharacter(id);
     const to = this.requireCharacter(targetId);
-    const toBefore = structuredClone(to);
+    const newCountBefore = to.newCount;
+    const addedAliases = [from.name, ...from.aliases].filter((a) => !to.aliases.includes(a));
     const touched: [ImageRow, ID[]][] = [];
     for (const img of this.db.images.values()) {
       if (!img.characterIds.includes(id)) continue;
@@ -865,8 +866,10 @@ export class MockDataSource implements DataSource {
     this.db.characters.delete(id);
     return this.withUndo(`已把「${from.name}」合并进「${to.name}」（${touched.length} 张）`, () => {
       this.db.characters.set(from.id, from);
-      Object.assign(to, toBefore);
-      for (const [img, ids] of touched) img.characterIds = ids;
+      // 同 sqlite：只回退合并本身改的，合并之后别处给目标、给这些图加的别名和角色留着
+      to.aliases = to.aliases.filter((a) => !addedAliases.includes(a));
+      to.newCount = newCountBefore;
+      for (const [img, ids] of touched) img.characterIds = [...ids, ...img.characterIds.filter((c) => c !== targetId && !ids.includes(c))];
     });
   }
 
@@ -1410,12 +1413,46 @@ export class MockDataSource implements DataSource {
     if (!keepIds.length) throw new BadRequestError('至少保留一张');
     if (keepIds.some((k) => !group.imageIds.includes(k))) throw new BadRequestError('保留的图不在这个重复组里');
     const trashed = group.imageIds.filter((iid) => !keepIds.includes(iid)).map((iid) => this.db.images.get(iid)!);
+    const kept = keepIds.map((k) => this.db.images.get(k)!).filter((img) => !img.trashed);
+    const before = kept.map((r) => ({
+      r,
+      characterIds: r.characterIds,
+      favorite: r.favorite,
+      originalAt: r.originalAt,
+      copyrightWorkIds: r.copyrightWorkIds,
+      rating: r.rating,
+      ratingManual: r.ratingManual,
+      artists: r.artists,
+      artistsManual: r.artistsManual,
+    }));
+    this.carryOver(kept, trashed.filter((img) => this.isVisible(img)));
     for (const img of trashed) img.trashed = true;
     group.resolved = true;
     return this.withUndo(`已保留 ${keepIds.length} 张，${trashed.length} 张移到回收站`, () => {
       for (const img of trashed) img.trashed = false;
+      for (const { r, ...b } of before) Object.assign(r, b);
       group.resolved = false;
     });
+  }
+
+  /** 同 sqlite/duplicates.ts 的 carryOver：副本上手动做的整理并到保留的图上（mock 不分角色来源，副本的角色都并过去） */
+  private carryOver(kept: ImageRow[], gone: ImageRow[]): void {
+    const strict: Rating[] = ['explicit', 'questionable', 'sensitive', 'general'];
+    const rating = strict.find((x) => gone.some((g) => g.ratingManual && g.rating === x));
+    const originalAt = gone.map((g) => g.originalAt).filter((x): x is string => !!x).sort()[0];
+    const artistSrc = gone.find((g) => g.artistsManual);
+    for (const k of kept) {
+      k.characterIds = [...new Set([...k.characterIds, ...gone.flatMap((g) => g.characterIds)])];
+      if (gone.some((g) => g.favorite)) k.favorite = true;
+      if (!k.originalAt && originalAt) {
+        // 同 sqlite：连「原创」作品的关联一起补上
+        k.originalAt = originalAt;
+        const wid = this.originalWorkId();
+        if (!k.copyrightWorkIds.includes(wid)) k.copyrightWorkIds = [...k.copyrightWorkIds, wid];
+      }
+      if (!k.ratingManual && rating) Object.assign(k, { rating, ratingManual: true });
+      if (!k.artistsManual && artistSrc) Object.assign(k, { artists: [...(artistSrc.artists ?? [])], artistsManual: true });
+    }
   }
 
   async ignoreDuplicate(id: ID): Promise<MutationResult> {
@@ -1471,6 +1508,10 @@ export class MockDataSource implements DataSource {
         predicate = (x) => x.id === img.id;
         break;
       }
+    }
+    // 和 sqlite 一样：同一条规则不能建两次
+    if (this.db.exclusions.some((e) => e.kind === body.kind && e.target === target)) {
+      throw new ConflictError('已经有这条排除规则了');
     }
     const row = { id: `x${this.db.exclusions.length + 1}_${hashString(target).toString(36)}`, kind: body.kind, target, label, createdAt: new Date().toISOString() };
     this.db.exclusions.push(row);
@@ -1677,9 +1718,12 @@ export class MockDataSource implements DataSource {
             ? `已改成按漫画导入：${rows.length} 张归到漫画，不再识别`
             : '已改回按插画识别：没识别过的图会开始识别'
           : `按漫画导入的分级改成了「${RATING_LABEL[next.comicRating]}」`;
+    // 重新启用（含撤销停用）时扫一遍（同 sqlite）
+    if (next.enabled && !before.enabled) this.jobs.enqueue('scan', { requeueIfRunning: true });
     return this.withUndo(message, () => {
       Object.assign(root, before);
       for (const s of snap) Object.assign(s.img, { kind: s.kind, kindSource: s.kindSource, kindEvidence: s.kindEvidence, rating: s.rating, characterIds: s.characterIds });
+      if (before.enabled && !next.enabled) this.jobs.enqueue('scan', { requeueIfRunning: true });
     });
   }
 
@@ -1759,6 +1803,7 @@ export class MockDataSource implements DataSource {
     const [root] = this.db.settings.libraryRoots.splice(idx, 1);
     return this.withUndo(`已移除文件夹（不会删除磁盘上的文件）：${root!.path}`, () => {
       this.db.settings.libraryRoots.splice(idx, 0, root!);
+      if (root!.enabled) this.jobs.enqueue('scan', { requeueIfRunning: true });
     });
   }
 

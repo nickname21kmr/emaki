@@ -349,7 +349,13 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     const { status, json } = await call('GET', '/api/health');
     expect(status).toBe(200);
     // keepAwake 只在 sqlite 下有（防休眠状态）
-    expect(json).toMatchObject({ ok: true, dataSource: expect.any(String), version: expect.any(String), dataDir: expect.any(String) });
+    expect(json).toMatchObject({
+      ok: true,
+      dataSource: expect.any(String),
+      version: expect.any(String),
+      dataDir: expect.any(String),
+      bootId: expect.any(String),
+    });
   });
 
   route('POST /api/system/pick-folder', async () => {
@@ -503,6 +509,64 @@ describe('本机安全（T23）', () => {
     expect([bare.statusCode, bare.json()]).toEqual([415, apiError('bad_request')]);
     const text = await app.inject({ method: 'POST', url: '/api/undo/x', headers: { 'content-type': 'text/plain' }, payload: 'x' });
     expect(text.statusCode).toBe(415);
+    // 百分号编码的路径路由时会解码，照样命中 /api/...，也要拦
+    for (const url of ['/%61pi/characters/c1/seen', '/a%70i/system/network-check', '/%61pi/duplicates/d1/ignore']) {
+      const res = await app.inject({ method: 'POST', url, headers: { 'content-type': 'text/plain' }, payload: 'x' });
+      expect([url, res.statusCode]).toEqual([url, 415]);
+    }
+    expect((await call('GET', '/api/duplicates')).json).toHaveLength(1);
+  });
+
+  // 开发时 vite 代理不改 Host（changeOrigin: false），生产和桌面窗口都是 127.0.0.1:5174 同源
+  const own = [
+    { host: 'localhost:5173', origin: 'http://localhost:5173' },
+    { host: '127.0.0.1:5174', origin: 'http://127.0.0.1:5174' },
+  ];
+
+  it('自己的页面：Origin 和 Host 一致 → 放行', async () => {
+    for (const { host, origin } of own) {
+      const headers = { host, origin, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' };
+      const res = await app.inject({ method: 'POST', url: '/api/characters/c1/seen', headers, payload: '{}' });
+      expect([host, res.statusCode]).toEqual([host, 200]);
+      const get = await app.inject({ method: 'GET', url: '/api/health', headers: { host, 'sec-fetch-site': 'same-origin' } });
+      expect(get.statusCode).toBe(200);
+    }
+  });
+
+  it('本机其他端口的页面 → 403，没有 CORS 头', async () => {
+    const evil = { host: '127.0.0.1:5174', origin: 'http://127.0.0.1:8188' };
+    const bulk = await app.inject({
+      method: 'POST',
+      url: '/api/images/bulk',
+      headers: { ...evil, 'sec-fetch-site': 'same-site', 'content-type': 'application/json' },
+      payload: { ids: ['i1'], action: { type: 'trash' } },
+    });
+    expect([bulk.statusCode, bulk.json()]).toEqual([403, apiError('bad_request')]);
+    expect(bulk.headers['access-control-allow-origin']).toBeUndefined();
+    const preflight = await app.inject({
+      method: 'OPTIONS',
+      url: '/api/images/bulk',
+      headers: { ...evil, 'access-control-request-method': 'POST', 'access-control-request-headers': 'content-type' },
+    });
+    expect(preflight.statusCode).toBe(403);
+    expect(preflight.headers['access-control-allow-origin']).toBeUndefined();
+    const read = await app.inject({ method: 'GET', url: '/api/images?limit=2', headers: { host: '127.0.0.1:5174', origin: 'http://localhost:8888' } });
+    expect(read.statusCode).toBe(403);
+    expect(read.headers['access-control-allow-origin']).toBeUndefined();
+    // 不带 Origin、只有 sec-fetch-site 的写请求也拦
+    const noOrigin = await app.inject({
+      method: 'POST',
+      url: '/api/characters/c1/seen',
+      headers: { host: '127.0.0.1:5174', 'sec-fetch-site': 'cross-site', 'content-type': 'application/json' },
+      payload: '{}',
+    });
+    expect(noOrigin.statusCode).toBe(403);
+  });
+
+  it('跨站的图片 GET（<img>、CSS 背景，不带 Origin）照常放行', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/images/i1/thumb?w=300', headers: { host: '127.0.0.1:5174', 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'no-cors' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
 });
 

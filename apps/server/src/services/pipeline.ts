@@ -14,7 +14,8 @@ import type { ScanRequests } from './scan/ScanRequests.ts';
 export interface TagStage {
   isReady(): boolean;
   pendingCount(): number;
-  run: JobRunner;
+  /** manual：用户点了「运行识别」。自动续跑时不去下载还没下载的旧图模型 */
+  run(ctx: JobContext, o?: { manual?: boolean }): Promise<void | string>;
 }
 /** T11 */
 export interface DanbooruStage {
@@ -62,6 +63,8 @@ export class Pipeline {
   private tagPaused = false;
   /** 用户取消了画师补跑：之后不自动续跑，直到手动点「补跑」或重新打开开关 */
   private artistsPaused = false;
+  /** 用户点了「运行识别」：下一次识别可以下载旧图模型（自动排上的不下） */
+  private tagManual = false;
 
   constructor(private d: PipelineDeps) {}
 
@@ -90,7 +93,9 @@ export class Pipeline {
         }
         case 'tag': {
           if (!this.d.tag) throw new NotImplementedError('T10', '角色识别');
-          const msg = await this.d.tag.run(ctx);
+          const manual = this.tagManual;
+          this.tagManual = false;
+          const msg = await this.d.tag.run(ctx, { manual });
           if (ctx.signal.aborted) this.tagPaused = true;
           if (!ctx.signal.aborted && !ctx.yielded) {
             this.d.afterTag?.();
@@ -128,7 +133,10 @@ export class Pipeline {
     // 有「刚写入、延后处理」的文件：它们的目录已在 requests 里，过一会儿再扫一次，
     // 否则要等下一个文件事件才会入库（浏览器刚下载完的图就是这种情况）
     if (s.deferred > 0) {
-      const t = setTimeout(() => this.d.jobs().enqueue('scan', { requeueIfRunning: true }), DEFERRED_RETRY_MS);
+      const t = setTimeout(() => {
+        // 这期间别的扫描（监听触发的）可能已经把这些目录取走了：没有待扫的就不排，空请求会被当成全量扫描
+        if (this.d.requests.pending) this.d.jobs().enqueue('scan', { requeueIfRunning: true });
+      }, DEFERRED_RETRY_MS);
       t.unref();
     }
     const changed = s.added + s.updated + s.moved + s.restored > 0;
@@ -150,7 +158,10 @@ export class Pipeline {
 
   /** 用户手动开始某个任务（取消识别后再点「运行识别」→ 恢复自动续跑） */
   noteManualStart(kind: JobKind): void {
-    if (kind === 'tag') this.tagPaused = false;
+    if (kind === 'tag') {
+      this.tagPaused = false;
+      this.tagManual = true;
+    }
     if (kind === 'artists') this.artistsPaused = false;
   }
 

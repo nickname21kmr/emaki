@@ -64,6 +64,31 @@ export function applyExclusionRules(ctx: SqliteContext, scope: { imageIds?: numb
   return n;
 }
 
+export type NewlyExcluded = { id: number; excluded_by: number }[];
+
+/** 同 applyExclusionRules，另外返回这次新排除的图和排除它的规则（撤销用，交给 revertNewlyExcluded）。必须在事务内调用 */
+export function applyExclusionRulesTracked(ctx: SqliteContext, imageIds: number[]): NewlyExcluded {
+  const free = ctx.db
+    .prepare('SELECT id FROM images WHERE excluded_by IS NULL AND id IN (SELECT value FROM json_each(?))')
+    .pluck()
+    .all(JSON.stringify(imageIds)) as number[];
+  if (!applyExclusionRules(ctx, { imageIds: free })) return [];
+  return ctx.db
+    .prepare('SELECT id, excluded_by FROM images WHERE excluded_by IS NOT NULL AND id IN (SELECT value FROM json_each(?))')
+    .all(JSON.stringify(free)) as NewlyExcluded;
+}
+
+/**
+ * 撤销移动、改类型时调用：这些图还是被同一条规则排除的就放出来（期间换了规则、手动恢复过的不动），
+ * 再按现有规则重新排除一遍，回到原位后还命中的照样排除。必须在事务内调用
+ */
+export function revertNewlyExcluded(ctx: SqliteContext, rows: NewlyExcluded): void {
+  if (!rows.length) return;
+  const clear = ctx.db.prepare('UPDATE images SET excluded_by = NULL WHERE id = @id AND excluded_by = @excluded_by');
+  for (const r of rows) clear.run(r);
+  applyExclusionRules(ctx, { imageIds: rows.map((r) => r.id) });
+}
+
 /** 规范化 + 插入 + 应用 + 记录撤销。T18 批量排除复用（多张图一个撤销记录） */
 export function createExclusionInTx(
   ctx: SqliteContext,

@@ -106,14 +106,14 @@ import { CharacterMutations } from './characters.ts';
 import { UnrecognizedQueries } from './unrecognized.ts';
 import { createContext } from './context.ts';
 import { Derived } from './derived.ts';
-import { applyExclusionRules, ExclusionQueries } from './exclusions.ts';
+import { applyExclusionRules, applyExclusionRulesTracked, ExclusionQueries, revertNewlyExcluded, type NewlyExcluded } from './exclusions.ts';
 import { LibraryQueries } from './library.ts';
 import { TagResultWriter } from '../../services/tagger/writer.ts';
 import { moveBack, moveImageFiles, normalizeSubdir, type MoveRow } from './move.ts';
 import { artistNames, imageArtists, linkGroups, listArtists as listArtistsQuery, tagNames } from './artists.ts';
 import { artistLinksMessage, linkTags, planArtistLinks } from '../artistEdits.ts';
-import { diskCaseRel, mergeChildRoots, relUnder, type ChildRoot } from './roots.ts';
-import { applySettingsPatch, getDanbooruApiKey, isInside, normalizeRootPath, patchSettingsInternal, readSettings, samePath } from './settings.ts';
+import { adoptFromRemovedParents, diskCaseRel, mergeChildRoots, relUnder, type ChildRoot } from './roots.ts';
+import { applySettingsPatch, getDanbooruApiKey, isInside, normalizeRootPath, patchSettingsInternal, readSettings, rootPathKey, samePath } from './settings.ts';
 import { iso, MIME, parseId, toId, VISIBLE } from './sql.ts';
 
 /** 改图库文件夹的导入方式会改这些列（撤销用） */
@@ -152,7 +152,8 @@ export class SqliteDataSource implements DataSource {
     const db = openDatabase(opts.memory ? ':memory:' : path.join(dataDir, 'emaki.sqlite'));
     migrate(db, { backupDir: opts.memory ? undefined : dataDir, log: (m) => console.log(m) });
     db.pragma('optimize = 0x10002'); // 长连接：打开时一次，之后每小时一次
-    if (refreshPlannerStats(db)) console.log('[db] 行数变化较大，已重新采样查询统计');
+    // 启动时不精确数 image_tags（冷缓存下 2 秒多）；识别跑完、每小时那次照常数
+    if (refreshPlannerStats(db, { skipImageTags: true })) console.log('[db] 行数变化较大，已重新采样查询统计');
     const ds = new SqliteDataSource(db, bus, dataDir, opts);
     ds.purgeRemovedRoots();
     backfillSources(db); // 来源解析规则升级后重算
@@ -237,11 +238,11 @@ export class SqliteDataSource implements DataSource {
     const lastRunAt = readSettings(db).dedupe.lastRunAt;
     const lastThumb = db.prepare('SELECT MAX(thumb_at) FROM images').pluck().get() as string | null;
     if (lastThumb !== null && (lastRunAt === null || lastThumb > lastRunAt)) ds.pipeline.markDedupeDirty();
-    // 搜索的标签张数（T20）：打标签结束立即刷新
+    // 搜索的标签张数（T20）：打标签结束标记过期，下次搜索时刷新
     // register 是覆盖式的：识别结束、扫描结束后的钩子都写在这一处
     ds.pipeline.register({
       afterTag: () => {
-        ds.searchQueries.refreshNow();
+        ds.searchQueries.markStale();
         ds.refreshCollections('tag');
       },
       // 扫描有变化才重算合集（RV-C-9）：延后重扫大约 3 秒一次，没变化时不要全量读库
@@ -285,7 +286,7 @@ export class SqliteDataSource implements DataSource {
     if (process.env.EMAKI_COLLECTIONS === '0') return;
     const run = () => void (ids === 'all' ? this.collections.refreshAll() : this.collections.refreshDirs(ids));
     run();
-    undo?.onUndo(run);
+    undo?.onUndoLast(run);
   };
   private readonly duplicates: DuplicateQueries;
   /** ⌘K 搜索（T20） */
@@ -362,7 +363,7 @@ export class SqliteDataSource implements DataSource {
         this.derived.invalidate(soft);
         this.unrecognized.invalidate(soft);
         this.results.invalidate(soft);
-        this.searchQueries.scheduleRefresh();
+        this.searchQueries.markStale();
       }
     });
     // 扫描 / 识别跑完后行数可能变了很多（首次导入）：查询统计过期会让列表走错计划（T22）
@@ -382,6 +383,17 @@ export class SqliteDataSource implements DataSource {
   private autoTag = true;
   private requestTag(): void {
     if (this.autoTag) this.pipeline.requestTag();
+  }
+
+  /**
+   * 文件夹重新显示（启用、撤销停用或移除）：隐藏期间跑过查重的话，它的未处理重复组已在对账时删掉，排一次查重找回来。
+   * since 是开始隐藏的时间，不知道时传 null（查过重就排）
+   */
+  private redupeAfterHidden(since: string | null): void {
+    const last = readSettings(this.ctx.db).dedupe.lastRunAt;
+    if (last === null || (since !== null && last < since)) return;
+    this.pipeline.markDedupeDirty();
+    this.ctx.jobs.enqueue('dedupe');
   }
 
   private watchedRoots(): WatchedRoot[] {
@@ -409,7 +421,6 @@ export class SqliteDataSource implements DataSource {
     await this.watcher?.close();
     await shutdownTagger(); // 关掉推理子进程，释放显存
     clearInterval(this.optimizeTimer);
-    this.searchQueries.dispose();
     closeDatabase(this.ctx.db);
   }
 
@@ -728,10 +739,11 @@ export class SqliteDataSource implements DataSource {
     const json = JSON.stringify(ids);
     const charSnap = this.ctx.db.prepare("SELECT * FROM image_characters WHERE origin = 'tagger' AND image_id IN (SELECT value FROM json_each(?))").all(json);
     const retagSnap = this.ctx.db.prepare('SELECT id, retag FROM images WHERE id IN (SELECT value FROM json_each(?))').all(json);
-    // 移进了被排除的文件夹：照规则排除；移进 / 移出按漫画导入的文件夹：类型、分级跟着文件夹
+    // 移进了被排除的文件夹：照规则排除（记下新排除的，撤销时放出来）；移进 / 移出按漫画导入的文件夹：类型、分级跟着文件夹
+    let excluded: NewlyExcluded = [];
     if (ids.length)
       this.ctx.db.transaction(() => {
-        applyExclusionRules(this.ctx, { imageIds: ids });
+        excluded = applyExclusionRulesTracked(this.ctx, ids);
         syncRootModes(this.ctx.db, ids);
       })();
     this.ctx.touch();
@@ -764,6 +776,8 @@ export class SqliteDataSource implements DataSource {
         // 重新识别的标记最后按移动前写回（同步可能刚标过）
         const setRetag = this.ctx.db.prepare('UPDATE images SET retag = @retag WHERE id = @id');
         for (const r of retagSnap as { id: number; retag: number }[]) setRetag.run({ id: r.id, retag: lost.has(r.id) ? 1 : r.retag });
+        // 移动时按规则排除的：移回原位不再命中就放出来（没能移回的照规则还会排除）
+        revertNewlyExcluded(this.ctx, excluded);
       })();
       this.ctx.touch();
       if (back.failed.length) throw new ConflictError(`移回了 ${back.restored} 张，${back.failed.length} 张没能移回（文件或位置已经变了）`);
@@ -940,35 +954,40 @@ export class SqliteDataSource implements DataSource {
   }
 
   async addLibraryRoot(body: AddLibraryRootBody): Promise<MutationResult> {
-    const p = normalizeRootPath(body.path);
+    const input = normalizeRootPath(body.path);
     try {
-      const st = await stat(p);
+      const st = await stat(input);
       if (!st.isDirectory()) throw new BadRequestError('这不是一个文件夹');
     } catch (err) {
       if (err instanceof BadRequestError) throw err;
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'EACCES' || code === 'EPERM') throw new BadRequestError('没有权限读取这个文件夹');
-      throw new BadRequestError(`找不到这个文件夹：${p}`);
+      throw new BadRequestError(`找不到这个文件夹：${input}`);
     }
+    // 同一个文件夹换种写法（联接点、subst 盘、\\?\ 前缀、映射盘和 UNC 路径）也要认出来：下面的判断都按真实位置比较。
+    // 存的还是用户选的写法，只有 \\?\、\\.\ 开头的换成普通路径
+    const pk = await rootPathKey(input);
+    const p = /^\/\/[?.]\//.test(input) ? pk : input;
 
     const db = this.ctx.db;
     const mode = body.mode === 'comic' ? 'comic' : 'auto';
     const comicRating = body.comicRating ?? 'general';
-    const rows = db.prepare('SELECT id, path, enabled, removed_at, imported_at, content_mode FROM library_roots').all() as (ChildRoot & {
+    const rawRows = db.prepare('SELECT id, path, enabled, removed_at, imported_at, content_mode FROM library_roots').all() as (ChildRoot & {
       enabled: number;
       content_mode: string;
     })[];
+    const rows = await Promise.all(rawRows.map(async (r) => ({ ...r, key: await rootPathKey(r.path) })));
     const active = rows.filter((r) => r.removed_at === null);
-    if (active.some((r) => samePath(r.path, p))) throw new BadRequestError('这个文件夹已经在图库里了');
-    const parent = active.find((r) => isInside(p, r.path));
+    if (active.some((r) => samePath(r.key, pk))) throw new BadRequestError('这个文件夹已经在图库里了');
+    const parent = active.find((r) => isInside(pk, r.key));
     // 已有图库文件夹里面的子文件夹：选了漫画就把这个子文件夹按漫画导入，不另加图库文件夹
-    if (parent && mode === 'comic') return this.setComicFolder(parent, await diskCaseRel(parent.path, relUnder(parent.path, p)), comicRating);
+    if (parent && mode === 'comic') return this.setComicFolder(parent, await diskCaseRel(parent.path, relUnder(parent.key, pk)), comicRating);
     if (parent) throw new BadRequestError(`已经包含在「${parent.path}」里了，不用单独添加。要把它当漫画，选「漫画 · 跳过识别」再添加`);
-    const d = normalizeRootPath(this.ctx.dataDir);
-    if (samePath(p, d) || isInside(p, d) || isInside(d, p)) throw new BadRequestError('不能把 Emaki 的数据目录加入图库');
+    const d = await rootPathKey(normalizeRootPath(this.ctx.dataDir));
+    if (samePath(pk, d) || isInside(pk, d) || isInside(d, pk)) throw new BadRequestError('不能把 Emaki 的数据目录加入图库');
 
     // 新文件夹包含已有的文件夹：问一下再合并。以前移除过的子文件夹直接接管，找回当时的整理结果
-    const children = rows.filter((r) => isInside(r.path, p));
+    const children = rows.filter((r) => isInside(r.key, pk));
     const activeChildren = children.filter((r) => r.removed_at === null);
     if (activeChildren.length && !body.merge) {
       const names = activeChildren.map((r) => `「${r.path}」`).join('');
@@ -987,9 +1006,17 @@ export class SqliteDataSource implements DataSource {
       db.exec(`VACUUM INTO '${backup.replace(/\\/g, '/').replace(/'/g, "''")}'`);
     }
 
-    const removed = rows.find((r) => r.removed_at !== null && samePath(r.path, p));
+    const removed = rows.find((r) => r.removed_at !== null && samePath(r.key, pk));
+    // 在移除过的父文件夹里面添加：接管父文件夹在这里面的旧记录，由内往外
+    const removedParents = await Promise.all(
+      rows
+        .filter((r) => r.removed_at !== null && isInside(pk, r.key))
+        .sort((a, b) => b.key.length - a.key.length)
+        .map(async (r) => ({ id: r.id, imported_at: r.imported_at, prefix: await diskCaseRel(r.path, relUnder(r.key, pk)) })),
+    );
     let rootId = 0;
     let merged = 0;
+    let adopted = 0;
     db.transaction(() => {
       if (removed) {
         // 复活：旧图和识别结果全部回来
@@ -1005,22 +1032,29 @@ export class SqliteDataSource implements DataSource {
           db.prepare('INSERT INTO library_roots (path, enabled, content_mode, comic_rating) VALUES (?, 1, ?, ?)').run(p, mode, comicRating).lastInsertRowid,
         );
       }
-      if (children.length) merged = mergeChildRoots(db, rootId, p, children).images;
-      // 复活、合并进来的旧图按这次的设置重判类型（按漫画导入：归漫画、用选的分级）
-      if (removed || children.length) this.applyRootMode(rootId);
+      // 子文件夹在新文件夹下的相对路径按真实位置算（两边可能是不同写法）
+      if (children.length) merged = mergeChildRoots(db, rootId, pk, children.map((c) => ({ ...c, path: c.key }))).images;
+      if (removedParents.length) adopted = adoptFromRemovedParents(db, rootId, removedParents).images;
+      // 复活、合并、接管进来的旧图按这次的设置重判类型（按漫画导入：归漫画、用选的分级）
+      if (removed || children.length || adopted) this.applyRootMode(rootId);
     })();
-    if (children.length || removed) this.collectionsHook(null, 'all');
+    if (children.length || removed || adopted) {
+      this.collectionsHook(null, 'all');
+      // 这些旧图隐藏期间跑过的查重会把它们的未处理重复组删掉：这次扫描完（哪怕没有新图）再查一次
+      this.pipeline.markDedupeDirty();
+    }
     this.ctx.touch();
     this.notifyRoots();
     // 只扫新文件夹；扫描正在跑时也再排一次，别丢了这个请求
     this.requests.addDirty({ rootId, relDir: '', recursive: true });
     this.ctx.jobs.enqueue('scan', { requeueIfRunning: true });
+    const found = adopted ? `（找回了 ${adopted} 张图以前的整理结果）` : '';
     return done(
       activeChildren.length
-        ? `已合并成一个文件夹（保留了 ${merged} 张图的整理结果），开始扫描其余部分：${p}`
+        ? `已合并成一个文件夹（保留了 ${merged + adopted} 张图的整理结果），开始扫描其余部分：${p}`
         : mode === 'comic'
-          ? `已按漫画导入，开始扫描（不识别，每个子文件夹成一本）：${p}`
-          : `已添加文件夹，开始扫描：${p}`,
+          ? `已按漫画导入${found}，开始扫描（不识别，每个子文件夹成一本）：${p}`
+          : `已添加文件夹${found}，开始扫描：${p}`,
     );
   }
 
@@ -1116,6 +1150,7 @@ export class SqliteDataSource implements DataSource {
     const snap = touchesImages
       ? (db.prepare(`SELECT id, tagged_at, ${ROOT_MODE_COLS.join(', ')} FROM images WHERE root_id = ?`).all(root.id) as RootImageSnap[])
       : [];
+    const at = iso(this.ctx.clock());
     const result = this.ctx.mutate((u) => {
       u.columns('library_roots', cols, [root.id]);
       db.prepare('UPDATE library_roots SET enabled = ?, content_mode = ?, comic_rating = ? WHERE id = ?').run(enabled, mode, rating, root.id);
@@ -1126,6 +1161,9 @@ export class SqliteDataSource implements DataSource {
         this.collectionsHook(null, 'all');
         this.ctx.touch();
         this.notifyRoots();
+        // 撤销停用：重新启用了，停用期间的变化要扫进来
+        if (!enabled && cur.enabled) this.rescanRoot(root.id);
+        if (!enabled && cur.enabled) this.redupeAfterHidden(at);
         // 撤销「改成漫画」回到插画：没识别过的图接着识别
         if (modeChanged && cur.content_mode !== 'comic') this.requestTag();
       });
@@ -1145,6 +1183,8 @@ export class SqliteDataSource implements DataSource {
     this.collectionsHook(null, 'all');
     this.ctx.touch();
     this.notifyRoots();
+    if (enabled && !cur.enabled) this.rescanRoot(root.id);
+    if (enabled && !cur.enabled) this.redupeAfterHidden(null);
     // 改回插画：没识别过的图接着识别（模型在、用户没暂停时；正在识别也再排一轮）
     if (modeChanged && mode === 'auto') this.requestTag();
     return result;
@@ -1189,10 +1229,20 @@ export class SqliteDataSource implements DataSource {
     });
   }
 
+  /**
+   * 停用、移除期间磁盘上的变化监听器收不到，全量扫描也跳过这个文件夹：重新启用（包括撤销停用、撤销移除）时整个扫一遍。
+   * 扫描正在跑时也再排一次，别丢了这个请求
+   */
+  private rescanRoot(rootId: number): void {
+    this.requests.addDirty({ rootId, relDir: '', recursive: true });
+    this.ctx.jobs.enqueue('scan', { requeueIfRunning: true });
+  }
+
   async removeLibraryRoot(id: ID): Promise<MutationResult> {
     const root = this.requireRoot(id);
     const set = this.ctx.db.prepare('UPDATE library_roots SET removed_at = ? WHERE id = ?');
-    set.run(iso(this.ctx.clock()), root.id);
+    const at = iso(this.ctx.clock());
+    set.run(at, root.id);
     this.collectionsHook(null, 'all');
     this.ctx.touch();
     this.notifyRoots();
@@ -1201,6 +1251,10 @@ export class SqliteDataSource implements DataSource {
       this.collectionsHook(null, 'all');
       this.ctx.touch();
       this.notifyRoots();
+      if (this.ctx.db.prepare('SELECT enabled FROM library_roots WHERE id = ?').pluck().get(root.id)) {
+        this.rescanRoot(root.id);
+        this.redupeAfterHidden(at);
+      }
     });
   }
 
@@ -1213,7 +1267,8 @@ export class SqliteDataSource implements DataSource {
     // 用户手动点的：之前读不到、正在退避的图也马上重试（比如刚把移动硬盘插回去）
     if (kind === 'tag' || kind === 'artists') resetIoBackoff();
     this.pipeline.noteManualStart(kind);
-    return this.ctx.jobs.enqueue(kind);
+    // 手动扫描时正在跑监听触发的增量扫描：它开始时已经取走了请求，不再排一次的话这次全量扫描就被吞了
+    return this.ctx.jobs.enqueue(kind, { requeueIfRunning: kind === 'scan' });
   }
   async cancelJob(id: ID): Promise<void> {
     // 排队中的任务被取消时 runner 不会执行，pipeline 收不到「被取消」：这里先记下暂停，免得识别一结束又排上

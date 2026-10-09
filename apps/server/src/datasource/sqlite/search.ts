@@ -1,6 +1,6 @@
 /**
  * ⌘K 搜索（T20）：角色、作品、标签三类，规则与 mock 一致（searchKey 子串匹配，名额也一样）。
- * 角色 / 作品来自 Derived 缓存；标签用 tags.image_count 缓存（打标签后立即刷新，其他变化防抖 5 秒）。
+ * 角色 / 作品来自 Derived 缓存；标签用 tags.image_count 缓存（图库有变化只标记过期，下次搜索时再刷新）。
  */
 import { searchKey, TAG_FILTER_MIN_SCORE, type SearchHit, type SearchQuery, type TagSuggestion, type TagSuggestionsQuery } from '@emaki/shared';
 import { stripZhQualifier } from '../../services/i18n/humanize.ts';
@@ -8,28 +8,48 @@ import type { Db } from '../../db/connection.ts';
 import type { Derived } from './derived.ts';
 import { toCharacter, toWork } from './library.ts';
 
+/**
+ * tags.image_count = 每个标签在计入张数的图（v_counted_images）里出现几次。
+ * 不从图出发联 image_tags 再分组（330 万行进临时 B 树，真实库 3.5–6 秒）：
+ * 先沿 idx_image_tags_tag_score 按 tag_id 顺序数总数，再减去不计数的图（排除、回收站、丢失、文件夹停用，几千张）的标签。
+ * 只写张数变了的行。真实库约 0.6–1 秒，结果和原来逐个一致
+ */
 export function refreshTagCounts(db: Db): void {
   db.transaction(() => {
-    db.prepare('UPDATE tags SET image_count = 0 WHERE image_count <> 0').run();
-    db.prepare(
-      `UPDATE tags SET image_count = c.n
-       FROM (SELECT it.tag_id, COUNT(*) AS n
-             FROM image_tags it JOIN v_counted_images i ON i.id = it.image_id
-             GROUP BY it.tag_id) AS c
-       WHERE c.tag_id = tags.id`,
-    ).run();
+    const n = new Map<number, number>();
+    for (const [id, c] of db.prepare('SELECT tag_id, COUNT(*) FROM image_tags INDEXED BY idx_image_tags_tag_score GROUP BY tag_id').raw().all() as [
+      number,
+      number,
+    ][]) {
+      n.set(id, c);
+    }
+    // 条件是 v_images + excluded_by IS NULL 的反面；LEFT JOIN 是为了文件夹行不在的图也算不计数（视图里是内连接）
+    for (const [id, c] of db
+      .prepare(
+        `SELECT it.tag_id, COUNT(*) FROM images i LEFT JOIN library_roots r ON r.id = i.root_id
+         CROSS JOIN image_tags it ON it.image_id = i.id
+         WHERE NOT (r.id IS NOT NULL AND r.enabled = 1 AND r.removed_at IS NULL
+                    AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL)
+         GROUP BY it.tag_id`,
+      )
+      .raw()
+      .all() as [number, number][]) {
+      n.set(id, (n.get(id) ?? 0) - c);
+    }
+    const update = db.prepare('UPDATE tags SET image_count = ? WHERE id = ?');
+    for (const [id, cur] of db.prepare('SELECT id, image_count FROM tags').raw().all() as [number, number][]) {
+      const v = n.get(id) ?? 0;
+      if (v !== cur) update.run(v, id);
+    }
   })();
 }
-
-const DEBOUNCE_MS = 5000;
 
 export class SearchQueries {
   private tags: { name: string; key: string; count: number }[] | null = null;
   /** 标签联想用：库里有的一般标签 + 中文名 / 别名的搜索键（和 tags 一起失效） */
   private suggest: SuggestEntry[] | null = null;
-  /** 本进程还没刷新过：第一次搜索时同步刷新一次 */
-  private fresh = false;
-  private timer: NodeJS.Timeout | null = null;
+  /** tags.image_count 过期了（进程刚启动也算）：下次搜索 / 联想时同步刷新一次 */
+  private stale = true;
 
   constructor(
     private readonly db: Db,
@@ -37,28 +57,24 @@ export class SearchQueries {
   ) {}
 
   refreshNow(): void {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = null;
     refreshTagCounts(this.db);
-    this.fresh = true;
+    this.stale = false;
     this.tags = null;
     this.suggest = null;
   }
 
-  /** 图库有变化（排除、回收站、扫描……）：合并成一次刷新 */
-  scheduleRefresh(): void {
-    if (!this.fresh || this.timer) return;
-    this.timer = setTimeout(() => this.refreshNow(), DEBOUNCE_MS);
-    this.timer.unref();
-  }
-
-  dispose(): void {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = null;
+  /**
+   * 图库有变化（排除、回收站、扫描、识别……）：只记一笔，等真的搜索时再刷新。
+   * 不用计时器在后台刷：刷新是同步的，扫描 / 识别期间每几秒一次会让整个服务一次卡一秒以上
+   */
+  markStale(): void {
+    this.stale = true;
+    this.tags = null;
+    this.suggest = null;
   }
 
   private generalTags() {
-    if (!this.fresh) this.refreshNow();
+    if (this.stale) this.refreshNow();
     this.tags ??= (
       this.db.prepare("SELECT name, image_count FROM tags WHERE category = 'general' AND image_count > 0").all() as {
         name: string;
@@ -69,7 +85,7 @@ export class SearchQueries {
   }
 
   private suggestEntries(): SuggestEntry[] {
-    if (!this.fresh) this.refreshNow();
+    if (this.stale) this.refreshNow();
     this.suggest ??= (
       this.db
         .prepare(

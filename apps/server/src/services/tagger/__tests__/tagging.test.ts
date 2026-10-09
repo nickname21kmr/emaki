@@ -11,10 +11,10 @@ import { CharacterCatalog } from '../../catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../../catalog/copyrights.ts';
 import { humanizeCharacterTag, humanizeCopyrightTag } from '../../i18n/humanize.ts';
 import { HumanizeLocalizer, type AutoAlias } from '../../i18n/localizer.ts';
-import { TaggerCrashedError, type TaggerLike, type TaggerStartOptions } from '../client.ts';
+import { shutdownTagger, TaggerClient, TaggerCrashedError, type TaggerLike, type TaggerStartOptions } from '../client.ts';
 import type { HostItemResult } from '../protocol.ts';
 import { resetIoBackoff } from '../readBackoff.ts';
-import { createTagJobRunner, createTagStage } from '../tagJob.ts';
+import { createTagJobRunner, createTagStage, type TagJobDeps } from '../tagJob.ts';
 import { TagResultWriter } from '../writer.ts';
 
 const REPO = 'SmilingWolf/wd-eva02-large-tagger-v3';
@@ -144,6 +144,24 @@ describe('TagResultWriter', () => {
     const before = tables.map((t) => count(`SELECT count(*) FROM ${t}`));
     writer().writeBatch(batch);
     expect(tables.map((t) => count(`SELECT count(*) FROM ${t}`))).toEqual(before);
+  });
+
+  it('同一个 writer 跑很久，中途角色被合并、建议被采纳：重新查库，不写已删的 id、不重复建', () => {
+    const w = writer();
+    w.writeBatch([ok(1, [['mika_(blue_archive)', 0.95], ['hina_(blue_archive)', 0.5]])]);
+    const mika = count("SELECT id FROM characters WHERE danbooru_tag = 'mika_(blue_archive)'");
+    // 用户把 mika 合并进自建角色（删行 + 重定向），又在「未识别」里采纳 hina 建了角色
+    db.prepare("INSERT INTO characters (id, name, source, created_at) VALUES (50, '未花', 'custom', 'x')").run();
+    db.prepare('DELETE FROM characters WHERE id = ?').run(mika);
+    db.prepare("INSERT INTO danbooru_tag_redirects (tag, character_id) VALUES ('mika_(blue_archive)', 50)").run();
+    db.prepare("INSERT INTO characters (id, name, danbooru_tag, source, created_at) VALUES (60, '日奈', 'hina_(blue_archive)', 'danbooru', 'x')").run();
+    w.writeBatch([ok(2, [['mika_(blue_archive)', 0.95], ['hina_(blue_archive)', 0.95]])]);
+    expect(db.prepare('SELECT character_id FROM image_characters WHERE image_id = 2 ORDER BY character_id').pluck().all()).toEqual([50, 60]);
+    expect(count("SELECT count(*) FROM characters WHERE danbooru_tag = 'hina_(blue_archive)'")).toBe(1);
+    // 撤销采纳删掉 hina：下一批重新建
+    db.prepare('DELETE FROM characters WHERE id = 60').run();
+    w.writeBatch([ok(3, [['hina_(blue_archive)', 0.95]])]);
+    expect(count("SELECT count(*) FROM image_characters ic JOIN characters c ON c.id = ic.character_id WHERE ic.image_id = 3 AND c.danbooru_tag = 'hina_(blue_archive)'")).toBe(1);
   });
 
   it('阈值调低后提升建议', () => {
@@ -441,6 +459,21 @@ describe('tagJob', () => {
     expect(callsAtEnd).toBeLessThanOrEqual(2);
   });
 
+  it('模型还在加载、请求卡住时取消：马上结束，不等加载完或超时', async () => {
+    for (const factory of [
+      () => new Promise<TaggerLike>(() => {}), // 加载一直不完
+      async () => ({ ...fakeClient('dml'), tag: () => new Promise<HostItemResult[]>(() => {}) }), // 请求卡住
+    ]) {
+      freshDb(5);
+      const ac = new AbortController();
+      const job = runner(factory)(ctxOf({ signal: ac.signal }));
+      await new Promise((r) => setTimeout(r, 20));
+      ac.abort();
+      expect(await Promise.race([job.then(() => 'ended'), new Promise((r) => setTimeout(() => r('waiting'), 500))])).toBe('ended');
+      expect(pending()).toBe(5);
+    }
+  });
+
   it('一开始就回退到 CPU 的：之后崩溃按 CPU 重开，不再去试起不来的 DirectML', async () => {
     let first = true;
     const factory = vi.fn(async (o: TaggerStartOptions) => {
@@ -540,6 +573,80 @@ describe('tagJob', () => {
     expect(factory.mock.calls.map((c) => [c[0].device, c[0].batchSize])).toEqual([['dml', 2], ['dml', 1], ['cpu', 2]]);
     expect(pending()).toBe(0);
   });
+
+  describe('不注入 clientFactory：走共享的识别子进程（acquireTagger），只把 spawn 换成假的', () => {
+    /** 第 hangIndex 个（从 0 数）起的子进程推理永远不返回（DML 卡住），其余正常 */
+    const stubSpawn = (hangIndex: number | null) => {
+      const made: { dispose: ReturnType<typeof vi.fn> }[] = [];
+      vi.spyOn(TaggerClient, 'spawn').mockImplementation(async () => {
+        const hang = made.length === hangIndex;
+        let alive = true;
+        const dispose = vi.fn(async () => {
+          alive = false;
+        });
+        made.push({ dispose });
+        return {
+          device: 'cpu',
+          batchSize: 2,
+          info: { type: 'ready', device: 'cpu', dmlDeviceId: null, fallbackReason: null, batchSize: 2, fixedBatch: false, inputName: 'input', inputShape: [], outputName: 'output', numLabels: 0, loadMs: 0, pid: made.length },
+          get alive() {
+            return alive;
+          },
+          tag: (items: { id: number }[]) => (hang ? new Promise(() => {}) : Promise.resolve(items.map((i) => ok(i.id, [])))),
+          dispose,
+        } as unknown as TaggerClient;
+      });
+      return made;
+    };
+    const shared = () =>
+      createTagJobRunner({
+        db,
+        bus: new EventBus(),
+        modelsDir: 'X:/models',
+        getTaggerSettings: () => ({ model: REPO, device: 'cpu', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true, artists: false }),
+        makeCatalog: () => {
+          const copyrights = new CopyrightResolver(db, OFFLINE);
+          return { catalog: new CharacterCatalog(db, { copyrights }), copyrights };
+        },
+        ensureFiles: async () => ({ dir: 'X:', modelPath: 'X:/m.onnx', labelsPath: 'X:/l.csv' }),
+      });
+    const cleanup = async () => {
+      await shutdownTagger();
+      vi.restoreAllMocks();
+    };
+
+    it('请求卡住时取消：卡住的子进程马上关掉，接着再运行识别起新的，不会排在卡住的请求后面', async () => {
+      try {
+        const made = stubSpawn(0);
+        const ac = new AbortController();
+        const job = shared()(ctxOf({ signal: ac.signal }));
+        await new Promise((r) => setTimeout(r, 20));
+        ac.abort();
+        await job;
+        expect(made[0]!.dispose).toHaveBeenCalled();
+        const again = shared()(ctxOf());
+        expect(await Promise.race([again.then(() => 'ended'), new Promise((r) => setTimeout(() => r('waiting'), 500))])).toBe('ended');
+        expect(made).toHaveLength(2);
+        expect(pending()).toBe(0);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it('正常跑完：子进程留着给下一次用，不重新加载模型', async () => {
+      try {
+        const made = stubSpawn(null);
+        await shared()(ctxOf());
+        freshDb(5);
+        await shared()(ctxOf());
+        expect(pending()).toBe(0);
+        expect(made).toHaveLength(1);
+        expect(made[0]!.dispose).not.toHaveBeenCalled();
+      } finally {
+        await cleanup();
+      }
+    });
+  });
 });
 
 describe('tagJob 分流（旧文件用旧模型、新文件用新模型、相机照片跳过）', () => {
@@ -563,22 +670,26 @@ describe('tagJob 分流（旧文件用旧模型、新文件用新模型、相机
       return items.map((i) => ok(i.id, []));
     },
   });
-  const run = (over: Partial<ReturnType<typeof settings>> = {}) => {
+  const deps = (seen: Record<string, number[]>, over: Partial<ReturnType<typeof settings>> = {}, extra: Partial<TagJobDeps> = {}): TagJobDeps => ({
+    db,
+    bus: new EventBus(),
+    modelsDir: 'X:/models',
+    getTaggerSettings: () => ({ ...settings(), ...over }),
+    makeCatalog: () => {
+      const copyrights = new CopyrightResolver(db, OFFLINE);
+      return { catalog: new CharacterCatalog(db, { copyrights }), copyrights };
+    },
+    clientFactory: async (o) => client(o.repo, seen),
+    ensureFiles: async () => ({ dir: 'X:', modelPath: 'X:/m.onnx', labelsPath: 'X:/l.csv' }),
+    ...extra,
+  });
+  const run = (over: Partial<ReturnType<typeof settings>> = {}, extra: Partial<TagJobDeps> = {}) => {
     const seen: Record<string, number[]> = {};
-    const r = createTagJobRunner({
-      db,
-      bus: new EventBus(),
-      modelsDir: 'X:/models',
-      getTaggerSettings: () => ({ ...settings(), ...over }),
-      makeCatalog: () => {
-        const copyrights = new CopyrightResolver(db, OFFLINE);
-        return { catalog: new CharacterCatalog(db, { copyrights }), copyrights };
-      },
-      clientFactory: async (o) => client(o.repo, seen),
-      ensureFiles: async () => ({ dir: 'X:', modelPath: 'X:/m.onnx', labelsPath: 'X:/l.csv' }),
-    });
-    return { seen, go: () => r(ctxOf()) };
+    const r = createTagJobRunner(deps(seen, over, extra));
+    const ctx = ctxOf();
+    return { seen, ctx, go: (o?: { manual?: boolean }) => r(ctx, o) };
   };
+  const advanced = (ctx: JobContext) => (ctx.advance as ReturnType<typeof vi.fn>).mock.calls.reduce((s, c) => s + (c[0] as number), 0);
   const settings = () => ({
     model: PIXAI,
     device: 'dml' as const,
@@ -641,5 +752,42 @@ describe('tagJob 分流（旧文件用旧模型、新文件用新模型、相机
     expect(count('SELECT count(*) FROM images WHERE retag = 1')).toBe(0);
     const again = run();
     expect(await again.go()).toBe('没有需要识别的图片');
+  });
+
+  it('旧图模型没下载、自动排上的：不下载，跳过旧图，新图照常识别；手动运行才下载', async () => {
+    const ensureFiles = vi.fn(async () => ({ dir: 'X:', modelPath: 'X:/m.onnx', labelsPath: 'X:/l.csv' }));
+    const notReady = { ensureFiles, isModelReady: (s: { repo: string }) => s.repo !== REPO };
+    const auto = run({}, notReady);
+    const msg = await auto.go({ manual: false });
+    expect(auto.seen[REPO]).toBeUndefined();
+    expect(auto.seen[PIXAI]!.sort()).toEqual([3, 4]);
+    expect(ensureFiles.mock.calls.map((c) => (c as unknown as [{ repo: string }])[0].repo)).toEqual([PIXAI]);
+    expect(msg).toContain('还没下载，跳过 2 张旧图');
+    expect(advanced(auto.ctx)).toBe(4);
+    expect(count('SELECT count(*) FROM images WHERE id IN (1, 2) AND tagged_at IS NULL')).toBe(2);
+    // 只剩旧图：不算待识别，不会为它们自动排任务
+    expect(createTagStage(deps({}, {}, notReady)).pendingCount()).toBe(0);
+    expect(createTagStage(deps({}, {}, { isModelReady: () => true })).pendingCount()).toBe(2);
+
+    const manual = run({}, notReady);
+    await manual.go({ manual: true });
+    expect(manual.seen[REPO]!.sort()).toEqual([1, 2]);
+  });
+
+  it('旧图模型下载失败（离线）：跳过旧图这一轮，主模型那一轮照常跑完，任务不失败', async () => {
+    const { seen, ctx, go } = run(
+      {},
+      {
+        ensureFiles: async (spec) => {
+          if (spec.repo === REPO) throw new Error('无法连接任何下载源');
+          return { dir: 'X:', modelPath: 'X:/m.onnx', labelsPath: 'X:/l.csv' };
+        },
+      },
+    );
+    const msg = await go();
+    expect(seen[PIXAI]!.sort()).toEqual([3, 4]);
+    expect(msg).toContain('旧图模型用不了，跳过 2 张旧图（无法连接任何下载源）');
+    expect(advanced(ctx)).toBe(4);
+    expect(count('SELECT count(*) FROM images WHERE id IN (1, 2) AND tagged_at IS NULL')).toBe(2);
   });
 });

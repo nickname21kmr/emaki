@@ -105,6 +105,26 @@ describe('refreshAll', () => {
     db.prepare("UPDATE images SET trashed_at = '2026-09-27T00:00:00.000Z'").run();
     expect(svc.refreshAll()).toMatchObject({ removed: 1, active: 0 });
   });
+
+  it('⑨ 文件夹停用、移除期间合集不删，重新显示后 id 和页码不变', () => {
+    const a = add('Vol.01', pages(20));
+    const b = add('Vol.02', pages(20));
+    svc.refreshAll();
+    const before = db.prepare('SELECT id, rel_dir FROM collections ORDER BY id').all();
+    const pagesBefore = pageNos([...a, ...b]);
+    for (const [hide, show] of [
+      ['UPDATE library_roots SET enabled = 0', 'UPDATE library_roots SET enabled = 1'],
+      ["UPDATE library_roots SET removed_at = '2026-09-27T00:00:00.000Z'", 'UPDATE library_roots SET removed_at = NULL'],
+    ]) {
+      db.prepare(hide!).run();
+      expect(svc.refreshAll()).toMatchObject({ created: 0, removed: 0, pagesChanged: 0 });
+      expect(svc.refreshDirs([a[0]!])).toMatchObject({ created: 0, removed: 0, pagesChanged: 0 });
+      expect(pageNos([...a, ...b])).toEqual(pagesBefore);
+      db.prepare(show!).run();
+      expect(svc.refreshAll()).toMatchObject({ created: 0, removed: 0, pagesChanged: 0 });
+      expect(db.prepare('SELECT id, rel_dir FROM collections ORDER BY id').all()).toEqual(before);
+    }
+  });
 });
 
 describe('refreshDirs / assignPages', () => {

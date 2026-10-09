@@ -203,3 +203,40 @@ describe('同时改类型和其他字段', () => {
     expect(dumpCore(ds.ctx.db)).toEqual(before);
   });
 });
+
+describe('改类型提升了建议、命中排除规则', () => {
+  // 截图改成插画：高分建议当场变成角色，图被「角色」规则排除；撤销后角色去掉了，排除也要放出来
+  it('撤销后和改之前完全一样', async () => {
+    const i24 = Number(id('image', 'i24'));
+    await ds.createExclusion({ kind: 'character', target: id('character', 'c1') });
+    await ds.updateImage(id('image', 'i24'), { kind: 'screenshot' });
+    ds.ctx.db.prepare('UPDATE character_suggestions SET score = 0.99 WHERE image_id = ?').run(i24);
+    const before = dumpCore(ds.ctx.db);
+    const r = await ds.bulkImages({ ids: img('i24'), action: { type: 'kind', value: 'illustration' } });
+    expect(ds.ctx.db.prepare('SELECT excluded_by FROM images WHERE id = ?').pluck().get(i24)).not.toBeNull();
+    await ds.undo(r.undoToken!);
+    expect(dumpCore(ds.ctx.db)).toEqual(before);
+  });
+
+  // 合集里的一页：撤销时要先放出排除再重算合集，不然这页掉出合集、后面的页重新编号
+  it.each(['bulk', 'updateImage'])('合集里的一页（%s）：撤销后还在原来的页码', async (via) => {
+    const db = ds.ctx.db;
+    const page = Number(id('image', 'i23'));
+    const cid = Number(await makeCollection());
+    const made = await ds.createCharacter({ name: 'X', workIds: [], danbooruTag: 'xx_(emaki_test)' });
+    await ds.updateImage(String(page), { kind: 'screenshot' });
+    db.prepare('INSERT OR REPLACE INTO character_suggestions (image_id, danbooru_tag, score) VALUES (?, ?, 0.99)').run(page, 'xx_(emaki_test)');
+    await ds.createExclusion({ kind: 'character', target: made.character.id });
+    const pos = () => db.prepare('SELECT collection_id, page_no, excluded_by FROM images WHERE id = ?').get(page) as Record<string, unknown>;
+    expect(pos()).toMatchObject({ collection_id: cid, excluded_by: null });
+    const before = dumpCore(db);
+    const r =
+      via === 'bulk'
+        ? await ds.bulkImages({ ids: [String(page)], action: { type: 'kind', value: 'illustration' } })
+        : await ds.updateImage(String(page), { kind: 'illustration' });
+    expect(pos()).toMatchObject({ collection_id: null, page_no: null });
+    expect(pos().excluded_by).not.toBeNull();
+    await ds.undo(r.undoToken!);
+    expect(dumpCore(db)).toEqual(before);
+  });
+});

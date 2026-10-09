@@ -11,6 +11,7 @@ import { readFile, stat } from 'node:fs/promises';
 import type { EventBus } from '../../core/events.ts';
 import type { JobContext } from '../../core/jobs.ts';
 import type { Db } from '../../db/connection.ts';
+import { diskCaseRel } from '../../datasource/sqlite/roots.ts';
 import { normalizeRootPath } from '../../datasource/sqlite/settings.ts';
 import { sha256Buffer, sha256File } from '../fs/hash.ts';
 import { baseName, isoFromMs, parentRel, pathKey, toAbs } from '../fs/paths.ts';
@@ -63,6 +64,8 @@ const MAX_BUFFERED = 64 * 1024 * 1024; // 64 MiB 以内整个读进内存（sha 
 const FLUSH_ROWS = 200;
 const FLUSH_MS = 1000;
 const EMIT_MS = 3000;
+/** Windows 找文件不分大小写：Pixiv/one.png 和 pixiv/one.png 是同一个文件，库里按磁盘上的写法记 */
+const NOCASE = process.platform === 'win32';
 
 /** 纯函数：对比磁盘和库，分出 changed / fresh / gone / restored */
 export function classify(
@@ -73,8 +76,10 @@ export function classify(
 ): Classified {
   const out: Classified = { changed: [], fresh: [], gone: [], restored: [] };
   const seen = new Set<string>();
+  // 读库的前缀在 Windows 上不分大小写，旧写法的行也会进来：判断在不在读失败的目录里同样不分
+  const fold = (p: string) => (NOCASE ? p.toLowerCase() : p);
   const underFailed = (row: DbRow) =>
-    (failedDirs.get(row.root_id) ?? []).some((d) => d === '' || row.rel_path.startsWith(d + '/'));
+    (failedDirs.get(row.root_id) ?? []).some((d) => d === '' || fold(row.rel_path).startsWith(fold(d) + '/'));
 
   for (const row of dbRows) {
     const k = fileKey(row.root_id, row.rel_path);
@@ -147,6 +152,7 @@ export class Scanner {
   private async confirmGone(goneIds: Set<number>, rows: DbRow[], rootById: Map<number, RootRow>): Promise<void> {
     const byId = new Map(rows.map((r) => [r.id, r]));
     const rootOk = new Map<number, boolean>();
+    const dirNames = new Map<string, Promise<string[]>>();
     const ids = [...goneIds];
     for (let i = 0; i < ids.length; i += 32) {
       await Promise.all(
@@ -163,6 +169,9 @@ export class Scanner {
             () => false,
             (err: NodeJS.ErrnoException) => err.code === 'ENOENT' || err.code === 'ENOTDIR',
           );
+          // Windows 上能 stat 到、但磁盘上的写法已经不一样了（文件夹只改了大小写）：这一行记的路径过时了，照常算不在。
+          // 按新写法遍历到的文件会移过来或另外入库，不然同一张图会永远有两行
+          if (!gone && NOCASE && (await diskCaseRel(root.path, row.rel_path, dirNames)) !== row.rel_path) return;
           if (!gone) goneIds.delete(id);
         }),
       );
@@ -197,6 +206,18 @@ export class Scanner {
       else summary.unreachable.push(r.path);
     }
     scopes = scopes.filter((s) => reachable.has(s.rootId));
+    // Windows：文件夹只改了大小写（Pixiv → pixiv）时，监听器把旧写法、新写法都报上来。范围换成磁盘上的写法，
+    // 遍历出来的路径才和库里一致；阶段 3 读库的前缀也不分大小写，旧写法的行才会进来当移动候选
+    if (NOCASE) {
+      const names = new Map<string, Promise<string[]>>();
+      const merged = new Map<string, ScanScope>();
+      for (const s of scopes) {
+        const relDir = s.relDir && (await diskCaseRel(rootById.get(s.rootId)!.path, s.relDir, names));
+        const k = fileKey(s.rootId, relDir);
+        merged.set(k, { rootId: s.rootId, relDir, recursive: s.recursive || !!merged.get(k)?.recursive });
+      }
+      scopes = [...merged.values()];
+    }
 
     // ---- 阶段 2：遍历
     ctx.setMessage('正在遍历文件夹…');
@@ -233,18 +254,23 @@ export class Scanner {
     }
 
     // ---- 阶段 3：读库
-    const scopeRows = db.prepare(
-      `SELECT id, root_id, rel_path, file_name, bytes, modified_at, sha256, missing, trashed_at
-       FROM images
-       WHERE root_id = @rootId
-         AND (@prefix = '' OR substr(rel_path, 1, length(@prefix)) = @prefix)
-         AND (@recursive = 1 OR instr(substr(rel_path, length(@prefix) + 1), '/') = 0)`,
-    );
+    const scopeSql = (match: string) =>
+      db.prepare(
+        `SELECT id, root_id, rel_path, file_name, bytes, modified_at, sha256, missing, trashed_at
+         FROM images
+         WHERE root_id = @rootId
+           AND (@prefix = '' OR ${match})
+           AND (@recursive = 1 OR instr(substr(rel_path, length(@prefix) + 1), '/') = 0)`,
+      );
+    const scopeRows = scopeSql(`substr(rel_path, 1, length(@prefix)) = @prefix${NOCASE ? ' COLLATE NOCASE' : ''}`);
+    // NOCASE 只折叠 ASCII：前缀里有非 ASCII 字符（Äpfel → äpfel、全角字母）时改用 fold_case，慢一些，只在这时用
+    const scopeRowsFold = NOCASE ? scopeSql('fold_case(substr(rel_path, 1, length(@prefix))) = fold_case(@prefix)') : scopeRows;
     const dbRows: DbRow[] = [];
     const seenIds = new Set<number>();
     for (const s of scopes) {
       const prefix = s.relDir === '' ? '' : s.relDir + '/';
-      for (const r of scopeRows.all({ rootId: s.rootId, prefix, recursive: s.recursive ? 1 : 0 }) as DbRow[]) {
+      const stmt = /[^\x00-\x7f]/.test(prefix) ? scopeRowsFold : scopeRows;
+      for (const r of stmt.all({ rootId: s.rootId, prefix, recursive: s.recursive ? 1 : 0 }) as DbRow[]) {
         if (!seenIds.has(r.id)) {
           seenIds.add(r.id);
           dbRows.push(r);

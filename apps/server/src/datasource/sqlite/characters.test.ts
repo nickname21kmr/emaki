@@ -77,3 +77,72 @@ it('合并角色：合集的整本关联跟着搬，撤销后恢复（T38b，RV-
   await ds.undo(r.undoToken!);
   expect(linked()).toEqual([Number(c('c7'))]);
 });
+
+it('撤销合并只回退合并搬过去的：合并之后识别器给目标新加的关联、别名留着', async () => {
+  const to = Number(c('c1'));
+  const img = Number(env.id('image', 'i24'));
+  const before = dumpCore(db());
+  const r = await ds.mergeCharacter(c('c7'), c('c1'));
+  // 合并之后识别器把另一张图归给目标，词典给目标加了别名
+  db().prepare("INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, ?, 'tagger', 0.9, 'x')").run(img, to);
+  db().prepare("INSERT INTO aliases (owner_type, owner_id, alias, search_key, origin, visible, position) VALUES ('character', ?, 'later', 'later', 'dict', 0, 9)").run(to);
+  await ds.undo(r.undoToken!);
+  expect(db().prepare('SELECT origin FROM image_characters WHERE image_id = ? AND character_id = ?').pluck().get(img, to)).toBe('tagger');
+  expect(db().prepare("SELECT 1 FROM aliases WHERE owner_type = 'character' AND owner_id = ? AND alias = 'later'").get(to)).toBeTruthy();
+  // 去掉之后加的两行，其余和合并前完全一样
+  db().prepare('DELETE FROM image_characters WHERE image_id = ? AND character_id = ?').run(img, to);
+  db().prepare("DELETE FROM aliases WHERE owner_type = 'character' AND owner_id = ? AND alias = 'later'").run(to);
+  expect(dumpCore(db())).toEqual(before);
+});
+
+it('撤销合并时被合并角色的编号已经给了新角色：拒绝撤销，新角色和它的图都不动', async () => {
+  // 新建的角色 id 最大，合并删掉后识别器新建角色会拿到同一个 id
+  const made = await ds.createCharacter({ name: '临时', workIds: [] });
+  const fromId = Number(made.character.id);
+  db().prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (?, ?, 'manual', 'x')").run(Number(env.id('image', 'i24')), fromId);
+  const r = await ds.mergeCharacter(made.character.id, c('c1'));
+  const g = ds.makeCatalog().catalog.ensureCharacter('test_girl_(emaki_test)', '2026-01-01T00:00:00.000Z');
+  expect(g).toMatchObject({ id: fromId, created: true });
+  db().prepare("INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, ?, 'tagger', 0.9, 'x')").run(Number(env.id('image', 'i25')), fromId);
+  const snap = dumpCore(db());
+  await expect(ds.undo(r.undoToken!)).rejects.toMatchObject({ statusCode: 409, message: '无法撤销：「临时」原来的编号已经给了之后新建的角色' });
+  expect(dumpCore(db())).toEqual(snap);
+});
+
+describe('新建的角色被合并掉、编号又给了新角色：撤销更早的「新建」也要拒绝，不能删掉新角色', () => {
+  /** 合并删掉 fromId 后识别器新建角色，拿到同一个编号，还归了一张图 */
+  const reuse = async (fromId: number) => {
+    await ds.mergeCharacter(String(fromId), c('c1'));
+    const g = ds.makeCatalog().catalog.ensureCharacter('test_girl_(emaki_test)', '2026-10-01T00:00:00.000Z');
+    expect(g).toMatchObject({ id: fromId, created: true });
+    db().prepare("INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, ?, 'tagger', 0.9, 'x')").run(Number(env.id('image', 'i25')), fromId);
+  };
+
+  it('createCharacter', async () => {
+    const made = await ds.createCharacter({ name: '临时', workIds: [] });
+    await reuse(Number(made.character.id));
+    const snap = dumpCore(db());
+    await expect(ds.undo(made.undoToken!)).rejects.toMatchObject({ statusCode: 409, message: '无法撤销：「临时」已经合并掉了，原来的编号给了之后新建的角色' });
+    expect(dumpCore(db())).toEqual(snap);
+  });
+
+  it('insertDanbooruCharacter（接受建议、改类型时新建的角色）', async () => {
+    let id = 0;
+    const r = ds.ctx.mutate((u) => {
+      id = insertDanbooruCharacter(u, ds.makeCatalog().catalog, 'power_(chainsaw_man)', { now: '2026-01-01T00:00:00.000Z' }).id;
+      return { message: 'x' };
+    });
+    await reuse(id);
+    const snap = dumpCore(db());
+    await expect(ds.undo(r.undoToken!)).rejects.toMatchObject({ statusCode: 409, message: '无法撤销：新建的角色 power_(chainsaw_man) 已经合并掉了，原来的编号给了之后新建的角色' });
+    expect(dumpCore(db())).toEqual(snap);
+  });
+
+  it('编号没被拿走时照常撤销（角色已经不在，什么也不删）', async () => {
+    const made = await ds.createCharacter({ name: '临时', workIds: [] });
+    await ds.mergeCharacter(made.character.id, c('c1'));
+    const snap = dumpCore(db());
+    await ds.undo(made.undoToken!);
+    expect(dumpCore(db())).toEqual(snap);
+  });
+});

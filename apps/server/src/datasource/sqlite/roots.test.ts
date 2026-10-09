@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, renameSync, rmSync, utimesSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, rmSync, symlinkSync, utimesSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../../core/events.ts';
@@ -96,18 +96,208 @@ describe('添加父文件夹：合并已有的图库文件夹', () => {
     await expect(ds.addLibraryRoot({ path: `${sub('C1')}/deep` })).rejects.toThrow(`已经包含在「${P()}」里了，不用单独添加`);
   });
 
-  it('父文件夹以前移除过、又有同路径的旧记录：还在用的子文件夹的记录留下', async () => {
+  it('父文件夹移除后单独加回里面的子文件夹：接管旧记录（id 和整理结果都在）；再加回父文件夹时合并回去', async () => {
+    const idle = async () => {
+      while ((await ds.listJobs()).some((j) => j.status === 'queued' || j.status === 'running')) await new Promise((r) => setTimeout(r, 10));
+    };
+    const colls = () => ds.ctx.db.prepare('SELECT id, root_id, rel_dir FROM collections').all();
     await ds.addLibraryRoot({ path: P(), merge: true });
+    await idle();
     const p = rootId(P());
     await ds.removeLibraryRoot(String(p));
-    // 父文件夹移除后又单独加了 C1，里面同一张图有了新记录
-    await ds.addLibraryRoot({ path: sub('C1') });
-    addImage(10, rootId(sub('C1')), 'a.png');
+    const r = await ds.addLibraryRoot({ path: sub('C1') });
+    const c1 = rootId(sub('C1'));
+    expect(r.message).toBe(`已添加文件夹（找回了 2 张图以前的整理结果），开始扫描：${sub('C1')}`);
+    expect([1, 2, 4].map(rowOf)).toEqual([
+      { root_id: c1, rel_path: 'a.png' },
+      { root_id: c1, rel_path: 'book/01.png' },
+      { root_id: p, rel_path: 'C3/c.png' },
+    ]);
+    expect(colls()).toEqual([{ id: 9, root_id: c1, rel_dir: 'book' }]);
+    expect(ds.ctx.db.prepare('SELECT character_id FROM image_characters WHERE image_id = 1').pluck().all()).toEqual([7]);
+    // 接管回来的图不算刚导入
+    expect(ds.ctx.db.prepare('SELECT imported_at FROM library_roots WHERE id = ?').pluck().get(c1)).toBe('2025-01-01T00:00:00.000Z');
+    await idle();
+
+    // 父文件夹里又有一条和 C1 同路径的记录（冲突）：还在用的 C1 的记录留下
+    addImage(10, p, 'C1/x.png');
+    addImage(11, c1, 'x.png');
     await ds.addLibraryRoot({ path: P(), merge: true });
     expect(rootId(P())).toBe(p);
-    expect(rowOf(10)).toEqual({ root_id: p, rel_path: 'C1/a.png' });
-    expect(rowOf(1)).toBeUndefined();
-    expect(rowOf(4)).toEqual({ root_id: p, rel_path: 'C3/c.png' });
+    expect([1, 2, 4, 11].map(rowOf)).toEqual([
+      { root_id: p, rel_path: 'C1/a.png' },
+      { root_id: p, rel_path: 'C1/book/01.png' },
+      { root_id: p, rel_path: 'C3/c.png' },
+      { root_id: p, rel_path: 'C1/x.png' },
+    ]);
+    expect(rowOf(10)).toBeUndefined();
+    expect(colls()).toEqual([{ id: 9, root_id: p, rel_dir: 'C1/book' }]);
+  });
+});
+
+describe('移除、停用后再显示：合集 id 和页码不变，重复组找回来', () => {
+  let dir: string;
+  let ds: SqliteDataSource;
+  const idle = async () => {
+    while ((await ds.listJobs()).some((j) => j.status === 'queued' || j.status === 'running')) await new Promise((r) => setTimeout(r, 10));
+  };
+  beforeEach(async () => {
+    dir = makeTmpDir('reshow');
+    ds = await SqliteDataSource.open(new EventBus(), path.join(dir, 'data'), { memory: true, autoJobs: false, importDict: false });
+  });
+  afterEach(async () => {
+    await ds.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('移除后撤销、停用后启用（或撤销停用）、移除后重新添加', async () => {
+    const R = path.join(dir, '某漫画');
+    const old = new Date('2025-01-01');
+    // 两卷各两页；Vol.02 的两页是同一个文件（完全重复）
+    for (const [rel, seed] of [
+      ['某漫画 Vol.01/1.png', 1],
+      ['某漫画 Vol.01/2.png', 2],
+      ['某漫画 Vol.02/1.png', 3],
+      ['某漫画 Vol.02/2.png', 3],
+    ] as const) {
+      const p = path.join(R, rel);
+      mkdirSync(path.dirname(p), { recursive: true });
+      await sharp({ create: { width: 40 + seed, height: 60, channels: 3, background: { r: seed * 20, g: 100, b: 100 } } }).png().toFile(p);
+      utimesSync(p, old, old);
+    }
+    const rootPath = R.replace(/\\/g, '/');
+    await ds.addLibraryRoot({ path: rootPath, mode: 'comic' });
+    await idle();
+    // 扫描后已经自动查过一次重（任务链里的「需要查重」标记清掉了，下面不会顺带再查）
+    expect((await ds.listJobs()).map((j) => [j.kind, j.status])).toContainEqual(['dedupe', 'done']);
+    const db = ds.ctx.db;
+    ds.dedupe.runOnce();
+    const root = (await ds.getSettings()).libraryRoots[0]!.id;
+    const state = () => [db.prepare('SELECT id, rel_dir FROM collections ORDER BY id').all(), db.prepare('SELECT id, collection_id, page_no FROM images ORDER BY id').all()];
+    const groups = () => db.prepare('SELECT COUNT(*) FROM duplicate_groups WHERE resolved_at IS NULL').pluck().get();
+    const before = state();
+    expect(before[0]).toHaveLength(2);
+    expect(groups()).toBe(1);
+    // 文件夹隐藏期间跑过查重：它的未处理组在对账时被删掉，再显示后要自动找回来
+    const dedupeWhileHidden = () => {
+      ds.dedupe.runOnce();
+      expect(groups()).toBe(0);
+    };
+    const shownAgain = async () => {
+      await idle();
+      expect(state()).toEqual(before);
+      expect(groups()).toBe(1);
+    };
+
+    const rm1 = await ds.removeLibraryRoot(root);
+    // 隐藏期间按 id 也找不到、改不了
+    const book = String((before[0] as { id: number }[])[0]!.id);
+    expect(await ds.listCollections({})).toEqual([]);
+    expect(await ds.getCollection(book)).toBeNull();
+    await expect(ds.updateCollection(book, { title: 'x' })).rejects.toMatchObject({ statusCode: 404 });
+    dedupeWhileHidden();
+    await ds.undo(rm1.undoToken!);
+    await shownAgain();
+
+    const off = await ds.updateLibraryRoot(root, { enabled: false });
+    dedupeWhileHidden();
+    await ds.undo(off.undoToken!);
+    await shownAgain();
+
+    await ds.updateLibraryRoot(root, { enabled: false });
+    dedupeWhileHidden();
+    await ds.updateLibraryRoot(root, { enabled: true });
+    await shownAgain();
+
+    await ds.removeLibraryRoot(root);
+    dedupeWhileHidden();
+    await ds.addLibraryRoot({ path: rootPath, mode: 'comic' });
+    await shownAgain();
+  });
+
+  it('移除父文件夹后单独加回一本书的文件夹：这本合集接管过来（id 和手改的标题不变）', async () => {
+    const lib = path.join(dir, 'lib');
+    const old = new Date('2025-01-01');
+    let seed = 0;
+    for (const rel of ['漫画/Vol.01/1.png', '漫画/Vol.01/2.png', '漫画/Vol.02/1.png']) {
+      const p = path.join(lib, rel);
+      mkdirSync(path.dirname(p), { recursive: true });
+      seed++;
+      await sharp({ create: { width: 40 + seed, height: 60, channels: 3, background: { r: seed * 20, g: 100, b: 100 } } }).png().toFile(p);
+      utimesSync(p, old, old);
+    }
+    const fwd = (p: string) => p.replace(/\\/g, '/');
+    await ds.addLibraryRoot({ path: fwd(lib), mode: 'comic' });
+    await idle();
+    const db = ds.ctx.db;
+    const book = db.prepare("SELECT id FROM collections WHERE rel_dir = '漫画/Vol.01'").pluck().get() as number;
+    db.prepare("UPDATE collections SET title = '手改的标题', title_manual = 1 WHERE id = ?").run(book);
+    const pages = db.prepare('SELECT id FROM images WHERE collection_id = ? ORDER BY page_no').pluck().all(book);
+    expect(pages).toHaveLength(2);
+
+    await ds.removeLibraryRoot((await ds.getSettings()).libraryRoots[0]!.id);
+    await idle();
+    await ds.addLibraryRoot({ path: fwd(path.join(lib, '漫画', 'Vol.01')), mode: 'comic' });
+    await idle();
+    expect((await ds.listCollections({})).map((c) => [c.id, c.title])).toEqual([[String(book), '手改的标题']]);
+    expect(db.prepare('SELECT rel_dir FROM collections WHERE id = ?').pluck().get(book)).toBe('');
+    expect(db.prepare('SELECT id FROM images WHERE collection_id = ? ORDER BY page_no').pluck().all(book)).toEqual(pages);
+  });
+});
+
+describe('同一个文件夹换种写法（联接点、\\\\?\\ 前缀）', () => {
+  let dir: string;
+  let ds: SqliteDataSource;
+  const at = (...s: string[]) => path.join(dir, ...s);
+  const roots = () => ds.ctx.db.prepare('SELECT id, path FROM library_roots').all() as { id: number; path: string }[];
+  beforeEach(async () => {
+    dir = makeTmpDir('spell');
+    mkdirSync(at('Pics', 'sub'), { recursive: true });
+    mkdirSync(at('data'), { recursive: true });
+    symlinkSync(at('Pics'), at('PicsLink'), 'junction');
+    symlinkSync(at('data'), at('DataLink'), 'junction');
+    ds = await SqliteDataSource.open(new EventBus(), at('data'), { memory: true, autoJobs: false, importDict: false });
+  });
+  afterEach(async () => {
+    await ds.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it.skipIf(process.platform !== 'win32')('认成已有的文件夹或它的子文件夹，不重复加', async () => {
+    await ds.addLibraryRoot({ path: at('Pics') });
+    await expect(ds.addLibraryRoot({ path: at('PicsLink') })).rejects.toThrow('这个文件夹已经在图库里了');
+    await expect(ds.addLibraryRoot({ path: `\\\\?\\${at('Pics')}` })).rejects.toThrow('这个文件夹已经在图库里了');
+    await expect(ds.addLibraryRoot({ path: at('PicsLink', 'sub') })).rejects.toThrow('已经包含在');
+    expect(roots()).toHaveLength(1);
+  });
+
+  it.skipIf(process.platform !== 'win32')('数据目录换种写法也不能加', async () => {
+    for (const p of [`\\\\?\\${at('data')}`, at('DataLink'), at('DataLink', '..')]) {
+      await expect(ds.addLibraryRoot({ path: p })).rejects.toThrow('不能把 Emaki 的数据目录加入图库');
+    }
+    expect(roots()).toEqual([]);
+  });
+
+  it.skipIf(process.platform !== 'win32')('\\\\?\\ 写法存成普通路径', async () => {
+    await ds.addLibraryRoot({ path: `\\\\?\\${at('Pics')}` });
+    expect(roots().map((r) => r.path.toLowerCase())).toEqual([at('Pics').replace(/\\/g, '/').toLowerCase()]);
+  });
+
+  it.skipIf(process.platform !== 'win32')('先按联接点加了子文件夹，再加父文件夹：认出来合并，相对路径按真实位置算', async () => {
+    await ds.addLibraryRoot({ path: at('PicsLink', 'sub') });
+    while ((await ds.listJobs()).some((j) => j.status === 'queued' || j.status === 'running')) await new Promise((r) => setTimeout(r, 10));
+    const child = roots()[0]!.id;
+    ds.ctx.db
+      .prepare(
+        `INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
+         VALUES (1, ?, 'a.png', 'a.png', 1, 1, 1, 'png', 's1', 'x', 'x')`,
+      )
+      .run(child);
+    await expect(ds.addLibraryRoot({ path: at('Pics') })).rejects.toMatchObject({ code: 'needs_confirm' });
+    await ds.addLibraryRoot({ path: at('Pics'), merge: true });
+    const [root] = roots();
+    expect(roots()).toHaveLength(1);
+    expect(ds.ctx.db.prepare('SELECT root_id, rel_path FROM images WHERE id = 1').get()).toEqual({ root_id: root!.id, rel_path: 'sub/a.png' });
   });
 });
 

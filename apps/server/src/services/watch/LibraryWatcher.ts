@@ -118,9 +118,11 @@ export class LibraryWatcher {
     }
     const rel = String(filename).split(path.sep).join('/');
     const segs = rel.split('/');
-    if (segs.slice(0, -1).some(isSkippedDirName)) return; // .git、$RECYCLE.BIN 里的变化不管
+    const last = segs.at(-1)!;
+    // .git、$RECYCLE.BIN 里的变化不管；这种目录本身新建、改名过来（把 r18 改成 .r18 藏起来）也不管，扫描器不进这种目录
+    if (segs.slice(0, -1).some(isSkippedDirName) || (!isImageFile(last) && isSkippedDirName(last))) return;
     if (pathKey(toAbs(root.path, rel)).startsWith(this.dataKey + '/')) return;
-    if (isImageFile(segs.at(-1)!)) {
+    if (isImageFile(last)) {
       if (event === 'change' && this.d.known) this.touched.set(`${root.id}
 ${rel}`, { rootId: root.id, rel });
       else this.d.requests.addDirty({ rootId: root.id, relDir: parentRel(rel), recursive: false });

@@ -96,6 +96,8 @@ export class TagResultWriter {
   /** 一个事务写一批；返回被标记为已处理的 imageId */
   writeBatch(results: HostItemResult[]): number[] {
     const now = this.nowIso();
+    // 两批之间用户可能合并、采纳、撤销了角色：缓存只在一批（一个事务）里有效
+    this.catalog.clearCache();
     return this.db.transaction(() => {
       const ids: number[] = [];
       for (const r of results) {
@@ -178,6 +180,7 @@ export class TagResultWriter {
   /** 阶段 0：分数已达到（可能被调低的）自动采纳阈值的建议，直接提升为角色关联 */
   promoteSuggestions(): number {
     const now = this.nowIso();
+    this.catalog.clearCache();
     return this.db.transaction(() => {
       let n = 0;
       for (const row of this.s.promotable!.all(this.o.autoAcceptThreshold) as { imageId: number; tag: string; score: number }[]) {

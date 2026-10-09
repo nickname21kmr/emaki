@@ -81,6 +81,17 @@ describe('Pipeline', () => {
     expect(enqueued).toEqual(['tag']);
   });
 
+  it('识别任务知道是不是用户手动点的（自动排上的不下载旧图模型）；手动标记只用一次', async () => {
+    const { pipeline } = setup({ tagPending: 10 });
+    const seen: (boolean | undefined)[] = [];
+    pipeline.register({ tag: { isReady: () => true, pendingCount: () => 10, run: async (_c, o) => void seen.push(o?.manual) } });
+    await pipeline.runner('tag')(ctx());
+    pipeline.noteManualStart('tag');
+    await pipeline.runner('tag')(ctx());
+    await pipeline.runner('tag')(ctx());
+    expect(seen).toEqual([false, true, false]);
+  });
+
   it('画师：开着、没补完 → 重启后接着补（没有要识别的时直接排）；关着不排；取消后不自动续，手动后恢复', async () => {
     const on = setup({ tagPending: 0, artists: { enabled: true, pending: 500 } });
     await on.pipeline.runner('scan')(ctx());

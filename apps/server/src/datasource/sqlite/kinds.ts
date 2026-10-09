@@ -11,7 +11,7 @@ import { backfillClassification } from '../../services/classify/backfill.ts';
 import type { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
 import { insertDanbooruCharacter } from './characters.ts';
 import type { SqliteContext } from './context.ts';
-import { applyExclusionRules } from './exclusions.ts';
+import { applyExclusionRulesTracked, revertNewlyExcluded } from './exclusions.ts';
 import { iso } from './sql.ts';
 import type { UndoRecorder } from './undo.ts';
 
@@ -77,5 +77,7 @@ function promoteSuggestions(ctx: SqliteContext, u: UndoRecorder, ids: number[], 
     u.set('character_suggestions', 'image_id = ? AND danbooru_tag = ?', [r.imageId, r.tag]);
     db.prepare('DELETE FROM character_suggestions WHERE image_id = ? AND danbooru_tag = ?').run(r.imageId, r.tag);
   }
-  applyExclusionRules(ctx, { imageIds: [...new Set(rows.map((r) => r.imageId))] });
+  // 新角色可能命中「角色」排除规则；撤销时角色关联去掉了，这条排除也要跟着放出来
+  const excluded = applyExclusionRulesTracked(ctx, [...new Set(rows.map((r) => r.imageId))]);
+  if (excluded.length) u.onUndo(() => db.transaction(() => revertNewlyExcluded(ctx, excluded))());
 }

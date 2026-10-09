@@ -52,6 +52,11 @@ export class CharacterCatalog {
     return this.normalize(tag);
   }
 
+  /** 丢掉 tag → id 缓存。识别任务一跑几个小时，每批开头清一次：中途合并 / 采纳 / 撤销都会改 characters 表 */
+  clearCache(): void {
+    this.cache.clear();
+  }
+
   /** normalizeTag → characters.danbooru_tag → danbooru_tag_redirects（合并重定向）；规范化后找不到时再按原标签找 */
   resolveCharacterId(tag: string): number | null {
     const t = this.normalize(tag);

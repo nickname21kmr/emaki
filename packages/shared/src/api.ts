@@ -613,6 +613,8 @@ export interface HealthResponse {
   version: string;
   /** 数据目录的绝对路径（只监听本机，返回路径没有问题） */
   dataDir: string;
+  /** 这次启动的随机 id，重启就变：前端据此丢掉旧的撤销记录（撤销栈只在后端内存里） */
+  bootId: string;
   /** 防休眠状态；演示数据下没有 */
   keepAwake?: KeepAwakeStatus;
 }

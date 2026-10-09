@@ -142,7 +142,17 @@ export class CollectionQueries {
     };
     const manualChars = manual('collection_characters', 'character_id');
     const manualWorks = manual('collection_works', 'work_id');
-    const chars = this.derived.get().characters;
+    // 角色所属作品直接读 character_works（顺序同 Derived 的 workIds）。不用 derived.get()：
+    // 侧栏统计也走这里，用户每点一次收藏 Derived 都会失效，为了这张小表整份重建要 1 秒以上
+    const workIdsOf = new Map<number, number[]>();
+    for (const r of db.prepare('SELECT character_id AS c, work_id AS w FROM character_works ORDER BY character_id, position, work_id').all() as {
+      c: number;
+      w: number;
+    }[]) {
+      const list = workIdsOf.get(r.c);
+      if (list) list.push(r.w);
+      else workIdsOf.set(r.c, [r.w]);
+    }
 
     const out = new Map<number, Loaded>();
     for (const row of rows) {
@@ -167,7 +177,7 @@ export class CollectionQueries {
         workHits: workHits.get(row.id) ?? new Map(),
         manualChars: manualChars.get(row.id) ?? [],
         manualWorks: manualWorks.get(row.id) ?? [],
-        worksOfCharacter: (id) => chars.get(id)?.workIds ?? [],
+        worksOfCharacter: (id) => workIdsOf.get(id) ?? [],
       });
       out.set(row.id, {
         row,
@@ -504,7 +514,16 @@ export class CollectionQueries {
 
   private requireActive(idStr: ID): CollectionRow {
     const id = parseId(idStr);
-    const row = id === null ? undefined : (this.ctx.db.prepare("SELECT * FROM collections WHERE id = ? AND state = 'active'").get(id) as CollectionRow | undefined);
+    // 文件夹停用、移除期间合集还在（见 CollectionService），但和列表、详情一样当作不存在
+    const row =
+      id === null
+        ? undefined
+        : (this.ctx.db
+            .prepare(
+              `SELECT c.* FROM collections c JOIN library_roots r ON r.id = c.root_id
+               WHERE c.id = ? AND c.state = 'active' AND r.enabled = 1 AND r.removed_at IS NULL`,
+            )
+            .get(id) as CollectionRow | undefined);
     if (!row) throw new NotFoundError('合集');
     return row;
   }
