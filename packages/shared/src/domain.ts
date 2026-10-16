@@ -453,7 +453,7 @@ export interface Settings {
 }
 
 /** artists：给还没识别过画师的图补跑 PixAI，只记画师（2026-10-04） */
-export type JobKind = 'scan' | 'thumbnail' | 'tag' | 'danbooru-sync' | 'dedupe' | 'artists';
+export type JobKind = 'scan' | 'thumbnail' | 'tag' | 'danbooru-sync' | 'dedupe' | 'artists' | 'pixiv-tags';
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 
 export interface Job {

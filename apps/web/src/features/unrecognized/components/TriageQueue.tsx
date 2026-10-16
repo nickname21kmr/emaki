@@ -243,7 +243,7 @@ const QueueRow = memo(function QueueRow({
               </span>
               <span className="shrink-0 text-[10.5px] text-fg-subtle tabular">{position}</span>
             </span>
-            {top ? (
+            {top && top.score > 0 ? (
               <span className="mt-1 flex items-center gap-2">
                 <span className="relative h-[3px] w-full max-w-16 overflow-hidden rounded-full bg-line">
                   <span

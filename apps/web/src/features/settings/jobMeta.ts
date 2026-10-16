@@ -8,6 +8,7 @@ export const JOB_LABEL: Record<JobKind, string> = {
   'danbooru-sync': '同步 Danbooru',
   dedupe: '查找重复',
   artists: '识别画师',
+  'pixiv-tags': '补充 Pixiv 角色',
 };
 
 /** 进度条旁边的动词，比「进行中」更具体 */
@@ -18,6 +19,7 @@ export const JOB_VERB: Record<JobKind, string> = {
   'danbooru-sync': '同步中',
   dedupe: '查找中',
   artists: '识别中',
+  'pixiv-tags': '查询中',
 };
 
 export const JOB_ICON: Record<JobKind, LucideIcon> = {
@@ -27,6 +29,7 @@ export const JOB_ICON: Record<JobKind, LucideIcon> = {
   'danbooru-sync': CloudDownload,
   dedupe: Copy,
   artists: Palette,
+  'pixiv-tags': CloudDownload,
 };
 
 /** 「运行任务」菜单里的顺序：按日常使用频率 */

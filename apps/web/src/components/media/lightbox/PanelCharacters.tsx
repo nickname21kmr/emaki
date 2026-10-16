@@ -122,10 +122,10 @@ function SuggestionRow({
             </span>
           )}
         </div>
-        <div className="mt-1.5 flex items-center gap-2">
+        {s.score > 0 && <div className="mt-1.5 flex items-center gap-2">
           <Progress value={s.score} tone="shu" />
           <span className="w-8 shrink-0 text-right text-[11px] text-fg-muted tabular">{formatPercent(s.score)}</span>
-        </div>
+        </div>}
       </div>
       <Button size="sm" variant="secondary" loading={busy} disabled={disabled && !busy} onClick={onAccept}>
         采纳

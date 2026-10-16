@@ -76,7 +76,7 @@ export function DecisionPanel({
       <div key={item.image.id} className="animate-fade-in">
         <ImageMeta image={item.image} position={triage.index + 1} total={triage.total} />
 
-        <PanelSection title="tagger 建议" hint={suggestions.length ? '按数字键直接采纳' : undefined}>
+        <PanelSection title="角色建议" hint={suggestions.length ? '按数字键直接采纳' : undefined}>
           {suggestions.length ? (
             <div className="space-y-2">
               {/* 只给前 9 条编号，正好对应数字键 */}
@@ -87,8 +87,8 @@ export function DecisionPanel({
                   name={s.name}
                   workName={s.workName}
                   value={s.score}
-                  valueLabel={Math.round(s.score * 100)}
-                  valueUnit="%"
+                  valueLabel={s.score > 0 ? Math.round(s.score * 100) : null}
+                  valueUnit={s.score > 0 ? '%' : ''}
                   isNew={!s.characterId}
                   title={`${s.danbooruTag} · 按 ${i + 1} 采纳`}
                   onPick={() => triage.acceptSuggestion(s)}

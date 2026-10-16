@@ -57,8 +57,9 @@ export class TagResultWriter {
       upsertTag: db.prepare('INSERT INTO tags (name, category) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET name = excluded.name RETURNING id'),
       delImageTags: db.prepare('DELETE FROM image_tags WHERE image_id = ?'),
       insImageTag: db.prepare('INSERT OR REPLACE INTO image_tags (image_id, tag_id, score) VALUES (?, ?, ?)'),
-      delSuggestions: db.prepare('DELETE FROM character_suggestions WHERE image_id = ?'),
-      insSuggestion: db.prepare('INSERT OR REPLACE INTO character_suggestions (image_id, danbooru_tag, score) VALUES (?, ?, ?)'),
+      delSuggestions: db.prepare("DELETE FROM character_suggestions WHERE image_id = ? AND source = 'tagger'"),
+      insSuggestion: db.prepare(`INSERT INTO character_suggestions (image_id, danbooru_tag, score) VALUES (?, ?, ?)
+        ON CONFLICT(image_id, danbooru_tag) DO UPDATE SET score=excluded.score, source='tagger'`),
       // 只删识别器写的（score 非空）；用户「归为原创」手动挂的 score 为 NULL，重打标签不能删
       delImageCopyrights: db.prepare('DELETE FROM image_copyrights WHERE image_id = ? AND score IS NOT NULL'),
       insImageCopyright: db.prepare(`INSERT INTO image_copyrights (image_id, work_id, score) VALUES (@imageId, @workId, @score)
@@ -72,7 +73,7 @@ export class TagResultWriter {
       // 只提升插画和漫画上的建议：别册里的未知角色永远只是建议（BI-15 ①）
       promotable: db.prepare(`SELECT cs.image_id AS imageId, cs.danbooru_tag AS tag, cs.score AS score
         FROM character_suggestions cs JOIN images i ON i.id = cs.image_id
-        WHERE cs.score >= ? AND i.trashed_at IS NULL AND i.content_kind IN ('illustration','comic')`),
+        WHERE cs.source='tagger' AND cs.score >= ? AND i.trashed_at IS NULL AND i.content_kind IN ('illustration','comic')`),
       classRow: db.prepare(`SELECT ${CLASS_COLS} FROM images WHERE id = ?`),
       kindOf: db.prepare('SELECT content_kind FROM images WHERE id = ?').pluck(),
       delSuggestion: db.prepare('DELETE FROM character_suggestions WHERE image_id = ? AND danbooru_tag = ?'),

@@ -147,7 +147,7 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
 
   app.post('/api/jobs', (req) => {
     const { kind } = parse(
-      z.object({ kind: z.enum(['scan', 'thumbnail', 'tag', 'danbooru-sync', 'dedupe', 'artists']) }),
+      z.object({ kind: z.enum(['scan', 'thumbnail', 'tag', 'danbooru-sync', 'dedupe', 'artists', 'pixiv-tags']) }),
       req.body,
     );
     return ds.startJob(kind);

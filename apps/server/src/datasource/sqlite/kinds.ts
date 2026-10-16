@@ -62,7 +62,7 @@ function promoteSuggestions(ctx: SqliteContext, u: UndoRecorder, ids: number[], 
   const rows = db
     .prepare(
       `SELECT cs.image_id AS imageId, cs.danbooru_tag AS tag, cs.score FROM character_suggestions cs JOIN images i ON i.id = cs.image_id
-       WHERE cs.image_id IN (SELECT value FROM json_each(?)) AND cs.score >= ? AND i.content_kind IN ('illustration','comic')`,
+       WHERE cs.image_id IN (SELECT value FROM json_each(?)) AND cs.source='tagger' AND cs.score >= ? AND i.content_kind IN ('illustration','comic')`,
     )
     .all(JSON.stringify(ids), deps.autoAcceptThreshold()) as { imageId: number; tag: string; score: number }[];
   if (!rows.length) return;

@@ -1770,6 +1770,7 @@ export class MockDataSource implements DataSource {
       thumbnail: 600,
       tag: this.idx.visible.filter((i) => !i.tagged).length || 240,
       'danbooru-sync': 120,
+      'pixiv-tags': 0,
       artists: 0,
       dedupe: 900,
     };

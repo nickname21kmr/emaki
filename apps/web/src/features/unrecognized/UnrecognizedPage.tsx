@@ -7,6 +7,7 @@ import { AreaTabs } from './components/AreaTabs';
 import { BucketTabs } from './components/BucketTabs';
 import { PendingCollections } from './components/PendingCollections';
 import { RetagButton } from './components/RetagButton';
+import { PixivTagsButton } from './components/PixivTagsButton';
 import { RunTaggerButton } from './components/RunTaggerButton';
 import { SheetLayout } from './components/SheetLayout';
 import { TriageBody } from './components/TriageBody';
@@ -38,6 +39,7 @@ export function UnrecognizedPage() {
     <div className="flex h-full min-h-[620px] flex-col">
       <PageHeader title="未识别" subtitle={<Subtitle />} actions={
           <div className="flex items-center gap-2">
+            {p.area === 'art' && <PixivTagsButton />}
             <RetagButton />
             <RunTaggerButton />
           </div>
