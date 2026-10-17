@@ -94,6 +94,9 @@ import { hydrateImages, IMAGE_COLS, type ImageRow } from './hydrate.ts';
 import { listImages } from './queries/listImages.ts';
 import { loadSuggestions } from './suggestions.ts';
 import { pendingPixivCount, queuePixivImages, syncPixivCharacters } from '../../services/pixiv/sync.ts';
+import { refreshPixivAliases } from '../../services/pixiv/aliases.ts';
+import { createPixivDiscovery } from '../../services/pixiv/discovery.ts';
+import { DanbooruClient } from '../../services/danbooru/client.ts';
 import { BulkOps, RATING_LABEL } from './bulk.ts';
 import { CollectionQueries } from './collections.ts';
 import { assertKindValue, KIND_LABEL, setKindInTx, type KindDeps } from './kinds.ts';
@@ -207,7 +210,23 @@ export class SqliteDataSource implements DataSource {
       }),
       pixiv: {
         pendingCount: () => pendingPixivCount(ds.ctx),
-        run: (job) => syncPixivCharacters(ds.ctx, job, makeCatalog),
+        run: async (job) => {
+          const settings = readSettings(db).danbooru;
+          if (settings.enabled && pendingPixivCount(ds.ctx) > 0) {
+            try {
+              await refreshPixivAliases(db, danbooru, new DanbooruClient({
+                login: settings.username || undefined, apiKey: getDanbooruApiKey(db) ?? undefined,
+              }), job);
+            } catch (error) {
+              job.signal.throwIfAborted();
+              console.warn(`[pixiv-tags] 别名补全失败，本轮使用已有词库：${String(error)}`);
+            }
+          }
+          const discovery = settings.enabled ? createPixivDiscovery(db, danbooru, new DanbooruClient({
+            login: settings.username || undefined, apiKey: getDanbooruApiKey(db) ?? undefined,
+          })) : undefined;
+          return syncPixivCharacters(ds.ctx, job, makeCatalog, undefined, 1000, discovery);
+        },
       },
       danbooru: {
         shouldRunAfterTag: () => readSettings(db).danbooru.enabled && (hasUncachedCharacterTags(db) || hasUncachedArtists(db)),

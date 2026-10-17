@@ -64,6 +64,7 @@ export class Pipeline {
   /** 用户取消了画师补跑：之后不自动续跑，直到手动点「补跑」或重新打开开关 */
   private artistsPaused = false;
   private pixivPaused = false;
+  private pixivFailed = false;
 
   constructor(private d: PipelineDeps) {}
 
@@ -112,7 +113,7 @@ export class Pipeline {
             if (!ctx.signal.aborted && this.d.danbooru?.shouldRunAfterTag()) this.d.jobs().enqueue('danbooru-sync');
             return msg;
           } catch (error) {
-            this.pixivPaused = true;
+            this.pixivFailed = true;
             throw error;
           } finally {
             if (ctx.signal.aborted) this.pixivPaused = true;
@@ -166,9 +167,9 @@ export class Pipeline {
 
   /** 用户手动开始某个任务（取消识别后再点「运行识别」→ 恢复自动续跑） */
   noteManualStart(kind: JobKind): void {
-    if (kind === 'tag') this.tagPaused = false;
+    if (kind === 'tag') { this.tagPaused = false; this.pixivFailed = false; }
     if (kind === 'artists') this.artistsPaused = false;
-    if (kind === 'pixiv-tags') this.pixivPaused = false;
+    if (kind === 'pixiv-tags') { this.pixivPaused = false; this.pixivFailed = false; }
   }
 
   private afterThumbnail() {
@@ -188,7 +189,7 @@ export class Pipeline {
   }
 
   private maybePixiv(): void {
-    if (!this.pixivPaused && this.d.pixiv && this.d.pixiv.pendingCount() > 0)
+    if (!this.pixivPaused && !this.pixivFailed && this.d.pixiv && this.d.pixiv.pendingCount() > 0)
       this.d.jobs().enqueue('pixiv-tags', { requeueIfRunning: true });
   }
 

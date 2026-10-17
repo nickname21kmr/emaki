@@ -73,6 +73,9 @@ describe('Pipeline', () => {
     await expect(p.pipeline.runner('pixiv-tags')(ctx())).rejects.toThrow('offline');
     await expect(p.pipeline.runner('tag')(ctx())).resolves.toBe('识别完成');
     expect(p.enqueued).toEqual([]);
+    p.pipeline.noteManualStart('tag');
+    await p.pipeline.runner('tag')(ctx());
+    expect(p.enqueued).toEqual(['pixiv-tags']);
   });
   it('扫描没有新图，但还有没识别的图（例如进程重启丢了跑到一半的识别）→ 接着识别', async () => {
     const { pipeline, enqueued } = setup({ tagPending: 15000 });
