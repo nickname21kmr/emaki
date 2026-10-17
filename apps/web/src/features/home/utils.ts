@@ -32,6 +32,7 @@ export const JOB_LABEL: Record<JobKind, string> = {
   'danbooru-sync': '正在同步 Danbooru',
   dedupe: '正在查找重复',
   artists: '正在识别画师',
+  'pixiv-tags': '正在补充 Pixiv 角色',
 };
 
 /** 把 formatBytes 的结果拆成「数字 + 单位」，数字用大号衬线、单位用小字 */

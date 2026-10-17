@@ -94,6 +94,10 @@ import { config } from '../../config.ts';
 import { hydrateImages, IMAGE_COLS, type ImageRow } from './hydrate.ts';
 import { listImages } from './queries/listImages.ts';
 import { loadSuggestions } from './suggestions.ts';
+import { pendingPixivCount, queuePixivImages, syncPixivCharacters } from '../../services/pixiv/sync.ts';
+import { refreshPixivAliases } from '../../services/pixiv/aliases.ts';
+import { createPixivDiscovery } from '../../services/pixiv/discovery.ts';
+import { DanbooruClient } from '../../services/danbooru/client.ts';
 import { BulkOps, RATING_LABEL } from './bulk.ts';
 import { CollectionQueries } from './collections.ts';
 import { assertKindValue, KIND_LABEL, setKindInTx, type KindDeps } from './kinds.ts';
@@ -200,9 +204,32 @@ export class SqliteDataSource implements DataSource {
         modelsDir: config.modelsDir,
         getTaggerSettings: () => readSettings(db).tagger,
         makeCatalog,
-        afterBatchInTx: (ids) => applyExclusionRules(ds.ctx, { imageIds: ids }),
+        afterBatchInTx: (ids) => {
+          applyExclusionRules(ds.ctx, { imageIds: ids });
+          queuePixivImages(ds.ctx, ids);
+        },
         log: (m) => console.info(`[tag] ${m}`),
       }),
+      pixiv: {
+        pendingCount: () => pendingPixivCount(ds.ctx),
+        run: async (job) => {
+          const settings = readSettings(db).danbooru;
+          if (settings.enabled && pendingPixivCount(ds.ctx) > 0) {
+            try {
+              await refreshPixivAliases(db, danbooru, new DanbooruClient({
+                login: settings.username || undefined, apiKey: getDanbooruApiKey(db) ?? undefined,
+              }), job);
+            } catch (error) {
+              job.signal.throwIfAborted();
+              console.warn(`[pixiv-tags] 别名补全失败，本轮使用已有词库：${String(error)}`);
+            }
+          }
+          const discovery = settings.enabled ? createPixivDiscovery(db, danbooru, new DanbooruClient({
+            login: settings.username || undefined, apiKey: getDanbooruApiKey(db) ?? undefined,
+          })) : undefined;
+          return syncPixivCharacters(ds.ctx, job, makeCatalog, undefined, 1000, discovery);
+        },
+      },
       danbooru: {
         shouldRunAfterTag: () => readSettings(db).danbooru.enabled && (hasUncachedCharacterTags(db) || hasUncachedArtists(db)),
         run: createDanbooruSyncRunner({
@@ -1263,6 +1290,7 @@ export class SqliteDataSource implements DataSource {
     return this.ctx.jobs.list();
   }
   async startJob(kind: JobKind): Promise<Job> {
+    if (kind === 'pixiv-tags') queuePixivImages(this.ctx);
     if (kind === 'scan') this.requests.requestFull();
     // 用户手动点的：之前读不到、正在退避的图也马上重试（比如刚把移动硬盘插回去）
     if (kind === 'tag' || kind === 'artists') resetIoBackoff();

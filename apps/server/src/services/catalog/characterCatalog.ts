@@ -59,6 +59,10 @@ export class CharacterCatalog {
 
   /** normalizeTag → characters.danbooru_tag → danbooru_tag_redirects（合并重定向）；规范化后找不到时再按原标签找 */
   resolveCharacterId(tag: string): number | null {
+    if (tag.startsWith('emaki:character:')) {
+      const id = Number(tag.slice('emaki:character:'.length));
+      return Number.isSafeInteger(id) && this.db.prepare('SELECT 1 FROM characters WHERE id=?').get(id) ? id : null;
+    }
     const t = this.normalize(tag);
     return this.lookup(t) ?? (t !== tag ? this.lookup(tag) : null);
   }
@@ -79,6 +83,7 @@ export class CharacterCatalog {
     if (existing !== null) {
       return { id: existing, created: false, createdWorkIds: [] };
     }
+    if (rawTag.startsWith('emaki:character:')) throw new Error('候选角色已被删除，请重新匹配');
     const name = this.localizer.characterName(tag).name;
     const id = Number(this.s.insChar!.run({ name, tag, now }).lastInsertRowid);
     this.cache.set(tag, id);

@@ -45,6 +45,38 @@ function setup(o: { scan?: ScanSummary; tagPending?: number; tagReady?: boolean;
 }
 
 describe('Pipeline', () => {
+  it('首次模型识别完成后自动排 Pixiv 补充，取消时不排；重启已有待补记录可续跑', async () => {
+    const p=setup();
+    p.pipeline.register({pixiv:{pendingCount:()=>2,run:async()=> 'Pixiv 完成'}});
+    await p.pipeline.runner('tag')(ctx());
+    expect(p.enqueued).toEqual(['pixiv-tags']);
+    expect(p.requeue).toEqual(['pixiv-tags']);
+    const cancelled=setup();
+    cancelled.pipeline.register({pixiv:{pendingCount:()=>2,run:async()=> 'Pixiv 完成'}});
+    await cancelled.pipeline.runner('tag')(ctx(true));
+    expect(cancelled.enqueued).toEqual([]);
+    const restarted=setup();
+    restarted.pipeline.register({pixiv:{pendingCount:()=>2,run:async()=> 'Pixiv 完成'}});
+    await restarted.pipeline.runner('scan')(ctx());
+    expect(restarted.enqueued).toEqual(['pixiv-tags']);
+    restarted.pipeline.notePaused('pixiv-tags');
+    await restarted.pipeline.runner('tag')(ctx());
+    expect(restarted.enqueued).toEqual(['pixiv-tags']);
+    restarted.pipeline.noteManualStart('pixiv-tags');
+    await restarted.pipeline.runner('tag')(ctx());
+    expect(restarted.enqueued).toEqual(['pixiv-tags','pixiv-tags']);
+  });
+
+  it('Pixiv 网络失败暂停自动重试，模型识别结果不受影响', async () => {
+    const p=setup();
+    p.pipeline.register({pixiv:{pendingCount:()=>2,run:async()=> {throw new Error('offline');}}});
+    await expect(p.pipeline.runner('pixiv-tags')(ctx())).rejects.toThrow('offline');
+    await expect(p.pipeline.runner('tag')(ctx())).resolves.toBe('识别完成');
+    expect(p.enqueued).toEqual([]);
+    p.pipeline.noteManualStart('tag');
+    await p.pipeline.runner('tag')(ctx());
+    expect(p.enqueued).toEqual(['pixiv-tags']);
+  });
   it('扫描没有新图，但还有没识别的图（例如进程重启丢了跑到一半的识别）→ 接着识别', async () => {
     const { pipeline, enqueued } = setup({ tagPending: 15000 });
     await pipeline.runner('scan')(ctx());
