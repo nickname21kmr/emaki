@@ -1,6 +1,6 @@
 /**
  * 后台任务链：把 JobKind 映射到各个 service，并负责链式触发
- *   scan → thumbnail → tag（模型就绪时）→ dedupe；tag 之后按需 danbooru-sync。
+ *   scan → thumbnail → tag（模型就绪时）→ dedupe；tag 之后按需 danbooru-sync，设置里打开了再补 pixiv-tags。
  * 各阶段由对应任务注入（register）；没有注入的阶段 runner 抛 NotImplementedError，任务显示 failed 并提示缺哪一项。
  */
 import type { JobKind } from '@emaki/shared';
@@ -34,6 +34,12 @@ export interface ArtistStage {
 export interface DedupeStage {
   run(ctx: JobContext): Promise<string>;
 }
+/** 按 Pixiv 标签补充角色（会联网）：enabled() 只管识别后的自动排队，手动点按钮照常跑 */
+export interface PixivStage {
+  enabled(): boolean;
+  pendingCount(): number;
+  run: JobRunner;
+}
 
 export interface PipelineDeps {
   /** 延迟获取，避免构造时循环依赖 */
@@ -46,7 +52,7 @@ export interface PipelineDeps {
   danbooru?: DanbooruStage;
   dedupe?: DedupeStage;
   artists?: ArtistStage;
-  pixiv?: { pendingCount(): number; run: JobRunner };
+  pixiv?: PixivStage;
   /** T20：refreshTagCounts */
   afterTag?: () => void;
   /** 扫描完成（没被取消）后的钩子，例如 T08 重新同步监听 */
@@ -68,6 +74,8 @@ export class Pipeline {
   private tagManual = false;
   private pixivPaused = false;
   private pixivFailed = false;
+  /** 这一轮 Pixiv 补充是用户点按钮开始的（让出后续跑的也算）：关掉设置时不取消它 */
+  private pixivManual = false;
 
   constructor(private d: PipelineDeps) {}
 
@@ -102,26 +110,32 @@ export class Pipeline {
           if (ctx.signal.aborted) this.tagPaused = true;
           if (!ctx.signal.aborted && !ctx.yielded) {
             this.d.afterTag?.();
-            this.maybePixiv();
             if (this.d.danbooru?.shouldRunAfterTag()) this.d.jobs().enqueue('danbooru-sync');
             if (this.dedupeDirty) this.d.jobs().enqueue('dedupe');
             // 开着画师的：接着补（新图、WD 识别的旧图、重启前没补完的）；用户取消过就等他手动再点
             const a = this.d.artists;
             if (this.canAutoArtists()) this.d.jobs().enqueue('artists');
+            // 放在最后：enqueue 会马上启动空闲的 io 道，先排的话 Pixiv 会抢在同步、查重前面
+            this.maybePixiv();
           }
           return msg;
         }
         case 'pixiv-tags': {
           if (!this.d.pixiv) throw new NotImplementedError('pixiv', 'Pixiv 角色补充');
+          // 手动点的（含让出后的续跑）关着也跑；自动排上的到开跑时再查一次：排队期间用户可能关掉了开关
+          if (!this.pixivManual && (!this.d.pixiv.enabled() || this.pixivPaused)) return '补充 Pixiv 角色：设置里没有打开';
           try {
             const msg = await this.d.pixiv.run(ctx);
-            if (!ctx.signal.aborted && this.d.danbooru?.shouldRunAfterTag()) this.d.jobs().enqueue('danbooru-sync');
+            // 让出时不排 Danbooru 同步，等续跑的那一轮跑完再排
+            if (!ctx.signal.aborted && !ctx.yielded && this.d.danbooru?.shouldRunAfterTag()) this.d.jobs().enqueue('danbooru-sync');
             return msg;
           } catch (error) {
             this.pixivFailed = true;
             throw error;
           } finally {
             if (ctx.signal.aborted) this.pixivPaused = true;
+            // 这一轮结束了（不是让出）：手动标记用完
+            if (!ctx.yielded) this.pixivManual = false;
           }
         }
         case 'artists': {
@@ -181,7 +195,7 @@ export class Pipeline {
       this.pixivFailed = false;
     }
     if (kind === 'artists') this.artistsPaused = false;
-    if (kind === 'pixiv-tags') { this.pixivPaused = false; this.pixivFailed = false; }
+    if (kind === 'pixiv-tags') { this.pixivPaused = false; this.pixivFailed = false; this.pixivManual = true; }
   }
 
   private afterThumbnail() {
@@ -200,9 +214,26 @@ export class Pipeline {
     if (!tagNeeded && !this.tagPaused) this.maybePixiv();
   }
 
-  private maybePixiv(): void {
-    if (!this.pixivPaused && !this.pixivFailed && this.d.pixiv && this.d.pixiv.pendingCount() > 0)
-      this.d.jobs().enqueue('pixiv-tags', { requeueIfRunning: true });
+  private maybePixiv(requeueIfRunning = true): void {
+    const p = this.d.pixiv;
+    // 自动补充会把投稿 ID 发给 pixiv.net：设置里打开了才排（手动点按钮走 startJob，不经过这里）
+    if (p?.enabled() && !this.pixivPaused && !this.pixivFailed && p.pendingCount() > 0)
+      this.d.jobs().enqueue('pixiv-tags', { requeueIfRunning });
+  }
+
+  /**
+   * 设置里刚打开自动查 Pixiv：清掉之前的暂停和失败，有积压的就排一轮。
+   * 正在跑的（用户手动点的）不再追加一轮，剩下的等下次识别完再补
+   */
+  requestPixiv(): void {
+    this.pixivPaused = false;
+    this.pixivFailed = false;
+    this.maybePixiv(false);
+  }
+
+  /** 正在跑或排着的 Pixiv 补充是用户点按钮开始的：关掉设置时只取消自动排上的 */
+  isPixivManual(): boolean {
+    return this.pixivManual;
   }
 
   private canAutoArtists(): boolean {
@@ -231,6 +262,9 @@ export class Pipeline {
   notePaused(kind: JobKind): void {
     if (kind === 'tag') this.tagPaused = true;
     if (kind === 'artists') this.artistsPaused = true;
-    if (kind === 'pixiv-tags') this.pixivPaused = true;
+    if (kind === 'pixiv-tags') {
+      this.pixivPaused = true;
+      this.pixivManual = false;
+    }
   }
 }

@@ -121,7 +121,7 @@ function LocalNote({ onSettings }: { onSettings: () => void }) {
       <div className="min-w-0 flex-1">
         <p className="text-[13px] font-medium text-fg">Emaki 是本地应用，图片不会上传到任何地方。</p>
         <p className="mt-0.5 text-[12px] leading-relaxed text-fg-muted">
-          识别模型在本机运行；Danbooru 同步只下载标签资料，可以在设置里关掉。
+          识别模型在本机运行；Danbooru 同步只下载标签资料，可以在设置里关掉；查 Pixiv 标签只发作品号，识别后自动查默认关。
         </p>
       </div>
       <button

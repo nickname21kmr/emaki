@@ -17,13 +17,13 @@ const summary = (o: Partial<ScanSummary> = {}): ScanSummary => ({
   ...o,
 });
 
-const ctx = (aborted = false): JobContext => {
+const ctx = (aborted = false, yielded = false): JobContext => {
   const c = new AbortController();
   if (aborted) c.abort();
-  return { signal: c.signal, setTotal() {}, advance() {}, setMessage() {}, shouldYield: () => false, requeue() {}, yielded: false };
+  return { signal: c.signal, setTotal() {}, advance() {}, setMessage() {}, shouldYield: () => false, requeue() {}, yielded };
 };
 
-function setup(o: { scan?: ScanSummary; tagPending?: number; tagReady?: boolean; artists?: { enabled: boolean; pending: number; ready?: boolean } } = {}) {
+function setup(o: { scan?: ScanSummary; tagPending?: number; tagReady?: boolean; artists?: { enabled: boolean; pending: number; ready?: boolean }; danbooru?: boolean } = {}) {
   const enqueued: JobKind[] = [];
   const requeue: JobKind[] = [];
   const jobs = {
@@ -40,23 +40,24 @@ function setup(o: { scan?: ScanSummary; tagPending?: number; tagReady?: boolean;
     pixelPendingCount: () => 0,
     tag: { isReady: () => o.tagReady ?? true, pendingCount: () => o.tagPending ?? 0, run: async () => '识别完成' },
     artists: o.artists && { enabled: () => o.artists!.enabled, isReady: () => o.artists!.ready ?? true, pendingCount: () => o.artists!.pending, run: async () => '画师完成' },
+    danbooru: o.danbooru === undefined ? undefined : { shouldRunAfterTag: () => o.danbooru, run: async () => '同步完成' },
   } as unknown as PipelineDeps;
   return { pipeline: new Pipeline(deps), enqueued, requeue };
 }
 
 describe('Pipeline', () => {
-  it('首次模型识别完成后自动排 Pixiv 补充，取消时不排；重启已有待补记录可续跑', async () => {
+  it('设置里打开时：首次模型识别完成后自动排 Pixiv 补充，取消时不排；重启已有待补记录可续跑', async () => {
     const p=setup();
-    p.pipeline.register({pixiv:{pendingCount:()=>2,run:async()=> 'Pixiv 完成'}});
+    p.pipeline.register({pixiv:{enabled:()=>true,pendingCount:()=>2,run:async()=> 'Pixiv 完成'}});
     await p.pipeline.runner('tag')(ctx());
     expect(p.enqueued).toEqual(['pixiv-tags']);
     expect(p.requeue).toEqual(['pixiv-tags']);
     const cancelled=setup();
-    cancelled.pipeline.register({pixiv:{pendingCount:()=>2,run:async()=> 'Pixiv 完成'}});
+    cancelled.pipeline.register({pixiv:{enabled:()=>true,pendingCount:()=>2,run:async()=> 'Pixiv 完成'}});
     await cancelled.pipeline.runner('tag')(ctx(true));
     expect(cancelled.enqueued).toEqual([]);
     const restarted=setup();
-    restarted.pipeline.register({pixiv:{pendingCount:()=>2,run:async()=> 'Pixiv 完成'}});
+    restarted.pipeline.register({pixiv:{enabled:()=>true,pendingCount:()=>2,run:async()=> 'Pixiv 完成'}});
     await restarted.pipeline.runner('scan')(ctx());
     expect(restarted.enqueued).toEqual(['pixiv-tags']);
     restarted.pipeline.notePaused('pixiv-tags');
@@ -69,7 +70,7 @@ describe('Pipeline', () => {
 
   it('Pixiv 网络失败暂停自动重试，模型识别结果不受影响', async () => {
     const p=setup();
-    p.pipeline.register({pixiv:{pendingCount:()=>2,run:async()=> {throw new Error('offline');}}});
+    p.pipeline.register({pixiv:{enabled:()=>true,pendingCount:()=>2,run:async()=> {throw new Error('offline');}}});
     await expect(p.pipeline.runner('pixiv-tags')(ctx())).rejects.toThrow('offline');
     await expect(p.pipeline.runner('tag')(ctx())).resolves.toBe('识别完成');
     expect(p.enqueued).toEqual([]);
@@ -77,6 +78,85 @@ describe('Pipeline', () => {
     await p.pipeline.runner('tag')(ctx());
     expect(p.enqueued).toEqual(['pixiv-tags']);
   });
+
+  it('Pixiv：自动排上的那轮开跑时开关已经关了，就不联网；手动的照常跑', async () => {
+    const p = setup();
+    let on = true;
+    let ran = 0;
+    p.pipeline.register({ pixiv: { enabled: () => on, pendingCount: () => 2, run: async () => (ran++, 'Pixiv 完成') } });
+    await p.pipeline.runner('tag')(ctx());
+    expect(p.enqueued).toEqual(['pixiv-tags']);
+    on = false;
+    await expect(p.pipeline.runner('pixiv-tags')(ctx())).resolves.toBe('补充 Pixiv 角色：设置里没有打开');
+    expect(ran).toBe(0);
+    p.pipeline.noteManualStart('pixiv-tags');
+    await expect(p.pipeline.runner('pixiv-tags')(ctx())).resolves.toBe('Pixiv 完成');
+    expect(ran).toBe(1);
+  });
+
+  it('Pixiv：设置里没打开时识别完、扫描完都不自动排；手动点按钮照常跑', async () => {
+    const p = setup();
+    let ran = 0;
+    p.pipeline.register({ pixiv: { enabled: () => false, pendingCount: () => 2, run: async () => (ran++, 'Pixiv 完成') } });
+    await p.pipeline.runner('tag')(ctx());
+    await p.pipeline.runner('scan')(ctx());
+    expect(p.enqueued).toEqual([]);
+    p.pipeline.noteManualStart('pixiv-tags');
+    await expect(p.pipeline.runner('pixiv-tags')(ctx())).resolves.toBe('Pixiv 完成');
+    expect(ran).toBe(1);
+  });
+
+  it('Pixiv：识别完先排同步、查重，最后才排 Pixiv（免得它先占住 io 道）', async () => {
+    const p = setup({ danbooru: true });
+    p.pipeline.register({ pixiv: { enabled: () => true, pendingCount: () => 2, run: async () => 'Pixiv 完成' } });
+    p.pipeline.markDedupeDirty();
+    await p.pipeline.runner('tag')(ctx());
+    expect(p.enqueued).toEqual(['danbooru-sync', 'dedupe', 'pixiv-tags']);
+  });
+
+  it('Pixiv：让出时不排 Danbooru 同步，续跑的那一轮跑完才排', async () => {
+    const p = setup({ danbooru: true });
+    p.pipeline.register({ pixiv: { enabled: () => true, pendingCount: () => 2, run: async () => 'Pixiv 完成' } });
+    await p.pipeline.runner('pixiv-tags')(ctx(false, true));
+    expect(p.enqueued).toEqual([]);
+    await p.pipeline.runner('pixiv-tags')(ctx());
+    expect(p.enqueued).toEqual(['danbooru-sync']);
+  });
+
+  it('Pixiv：手动开始的一轮（含让出后的续跑）记为手动；整轮跑完、或排队中被取消后清掉', async () => {
+    const p = setup();
+    p.pipeline.register({ pixiv: { enabled: () => false, pendingCount: () => 2, run: async () => 'Pixiv 完成' } });
+    expect(p.pipeline.isPixivManual()).toBe(false);
+    p.pipeline.noteManualStart('pixiv-tags');
+    await p.pipeline.runner('pixiv-tags')(ctx(false, true));
+    expect(p.pipeline.isPixivManual()).toBe(true);
+    await p.pipeline.runner('pixiv-tags')(ctx());
+    expect(p.pipeline.isPixivManual()).toBe(false);
+    p.pipeline.noteManualStart('pixiv-tags');
+    p.pipeline.notePaused('pixiv-tags');
+    expect(p.pipeline.isPixivManual()).toBe(false);
+  });
+
+  it('Pixiv：设置里刚打开（requestPixiv）→ 清掉暂停和失败，有积压就排一轮；没积压、开关关着都不排', async () => {
+    let on = true;
+    let pending = 2;
+    const p = setup();
+    p.pipeline.register({ pixiv: { enabled: () => on, pendingCount: () => pending, run: async () => { throw new Error('offline'); } } });
+    await expect(p.pipeline.runner('pixiv-tags')(ctx())).rejects.toThrow('offline');
+    p.pipeline.notePaused('pixiv-tags');
+    await p.pipeline.runner('tag')(ctx());
+    expect(p.enqueued).toEqual([]);
+    // 不带 requeueIfRunning：正在跑（手动点的）时不追加一轮
+    p.pipeline.requestPixiv();
+    expect([p.enqueued, p.requeue]).toEqual([['pixiv-tags'], []]);
+    pending = 0;
+    p.pipeline.requestPixiv();
+    on = false;
+    pending = 2;
+    p.pipeline.requestPixiv();
+    expect(p.enqueued).toEqual(['pixiv-tags']);
+  });
+
   it('扫描没有新图，但还有没识别的图（例如进程重启丢了跑到一半的识别）→ 接着识别', async () => {
     const { pipeline, enqueued } = setup({ tagPending: 15000 });
     await pipeline.runner('scan')(ctx());

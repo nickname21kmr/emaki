@@ -38,6 +38,8 @@ export function settingsContract(make: ContractFactory, name: Name) {
         ['root2', 'E:/Old', false, 3],
       ]);
       expect(s.tagger.model).toBe('A1yCE/pixai-tagger-v1.0-onnx-fp16');
+      // 自动查 Pixiv 会联网，默认关
+      expect(s.tagger.pixiv).toBe(false);
       expect(s.danbooru.hasApiKey).toBe(false);
       expect(s.ui).toEqual({ theme: 'system', blurSensitive: true, density: 'comfortable' });
     });
@@ -644,6 +646,14 @@ export function unrecognizedContract(make: ContractFactory, name: Name) {
       expect(found.map((c) => [c.name, c.imageCount])).toEqual([['Test Girl', 1]]);
       await e.ds.undo(r.undoToken!);
       expect((await e.ds.listCharacters({ q: 'Test Girl' })).total).toBe(0);
+    });
+
+    it('自建角色的占位标签没有对应建议（角色已合并 / 删除）：409，不新建角色', async () => {
+      const e = env();
+      const before = (await e.ds.listCharacters({ includeOther: true })).total;
+      await expect(e.ds.acceptSuggestion(e.id('image', 'i27'), 'emaki:character:999')).rejects.toMatchObject({ statusCode: 409 });
+      expect((await e.ds.listCharacters({ includeOther: true })).total).toBe(before);
+      expect((await e.ds.getImage(e.id('image', 'i27')))!.characterIds).toEqual([]);
     });
   });
 }

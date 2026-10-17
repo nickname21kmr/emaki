@@ -424,6 +424,11 @@ export interface Settings {
     keepAwake: boolean;
     /** 识别画师（PixAI 的画师输出，默认关）：打开后识别时顺便记画师，并给已识别的图补跑 */
     artists: boolean;
+    /**
+     * 识别后自动查 Pixiv 标签补充没认出的角色（默认关）：会把文件名里的 Pixiv 投稿 ID 发给 pixiv.net，不上传图片。
+     * 只管识别后的自动补充；「未识别」页的按钮是用户手动点的，关着也能跑
+     */
+    pixiv: boolean;
   };
   danbooru: {
     /** 是否允许联网同步标签元数据 */

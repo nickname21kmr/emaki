@@ -126,5 +126,6 @@ WD14 tagger（ONNX，`onnxruntime-node`，Windows 上用 DirectML 走显卡）�
 ## 隐私
 
 - 后端只监听 127.0.0.1。
-- 唯一的联网行为：下载 tagger 模型、（可选）同步 Danbooru 标签元数据。图片本身永远不上传。
+- 唯一的联网行为：下载 tagger 模型、（可选）同步 Danbooru 标签元数据、（可选）按 Pixiv 作品号读公开标签补角色。图片本身永远不上传。
+- Pixiv 补充会把未识别图片文件名里的作品号发给 pixiv.net。识别后的自动补充由 `tagger.pixiv` 控制，默认关；「未识别」页的「补充 Pixiv 角色」按钮是用户手动点的，开关关着也会跑。
 - `data/` 目录（数据库、缩略图、模型）在 `.gitignore` 里。

@@ -4,7 +4,7 @@
  */
 import { searchKey, type Character, type CreateCharacterBody, type ID, type MutationResult, type UpdateCharacterBody } from '@emaki/shared';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
-import type { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
+import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
 import type { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
 import { recomputeCustomMatches } from '../../services/danbooru/matcher.ts';
 import type { SqliteContext } from './context.ts';
@@ -216,10 +216,22 @@ export class CharacterMutations {
         { ...p, name: from.name },
       );
       const redirected = list('SELECT tag FROM danbooru_tag_redirects WHERE character_id = ?', from.id);
+      // Pixiv 给自建角色的建议（character_id）改指向目标，按目标合并后的写法：有 Danbooru 标签就写标签（character_id 留空），
+      // 没有就写目标的占位标签。图上已有目标的建议就不搬，删角色时级联删掉
+      const toDanbooru = to.danbooru_tag ?? from.danbooru_tag;
+      const sug = { tag: toDanbooru ?? CharacterCatalog.customTag(to.id), cid: toDanbooru ? null : to.id };
+      const movedSuggestions = list(
+        `SELECT image_id FROM character_suggestions WHERE character_id = @from AND image_id NOT IN
+           (SELECT image_id FROM character_suggestions WHERE character_id = @to OR danbooru_tag = @tag)`,
+        { ...p, tag: sug.tag },
+      );
 
       // 严格按此顺序记录（撤销逆序：先还原目标的标签，再插回被合并的角色，再恢复各子表）
       u.sql('DELETE FROM image_characters WHERE character_id = ? AND image_id IN (SELECT value FROM json_each(?))', [to.id, movedImages]);
       u.set('image_characters', 'character_id = ?', [from.id]);
+      // 同上：必须在 characters 之前记录。撤销时先删搬过去的行，再插回原来的
+      u.set('character_suggestions', 'character_id = ?', [from.id]);
+      u.sql('DELETE FROM character_suggestions WHERE danbooru_tag = ? AND image_id IN (SELECT value FROM json_each(?))', [sug.tag, movedSuggestions]);
       // 合集的整本关联（T38b，RV-C-6）：必须在 characters 之前记录，撤销时 characters 先插回，外键才不失败
       u.sql('DELETE FROM collection_characters WHERE character_id = ? AND collection_id IN (SELECT value FROM json_each(?))', [to.id, movedCollections]);
       u.set('collection_characters', 'character_id = ?', [from.id]);
@@ -248,6 +260,12 @@ export class CharacterMutations {
            SELECT collection_id, @to, added_at FROM collection_characters WHERE character_id = @from`,
         )
         .run(p);
+      this.db
+        .prepare(
+          `UPDATE character_suggestions SET danbooru_tag = @tag, character_id = @cid
+           WHERE character_id = @from AND image_id IN (SELECT value FROM json_each(@moved))`,
+        )
+        .run({ from: from.id, ...sug, moved: movedSuggestions });
       // 2 指向被合并角色的重定向改指向目标
       this.db.prepare('UPDATE danbooru_tag_redirects SET character_id = @to WHERE character_id = @from').run(p);
       // 3 标签：目标没有就接过来；目标已有就留一条重定向（否则下次打标签会把被合并的角色重新建出来）
@@ -272,7 +290,7 @@ export class CharacterMutations {
         )
         .run(p);
       this.db.prepare("DELETE FROM aliases WHERE owner_type = 'character' AND owner_id = ?").run(from.id);
-      // 5 删除（级联 image_characters / character_works / custom_character_matches）
+      // 5 删除（级联 image_characters / character_works / custom_character_matches / 没搬的 character_suggestions）
       this.db.prepare('DELETE FROM characters WHERE id = ?').run(from.id);
       // id 不是 AUTOINCREMENT：删掉的是最大 id 时，识别器之后新建的角色会拿到它。撤销时最先查，被占了就整个拒绝，免得删掉新角色
       u.guard('SELECT 1 FROM characters WHERE id = ?', [from.id], `无法撤销：「${from.name}」原来的编号已经给了之后新建的角色`);

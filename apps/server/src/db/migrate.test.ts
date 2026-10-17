@@ -56,6 +56,39 @@ describe('migrate', () => {
     db.pragma('user_version = 99');
     expect(() => migrate(db)).toThrow(/比程序支持的/);
   });
+
+  it('022：emaki:character 占位建议回填 character_id，角色已经不在的删掉；之后删角色级联删建议', () => {
+    copyMigrations(dir, 21);
+    migrate(db, { dir });
+    db.exec(`INSERT INTO library_roots (id, path) VALUES (1, 'D:/x');
+      INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
+        VALUES (1, 1, 'a.png', 'a.png', 1, 1, 1, 'png', 's1', 'x', 'x');
+      INSERT INTO characters (id, name, source, created_at) VALUES (5, '小雪', 'custom', 'x');
+      INSERT INTO character_suggestions (image_id, danbooru_tag, score, source) VALUES
+        (1, 'emaki:character:5', 0, 'pixiv'), (1, 'emaki:character:9', 0, 'pixiv'), (1, 'hina_(blue_archive)', 0.4, 'tagger');
+      INSERT INTO pixiv_character_checks (image_id, post_id, modified_at) VALUES (1, '123', 'x');`);
+    migrate(db);
+    const rows = () => db.prepare('SELECT danbooru_tag, character_id FROM character_suggestions ORDER BY danbooru_tag').all();
+    expect(rows()).toEqual([
+      { danbooru_tag: 'emaki:character:5', character_id: 5 },
+      { danbooru_tag: 'hina_(blue_archive)', character_id: null },
+    ]);
+    expect(db.prepare('SELECT result FROM pixiv_character_checks').pluck().all()).toEqual([null]);
+    db.exec('DELETE FROM characters WHERE id = 5');
+    expect(rows()).toEqual([{ danbooru_tag: 'hina_(blue_archive)', character_id: null }]);
+  });
+
+  it('022：伪标签的编号已经被 Danbooru 角色占用的，删掉，不挂到那个角色上', () => {
+    copyMigrations(dir, 21);
+    migrate(db, { dir });
+    db.exec(`INSERT INTO library_roots (id, path) VALUES (1, 'D:/x');
+      INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
+        VALUES (1, 1, 'a.png', 'a.png', 1, 1, 1, 'png', 's1', 'x', 'x');
+      INSERT INTO characters (id, name, danbooru_tag, source, created_at) VALUES (7, '后来新建的', 'reused_(x)', 'danbooru', 'x');
+      INSERT INTO character_suggestions (image_id, danbooru_tag, score, source) VALUES (1, 'emaki:character:7', 0, 'pixiv');`);
+    migrate(db);
+    expect(db.prepare('SELECT COUNT(*) FROM character_suggestions').pluck().get()).toBe(0);
+  });
 });
 
 describe('升级前备份', () => {

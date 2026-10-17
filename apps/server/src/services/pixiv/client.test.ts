@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { afterEach, expect, it, vi } from 'vitest';
-import { PixivAccessError, PixivClient } from './client.ts';
+import { PixivAccessError, PixivClient, PixivPostError } from './client.ts';
 
 vi.mock('node:timers/promises', () => ({ setTimeout: vi.fn().mockResolvedValue(undefined) }));
 afterEach(() => vi.mocked(sleep).mockReset().mockResolvedValue(undefined));
@@ -69,4 +69,30 @@ it('JSON 或字段错误不当成网络故障反复请求', async () => {
 it('200 业务错误不能当成明确404缓存', async () => {
   const fetch=vi.fn().mockResolvedValue({...ok(),text:async()=>JSON.stringify({error:true,body:null})});
   await expect(new PixivClient(fetch).artwork('123',new AbortController().signal)).rejects.toThrow('业务错误');
+  // 按这个投稿被拒处理（跳过它接着查），不是整批失败
+  await expect(new PixivClient(fetch).artwork('123',new AbortController().signal)).rejects.toBeInstanceOf(PixivPostError);
+});
+
+it('只有 Pixiv 自己的 {error:true} 404 才算作品不存在，网关或改版的 404 按失败处理', async () => {
+  const pixiv=vi.fn().mockResolvedValue({...ok(),status:404,text:async()=>JSON.stringify({error:true,message:'',body:[]})});
+  expect(await new PixivClient(pixiv).artwork('123',new AbortController().signal)).toBeNull();
+  for(const text of ['<html>Not Found</html>','',JSON.stringify({error:false,body:{}})]) {
+    const fetch=vi.fn().mockResolvedValue({...ok(),status:404,text:async()=>text});
+    const result=new PixivClient(fetch).artwork('123',new AbortController().signal);
+    await expect(result).rejects.toThrow('404');
+    await expect(result).rejects.not.toBeInstanceOf(PixivPostError);
+  }
+});
+
+it('400 这类 4xx 是这个投稿被拒，不重试', async () => {
+  const fetch=vi.fn().mockResolvedValue({...ok(),status:400});
+  await expect(new PixivClient(fetch).artwork('123',new AbortController().signal)).rejects.toBeInstanceOf(PixivPostError);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(sleep).not.toHaveBeenCalled();
+});
+
+it('User-Agent 带版本号和项目地址，和 Danbooru 客户端一致', async () => {
+  const fetch=vi.fn().mockResolvedValue(ok());
+  await new PixivClient(fetch).artwork('123',new AbortController().signal);
+  expect(fetch.mock.calls[0]![1].headers['User-Agent']).toMatch(/^Emaki\/\S+ \(\+https:\/\/\S+\)$/);
 });

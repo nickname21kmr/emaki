@@ -114,6 +114,17 @@ export function TaggerSection({
           </div>
         </Field>
 
+        <Field
+          label="识别后自动查 Pixiv 标签补充没认出的角色"
+          hint="会联网：识别完还没认出角色的插画和漫画，文件名里带 Pixiv 作品号的，把作品号发给 pixiv.net，读这个作品公开的标签来补角色。只发作品号，不登录，不上传图片。打开了下面「Danbooru」里的「允许联网同步」时，还会拿不认识的 Pixiv 标签去 Danbooru 查角色名。关着时也可以在「未识别」页点「补充 Pixiv 角色」手动查。"
+        >
+          <Switch
+            checked={tagger.pixiv}
+            onCheckedChange={(v) => save({ tagger: { pixiv: v } })}
+            label="识别后自动查 Pixiv 标签补充没认出的角色"
+          />
+        </Field>
+
         <Field label="运行设备" hint="有显卡就选 GPU，NVIDIA、AMD、Intel 都可以，走 DirectML。DirectML 用不了时会自动改用 WebGPU，再不行用 CPU。">
           <Segmented
             value={tagger.device}

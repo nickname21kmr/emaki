@@ -94,7 +94,7 @@ import { config } from '../../config.ts';
 import { hydrateImages, IMAGE_COLS, type ImageRow } from './hydrate.ts';
 import { listImages } from './queries/listImages.ts';
 import { loadSuggestions } from './suggestions.ts';
-import { pendingPixivCount, queuePixivImages, syncPixivCharacters } from '../../services/pixiv/sync.ts';
+import { pendingPixivCount, queuePixivImages, resetPixivBackoff, syncPixivCharacters } from '../../services/pixiv/sync.ts';
 import { refreshPixivAliases } from '../../services/pixiv/aliases.ts';
 import { createPixivDiscovery } from '../../services/pixiv/discovery.ts';
 import { DanbooruClient } from '../../services/danbooru/client.ts';
@@ -211,6 +211,8 @@ export class SqliteDataSource implements DataSource {
         log: (m) => console.info(`[tag] ${m}`),
       }),
       pixiv: {
+        // 识别后自动查 Pixiv 会联网，设置里打开才排；待查的图照常登记（只写本地），打开后接着补
+        enabled: () => readSettings(db).tagger.pixiv,
         pendingCount: () => pendingPixivCount(ds.ctx),
         run: async (job) => {
           const settings = readSettings(db).danbooru;
@@ -936,6 +938,7 @@ export class SqliteDataSource implements DataSource {
   async updateSettings(body: UpdateSettingsBody): Promise<Settings> {
     const before = readSettings(this.ctx.db).tagger.autoAcceptThreshold;
     const beforeArtists = readSettings(this.ctx.db).tagger.artists;
+    const beforePixiv = readSettings(this.ctx.db).tagger.pixiv;
     applySettingsPatch(this.ctx.db, body as Parameters<typeof applySettingsPatch>[1]);
     const settings = await this.getSettings();
     // 调低自动采纳阈值：已达标的建议当场归到角色（和识别任务开头的「阶段 0」同一段逻辑）
@@ -962,6 +965,12 @@ export class SqliteDataSource implements DataSource {
     // 关掉：正在跑和排队中的补跑一起停（关了开关，设置页的进度和取消按钮也没了）
     if (body.tagger?.artists === false && beforeArtists) {
       for (const j of this.ctx.jobs.list()) if (j.kind === 'artists' && (j.status === 'queued' || j.status === 'running')) this.ctx.jobs.cancel(j.id);
+    }
+    // 刚打开自动查 Pixiv：把关着时登记下来的图补上
+    if (body.tagger?.pixiv === true && !beforePixiv) this.pipeline.requestPixiv();
+    // 关掉：停掉自动排上的（排队中和正在跑的）；用户在「未识别」页手动点的照常跑完
+    if (body.tagger?.pixiv === false && beforePixiv && !this.pipeline.isPixivManual()) {
+      for (const j of this.ctx.jobs.list()) if (j.kind === 'pixiv-tags' && (j.status === 'queued' || j.status === 'running')) this.ctx.jobs.cancel(j.id);
     }
     for (const fn of this.settingsListeners) fn(settings);
     this.ctx.touch();
@@ -1290,7 +1299,7 @@ export class SqliteDataSource implements DataSource {
     return this.ctx.jobs.list();
   }
   async startJob(kind: JobKind): Promise<Job> {
-    if (kind === 'pixiv-tags') queuePixivImages(this.ctx);
+    if (kind === 'pixiv-tags') { queuePixivImages(this.ctx); resetPixivBackoff(); }
     if (kind === 'scan') this.requests.requestFull();
     // 用户手动点的：之前读不到、正在退避的图也马上重试（比如刚把移动硬盘插回去）
     if (kind === 'tag' || kind === 'artists') resetIoBackoff();
@@ -1303,6 +1312,8 @@ export class SqliteDataSource implements DataSource {
     const job = this.ctx.jobs.list().find((j) => j.id === id);
     if (job && (job.status === 'queued' || job.status === 'running')) this.pipeline.notePaused(job.kind);
     this.ctx.jobs.cancel(id);
+    // 识别完追加排上的那一轮 Pixiv 也一起取消，不然取消后马上又开始请求 pixiv.net
+    if (job?.kind === 'pixiv-tags') for (const j of this.ctx.jobs.list()) if (j.kind === 'pixiv-tags' && j.status === 'queued') this.ctx.jobs.cancel(j.id);
   }
 
   // 撤销：执行 UndoStack 里记下的反向操作（T19 会加 ctx.mutate，自动记录反向操作）

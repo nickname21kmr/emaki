@@ -65,6 +65,7 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
             retryOld: z.boolean(),
             keepAwake: z.boolean(),
             artists: z.boolean(),
+            pixiv: z.boolean(),
           })
           .partial()
           .optional(),

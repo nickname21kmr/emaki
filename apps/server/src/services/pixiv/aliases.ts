@@ -9,6 +9,8 @@ export async function refreshPixivAliases(db: Db, catalog: DanbooruCatalog, clie
     AND not_found=0 AND alias_of IS NULL AND wiki_fetched_at IS NULL ORDER BY name`).pluck().all() as string[];
   for (let offset=0; offset<names.length; offset+=100) {
     job.signal.throwIfAborted();
+    // 同道有更急的任务：让出，没补的仍是 wiki_fetched_at 为空，下一轮接着补（随后的投稿循环也会立刻让出）
+    if (job.shouldYield()) { job.requeue(); return; }
     const batch=names.slice(offset,offset+100);
     job.setMessage(`补全角色/作品别名 ${offset}/${names.length}`);
     const pages=await client.wikiByTitles(batch,job.signal);

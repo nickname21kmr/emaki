@@ -121,7 +121,8 @@ export function createDanbooruSyncRunner(deps: DanbooruSyncDeps): JobRunner {
           `WITH wanted(name) AS (
              SELECT danbooru_tag FROM characters WHERE danbooru_tag IS NOT NULL
              UNION SELECT danbooru_tag FROM works WHERE danbooru_tag IS NOT NULL
-             UNION SELECT danbooru_tag FROM character_suggestions
+             -- 自建角色的建议（character_id / emaki: 占位标签）不是 Danbooru 标签，不能发出去
+             UNION SELECT danbooru_tag FROM character_suggestions WHERE character_id IS NULL AND danbooru_tag NOT LIKE 'emaki:%'
              UNION SELECT name FROM tags WHERE category IN ('character', 'copyright')
            )
            SELECT w.name FROM wanted w LEFT JOIN danbooru_tags d ON d.name = w.name

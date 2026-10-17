@@ -13,7 +13,7 @@ export function PixivTagsButton() {
   return (
     <Button variant="secondary" icon={<CloudDownload className="size-4" />} disabled={!!running}
       loading={start.isPending} onClick={() => start.mutate('pixiv-tags')}
-      title="查询未识别插画和漫画的 Pixiv 标签。单图或单角色直接关联，多图多角色给出建议。">
+      title="会联网：把未识别插画和漫画文件名里的 Pixiv 作品号发给 pixiv.net，读公开标签来补角色，不上传图片。打开了 Danbooru 联网同步时，还会拿不认识的 Pixiv 标签去 Danbooru 查角色名。投稿里的作品标签能确认角色、并且是单图或单角色的直接关联，其余只给建议；Pixiv 标了原创的归为原创。设置里没打开自动查时也能手动点。">
       {running ? `Pixiv ${running.total ? `${running.progress}/${running.total}` : '查询中'}` : '补充 Pixiv 角色'}
     </Button>
   );

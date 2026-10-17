@@ -5,12 +5,14 @@ import type {DanbooruClient} from '../danbooru/client.ts';
 import type {DanbooruCatalog} from '../danbooru/catalog.ts';
 
 export interface PixivDiscoveryResult { changed: boolean }
+/** onAdded：每写完一批就报出写入的角色标签，调用方据此增量补索引（后面的请求失败了也不丢这部分） */
+export type PixivDiscover = (artwork: PixivArtwork, signal: AbortSignal, onAdded?: (tags: string[]) => void) => Promise<PixivDiscoveryResult>;
 /** 在线确认角色类型后补入目录；未知标签不生成角色建议。 */
-export function createPixivDiscovery(db: Db, catalog: DanbooruCatalog, client: Pick<DanbooruClient,'autocomplete'|'tagsByNames'|'wikiByTitles'>) {
+export function createPixivDiscovery(db: Db, catalog: DanbooruCatalog, client: Pick<DanbooruClient,'autocomplete'|'tagsByNames'|'wikiByTitles'>): PixivDiscover {
   const known = new Set((db.prepare(`SELECT search_key name FROM tag_name_keys
     UNION SELECT name FROM tags UNION SELECT name FROM characters UNION SELECT alias FROM aliases`).all() as {name:string}[]).map(r=>searchKey(r.name)));
   const queried = new Map<string,'unknown'|'noncharacter'|'character'>();
-  return async (artwork: PixivArtwork, signal: AbortSignal): Promise<PixivDiscoveryResult> => {
+  return async (artwork, signal, onAdded) => {
     let changed=false;
     for(const item of artwork.tags.tags) {
       const names=[item.tag,...Object.values(item.translation??{})];
@@ -40,6 +42,7 @@ export function createPixivDiscovery(db: Db, catalog: DanbooruCatalog, client: P
             catalog.setOtherNames(tag.name,[...new Set([...(catalog.get(tag.name)?.otherNames??[]),...(page?.other_names??[]),query])],now);
           }
         })();
+        if(metadata.length) onAdded?.(metadata.map(t=>t.name));
         queried.set(key,metadata.length?'character':'unknown');
         if(metadata.length){known.add(key);changed=true;break;}
       }

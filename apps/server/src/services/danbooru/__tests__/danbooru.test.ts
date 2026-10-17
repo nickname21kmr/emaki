@@ -235,6 +235,24 @@ describe('sync', () => {
     expect(row('new_artist')).toMatchObject({ display: '新しい人' });
     expect(row('ghost')).toMatchObject({ not_found: 1 });
   });
+
+  it('Pixiv 给自建角色的建议（character_id / emaki: 占位标签）不拿去查 Danbooru', async () => {
+    db.exec(`INSERT INTO library_roots (id, path) VALUES (1, 'D:/x');
+      INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
+        VALUES (1, 1, 'a.png', 'a.png', 1, 1, 1, 'png', 's1', 'x', 'x');
+      INSERT INTO characters (id, name, source, created_at) VALUES (5, '小雪', 'custom', 'x');
+      INSERT INTO character_suggestions (image_id, danbooru_tag, character_id, score, source) VALUES
+        (1, 'emaki:character:5', 5, 0, 'pixiv'), (1, 'emaki:character:9', NULL, 0, 'pixiv'), (1, 'some_girl_(game)', NULL, 0, 'pixiv');`);
+    const asked: string[] = [];
+    const f = fakeFetch((u) => {
+      if (u.pathname === '/tags.json') asked.push(...(u.searchParams.get('search[name_comma]') ?? '').split(','));
+      return { body: [] };
+    });
+    await runner(true, f.fn)(ctx());
+    expect(asked).toContain('some_girl_(game)');
+    expect(asked.filter((n) => n.startsWith('emaki:'))).toEqual([]);
+    expect(db.prepare("SELECT count(*) FROM danbooru_tags WHERE name LIKE 'emaki:%'").pluck().get()).toBe(0);
+  });
 });
 
 describe('matcher', () => {

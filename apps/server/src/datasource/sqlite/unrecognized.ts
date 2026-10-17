@@ -14,8 +14,8 @@ import {
   type UnrecognizedSummary,
   type UnrecognizedTheme,
 } from '@emaki/shared';
-import { BadRequestError, NotFoundError } from '../../http/errors.ts';
-import type { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
+import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
+import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
 import { insertDanbooruCharacter } from './characters.ts';
 import type { SqliteContext } from './context.ts';
 import { applyExclusionRules } from './exclusions.ts';
@@ -225,15 +225,19 @@ export class UnrecognizedQueries {
     if (imageId === null || !this.ctx.stmt('SELECT 1 FROM v_images WHERE id = ?').get(imageId)) throw new NotFoundError('图片');
     const tag = rawTag.trim();
     if (!tag) throw new BadRequestError('标签不能为空');
-    const score = (this.ctx.stmt('SELECT score FROM character_suggestions WHERE image_id = ? AND danbooru_tag = ?').pluck().get(imageId, tag) ??
-      null) as number | null;
+    const row = this.ctx
+      .stmt('SELECT score, character_id FROM character_suggestions WHERE image_id = ? AND danbooru_tag = ?')
+      .get(imageId, tag) as { score: number; character_id: number | null } | undefined;
+    const score = row?.score ?? null;
+    // 自建角色的建议只认 character_id：角色合并 / 删除后这行已级联删掉，不能按编号再找（编号可能给了别的角色）
+    if (CharacterCatalog.isCustomTag(tag) && row?.character_id == null) throw new ConflictError('这条建议已失效，请刷新');
     const catalog = this.catalog();
     const db = this.ctx.db;
     const now = iso(this.ctx.clock());
     return this.ctx.mutate((u) => {
       u.set('character_suggestions', 'image_id = ? AND danbooru_tag = ?', [imageId, tag]);
       u.columns('images', ['excluded_by'], [imageId]);
-      let characterId = catalog.resolveCharacterId(tag);
+      let characterId = row?.character_id ?? catalog.resolveCharacterId(tag);
       let created = false;
       if (characterId === null) {
         // 新建角色（封面由 derived 自动选）；和自动采纳一样按作品挂好（必要时新建作品），撤销时一并删除

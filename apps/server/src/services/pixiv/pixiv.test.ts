@@ -11,7 +11,7 @@ import { CopyrightResolver } from '../catalog/copyrights.ts';
 import { TagResultWriter } from '../tagger/writer.ts';
 import { PixivAccessError, PixivClient, type PixivArtwork } from './client.ts';
 import { createPixivMatcher } from './match.ts';
-import { pendingPixivCount, queuePixivImages, syncPixivCharacters } from './sync.ts';
+import { pendingPixivCount, queuePixivImages, resetPixivBackoff, syncPixivCharacters } from './sync.ts';
 
 let db: Db;
 let ctx: ReturnType<typeof createContext>;
@@ -22,7 +22,9 @@ const makeCatalog = () => {
   const copyrights = new CopyrightResolver(db, { [A]: ['game_a'], [B]: ['game_b'] });
   return { catalog: new CharacterCatalog(db, { copyrights }), copyrights };
 };
-const art = (pageCount: number, names: string[], id = '123'): PixivArtwork => ({ id, pageCount, tags: { tags: names.map((tag) => ({ tag })) } });
+// 默认带上两部作品的标签：自动关联要靠投稿里的作品标签确认角色
+const art = (pageCount: number, names: string[], id = '123', works = ['ゲームA', 'ゲームB']): PixivArtwork =>
+  ({ id, pageCount, tags: { tags: [...names, ...works].map((tag) => ({ tag })) } });
 const links = () => db.prepare('SELECT image_id, character_id FROM image_characters ORDER BY image_id,character_id').all();
 function name(tag: string, value: string, category = 4) {
   db.prepare('INSERT OR IGNORE INTO tag_i18n(tag,category) VALUES (?,?)').run(tag, category);
@@ -39,7 +41,8 @@ beforeEach(() => {
   ctx = createContext({ db, bus, dataDir: '.', clock: () => 0, undo: new UndoStack(), jobs: new JobQueue(bus, () => async () => {}) });
   controller = new AbortController();
   job = { signal: controller.signal, setTotal: vi.fn(), advance: vi.fn(), setMessage: vi.fn(), shouldYield: () => false, requeue: vi.fn(), yielded: false };
-  name(A, 'アリス'); name(A, 'Alice'); name(B, 'ボブ'); name('game_a', 'ゲームA', 3);
+  name(A, 'アリス'); name(A, 'Alice'); name(B, 'ボブ'); name('game_a', 'ゲームA', 3); name('game_b', 'ゲームB', 3);
+  resetPixivBackoff();
   queuePixivImages(ctx);
 });
 afterEach(() => db.close());
@@ -65,6 +68,9 @@ it('404 按投稿持久记忆，补跑和同投稿新图片不重复联网，换
 it('连接失败不记为投稿不存在，补跑可以恢复', async () => {
   await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>{throw new Error('timeout');}},0);
   expect(db.prepare('SELECT COUNT(*) FROM pixiv_unavailable_posts').pluck().get()).toBe(0);
+  // 退避期内自动补充不再挑它；手动补跑清掉退避后仍是待补
+  expect(pendingPixivCount(ctx)).toBe(0);
+  resetPixivBackoff();
   expect(pendingPixivCount(ctx)).toBe(2);
   await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(1,['アリス'])},0);
   expect(links()).toHaveLength(2);
@@ -136,7 +142,7 @@ it('翻译里的服饰普通词与角色同名时不会误关联；原文匹配�
   name('kneehighs', 'kneesocks', 0);
   const {catalog,copyrights} = makeCatalog();
   const match=createPixivMatcher(db,catalog,copyrights);
-  expect(match({id:'123',pageCount:1,tags:{tags:[{tag:'ニーソ',translation:{en:'kneesocks'}},{tag:'アリス',translation:{en:'ボブ'}}]}}))
+  expect(match({id:'123',pageCount:1,tags:{tags:[{tag:'ニーソ',translation:{en:'kneesocks'}},{tag:'アリス',translation:{en:'ボブ'}},{tag:'ゲームA'}]}}))
     .toEqual({tags:[A],automatic:true});
 });
 
@@ -144,8 +150,8 @@ it('有歧义只建议，作品标签可消歧，普通标签/局部名称不会
   name(B, 'Alice');
   const { catalog, copyrights } = makeCatalog();
   const match = createPixivMatcher(db, catalog, copyrights);
-  expect(match(art(1, ['Alice']))).toEqual({ tags: [A, B], automatic: false });
-  expect(match(art(1, ['Alice', 'ゲームA']))).toEqual({ tags: [A], automatic: true });
+  expect(match(art(1, ['Alice'], '123', []))).toEqual({ tags: [A, B], automatic: false });
+  expect(match(art(1, ['Alice', 'ゲームA'], '123', []))).toEqual({ tags: [A], automatic: true });
   expect(match(art(1, ['白髪', 'アリス誕生日'])) .tags).toEqual([]);
 });
 
@@ -180,7 +186,7 @@ it('同一标签的译名可消除原文别名歧义，不把真正的多角色�
   name(B, 'アリス');
   const {catalog,copyrights} = makeCatalog();
   const match=createPixivMatcher(db,catalog,copyrights);
-  const artwork: PixivArtwork = {id:'123',pageCount:19,tags:{tags:[{tag:'アリス',translation:{en:'Alice'}}]}};
+  const artwork: PixivArtwork = {id:'123',pageCount:19,tags:{tags:[{tag:'アリス',translation:{en:'Alice'}},{tag:'ゲームA'}]}};
   expect(match(artwork)).toEqual({tags:[A],automatic:true});
   artwork.tags.tags.push({tag:'ボブ'});
   expect(match(artwork)).toEqual({tags:[A,B],automatic:false});
@@ -200,7 +206,8 @@ it('解析 Pixiv 响应、校验 ID；404 跳过，403 不重试', async () => {
   const client = new PixivClient(fetchImpl);
   expect((await client.artwork('123',controller.signal))?.pageCount).toBe(2);
   await expect(client.artwork('456',controller.signal)).rejects.toThrow('ID');
-  fetchImpl.mockResolvedValue({status:404,text:async()=>'',headers:{get:()=>null}});
+  // 只有 Pixiv 自己的 {error:true} 才算作品不存在（原来空响应体的 404 也算，现在按失败处理）
+  fetchImpl.mockResolvedValue({status:404,text:async()=>JSON.stringify({error:true,message:'x',body:[]}),headers:{get:()=>null}});
   expect(await client.artwork('123',controller.signal)).toBeNull();
   fetchImpl.mockResolvedValue({status:403,text:async()=>'',headers:{get:()=>null}});
   await expect(client.artwork('123',controller.signal)).rejects.toBeInstanceOf(PixivAccessError);
@@ -219,7 +226,7 @@ it('cosplay 普通标签不会屏蔽角色本名，实际 cosplay 标签仍不�
 it('明确的原文角色名不会被普通译名屏蔽，单独的普通词仍不认角色', () => {
   name('iris_(flower)','Iris',0); name(A,'Iris');
   const {catalog,copyrights}=makeCatalog();const match=createPixivMatcher(db,catalog,copyrights);
-  expect(match({id:'123',pageCount:2,tags:{tags:[{tag:'アリス',translation:{en:'Iris'}}]}})).toEqual({tags:[A],automatic:true});
+  expect(match({id:'123',pageCount:2,tags:{tags:[{tag:'アリス',translation:{en:'Iris'}},{tag:'ゲームA'}]}})).toEqual({tags:[A],automatic:true});
   expect(match(art(1,['Iris'])).tags).toEqual([]);
 });
 
@@ -273,7 +280,8 @@ it('在线精确确认的新角色可建档并关联，普通标签和模糊结�
   const {createPixivDiscovery}=await import('./discovery.ts');
   const {DanbooruCatalog}=await import('../danbooru/catalog.ts');
   const dan=new DanbooruCatalog(db,makeCatalog().copyrights);
-  const tag='new_character_(test)';
+  // 括号里是已知作品，投稿里的作品标签能确认它
+  const tag='new_character_(game_a)';
   const client={autocomplete:vi.fn().mockImplementation(async(q:string)=>q==='未知角色名'?[{type:'tag',category:4,value:tag,antecedent:q}]:[{type:'tag',category:0,value:'ordinary_word',antecedent:q}]),
     tagsByNames:vi.fn().mockResolvedValue([{name:tag,category:4,post_count:1,is_deprecated:false,antecedent_implications:[],consequent_aliases:[]}]),
     wikiByTitles:vi.fn().mockResolvedValue([{title:tag,other_names:['未知角色名'],is_deleted:false}])};
@@ -325,6 +333,7 @@ it('陌生名称在线查询失败时保留队列，不写半成品建议', asyn
   });
   const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(1,['未知名字'])},0,discover);
   expect(summary).toContain('失败 1');
+  resetPixivBackoff();
   expect(pendingPixivCount(ctx)).toBe(2);
   expect(db.prepare('SELECT COUNT(*) FROM character_suggestions').pluck().get()).toBe(0);
 });
@@ -335,6 +344,13 @@ it('自定义原创角色可按名字关联，多角色投稿的建议显示真�
   expect(links()).toHaveLength(0);
   const {loadSuggestions}=await import('../../datasource/sqlite/suggestions.ts');
   expect(loadSuggestions(ctx,[1],makeCatalog().catalog).get(1)?.map(s=>s.name)).toEqual(['原创角色甲','原创角色乙']);
+  // 自建角色的建议带真外键
+  expect(db.prepare("SELECT danbooru_tag,character_id FROM character_suggestions WHERE image_id=1 ORDER BY character_id").all())
+    .toEqual(ids.map((id)=>({danbooru_tag:`emaki:character:${id}`,character_id:id})));
+  // 给过建议的投稿，手动补跑不再重查；文件换了才重查
+  queuePixivImages(ctx);
+  expect(pendingPixivCount(ctx)).toBe(0);
+  db.exec("UPDATE images SET modified_at='y'");
   queuePixivImages(ctx);
   await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(3,['原创角色甲'])},0);
   expect(links()).toEqual([{image_id:1,character_id:ids[0]},{image_id:2,character_id:ids[0]}]);
@@ -364,14 +380,191 @@ it('在线补充同角色不同别名时保留此前已确认的名称', async (
 
 it('投稿查询部分失败后，后续投稿仍能使用已写入的角色索引', async () => {
   db.exec("UPDATE images SET source_post_id='456' WHERE id=2");
+  addImage(3,'100'); // 最先查，把索引建起来
   queuePixivImages(ctx);
-  const discover=vi.fn().mockImplementationOnce(async()=>{
-    name(A,'新别名');
-    throw new Error('later request failed');
-  }).mockResolvedValue({changed:false});
-  const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async id=>art(1,['新别名'],id)},0,discover);
+  const discover=vi.fn().mockResolvedValueOnce({changed:false})
+    .mockImplementationOnce(async(_a:PixivArtwork,_s:AbortSignal,onAdded?:(tags:string[])=>void)=>{
+      name(A,'新别名'); onAdded?.([A]);
+      throw new Error('later request failed');
+    }).mockResolvedValue({changed:false});
+  const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async id=>art(1,[id==='100'?'アリス':'新别名'],id)},0,discover);
   expect(summary).toContain('失败 1');
-  expect(links()).toHaveLength(1);
-  expect(links()[0]).toMatchObject({image_id:2});
+  expect(links()).toMatchObject([{image_id:2},{image_id:3}]);
+  resetPixivBackoff();
   expect(pendingPixivCount(ctx)).toBe(1);
 });
+
+it('同道有更急的任务时一开始就让出：不发请求，待补保留', async () => {
+  const client={artwork:vi.fn()};
+  const summary=await syncPixivCharacters(ctx,{...job,shouldYield:()=>true},makeCatalog,client,0);
+  expect(job.requeue).toHaveBeenCalledTimes(1);
+  expect(client.artwork).not.toHaveBeenCalled();
+  expect(summary).toContain('已让出');
+  expect(pendingPixivCount(ctx)).toBe(2);
+});
+
+it('查完一个投稿后让出，让出前先等够间隔，续跑只查剩下的', async () => {
+  db.exec("UPDATE images SET source_post_id='456' WHERE id=2");
+  queuePixivImages(ctx);
+  let requestedAt=0, checkedAt=0;
+  const client={artwork:vi.fn().mockImplementation(async(id:string)=>{requestedAt=performance.now();return art(1,['アリス'],id);})};
+  const shouldYield=vi.fn().mockReturnValueOnce(false).mockImplementation(()=>{checkedAt=performance.now();return true;});
+  await syncPixivCharacters(ctx,{...job,shouldYield},makeCatalog,client,50);
+  expect(client.artwork.mock.calls.map(c=>c[0])).toEqual(['123']);
+  expect(checkedAt-requestedAt).toBeGreaterThanOrEqual(40);
+  expect(job.requeue).toHaveBeenCalledTimes(1);
+  expect(pendingPixivCount(ctx)).toBe(1);
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork.mock.calls.map(c=>c[0])).toEqual(['123','456']);
+  expect(pendingPixivCount(ctx)).toBe(0);
+});
+
+it('补别名时有更急的任务就让出，没补的留到下一轮', async () => {
+  const {refreshPixivAliases}=await import('./aliases.ts');
+  const {DanbooruCatalog}=await import('../danbooru/catalog.ts');
+  const insert=db.prepare("INSERT INTO danbooru_tags(name,category,post_count,fetched_at) VALUES (?,4,1,'now')");
+  for(let n=0;n<150;n++) insert.run(`c${String(n).padStart(3,'0')}_(game_a)`);
+  const client={wikiByTitles:vi.fn().mockResolvedValue([])};
+  await refreshPixivAliases(db,new DanbooruCatalog(db,makeCatalog().copyrights),client,{...job,shouldYield:vi.fn().mockReturnValueOnce(false).mockReturnValue(true)});
+  expect(client.wikiByTitles).toHaveBeenCalledTimes(1);
+  expect(job.requeue).toHaveBeenCalledTimes(1);
+  expect(db.prepare('SELECT COUNT(*) FROM danbooru_tags WHERE wiki_fetched_at IS NULL').pluck().get()).toBe(50);
+});
+
+it('只有投稿里的作品标签能确认的角色才自动关联；自建角色不用确认', () => {
+  const custom=Number(db.prepare("INSERT INTO characters(name,source,created_at) VALUES ('ミドリ','custom','now')").run().lastInsertRowid);
+  const {catalog,copyrights}=makeCatalog();const match=createPixivMatcher(db,catalog,copyrights);
+  expect(match(art(1,['アリス'],'1',[]))).toEqual({tags:[A],automatic:false});
+  expect(match(art(1,['アリス'],'1',['ゲームB']))).toEqual({tags:[A],automatic:false});
+  expect(match(art(1,['アリス'],'1',['ゲームA']))).toEqual({tags:[A],automatic:true});
+  // 一个确认了、一个没确认：整篇只给建议
+  expect(match(art(1,['アリス','ボブ'],'1',['ゲームA'])).automatic).toBe(false);
+  // Pixiv 标了原创：Danbooru 角色只建议，自建角色照样关联
+  expect(match({...art(1,['アリス'],'1',['ゲームA']),isOriginal:true}).automatic).toBe(false);
+  expect(match({...art(1,['ミドリ'],'1',[]),isOriginal:true})).toEqual({tags:[`emaki:character:${custom}`],automatic:true});
+});
+
+it('原创投稿撞上 Danbooru 角色名：归为原创、只给建议，不新建角色', async () => {
+  const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>({...art(1,['アリス']),isOriginal:true})},0);
+  expect(summary).toContain('原创 2 张');
+  expect(links()).toHaveLength(0);
+  expect(db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0);
+  expect(db.prepare("SELECT danbooru_tag,character_id FROM character_suggestions WHERE source='pixiv' AND image_id=1").all())
+    .toEqual([{danbooru_tag:A,character_id:null}]);
+});
+
+it('用户撤掉的 Pixiv 关联和原创，手动补跑不再写回；未匹配的投稿仍会重查', async () => {
+  db.exec("UPDATE images SET source_post_id='456' WHERE id=2");
+  addImage(3,'789');
+  queuePixivImages(ctx);
+  const client={artwork:vi.fn().mockImplementation(async(id:string)=>
+    id==='123'?art(1,['アリス'],id):id==='456'?{...art(1,[],id),isOriginal:true}:art(1,['不认识的名字'],id))};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(links()).toMatchObject([{image_id:1}]);
+  expect(db.prepare('SELECT image_id,result FROM pixiv_character_checks ORDER BY image_id').all())
+    .toEqual([{image_id:1,result:'linked'},{image_id:2,result:'original'},{image_id:3,result:'unmatched'}]);
+  // 从角色移除、移出原创
+  db.exec('DELETE FROM image_characters; UPDATE images SET original_at=NULL WHERE id=2; DELETE FROM image_copyrights WHERE image_id=2');
+  queuePixivImages(ctx);
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork.mock.calls.map(c=>c[0])).toEqual(['123','456','789','789']);
+  expect(links()).toHaveLength(0);
+  expect(db.prepare('SELECT COUNT(*) FROM images WHERE original_at IS NOT NULL').pluck().get()).toBe(0);
+});
+
+it('请求失败的投稿进退避：之后的自动补充不再请求，手动补跑清掉退避后重试', async () => {
+  const client={artwork:vi.fn().mockRejectedValueOnce(new Error('Pixiv 请求失败（500）')).mockResolvedValue(art(1,['アリス']))};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(pendingPixivCount(ctx)).toBe(0);
+  queuePixivImages(ctx,[1,2]); // 识别又写了一批（自动路径）
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).toHaveBeenCalledTimes(1);
+  resetPixivBackoff();
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).toHaveBeenCalledTimes(2);
+  expect(links()).toHaveLength(2);
+});
+
+it('Pixiv 明确拒绝的投稿跳过接着查，不算连续失败；自动补充不再请求，手动补跑重试', async () => {
+  db.exec("UPDATE images SET source_post_id='100' WHERE id=1; UPDATE images SET source_post_id='200' WHERE id=2");
+  addImage(3,'300'); addImage(4,'400');
+  queuePixivImages(ctx);
+  const reply=(status:number,body:unknown)=>({status,headers:{get:()=>null},text:async()=>JSON.stringify(body)});
+  const fetchImpl=vi.fn().mockImplementation(async(url:string)=>{
+    const id=url.split('/').pop()!;
+    if(id==='100') return reply(200,{error:true,message:'',body:[]});
+    if(id==='200'||id==='300') return reply(400,{error:true,message:'',body:[]});
+    return reply(200,{error:false,body:art(1,['アリス'],id)});
+  });
+  const summary=await syncPixivCharacters(ctx,job,makeCatalog,new PixivClient(fetchImpl),0);
+  expect(summary).toContain('失败 3');
+  expect(links()).toMatchObject([{image_id:4}]);
+  expect(db.prepare("SELECT COUNT(*) FROM pixiv_character_checks WHERE result='skipped'").pluck().get()).toBe(3);
+  expect(db.prepare('SELECT COUNT(*) FROM pixiv_unavailable_posts').pluck().get()).toBe(0);
+  expect(pendingPixivCount(ctx)).toBe(0);
+  queuePixivImages(ctx);
+  expect(pendingPixivCount(ctx)).toBe(3);
+});
+
+it('在线发现的新角色增量补进已建好的索引，同一轮后面的投稿就能认出', async () => {
+  db.exec("UPDATE images SET source_post_id='456' WHERE id=2");
+  queuePixivImages(ctx);
+  const {createPixivDiscovery}=await import('./discovery.ts');
+  const {DanbooruCatalog}=await import('../danbooru/catalog.ts');
+  const tag='new_character_(game_a)';
+  const discover=createPixivDiscovery(db,new DanbooruCatalog(db,makeCatalog().copyrights),{
+    autocomplete:vi.fn().mockImplementation(async(q:string)=>q==='新角色'?[{type:'tag',category:4,value:tag,antecedent:q}]:[]),
+    tagsByNames:vi.fn().mockResolvedValue([{name:tag,category:4,post_count:1,is_deprecated:false,antecedent_implications:[],consequent_aliases:[]}]),
+    wikiByTitles:vi.fn().mockResolvedValue([]),
+  });
+  const mk=vi.fn(makeCatalog);
+  await syncPixivCharacters(ctx,job,mk,{artwork:async(id:string)=>art(1,[id==='123'?'アリス':'新角色'],id)},0,discover);
+  expect(db.prepare('SELECT ic.image_id,c.danbooru_tag FROM image_characters ic JOIN characters c ON c.id=ic.character_id ORDER BY ic.image_id').all())
+    .toEqual([{image_id:1,danbooru_tag:A},{image_id:2,danbooru_tag:tag}]);
+  // 索引只建一次，加上每个投稿写入前各取一次目录
+  expect(mk).toHaveBeenCalledTimes(3);
+});
+
+it('任务期间自建角色被合并、编号被新角色占用：重建索引再匹配，关联到合并后的角色', async () => {
+  db.exec("UPDATE images SET source_post_id='456' WHERE id=2");
+  queuePixivImages(ctx);
+  const ins=db.prepare("INSERT INTO characters(name,source,created_at) VALUES (?,'custom','now')");
+  const y=Number(ins.run('ミドリ本体').lastInsertRowid), x=Number(ins.run('ミドリ').lastInsertRowid);
+  const client={artwork:async(id:string)=>{
+    if(id==='456'){
+      // 按 merge 的做法：目标加别名，再删掉被合并的；随后识别新建的 Danbooru 角色占用了空出来的编号
+      db.prepare("INSERT INTO aliases(owner_type,owner_id,alias,search_key) VALUES ('character',?,'ミドリ',?)").run(y,searchKey('ミドリ'));
+      db.prepare('DELETE FROM characters WHERE id=?').run(x);
+      expect(makeCatalog().catalog.ensureCharacter(B,'now').id).toBe(x);
+    }
+    // 第一个投稿没匹配上，只把索引建起来（不新建角色，x 才是最大编号）
+    return art(1,[id==='123'?'不认识的名字':'ミドリ'],id);
+  }};
+  const summary=await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(summary).toContain('失败 0');
+  expect(links()).toEqual([{image_id:2,character_id:y}]);
+});
+
+it('Danbooru 连不上不算 Pixiv 失败：这轮停用在线发现，本地认得的角色照样关联', async () => {
+  db.exec("UPDATE images SET source_post_id='456' WHERE id=2");
+  queuePixivImages(ctx);
+  const {createPixivDiscovery}=await import('./discovery.ts');
+  const {DanbooruCatalog}=await import('../danbooru/catalog.ts');
+  const {DanbooruError}=await import('../danbooru/client.ts');
+  const autocomplete=vi.fn().mockRejectedValue(new DanbooruError('被 Cloudflare 拦截','blocked',403));
+  const discover=createPixivDiscovery(db,new DanbooruCatalog(db,makeCatalog().copyrights),{autocomplete,tagsByNames:vi.fn(),wikiByTitles:vi.fn()});
+  const client={artwork:vi.fn().mockImplementation(async(id:string)=>art(1,['アリス','未知名字'],id))};
+  const summary=await syncPixivCharacters(ctx,job,makeCatalog,client,0,discover);
+  expect(summary).toContain('失败 0');
+  expect(summary).toContain('Danbooru 连不上');
+  expect(links()).toHaveLength(2);
+  expect(autocomplete).toHaveBeenCalledTimes(1);
+  expect(client.artwork).toHaveBeenCalledTimes(2);
+  expect(pendingPixivCount(ctx)).toBe(0);
+});
+
+function addImage(id: number, post: string) {
+  db.prepare(`INSERT INTO images
+    (id,root_id,rel_path,file_name,width,height,bytes,format,sha256,added_at,modified_at,content_kind,source_site,source_post_id)
+    VALUES (?,1,?,?,1,1,1,'png',?,'x','x','illustration','pixiv',?)`).run(id, `${post}_p${id}.png`, `${post}_p${id}.png`, `s${id}`, post);
+}

@@ -16,7 +16,28 @@ export interface CatalogOptions {
   normalizeTag?: (tag: string) => string;
 }
 
+/** 自建角色（没有 danbooru_tag）建议的主键占位前缀；真正的引用在 character_suggestions.character_id */
+export const CUSTOM_TAG_PREFIX = 'emaki:character:';
+
 export class CharacterCatalog {
+  /** 自建角色的占位标签 */
+  static customTag(id: number): string {
+    return `${CUSTOM_TAG_PREFIX}${id}`;
+  }
+
+  /** 占位标签里的编号；不是占位标签返回 null。只解析，不查库，也不保证这个编号还是原来那个角色 */
+  static customId(tag: string): number | null {
+    if (!tag.startsWith(CUSTOM_TAG_PREFIX)) return null;
+    const s = tag.slice(CUSTOM_TAG_PREFIX.length);
+    const id = Number(s);
+    return /^[1-9]\d*$/.test(s) && Number.isSafeInteger(id) ? id : null;
+  }
+
+  /** 带占位前缀的都不是 Danbooru 标签：不能拿去新建角色，也不能发给 Danbooru */
+  static isCustomTag(tag: string): boolean {
+    return tag.startsWith(CUSTOM_TAG_PREFIX);
+  }
+
   private readonly cache = new Map<string, number | null>();
   private readonly localizer: Localizer;
   private readonly normalize: (tag: string) => string;
@@ -59,9 +80,10 @@ export class CharacterCatalog {
 
   /** normalizeTag → characters.danbooru_tag → danbooru_tag_redirects（合并重定向）；规范化后找不到时再按原标签找 */
   resolveCharacterId(tag: string): number | null {
-    if (tag.startsWith('emaki:character:')) {
-      const id = Number(tag.slice('emaki:character:'.length));
-      return Number.isSafeInteger(id) && this.db.prepare('SELECT 1 FROM characters WHERE id=?').get(id) ? id : null;
+    // 占位标签按编号找：编号会被复用，只适合刚从 characters 生成占位标签的同一个任务；读建议行要用 character_id
+    if (CharacterCatalog.isCustomTag(tag)) {
+      const id = CharacterCatalog.customId(tag);
+      return id !== null && this.db.prepare('SELECT 1 FROM characters WHERE id=?').get(id) ? id : null;
     }
     const t = this.normalize(tag);
     return this.lookup(t) ?? (t !== tag ? this.lookup(tag) : null);
@@ -83,7 +105,8 @@ export class CharacterCatalog {
     if (existing !== null) {
       return { id: existing, created: false, createdWorkIds: [] };
     }
-    if (rawTag.startsWith('emaki:character:')) throw new Error('候选角色已被删除，请重新匹配');
+    // 占位标签绝不新建角色（会建出一个叫 Emaki:character:N 的 danbooru 角色）
+    if (CharacterCatalog.isCustomTag(rawTag)) throw new Error('候选角色已被删除，请重新匹配');
     const name = this.localizer.characterName(tag).name;
     const id = Number(this.s.insChar!.run({ name, tag, now }).lastInsertRowid);
     this.cache.set(tag, id);

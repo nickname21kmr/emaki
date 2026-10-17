@@ -1356,6 +1356,8 @@ export class MockDataSource implements DataSource {
 
   async acceptSuggestion(imageId: ID, danbooruTag: string): Promise<MutationResult> {
     const img = this.requireImage(imageId);
+    // 同 sqlite：emaki:character: 是自建角色建议的占位标签，没有对应建议行就是失效了，不能拿它新建角色（mock 没有 Pixiv 建议）
+    if (danbooruTag.trim().startsWith('emaki:character:')) throw new ConflictError('这条建议已失效，请刷新');
     let ch = this.idx.charByTag.get(danbooruTag);
     let created: CharacterRow | null = null;
     if (!ch) {

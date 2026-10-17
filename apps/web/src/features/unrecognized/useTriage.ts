@@ -132,12 +132,13 @@ export function useTriage(bucket: 'suggested' | 'untagged') {
       for (const s of it.suggestions) {
         // 需要新建角色的建议没法批量归入，只在单张模式里提供
         if (!s.characterId) continue;
-        const prev = map.get(s.danbooruTag);
+        // 按角色分组：同一个自建角色可能有伪标签和 Danbooru 标签两种写法的建议
+        const prev = map.get(s.characterId);
         if (prev) {
           prev.hits += 1;
           prev.score = Math.max(prev.score, s.score);
         } else {
-          map.set(s.danbooruTag, { ...s, hits: 1 });
+          map.set(s.characterId, { ...s, hits: 1 });
         }
       }
     }
@@ -148,7 +149,7 @@ export function useTriage(bucket: 'suggested' | 'untagged') {
   const sameTop = useMemo(() => {
     const s = current?.suggestions[0];
     if (!s?.characterId) return []; // 新角色没法批量归入
-    return items.filter((it) => it.suggestions[0]?.danbooruTag === s.danbooruTag);
+    return items.filter((it) => it.suggestions[0]?.characterId === s.characterId);
   }, [items, current]);
   const selectSameTop = () => {
     if (sameTop.length > 1) useSelection.getState().setMany(sameTop.map((it) => it.image.id));
