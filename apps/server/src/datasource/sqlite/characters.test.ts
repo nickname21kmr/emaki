@@ -17,6 +17,18 @@ afterEach(() => env.close());
 const db = () => ds.ctx.db;
 const c = (id: string) => env.id('character', id);
 
+it('手动选图但没设焦点时自动裁切；明确设置的焦点保留，清空后重新推断', async () => {
+  const id = c('c2');
+  const coverImageId = env.id('image', 'i9');
+  await ds.updateCharacter(id, { coverImageId, coverFocus: null });
+  const automatic = (await ds.getCharacter(id))!.character;
+  expect(automatic).toMatchObject({ coverImageId, coverManual: true, coverFocus: { space: 'image' } });
+  await ds.updateCharacter(id, { coverFocus: { x: 0.1, y: 0.8 } });
+  expect((await ds.getCharacter(id))!.character.coverFocus).toEqual({ x: 0.1, y: 0.8 });
+  await ds.updateCharacter(id, { coverFocus: null });
+  expect((await ds.getCharacter(id))!.character.coverFocus).toEqual(automatic.coverFocus);
+});
+
 describe('撤销后数据库完全还原', () => {
   const ops: [string, () => Promise<{ undoToken: string | null }>][] = [
     ['新建', () => ds.createCharacter({ name: '雪之下', workIds: [env.id('work', 'w3')], aliases: ['yukino'], danbooruTag: 'yukinoshita_yukino' })],
