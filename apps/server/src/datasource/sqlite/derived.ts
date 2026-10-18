@@ -207,7 +207,10 @@ export class Derived {
       );
       for (let k = 0; k < list.length && k < 40; k++) candRows.push(list[k]!);
     }
-    const candTags = loadCoverTags(db, candRows.map((r) => r.iid));
+    const candTags = loadCoverTags(db, [
+      ...candRows.map((r) => r.iid),
+      ...charRows.filter((c) => c.cover_manual === 1 && c.cover_image_id !== null).map((c) => c.cover_image_id!),
+    ]);
     const cands = new Map<number, ScoredCoverCandidate[]>();
     for (const item of scoreCoverCandidates(candRows, candTags)) {
       const list = cands.get(item.cid);
@@ -300,6 +303,8 @@ export class Derived {
       const st = charStats.get(c.id);
       const workIds = workIdsOf.get(c.id) ?? [];
       const workKeys = workIds.flatMap((wid) => works.get(wid)?.keys ?? []);
+      const usesManualCover = c.cover_manual === 1 && c.cover_image_id !== null && coverVisible.has(c.id);
+      const effectiveCoverId = usesManualCover ? c.cover_image_id : (autoCover.get(c.id) ?? null);
       characters.set(c.id, {
         id: c.id,
         name: c.name,
@@ -308,12 +313,12 @@ export class Derived {
         aliases: all.filter((a) => a.visible).map((a) => a.alias),
         workIds,
         coverImageId: c.cover_image_id,
-        // 焦点只对手动封面有意义；自动封面由前端兜底
+        // 明确设置的手动焦点优先；只选了图但没设焦点时，也按构图自动裁切。
         coverFocus:
-          c.cover_manual === 1
+          usesManualCover
             ? c.cover_focus_x !== null && c.cover_focus_y !== null
               ? { x: c.cover_focus_x, y: c.cover_focus_y }
-              : null
+              : inferCoverFocus(candTags.get(c.cover_image_id!) ?? [])
             : (autoFocus.get(c.id) ?? null),
         pinned: !!c.pinned,
         nameLocked: c.name_locked === 1,
@@ -323,8 +328,7 @@ export class Derived {
         otherCount: charOther.get(c.id) ?? 0,
         newCount: st?.new_count ?? 0,
         lastAddedAt: st?.last_added_at ?? null,
-        effectiveCoverId:
-          c.cover_manual === 1 && c.cover_image_id !== null && coverVisible.has(c.id) ? c.cover_image_id : (autoCover.get(c.id) ?? null),
+        effectiveCoverId,
         coverRating: 'general',
         coverManual: c.cover_manual === 1,
         coverColor: null,

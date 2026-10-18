@@ -1,10 +1,11 @@
-import type { ContentKind, ImageItem, ThumbWidth } from '@emaki/shared';
+import type { ContentKind, FocusPoint, ImageItem, ThumbWidth } from '@emaki/shared';
 import { EyeOff } from 'lucide-react';
 import { useCallback, useState, type CSSProperties } from 'react';
 import { imageUrl } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { blurLabel, blurReason } from '@/lib/blur';
 import { useBlurPrefs, usePrefs } from '@/lib/stores';
+import { useCoverPosition } from './useCoverPosition';
 
 /** kind 只给逐张的图传（照片、文字按偏好模糊）；封面、头像不传，只按分级 */
 type ThumbSource = Pick<ImageItem, 'id' | 'dominantColor' | 'rating'> & { kind?: ContentKind | null };
@@ -51,8 +52,8 @@ export function Thumb({
   width?: ThumbWidth;
   className?: string;
   imgClassName?: string;
-  /** object-position，0~1 */
-  focus?: { x: number; y: number } | null;
+  /** 手动 object-position 或自动封面的原图主体坐标，0~1 */
+  focus?: FocusPoint | null;
   alt?: string;
   eager?: boolean;
   blurBadge?: BlurBadge;
@@ -64,6 +65,7 @@ export function Thumb({
   forceBlur?: boolean;
 }) {
   const src = imageUrl.thumb(image.id, width);
+  const crop = useCoverPosition(focus, src);
   const [loaded, setLoaded] = useState(() => loadedUrls.has(src));
   const prefs = useBlurPrefs();
   const hoverPref = usePrefs((s) => s.revealOnHover);
@@ -86,13 +88,15 @@ export function Thumb({
   // 浏览器缓存命中时 onLoad 可能在 React 挂上监听之前就触发了：挂载时检查一次 complete
   const imgRef = useCallback(
     (el: HTMLImageElement | null) => {
+      crop.imageRef.current = el;
       if (el?.complete && el.naturalWidth > 0) markLoaded();
     },
-    [markLoaded],
+    [markLoaded, crop.imageRef],
   );
 
   return (
     <div
+      ref={crop.frameRef}
       className={cn(!positioned && 'relative', 'overflow-hidden', blurred && blurBadge === 'center' && '@container', className)}
       style={{ backgroundColor: image.dominantColor }}
     >
@@ -114,7 +118,7 @@ export function Thumb({
           !blurred && imgClassName,
           revealImg,
         )}
-        style={focus || imgStyle ? { ...(focus ? { objectPosition: `${focus.x * 100}% ${focus.y * 100}%` } : {}), ...imgStyle } : undefined}
+        style={focus || imgStyle ? { ...(focus ? { objectPosition: crop.position } : {}), ...imgStyle } : undefined}
       />
       {blurred && blurBadge === 'center' && (
         <div className={cn('pointer-events-none absolute inset-0 flex items-center justify-center transition-opacity duration-300 @max-[72px]:hidden', revealMark)}>

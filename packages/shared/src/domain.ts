@@ -82,10 +82,12 @@ export interface CoverRef {
 
 export type CharacterSource = 'danbooru' | 'custom';
 
-/** 焦点坐标（0~1），用于封面裁剪时保持脸在画面内。 */
+/** 焦点坐标（0~1）。默认是手动 CSS object-position；image 表示原图里的主体位置。 */
 export interface FocusPoint {
   x: number;
   y: number;
+  /** 自动推断的焦点；前端结合原图和容器比例换算，不能直接当 CSS 百分比。 */
+  space?: 'image';
 }
 
 export interface Character {
