@@ -66,7 +66,13 @@ export function createLibraryMcp(app: FastifyInstance, ds: DataSource, file: str
     host.assertEnabled(); const result = await host.operation(scope, operationId, JSON.stringify(['update_images', body]), () => invoke('POST', '/api/images/bulk', body));
     host.recordMutation(sessionId, result); return json(result);
   });
-  server.registerTool('edit_character', { description: '创建或编辑角色。payload 遵循 Emaki 角色 API（name、aliases、workIds 等）；通过 read_library 先读取现有角色。id 为空时创建。',
+  server.registerTool('accept_suggestion', { description: '采纳一张图片的当前角色建议，等同于未识别页面的采纳按钮。传入详情 characterSuggestions 或未识别列表 suggestions 中的 danbooruTag；复用角色解析、必要的新建及作品关联，返回撤销 token。重试复用 operationId。',
+    inputSchema: { operationId: z.string().min(1).max(100), imageId: z.string().min(1).max(100), danbooruTag: z.string().min(1).max(500) }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true } }, async ({ operationId, imageId, danbooruTag }) => {
+    host.assertEnabled();
+    const result = await host.operation(scope, operationId, JSON.stringify(['accept_suggestion', imageId, danbooruTag]), () => invoke('POST', `/api/unrecognized/${encodeURIComponent(imageId)}/accept`, { danbooruTag }));
+    host.recordMutation(sessionId, result); return json(result);
+  });
+  server.registerTool('edit_character', { description: '创建或编辑角色。id 为空时创建，payload 为 {name, aliases?, workIds: string[], danbooruTag?: string|null}，返回 character.id。编辑还支持 coverImageId、coverFocus、pinned。先查询名字、别名和作品避免重复创建；未核实的 Danbooru 标签留空。',
     inputSchema: { operationId: z.string().min(1).max(100), id: z.string().optional(), payload: z.record(z.string(), z.unknown()) } }, async ({ operationId, id, payload }) => {
     host.assertEnabled(); const result = await host.operation(scope, operationId, JSON.stringify(['edit_character', { id, payload }]), () => invoke(id ? 'PATCH' : 'POST', id ? `/api/characters/${encodeURIComponent(id)}` : '/api/characters', payload));
     host.recordMutation(sessionId, result); return json(result);

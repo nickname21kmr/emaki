@@ -31,6 +31,7 @@ Pi 可以读取本机 `PI_CODING_AGENT_DIR`（默认 `~/.pi/agent`）的模型�
 | `describe_database` / `query_database` | 当前表结构、自由只读 SQL；关联、统计、抽样由 agent 自行组织 |
 | `read_library` | 读取应用现有图库、角色、作品、任务、未识别等 API，保留页面口径 |
 | `read_media` | 实际看图，也支持按像素裁剪局部 |
+| `accept_suggestion` | 复用未识别页面的采纳建议流程，解析或创建角色、关联作品并返回撤销令牌 |
 | `update_images` / `edit_character` | 调用原有业务接口修改图片和角色，保留原有校验、事件和可用的撤销能力 |
 | `manage_job` | 查看、启动、取消应用已有后台任务 |
 | `get_page_context` / `present_result` | 当前消息的页面选择快照、图片集合与表格；外部 MCP 无绑定网页会话时，前者返回 null，后者直接返回结果 |

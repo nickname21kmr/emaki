@@ -77,6 +77,31 @@ describe('assistant HTTP and MCP', () => {
     const img = (await app.inject({ url: `/api/images/${imageId}`, headers: { host: 'localhost' } })).json(); expect(img.favorite).toBe(true);
     await client.close();
   });
+  it('accepts a real suggestion through MCP, deduplicates retry and supports normal undo', async () => {
+    const pending = (await app.inject({ url: '/api/unrecognized?area=art&bucket=suggested&limit=1', headers: { host: 'localhost' } })).json().items[0];
+    expect(pending).toBeTruthy();
+    const imagePath = `/api/images/${pending.image.id}`;
+    const before = (await app.inject({ url: imagePath, headers: { host: 'localhost' } })).json();
+    const suggestion = before.characterSuggestions[0];
+    expect(suggestion.danbooruTag).toBeTruthy();
+    const client = new Client({ name: 'accept-test', version: '1' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(base + '/api/assistant/mcp'), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
+    try {
+      const args = { operationId: 'accept-fixture', imageId: pending.image.id, danbooruTag: suggestion.danbooruTag };
+      const result: any = await client.callTool({ name: 'accept_suggestion', arguments: args });
+      expect(result.isError).not.toBe(true);
+      expect(await client.callTool({ name: 'accept_suggestion', arguments: args })).toEqual(result);
+      const after = (await app.inject({ url: imagePath, headers: { host: 'localhost' } })).json();
+      expect(after.characterIds).toContain(suggestion.characterId);
+      expect(after.status).toBe('recognized');
+      const { undoToken } = JSON.parse(result.content[0].text);
+      expect(undoToken).toBeTruthy();
+      expect((await app.inject({ method: 'POST', url: `/api/undo/${undoToken}`, headers: { host: 'localhost', 'content-type': 'application/json' }, payload: {} })).statusCode).toBe(200);
+      const restored = (await app.inject({ url: imagePath, headers: { host: 'localhost' } })).json();
+      expect(restored.characterIds).toEqual(before.characterIds);
+      expect(restored.characterSuggestions).toEqual(before.characterSuggestions);
+    } finally { await client.close(); }
+  });
   it('runs the real Pi harness against a fixture API, including an MCP round trip', async () => {
     const address = provider.address() as { port: number };
     await call('PATCH', '/settings', { pi: { provider: '', api: 'openai-completions', model: 'fixture-model', baseUrl: `http://127.0.0.1:${address.port}/v1` }, apiKey: 'fixture-key' });
