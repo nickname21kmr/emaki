@@ -7,7 +7,7 @@ import { createServer } from 'node:net';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { sharp } from '../image/sharpConfig.ts';
-import { VLM_FILE_HASHES, VLM_SCHEMA, parseVlmResponse, type VlmFiles } from './vlmDecision.ts';
+import { VLM_FILE_HASHES, VLM_PARALLEL, VLM_SCHEMA, parseVlmResponse, type VlmFiles } from './vlmDecision.ts';
 import { VLM_PROMPT } from './vlmPrompt.ts';
 
 let server: ChildProcess | undefined;
@@ -63,7 +63,8 @@ async function init(files: VlmFiles) {
   url = 'http://127.0.0.1:' + port;
   server = spawn(files.server, ['-m', files.model, '--mmproj', files.projector,
     '--host', '127.0.0.1', '--port', String(port), '--api-key', key,
-    '-c', '4096', '-np', '1', '-ngl', 'all', '--jinja', '--reasoning', 'off', '-b', '512', '-ub', '256'],
+    '-c', String(4096 * VLM_PARALLEL), '-np', String(VLM_PARALLEL), '-ngl', 'all',
+    '--jinja', '--reasoning', 'off', '-b', '512', '-ub', '256', '--cache-ram', '0'],
   { windowsHide: true, cwd: path.dirname(files.server), stdio: ['ignore', 'pipe', 'pipe'] });
   send({ type: 'server', pid: server.pid });
   let spawnError: Error | undefined;
@@ -104,18 +105,30 @@ async function classify(file: string, sha: string) {
     messages: [{ role: 'system', content: VLM_PROMPT }, { role: 'user', content: [
       { type: 'image_url', image_url: { url: 'data:image/png;base64,' + png.toString('base64') } },
       { type: 'text', text: '请分类这张图片。' },
-    ] }], temperature: 0, seed: 20261018, max_tokens: 64, chat_template_kwargs: { enable_thinking: false },
+    ] }], temperature: 0, seed: 20261018, max_tokens: 64, cache_prompt: false, chat_template_kwargs: { enable_thinking: false },
     response_format: { type: 'json_schema', json_schema: { name: 'image_kind', strict: true, schema: VLM_SCHEMA } },
   });
   return { kind: parseVlmResponse(value) };
 }
-let chain = Promise.resolve();
+let initialized: Promise<void> | undefined;
+let active = 0;
 process.on('message', (m: any) => {
   if (m.type === 'shutdown') { void stop(); return; }
-  chain = chain.then(async () => {
+  if (m.type === 'init' && !initialized) {
+    initialized = init(m.files);
+    void initialized.then(() => send({ id: m.id }), error => send({ id: m.id, error: String(error).slice(0, 1000) }));
+    return;
+  }
+  if (m.type !== 'classify' || !initialized || stopping || active >= VLM_PARALLEL) {
+    send({ id: m.id, error: '图片分类未就绪或超过并发上限' }); return;
+  }
+  active++;
+  void (async () => {
     try {
-      const value = m.type === 'init' ? await init(m.files) : await classify(m.file, m.sha256);
+      await initialized;
+      const value = await classify(m.file, m.sha256);
       send({ id: m.id, value });
     } catch (error) { send({ id: m.id, error: String(error).slice(0, 1000) }); }
-  });
+    finally { active--; }
+  })();
 });

@@ -7,7 +7,7 @@ import { backfillClassification } from './backfill.ts';
 import { IN_COMIC } from './comicAreas.ts';
 import { readContentReview } from './contentReview.ts';
 import { startVlm, type VlmClient } from './vlmClient.ts';
-import { VLM_PROFILE, readVlmDecision, type VlmDecision, type VlmFiles } from './vlmDecision.ts';
+import { VLM_PARALLEL, VLM_PROFILE, readVlmDecision, type VlmDecision, type VlmFiles } from './vlmDecision.ts';
 
 interface Row {
   id: number; sha256: string; content_review: string | null; source_site: string | null;
@@ -64,7 +64,8 @@ export function createContentStage(o: {
     },
   };
   async function execute(context: JobContext): Promise<string> {
-      const ctx = { ...context, signal: AbortSignal.any([context.signal, shutdown.signal]) };
+      const failed = new AbortController();
+      const ctx = { ...context, signal: AbortSignal.any([context.signal, shutdown.signal, failed.signal]) };
       if (!o.enabled) return '图片分类：未启用可选 4B 分类器';
       const rows = candidates();
       ctx.setTotal(rows.length);
@@ -79,13 +80,17 @@ export function createContentStage(o: {
         await (o.releaseTagger ?? shutdownTagger)();
         ctx.setMessage('图片分类：加载 Qwen3.5-4B…');
         client = await (o.start ?? startVlm)(o.files, ctx.signal);
-        for (const row of rows) {
+        let cursor = 0, yielding = false;
+        async function worker() {
+        for (;;) {
           ctx.signal.throwIfAborted();
-          if (ctx.shouldYield()) { ctx.requeue(); break; }
+          if (yielding || ctx.shouldYield()) { yielding = true; return; }
+          const row = rows[cursor++];
+          if (!row) return;
           const identity = { id: row.id, sha256: row.sha256, before: row.content_review,
             site: row.source_site, tagged: row.tagged_at, rel: row.rel_path, root: row.root_path };
           if (!stillEligible.get(identity)) { ctx.advance(1, '图片分类：跳过状态已变化的图片'); continue; }
-          const prediction = await client.classify(toAbs(row.root_path, row.rel_path), row.sha256);
+          const prediction = await client!.classify(toAbs(row.root_path, row.rel_path), row.sha256);
           ctx.signal.throwIfAborted();
           const record: VlmDecision = { version: 2, profile: VLM_PROFILE, sha256: row.sha256,
             kind: prediction.kind, status: prediction.fileError ? 'error' : 'ok', at: new Date().toISOString(),
@@ -101,6 +106,14 @@ export function createContentStage(o: {
           ctx.advance(1, `图片分类：已处理 ${applied} · 排除 ${changed} · 文件错误 ${errors}`);
           if (applied && applied % 20 === 0) o.onChanged();
         }
+        }
+        // Drain every worker before returning/closing the DB. An error aborts its peers,
+        // preventing late writes and further dispatch; already committed rows remain cached.
+        const results = await Promise.allSettled(Array.from({ length: Math.min(VLM_PARALLEL, rows.length) },
+          () => worker().catch(error => { failed.abort(error); throw error; })));
+        const rejection = results.find(r => r.status === 'rejected');
+        if (rejection?.status === 'rejected') throw failed.signal.reason ?? rejection.reason;
+        if (yielding) ctx.requeue();
         return `图片分类：处理 ${applied} 张 · 排除 ${changed} 张非插画 · 文件错误 ${errors}`;
       } finally {
         await client?.dispose();

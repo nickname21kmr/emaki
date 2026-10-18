@@ -1,5 +1,6 @@
 /** Increment this profile when model, prompt, preprocessing or decoding changes. */
-export const VLM_PROFILE = 'qwen3.5-4b-q4km-e87f176-v1';
+export const VLM_PROFILE = 'qwen3.5-4b-q4km-e87f176-v2-p4';
+export const VLM_PARALLEL = 4;
 export const VLM_KINDS = ['illustration', 'photo', 'screenshot', 'text', 'meme', 'comic', 'uncertain'] as const;
 export type VlmKind = typeof VLM_KINDS[number];
 export const VLM_SCHEMA = {

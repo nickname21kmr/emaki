@@ -102,6 +102,55 @@ it('yields before loading a model when the GPU lane has a higher priority job', 
   const s=setup(),ctx=context();ctx.shouldYield=()=>true;
   await s.stage.run(ctx);expect(ctx.requeue).toHaveBeenCalled();expect(s.start).not.toHaveBeenCalled();
 });
+function addRows() {
+  for (let id=4; id<=9; id++) db.prepare(`INSERT INTO images(id,root_id,rel_path,file_name,width,height,bytes,format,sha256,added_at,modified_at,tagged_at)
+    VALUES(?,1,?,?,800,800,1,'png',?,'x','x','x')`).run(id,id+'.png',id+'.png','sha'+id);
+}
+it('runs at most four requests and commits out-of-order completions to their own images', async () => {
+  addRows();
+  const pending: {resolve: (p: {kind: VlmKind}) => void}[]=[];
+  const s=setup(()=>new Promise(resolve=>pending.push({resolve})));
+  const run=s.stage.run(context());
+  await vi.waitFor(()=>expect(s.classify).toHaveBeenCalledTimes(4));
+  pending[2]!.resolve({kind:'text'});
+  await vi.waitFor(()=>expect(s.classify).toHaveBeenCalledTimes(5));
+  expect(db.prepare('SELECT content_kind FROM images WHERE id=3').pluck().get()).toBe('text');
+  expect(db.prepare('SELECT content_review FROM images WHERE id=1').pluck().get()).toBeNull();
+  for (let i=0;i<9;i++) {
+    if(i===2)continue;
+    await vi.waitFor(()=>expect(pending.length).toBeGreaterThan(i));
+    pending[i]!.resolve({kind:'photo'});
+  }
+  await run;
+  expect(s.stage.pendingCount()).toBe(0);expect(s.dispose).toHaveBeenCalledTimes(1);
+});
+it('failure waits for outstanding requests and forbids late writes or further dispatch', async () => {
+  addRows();
+  const pending: {resolve: (p: {kind: VlmKind}) => void; reject: (e: Error) => void}[]=[];
+  const s=setup(()=>new Promise((resolve,reject)=>pending.push({resolve,reject})));
+  let settled=false;
+  const run=s.stage.run(context()).catch(e=>e).finally(()=>{settled=true;});
+  await vi.waitFor(()=>expect(pending).toHaveLength(4));
+  pending[1]!.reject(new Error('failed request'));
+  await new Promise(resolve=>setImmediate(resolve));
+  expect(settled).toBe(false);expect(s.dispose).not.toHaveBeenCalled();
+  for(const i of [0,2,3])pending[i]!.resolve({kind:'photo'});
+  expect((await run).message).toBe('failed request');
+  expect(s.classify).toHaveBeenCalledTimes(4);expect(s.stage.pendingCount()).toBe(9);
+  expect(s.dispose).toHaveBeenCalledTimes(1);
+});
+it('yield drains in-flight work, dispatches no more images, and requeues once', async () => {
+  addRows();let yieldNow=false;
+  const pending: ((p:{kind:VlmKind})=>void)[]=[];
+  const s=setup(()=>new Promise(resolve=>pending.push(resolve))),ctx=context();
+  ctx.shouldYield=()=>yieldNow;
+  const run=s.stage.run(ctx);
+  await vi.waitFor(()=>expect(pending).toHaveLength(4));yieldNow=true;
+  for(const resolve of pending)resolve({kind:'photo'});
+  await run;
+  expect(s.classify).toHaveBeenCalledTimes(4);expect(ctx.requeue).toHaveBeenCalledTimes(1);
+  expect(s.stage.pendingCount()).toBe(5);expect(s.dispose).toHaveBeenCalledTimes(1);
+});
 it('changed hashes/profiles invalidate cached predictions and schedule new work', () => {
   db.prepare('UPDATE images SET content_review=? WHERE id=1').run(cached());
   const s=setup();expect(s.stage.pendingCount()).toBe(2);
