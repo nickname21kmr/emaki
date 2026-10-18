@@ -29,6 +29,35 @@ it('手动选图但没设焦点时自动裁切；明确设置的焦点保留，�
   expect((await ds.getCharacter(id))!.character.coverFocus).toEqual(automatic.coverFocus);
 });
 
+it('手动封面不在自动候选里时，仍读取这张图自己的构图标签', async () => {
+  const id = c('c2');
+  const imageId = env.id('image', 'i24'); // 没有关联角色，不会进入任何角色的自动候选。
+  const tag = db().prepare("INSERT INTO tags (name, category) VALUES ('chibi', 'general')").run().lastInsertRowid;
+  db().prepare('INSERT INTO image_tags (image_id, tag_id, score) VALUES (?, ?, 0.9)').run(Number(imageId), tag);
+  await ds.updateCharacter(id, { coverImageId: imageId, coverFocus: null });
+  expect((await ds.getCharacter(id))!.character).toMatchObject({
+    coverImageId: imageId,
+    coverManual: true,
+    coverFocus: { x: 0.5, y: 0.5, space: 'image' },
+  });
+});
+
+it('手动封面失效后，回退图使用自己的自动焦点，不沿用失效图片的手动坐标', async () => {
+  const id = c('c2');
+  const imageId = env.id('image', 'i9');
+  await ds.updateCharacter(id, { coverImageId: imageId, coverFocus: { x: 0.1, y: 0.8 } });
+  db().prepare('UPDATE images SET missing = 1 WHERE id = ?').run(Number(imageId));
+  ds.ctx.invalidate();
+  const fallback = (await ds.getCharacter(id))!.character;
+  expect(fallback.coverImageId).not.toBeNull();
+  expect(fallback.coverImageId).not.toBe(imageId);
+  expect(fallback.coverFocus).toEqual({ x: 0.5, y: 0.28, space: 'image' });
+  // 原图恢复后仍保留用户指定的焦点。
+  db().prepare('UPDATE images SET missing = 0 WHERE id = ?').run(Number(imageId));
+  ds.ctx.invalidate();
+  expect((await ds.getCharacter(id))!.character.coverFocus).toEqual({ x: 0.1, y: 0.8 });
+});
+
 describe('撤销后数据库完全还原', () => {
   const ops: [string, () => Promise<{ undoToken: string | null }>][] = [
     ['新建', () => ds.createCharacter({ name: '雪之下', workIds: [env.id('work', 'w3')], aliases: ['yukino'], danbooruTag: 'yukinoshita_yukino' })],
