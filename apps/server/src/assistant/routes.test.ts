@@ -77,6 +77,25 @@ describe('assistant HTTP and MCP', () => {
     const img = (await app.inject({ url: `/api/images/${imageId}`, headers: { host: 'localhost' } })).json(); expect(img.favorite).toBe(true);
     await client.close();
   });
+  it('edits sources through MCP with validation, retry deduplication and undo', async () => {
+    const client = new Client({ name: 'source-test', version: '1' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(base + '/api/assistant/mcp'), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
+    const read = async () => (await app.inject({ url: `/api/images/${imageId}`, headers: { host: 'localhost' } })).json();
+    const before = await read();
+    try {
+      const args = { operationId: 'source-fixture', imageId, source: { url: 'https://www.pixiv.net/artworks/98785437', artist: 'Killy' } };
+      const result: any = await client.callTool({ name: 'edit_source', arguments: args });
+      expect(result.isError).not.toBe(true);
+      expect(await client.callTool({ name: 'edit_source', arguments: args })).toEqual(result);
+      expect(await read()).toMatchObject({ sourceManual: true, source: { postId: '98785437' } });
+      const invalid = await app.inject({ method: 'PATCH', url: `/api/images/${imageId}`, headers: { host: 'localhost', 'content-type': 'application/json' }, payload: { source: { url: 'file:///C:/test' } } });
+      expect(invalid.statusCode).toBe(400);
+      expect((await read()).source.postId).toBe('98785437');
+      const { undoToken } = JSON.parse(result.content[0].text);
+      expect((await app.inject({ method: 'POST', url: `/api/undo/${undoToken}`, headers: { host: 'localhost', 'content-type': 'application/json' }, payload: {} })).statusCode).toBe(200);
+      expect(await read()).toMatchObject({ source: before.source, sourceManual: before.sourceManual });
+    } finally { await client.close(); }
+  });
   it('accepts a real suggestion through MCP, deduplicates retry and supports normal undo', async () => {
     const pending = (await app.inject({ url: '/api/unrecognized?area=art&bucket=suggested&limit=1', headers: { host: 'localhost' } })).json().items[0];
     expect(pending).toBeTruthy();

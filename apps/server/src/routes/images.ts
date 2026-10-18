@@ -1,3 +1,4 @@
+import { sourceEditSchema } from '../services/source/editSource.ts';
 import { BROWSE_THEMES, CUSTOM_THEME_LIMITS, THUMB_WIDTHS, UNRECOGNIZED_ANNEX_KINDS, UNRECOGNIZED_AREAS, UNRECOGNIZED_BUCKETS, UNRECOGNIZED_THEMES, type ThumbWidth } from '@emaki/shared';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createReadStream } from 'node:fs';
@@ -94,6 +95,7 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
     const { id } = parse(idParam, req.params);
     const body = parse(
       z.object({
+        source: sourceEditSchema.optional(),
         characterIds: z.array(z.string()).optional(),
         rating: ratingSchema.optional(),
         favorite: z.boolean().optional(),

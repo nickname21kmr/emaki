@@ -1,6 +1,6 @@
 /**
  * 从文件名（必要时参考父目录名）推断图片来源。纯函数，扫描器插入 / 移动图片时调用。
- * 改了规则就把 SOURCE_PARSER_VERSION 加 1，启动时 backfillSources 会重算全部行。
+ * 改了规则就把 SOURCE_PARSER_VERSION 加 1，启动时 backfillSources 会重算未人工确认的行。
  */
 import type { ImageSource } from '@emaki/shared';
 

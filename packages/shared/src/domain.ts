@@ -164,6 +164,8 @@ export interface ImageItem {
 
 /** 图片详情 = 列表项 + 全部标签。 */
 export interface ImageDetail extends ImageItem {
+  /** An explicit source edit takes precedence over scans, even when source is null. */
+  sourceManual: boolean;
   absPath: string;
   tags: TagScore[];
   /** tagger 给出的、还没被采纳的角色建议 */

@@ -1,3 +1,4 @@
+import { sourceEditSchema } from '../services/source/editSource.ts';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import sharp from 'sharp';
@@ -64,6 +65,11 @@ export function createLibraryMcp(app: FastifyInstance, ds: DataSource, file: str
       z.object({ type: z.literal('artist'), mode: z.enum(['add', 'remove', 'set']), artists: z.array(z.string()).max(10) }),
     ]) }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true } }, async ({ operationId, ...body }) => {
     host.assertEnabled(); const result = await host.operation(scope, operationId, JSON.stringify(['update_images', body]), () => invoke('POST', '/api/images/bulk', body));
+    host.recordMutation(sessionId, result); return json(result);
+  });
+  server.registerTool('edit_source', { description: '确认或修改一张图片的原作来源。source={url,artist?} 自动解析站点和作品号；人工确认优先于扫描。source=null 清除并锁定为空；source="auto" 解除人工锁定并按文件名重算。artist 是来源显示文字，不代替图片画师关联。返回撤销 token，重试复用 operationId。',
+    inputSchema: { operationId: z.string().min(1).max(100), imageId: z.string().min(1).max(100), source: sourceEditSchema }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true } }, async ({ operationId, imageId, source }) => {
+    host.assertEnabled(); const result = await host.operation(scope, operationId, JSON.stringify(['edit_source', imageId, source]), () => invoke('PATCH', `/api/images/${encodeURIComponent(imageId)}`, { source }));
     host.recordMutation(sessionId, result); return json(result);
   });
   server.registerTool('accept_suggestion', { description: '采纳一张图片的当前角色建议，等同于未识别页面的采纳按钮。传入详情 characterSuggestions 或未识别列表 suggestions 中的 danbooruTag；复用角色解析、必要的新建及作品关联，返回撤销 token。重试复用 operationId。',

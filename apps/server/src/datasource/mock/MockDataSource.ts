@@ -1,3 +1,4 @@
+import { editedSource } from '../../services/source/editSource.ts';
 import { inferCoverFocus } from '../../services/covers/focus.ts';
 import {
   CONTENT_KINDS,
@@ -960,6 +961,7 @@ export class MockDataSource implements DataSource {
       kindReason: row.kindManual ? null : describeKindReason(row.kindSource ?? 'default', row.kindEvidence ?? null),
       collection: this.collections.ofImage(row),
       artists: this.imageArtistsOf(row),
+      sourceManual: !!row.sourceManual,
       artistsManual: !!row.artistsManual,
     };
   }
@@ -1001,7 +1003,11 @@ export class MockDataSource implements DataSource {
 
   async updateImage(id: ID, body: UpdateImageBody): Promise<MutationResult> {
     const row = this.requireImage(id);
+    const sourceEdit = body.source === undefined ? undefined : editedSource(body.source, row.relPath);
+    if (body.kind !== undefined) assertKindValue(body.kind);
+    if (body.characterIds) for (const cid of body.characterIds) this.requireCharacter(cid);
     const before = {
+      ...(sourceEdit ? { source: row.source, sourceManual: row.sourceManual } : {}),
       characterIds: [...row.characterIds],
       rating: row.rating,
       ratingManual: row.ratingManual,
@@ -1012,13 +1018,12 @@ export class MockDataSource implements DataSource {
       kindManual: row.kindManual,
     };
     if (body.kind !== undefined) {
-      assertKindValue(body.kind);
       this.setKind([row], body.kind);
     }
     if (body.characterIds) {
-      for (const cid of body.characterIds) this.requireCharacter(cid);
       row.characterIds = [...new Set(body.characterIds)];
     }
+    if (sourceEdit) { row.source = sourceEdit.source; row.sourceManual = sourceEdit.manual; }
     if (body.rating) {
       row.rating = body.rating;
       row.ratingManual = true;
@@ -1035,7 +1040,7 @@ export class MockDataSource implements DataSource {
             : '已取消收藏'
           : body.rating
             ? '已修改分级'
-            : '已更新角色';
+            : body.source !== undefined ? (body.source === 'auto' ? '已恢复自动来源' : body.source === null ? '已清除来源' : '已确认来源') : '已更新角色';
     return this.withUndo(msg, () => {
       Object.assign(row, before);
     });

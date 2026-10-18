@@ -74,6 +74,30 @@ describe('Scanner', () => {
     expect((await scan()).added).toBe(0);
   });
 
+  it('改名和内容更新保留人工来源及主动清空，自动来源仍能解析', async () => {
+    await scan();
+    const first = row('one.png')!.id;
+    const second = row('two.png')!.id;
+    db.prepare("UPDATE images SET source_manual=1, source_site='other', source_url='https://example.com/original' WHERE id=?").run(first);
+    db.prepare('UPDATE images SET source_manual=1 WHERE id=?').run(second);
+    await rename(path.join(root, 'a/one.png'), path.join(root, 'a/98785437_p0.png'));
+    await rename(path.join(root, 'a/two.png'), path.join(root, 'a/98785438_p0.png'));
+    await rename(path.join(root, 'b/three.png'), path.join(root, 'b/98785439_p0.png'));
+    expect((await scan()).moved).toBe(3);
+    expect(row('98785437_p0.png')!.id).toBe(first);
+    expect(row('98785438_p0.png')!.id).toBe(second);
+    const sources = () => db.prepare('SELECT source_manual, source_site, source_url FROM images ORDER BY id').all();
+    const preserved = sources();
+    expect(db.prepare('SELECT source_site, source_url FROM images WHERE id=?').get(first)).toEqual({ source_site: 'other', source_url: 'https://example.com/original' });
+    expect(db.prepare('SELECT source_site, source_url FROM images WHERE id=?').get(second)).toEqual({ source_site: null, source_url: null });
+    expect(db.prepare("SELECT source_post_id FROM images WHERE file_name='98785439_p0.png'").pluck().get()).toBe('98785439');
+    await put('a/98785437_p0.png', 9);
+    const future = new Date(Date.now() + 10000);
+    await utimes(path.join(root, 'a/98785437_p0.png'), future, future);
+    expect((await scan()).updated).toBe(1);
+    expect(sources()).toEqual(preserved);
+  });
+
   it('整根扫描（新添加文件夹）更新上次扫描时间，子目录扫描不更新', async () => {
     const last = () => db.prepare('SELECT last_scan_at FROM library_roots').pluck().get();
     requests.addDirty({ rootId: 1, relDir: 'a', recursive: true });
