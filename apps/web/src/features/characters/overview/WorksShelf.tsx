@@ -22,7 +22,8 @@ const GRID = 'grid grid-cols-2 gap-x-4 gap-y-6 lg:grid-cols-3 lg:gap-x-6 xl:grid
 export function WorksShelf({ onPick, onCreate, onShowAll }: { onPick: (id: ID) => void; onCreate: () => void; onShowAll: () => void }) {
   const { works: all, isLoading, isError, error, refetch } = useWorkIndex();
   const { data: stats } = useStats();
-  const works = all.filter((w) => w.imageCount > 0);
+  // 「原创」是汇总分类，包含大量尚无具体角色的图，不作为一部作品参加排行。
+  const works = all.filter((w) => w.imageCount > 0 && w.danbooruTag !== 'original');
   const fans = works.filter((w) => w.imageCount >= FAN_MIN_IMAGES);
   const rest = works.filter((w) => w.imageCount < FAN_MIN_IMAGES);
   const [shown, setShown] = useState(BATCH);
@@ -59,10 +60,16 @@ export function WorksShelf({ onPick, onCreate, onShowAll }: { onPick: (id: ID) =
     );
   }
   if (!works.length) {
+    const hasOriginal = all.some((w) => w.danbooruTag === 'original' && w.imageCount > 0);
     return (
       <section>
         {title}
-        <EmptyState glyph="人" title="还没有角色" description="识别完成后，角色会按作品出现在这里。" className="py-16" />
+        <EmptyState
+          glyph="人"
+          title={hasOriginal ? '原创分类不参与作品排行' : '还没有角色'}
+          description={hasOriginal ? '可从侧栏「原创」或「全部作品」查看。具体原创角色仍按各自的收藏张数排列。' : '识别完成后，角色会按作品出现在这里。'}
+          className="py-16"
+        />
       </section>
     );
   }

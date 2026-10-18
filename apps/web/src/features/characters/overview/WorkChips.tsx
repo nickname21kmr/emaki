@@ -33,7 +33,8 @@ export function WorkChips({
   const recentCount = recent.data?.pages[0]?.total;
 
   const visible = useMemo(() => {
-    const top = works.slice(0, MAX_CHIPS);
+    // 原创汇总不占默认排行的位置，仍可从全部作品选择并在下面补回选中项。
+    const top = works.filter((w) => w.danbooruTag !== 'original').slice(0, MAX_CHIPS);
     // 从「全部作品」里选了排在后面的作品：临时补到行尾，保证选中项总是看得见
     if (selected && selected !== 'recent' && !top.some((w) => w.id === selected)) {
       const w = byId.get(selected);
