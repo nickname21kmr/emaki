@@ -14,6 +14,7 @@ import { assistantApi, useAssistantSettings } from './client';
 import { assistantInput } from './AssistantSettingsSection';
 import { groupMessages } from './presentation';
 import { useFloatingDrag } from './useFloatingDrag';
+import { openSessionEvents } from './sessionEvents';
 
 export function AssistantPanel() {
   const settings = useAssistantSettings().data, [open, setOpen] = useState(false);
@@ -43,12 +44,15 @@ function Conversation({ backend, close }: { backend: string | null; close: () =>
   useEffect(() => {
     if (!sessionId) return;
     let disposed = false;
-    const events = new EventSource(`/api/assistant/sessions/${sessionId}/events`);
-    events.onmessage = e => { const snapshot: AssistantSession = JSON.parse(e.data); setSession(snapshot); setConnected(true); };
-    events.onerror = () => setConnected(false);
-    events.addEventListener('disabled', () => { events.close(); void client.invalidateQueries({ queryKey: ['assistant-settings'] }); });
-    void assistantApi.session(sessionId).then(s => { if (!disposed) setSession(previous => previous ?? s); }).catch(e => { if (!disposed) { setError(e.message); events.close(); } });
-    return () => { disposed = true; events.close(); };
+    const closeEvents = openSessionEvents(sessionId, {
+      open: () => setConnected(true),
+      message: data => { const snapshot: AssistantSession = JSON.parse(data); setSession(snapshot); setConnected(true); },
+      error: () => setConnected(false),
+      disabled: () => { void client.invalidateQueries({ queryKey: ['assistant-settings'] }); },
+    });
+    // A temporary HTTP failure must not stop the stream's reconnection loop.
+    void assistantApi.session(sessionId).then(s => { if (!disposed) setSession(previous => previous ?? s); }).catch(() => {});
+    return () => { disposed = true; closeEvents(); };
   }, [sessionId, client]);
   useEffect(() => {
     if (model || !session || !models.data?.length) return;
