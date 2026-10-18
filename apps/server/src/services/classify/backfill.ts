@@ -11,6 +11,8 @@ import { transact, type Db, type Statement } from '../../db/connection.ts';
 import { IN_COMIC } from './comicAreas.ts';
 import { classifyContent, CLASSIFIER_VERSION, SIGNAL_TAGS } from './rules.ts';
 import { artScore, classifyTheme, THEME_TAG_NAMES, type StoredTheme } from './theme.ts';
+import { readContentReview } from './contentReview.ts';
+import { readVlmDecision } from './vlmDecision.ts';
 
 export interface ClassRow {
   id: number;
@@ -24,6 +26,9 @@ export interface ClassRow {
   tagged_at: string | null;
   /** 所在图库文件夹按漫画导入（1） */
   comic_root: number;
+  source_site?: string | null;
+  sha256?: string;
+  content_review?: string | null;
 }
 
 export interface Classification {
@@ -35,7 +40,7 @@ export interface Classification {
 }
 
 /** 只能接在 FROM images 后面（不带别名）：comic_root = 在按漫画导入的范围里（comicAreas.ts） */
-export const CLASS_COLS = `id, file_name, rel_path, width, height, format, camera, content_kind_manual, tagged_at,
+export const CLASS_COLS = `id, file_name, rel_path, width, height, format, camera, content_kind_manual, tagged_at, source_site, sha256, content_review,
   ${IN_COMIC('images')} AS comic_root`;
 /** 分类、主题、质量分用到的全部标签名：回填只读这些（RV-T-6） */
 export const CLASSIFY_TAG_NAMES: readonly string[] = [...new Set([...SIGNAL_TAGS, ...THEME_TAG_NAMES])];
@@ -43,7 +48,7 @@ export const CLASSIFY_TAG_NAMES: readonly string[] = [...new Set([...SIGNAL_TAGS
 /** tags 为 null = 还没打标签（theme、art_score 也写 NULL） */
 export function computeClassification(r: ClassRow, tags: [string, number][] | null): Classification {
   const tagged = r.tagged_at !== null && tags !== null;
-  const c = classifyContent({
+  let c = classifyContent({
     fileName: r.file_name,
     relPath: r.rel_path,
     width: r.width,
@@ -52,7 +57,16 @@ export function computeClassification(r: ClassRow, tags: [string, number][] | nu
     camera: r.camera,
     tags: tagged ? new Map(tags) : null,
     comicRoot: !!r.comic_root,
+    sourceSite: r.source_site,
   });
+  if (!r.content_kind_manual && !r.comic_root && r.format !== 'gif') {
+    const legacy = readContentReview(r.content_review, r.sha256);
+    const decision = readVlmDecision(r.content_review, r.sha256);
+    if (r.source_site === 'pixiv') c = { kind: 'illustration', source: 'tags', evidence: 'Pixiv 来源优先保留插画' };
+    else if (legacy) c = { kind: legacy.kind, source: 'tags', evidence: '视觉复核：' + legacy.reason };
+    else if (c.kind === 'illustration' && decision?.status === 'ok' && decision.kind !== 'uncertain')
+      c = { kind: decision.kind, source: 'tags', evidence: 'Qwen3.5-4B 图片分类：' + decision.kind };
+  }
   const score = tagged ? artScore({ w: r.width, h: r.height, fileName: r.file_name }, tags) : null;
   return { kind: c.kind, source: c.source, evidence: c.evidence, theme: tagged ? classifyTheme(tags, score) : null, artScore: score };
 }

@@ -9,6 +9,7 @@ export const JOB_LABEL: Record<JobKind, string> = {
   dedupe: '查找重复',
   artists: '识别画师',
   'pixiv-tags': '补充 Pixiv 角色',
+  'content-filter': '图片分类',
 };
 
 /** 进度条旁边的动词，比「进行中」更具体 */
@@ -20,6 +21,7 @@ export const JOB_VERB: Record<JobKind, string> = {
   dedupe: '查找中',
   artists: '识别中',
   'pixiv-tags': '查询中',
+  'content-filter': '分类中',
 };
 
 export const JOB_ICON: Record<JobKind, LucideIcon> = {
@@ -30,10 +32,11 @@ export const JOB_ICON: Record<JobKind, LucideIcon> = {
   dedupe: Copy,
   artists: Palette,
   'pixiv-tags': CloudDownload,
+  'content-filter': ImageIcon,
 };
 
 /** 「运行任务」菜单里的顺序：按日常使用频率 */
-export const JOB_KINDS: JobKind[] = ['scan', 'tag', 'dedupe', 'danbooru-sync', 'thumbnail'];
+export const JOB_KINDS: JobKind[] = ['scan', 'tag', 'dedupe', 'danbooru-sync', 'thumbnail', 'content-filter'];
 
 type Tone = 'neutral' | 'shu' | 'ok' | 'warn' | 'danger';
 

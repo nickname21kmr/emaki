@@ -72,6 +72,7 @@ import { Scanner } from '../../services/scan/Scanner.ts';
 import { ScanRequests } from '../../services/scan/ScanRequests.ts';
 import { backfillSources } from '../../services/source/backfill.ts';
 import { backfillClassification } from '../../services/classify/backfill.ts';
+import { createContentStage, type ContentStage } from '../../services/classify/vlmJob.ts';
 import { syncRootModes } from '../../services/classify/rootMode.ts';
 import { ComicAreas } from '../../services/classify/comicAreas.ts';
 import { CollectionService, type CollectionsHook } from '../../services/collections/CollectionService.ts';
@@ -195,7 +196,16 @@ export class SqliteDataSource implements DataSource {
     // 作品同理：Danbooru 改过名的版权标签，新旧两个名字各建了一部（用户 2026-09-29）
     const works = consolidateWorkTags(db, { canonicalize: (t) => danbooru.canonicalize(t), localizer });
     if (works.merged || works.renamed) console.log(`[作品] 收拢改过名的作品：合并 ${works.merged} 部，改标签 ${works.renamed} 部`);
+    ds.contentStage = createContentStage({
+      db, enabled: config.contentFilter.enabled, files: config.contentFilter,
+      onChanged: (final) => {
+        ds.ctx.invalidate('all');
+        bus.emit({ type: 'library-changed', reason: 'tag' });
+        if (final) ds.refreshCollections('tag');
+      },
+    });
     ds.pipeline.register({
+      content: ds.contentStage,
       tag: createTagStage({
         db,
         bus,
@@ -433,11 +443,14 @@ export class SqliteDataSource implements DataSource {
 
   async close(): Promise<void> {
     await this.watcher?.close();
+    await this.contentStage?.stop();
     await shutdownTagger(); // 关掉推理子进程，释放显存
     clearInterval(this.optimizeTimer);
     this.searchQueries.dispose();
     closeDatabase(this.ctx.db);
   }
+
+  private contentStage?: ContentStage;
 
   /** 后台任务之后重算合集；有变化才让缓存失效并通知前端（T38b） */
   refreshCollections(reason: 'scan' | 'tag' | 'mutation'): void {

@@ -10,7 +10,8 @@
  */
 import type { ContentKind, ContentKindSource, ImageFormat } from '@emaki/shared';
 
-export const CLASSIFIER_VERSION = 1;
+// Versions 2–7 were local photo/CLIP experiments; do not reuse their cached classifications.
+export const CLASSIFIER_VERSION = 8;
 
 export interface ClassifyInput {
   fileName: string;
@@ -24,6 +25,7 @@ export interface ClassifyInput {
   tags: ReadonlyMap<string, number> | null;
   /** 所在图库文件夹是「按漫画导入」的：每张都是漫画页 */
   comicRoot?: boolean;
+  sourceSite?: string | null;
 }
 
 export interface ClassifyResult {
@@ -94,6 +96,9 @@ export function classifyContent(x: ClassifyInput): ClassifyResult {
 
   // 0 用户导入时说了这个文件夹是漫画
   if (x.comicRoot) return { kind: 'comic', source: 'folder', evidence: COMIC_ROOT_EVIDENCE };
+  if (x.sourceSite === 'pixiv') return x.format === 'gif'
+    ? { kind: 'animated', source: 'format', evidence: 'GIF 动图' }
+    : { kind: 'illustration', source: 'tags', evidence: 'Pixiv 来源优先保留插画' };
 
   // 1 强信号：文件名 / 文件夹 / 相机
   if (SCREENSHOT_NAME.test(x.fileName)) return { kind: 'screenshot', source: 'name', evidence: '文件名像截图' };

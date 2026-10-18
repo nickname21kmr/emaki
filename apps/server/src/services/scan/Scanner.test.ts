@@ -74,6 +74,17 @@ describe('Scanner', () => {
     expect((await scan()).added).toBe(0);
   });
 
+  it('Pixiv 来源在首次扫描即优先保留，移动后重新应用来源规则', async () => {
+    await put('截图/100631387_p0.png', 4);
+    await scan();
+    const kind = () => db.prepare("SELECT content_kind FROM images WHERE file_name='100631387_p0.png'").pluck().get();
+    expect(kind()).toBe('illustration');
+    db.exec("UPDATE images SET content_kind='photo' WHERE file_name='one.png'");
+    await rename(path.join(root,'a/one.png'),path.join(root,'a/12345678_p0.png'));
+    await scan();
+    expect(db.prepare("SELECT content_kind FROM images WHERE file_name='12345678_p0.png'").pluck().get()).toBe('illustration');
+  });
+
   it('整根扫描（新添加文件夹）更新上次扫描时间，子目录扫描不更新', async () => {
     const last = () => db.prepare('SELECT last_scan_at FROM library_roots').pluck().get();
     requests.addDirty({ rootId: 1, relDir: 'a', recursive: true });

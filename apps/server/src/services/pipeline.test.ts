@@ -45,6 +45,32 @@ function setup(o: { scan?: ScanSummary; tagPending?: number; tagReady?: boolean;
 }
 
 describe('Pipeline', () => {
+  it('content filtering is opt-in, resumes after tags, and pauses queued work on failure/cancel', async () => {
+    const p = setup();
+    let enabled = false, ready = true, fail = false, calls = 0, retries = 0;
+    p.pipeline.register({ content: {
+      enabled: () => enabled, isReady: () => ready, pendingCount: () => 3,
+      retryErrors: () => { retries++; }, stop: async () => {},
+      run: async () => { calls++; if (fail) throw new Error('GPU failed'); return 'done'; },
+    } });
+    await p.pipeline.runner('tag')(ctx()); expect(p.enqueued).toEqual([]);
+    enabled = true; ready = false;
+    await p.pipeline.runner('tag')(ctx()); expect(p.enqueued).toEqual([]);
+    ready = true;
+    await p.pipeline.runner('tag')(ctx()); expect(p.enqueued).toEqual(['content-filter']);
+    fail = true;
+    await expect(p.pipeline.runner('content-filter')(ctx())).rejects.toThrow('GPU failed');
+    await p.pipeline.runner('tag')(ctx());
+    await p.pipeline.runner('content-filter')(ctx());
+    expect(calls).toBe(1); expect(p.enqueued).toHaveLength(1);
+    p.pipeline.noteManualStart('content-filter'); fail = false;
+    await p.pipeline.runner('content-filter')(ctx());
+    expect(retries).toBe(1); expect(calls).toBe(2);
+    p.pipeline.notePaused('content-filter');
+    await p.pipeline.runner('content-filter')(ctx());
+    await p.pipeline.runner('tag')(ctx());
+    expect(calls).toBe(2); expect(p.enqueued).toHaveLength(1);
+  });
   it('首次模型识别完成后自动排 Pixiv 补充，取消时不排；重启已有待补记录可续跑', async () => {
     const p=setup();
     p.pipeline.register({pixiv:{pendingCount:()=>2,run:async()=> 'Pixiv 完成'}});

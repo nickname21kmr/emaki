@@ -420,6 +420,7 @@ export class Scanner {
         format: probe.format,
         camera: probe.camera,
         tags: null,
+        sourceSite: parseSource(e.relPath)?.site,
         comicRoot: !!comics.of(e.rootId, e.relPath),
       });
       const kindCols = { camera: probe.camera, kind: cls.kind, kindSource: cls.source, kindEvidence: cls.evidence, kindVersion: CLASSIFIER_VERSION };

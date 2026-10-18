@@ -37,6 +37,13 @@ export const config = {
   assetsDir: path.join(repoRoot, 'apps/server/assets'),
   /** 模型文件目录；多个开发库可共用一份 */
   modelsDir: process.env.EMAKI_MODELS_DIR ? path.resolve(repoRoot, process.env.EMAKI_MODELS_DIR) : path.join(dataDir, 'models'),
+  /** Experimental opt-in. No download, no resident process unless a classification job needs it. */
+  contentFilter: {
+    enabled: process.env.EMAKI_CONTENT_FILTER === '1',
+    server: path.resolve(repoRoot, process.env.EMAKI_LLAMA_SERVER ?? 'data/models/llama-server'),
+    model: path.resolve(repoRoot, process.env.EMAKI_CONTENT_MODEL ?? 'data/models/Qwen3.5-4B-Q4_K_M.gguf'),
+    projector: path.resolve(repoRoot, process.env.EMAKI_CONTENT_PROJECTOR ?? 'data/models/mmproj-BF16.gguf'),
+  },
   /** 模型下载源（逗号分隔），会并行测速，选最快的 */
   modelSources: (process.env.EMAKI_MODEL_SOURCES ?? 'huggingface,hf-mirror,modelscope')
     .split(',')

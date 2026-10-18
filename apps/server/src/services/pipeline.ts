@@ -9,6 +9,7 @@ import { NotImplementedError } from '../http/errors.ts';
 import type { ThumbnailService } from './image/ThumbnailService.ts';
 import { formatScanSummary, type Scanner, type ScanSummary } from './scan/Scanner.ts';
 import type { ScanRequests } from './scan/ScanRequests.ts';
+import type { ContentStage } from './classify/vlmJob.ts';
 
 /** T10 */
 export interface TagStage {
@@ -46,6 +47,7 @@ export interface PipelineDeps {
   dedupe?: DedupeStage;
   artists?: ArtistStage;
   pixiv?: { pendingCount(): number; run: JobRunner };
+  content?: ContentStage;
   /** T20：refreshTagCounts */
   afterTag?: () => void;
   /** 扫描完成（没被取消）后的钩子，例如 T08 重新同步监听 */
@@ -55,7 +57,7 @@ export interface PipelineDeps {
 /** 延后的文件（2 秒内刚写入）过多久再扫 */
 const DEFERRED_RETRY_MS = 3000;
 
-export type PipelineStages = Partial<Pick<PipelineDeps, 'tag' | 'danbooru' | 'dedupe' | 'artists' | 'pixiv' | 'afterTag' | 'afterScan'>>;
+export type PipelineStages = Partial<Pick<PipelineDeps, 'tag' | 'danbooru' | 'dedupe' | 'artists' | 'pixiv' | 'content' | 'afterTag' | 'afterScan'>>;
 
 export class Pipeline {
   private dedupeDirty = false;
@@ -65,6 +67,8 @@ export class Pipeline {
   private artistsPaused = false;
   private pixivPaused = false;
   private pixivFailed = false;
+  private contentPaused = false;
+  private contentFailed = false;
 
   constructor(private d: PipelineDeps) {}
 
@@ -98,6 +102,7 @@ export class Pipeline {
           if (!ctx.signal.aborted && !ctx.yielded) {
             this.d.afterTag?.();
             this.maybePixiv();
+            this.maybeContent();
             if (this.d.danbooru?.shouldRunAfterTag()) this.d.jobs().enqueue('danbooru-sync');
             if (this.dedupeDirty) this.d.jobs().enqueue('dedupe');
             // 开着画师的：接着补（新图、WD 识别的旧图、重启前没补完的）；用户取消过就等他手动再点
@@ -105,6 +110,18 @@ export class Pipeline {
             if (this.canAutoArtists()) this.d.jobs().enqueue('artists');
           }
           return msg;
+        }
+        case 'content-filter': {
+          if (!this.d.content) throw new NotImplementedError('content-filter', '图片分类');
+          if (this.contentPaused || this.contentFailed) return '图片分类：已暂停，请手动重试';
+          try {
+            return await this.d.content.run(ctx);
+          } catch (error) {
+            if (!ctx.signal.aborted) this.contentFailed = true;
+            throw error;
+          } finally {
+            if (ctx.signal.aborted) this.contentPaused = true;
+          }
         }
         case 'pixiv-tags': {
           if (!this.d.pixiv) throw new NotImplementedError('pixiv', 'Pixiv 角色补充');
@@ -170,6 +187,9 @@ export class Pipeline {
     if (kind === 'tag') { this.tagPaused = false; this.pixivFailed = false; }
     if (kind === 'artists') this.artistsPaused = false;
     if (kind === 'pixiv-tags') { this.pixivPaused = false; this.pixivFailed = false; }
+    if (kind === 'content-filter') {
+      this.contentPaused = false; this.contentFailed = false; this.d.content?.retryErrors();
+    }
   }
 
   private afterThumbnail() {
@@ -186,6 +206,13 @@ export class Pipeline {
     // 识别确实不用跑（比如重启后）才接着补画师；识别被用户暂停时也不接，免得新图先被 PixAI 跑一遍画师、恢复识别后再跑一遍
     else if (!tagNeeded && this.canAutoArtists()) this.d.jobs().enqueue('artists');
     if (!tagNeeded && !this.tagPaused) this.maybePixiv();
+    if (!tagNeeded && !this.tagPaused) this.maybeContent();
+  }
+
+  private maybeContent(): void {
+    const c = this.d.content;
+    if (!this.contentPaused && !this.contentFailed && c?.enabled() && c.isReady() && c.pendingCount() > 0)
+      this.d.jobs().enqueue('content-filter', { requeueIfRunning: true });
   }
 
   private maybePixiv(): void {
@@ -220,5 +247,6 @@ export class Pipeline {
     if (kind === 'tag') this.tagPaused = true;
     if (kind === 'artists') this.artistsPaused = true;
     if (kind === 'pixiv-tags') this.pixivPaused = true;
+    if (kind === 'content-filter') this.contentPaused = true;
   }
 }
