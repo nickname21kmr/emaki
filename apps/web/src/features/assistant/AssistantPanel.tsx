@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, Link } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AssistantCard, AssistantSession, AssistantQuestion } from '@emaki/shared';
+import type { AssistantCard, AssistantSession, AssistantQuestion, AssistantMessage } from '@emaki/shared';
 import { MessageCircle, Plus, Send, Square, X, Maximize2, Minimize2 } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -12,16 +12,23 @@ import { useLightbox, useSelection } from '@/lib/stores';
 import { undo } from '@/lib/queries';
 import { assistantApi, useAssistantSettings } from './client';
 import { assistantInput } from './AssistantSettingsSection';
+import { groupMessages } from './presentation';
+import { useFloatingDrag } from './useFloatingDrag';
 
 export function AssistantPanel() {
   const settings = useAssistantSettings().data, [open, setOpen] = useState(false);
   if (!settings?.enabled) return null;
-  return <>{!open ? <button type="button" aria-label="打开 AI 助手" className="fixed bottom-6 right-6 z-40 flex size-12 items-center justify-center rounded-full bg-ink text-fg-inverse shadow-lg hover:scale-105" onClick={() => setOpen(true)}><MessageCircle size={22} /></button>
+  return <>{!open ? <FloatingLauncher open={() => setOpen(true)} />
     : <Conversation key={settings.backend ?? ''} backend={settings.backend} close={() => setOpen(false)} />}</>;
+}
+function FloatingLauncher({ open }: { open: () => void }) {
+  const drag = useFloatingDrag('emaki.assistant.bubble-position');
+  return <button ref={el => { drag.ref.current = el; }} style={drag.style} {...drag.handle} type="button" aria-label="打开 AI 助手" title="点击打开，拖动调整位置" className="fixed bottom-6 right-6 z-40 flex size-12 touch-none items-center justify-center rounded-full bg-ink text-fg-inverse shadow-lg" onClick={open}><MessageCircle size={22} /></button>;
 }
 
 function Conversation({ backend, close }: { backend: string | null; close: () => void }) {
   const client = useQueryClient(), location = useLocation();
+  const drag = useFloatingDrag('emaki.assistant.panel-position');
   const [expanded, setExpanded] = useState(false), [sessionId, setSessionId] = useState(() => sessionStorage.getItem(`emaki.assistant.${backend}`) ?? '');
   const [session, setSession] = useState<AssistantSession | null>(null), [text, setText] = useState(''), [model, setModel] = useState(''), [effort, setEffort] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [connected, setConnected] = useState(true);
@@ -61,8 +68,8 @@ function Conversation({ backend, close }: { backend: string | null; close: () =>
     submission.current = null;
     setText(''); follow.current = true; void sessions.refetch();
   };
-  return <aside role="dialog" aria-label="Emaki AI 助手" className={`fixed bottom-4 right-4 z-40 flex flex-col overflow-hidden rounded-2xl border border-line-strong bg-sheet shadow-2xl ${expanded ? 'h-[88vh] w-[min(880px,calc(100vw-32px))]' : 'h-[min(700px,85vh)] w-[min(440px,calc(100vw-32px))]'}`}>
-    <header className="flex items-center gap-2 border-b border-line px-4 py-3"><MessageCircle className="size-4 text-shu" /><strong className="flex-1 text-sm">Emaki 助手 <span className="ml-1 text-xs font-normal text-fg-muted">实验</span></strong>
+  return <aside ref={el => { drag.ref.current = el; }} style={drag.style} role="dialog" aria-label="Emaki AI 助手" className={`fixed bottom-4 right-4 z-40 flex flex-col overflow-hidden rounded-2xl border border-line-strong bg-sheet shadow-2xl ${expanded ? 'h-[88vh] w-[min(880px,calc(100vw-32px))]' : 'h-[min(700px,85vh)] w-[min(440px,calc(100vw-32px))]'}`}>
+    <header {...drag.handle} title="拖动移动助手" className="flex touch-none select-none cursor-move items-center gap-2 border-b border-line px-4 py-3"><MessageCircle className="size-4 text-shu" /><strong className="flex-1 text-sm">Emaki 助手 <span className="ml-1 text-xs font-normal text-fg-muted">实验</span></strong>
       <IconButton label="新建对话" disabled={!backend || busy} onClick={() => void perform(async () => { const s = await assistantApi.create(); chooseSession(s.id); await sessions.refetch(); })}><Plus /></IconButton>
       <IconButton label={expanded ? '缩小面板' : '展开面板'} onClick={() => setExpanded(!expanded)}>{expanded ? <Minimize2 /> : <Maximize2 />}</IconButton>
       <IconButton label="收起助手" onClick={close}><X /></IconButton>
@@ -72,13 +79,13 @@ function Conversation({ backend, close }: { backend: string | null; close: () =>
     </select></div>
     <div ref={scroll} onScroll={() => { const el = scroll.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 70; }} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 scrollbar-thin">
       {!sessionId && <div className="py-8 text-sm leading-7 text-fg-muted"><p className="font-medium text-fg">围绕当前图库，一起处理问题。</p><p>选中图片后，可以询问角色、对照来源，或让助手查询和整理。图片按需读取。</p>{backend ? <Button className="mt-4" disabled={busy} onClick={() => void perform(async () => { const s = await assistantApi.create(); chooseSession(s.id); await sessions.refetch(); })}>开始新对话</Button> : <Link className="text-shu underline" to="/settings#assistant">先在设置中选择后端</Link>}</div>}
-      {session?.messages.map(message => <div key={message.id} className={message.role === 'user' ? 'ml-5 rounded-xl bg-sunken p-3 text-sm' : 'text-sm leading-relaxed'}>
-        <div className="mb-1 text-[11px] text-fg-subtle">{message.role === 'user' ? '你' : message.role === 'assistant' ? message.model ?? '助手' : message.role === 'tool' ? '操作' : '状态'}</div>
-        {message.role === 'assistant' ? <div className="space-y-2 break-words [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-sunken [&_pre]:p-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_a]:text-shu [&_a]:underline"><Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, ...props }) => <a {...props} target="_blank" rel="noreferrer">{children}</a>, img: ({ alt }) => <span>{alt ?? '图片'}</span> }}>{message.text}</Markdown></div> : <p className="whitespace-pre-wrap break-words">{message.text}</p>}
-        {message.context && <p className="mt-2 text-[11px] text-fg-muted">{message.context.page} · {message.context.imageIds.length} 张图片</p>}
-        {message.cards?.map(card => <ResultCard key={card.id} card={card} disabled={Boolean(running || busy)} feedback={ids => void perform(() => send({ text: `针对结果「${card.title}」，我选择了这 ${ids.length} 张图片，请围绕这个选择继续。`, ids }))} />)}
-        {message.undoToken && <Button className="mt-2" size="sm" onClick={() => void undo(message.undoToken!, client)}>撤销这次修改</Button>}
-      </div>)}
+      {groupMessages(session?.messages ?? []).map(group => {
+        const content = group.map(message => <Message key={message.id} message={message} disabled={Boolean(running || busy)} feedback={(title, ids) => void perform(() => send({ text: `针对结果「${title}」，我选择了这 ${ids.length} 张图片，请围绕这个选择继续。`, ids }))} />);
+        return group.length > 1 ? <details key={group[0]!.id} className="rounded-xl border border-line px-3 py-2">
+          <summary className="cursor-pointer text-xs text-fg-muted">{group.length} 条工具记录{group.some(m => m.undoToken) ? ' · 含可撤销操作' : ''}</summary>
+          <div className="mt-3 space-y-3">{content}</div>
+        </details> : content;
+      })}
       {session?.questions.map(q => <Question key={q.id} question={q} answer={value => void perform(() => assistantApi.answer(sessionId, q.id, value))} disabled={busy} />)}
       {running && <p role="status" className="animate-pulse text-xs text-fg-muted">{session?.status === 'waiting' ? '等待你的回应' : '助手正在处理…'}</p>}
       {!connected && <p role="status" className="text-xs text-fg-muted">连接已断开，正在恢复；不会重新发送消息。</p>}
@@ -97,6 +104,17 @@ function Conversation({ backend, close }: { backend: string | null; close: () =>
     </form>
   </aside>;
 }
+function Message({ message, disabled, feedback }: { message: AssistantMessage; disabled: boolean; feedback: (title: string, ids: string[]) => void }) {
+  const client = useQueryClient();
+  return <div className={message.role === 'user' ? 'ml-5 rounded-xl bg-sunken p-3 text-sm' : 'text-sm leading-relaxed'}>
+        <div className="mb-1 text-[11px] text-fg-subtle">{message.role === 'user' ? '你' : message.role === 'assistant' ? message.model ?? '助手' : message.role === 'tool' ? '操作' : '状态'}</div>
+        {message.role === 'assistant' ? <div className="space-y-2 break-words [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-sunken [&_pre]:p-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_a]:text-shu [&_a]:underline"><Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, ...props }) => <a {...props} target="_blank" rel="noreferrer">{children}</a>, img: ({ alt }) => <span>{alt ?? '图片'}</span> }}>{message.text}</Markdown></div> : <p className="whitespace-pre-wrap break-words">{message.text}</p>}
+        {message.context && <p className="mt-2 text-[11px] text-fg-muted">{message.context.page} · {message.context.imageIds.length} 张图片</p>}
+        {message.cards?.map(card => <ResultCard key={card.id} card={card} disabled={disabled} feedback={ids => feedback(card.title, ids)} />)}
+        {message.undoToken && <Button className="mt-2" size="sm" onClick={() => void undo(message.undoToken!, client)}>撤销这次修改</Button>}
+      </div>;
+}
+
 function Question({ question, answer, disabled }: { question: AssistantQuestion; answer: (value: string) => void; disabled: boolean }) {
   const [text, setText] = useState('');
   return <div className="space-y-3 rounded-xl border border-line-strong p-3"><p className="whitespace-pre-wrap text-sm">{question.title}</p>

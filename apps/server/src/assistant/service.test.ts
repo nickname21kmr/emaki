@@ -11,6 +11,15 @@ function setup() {
 }
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe('assistant ownership and replay', () => {
+  it('migrates existing settings to ask and preserves an explicit full-access choice', () => {
+    const s = setup();
+    delete (s.store.settings as Partial<typeof s.store.settings>).accessMode;
+    s.store.saveSettings();
+    const migrated = new AssistantStore(s.dir);
+    expect(migrated.settings.accessMode).toBe('ask');
+    migrated.settings.accessMode = 'full'; migrated.saveSettings();
+    expect(new AssistantStore(s.dir).publicSettings().accessMode).toBe('full');
+  });
   it('defaults off and never accepts an arbitrary harness session ID', () => {
     const s = setup(); expect(s.store.publicSettings().enabled).toBe(false);
     expect(() => s.authorize(s.store.settings.externalToken)).toThrow('尚未开启');

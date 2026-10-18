@@ -10,7 +10,7 @@ export interface StoredSession extends AssistantSession {
   requestIds: string[];
 }
 export interface PrivateSettings extends AssistantSettings { apiKey: string; externalToken: string }
-const defaults = (): PrivateSettings => ({ enabled: false, backend: null, codexPath: '', apiKey: '', externalToken: randomBytes(32).toString('hex'),
+const defaults = (): PrivateSettings => ({ enabled: false, accessMode: 'ask', backend: null, codexPath: '', apiKey: '', externalToken: randomBytes(32).toString('hex'),
   pi: { provider: '', baseUrl: '', model: '', api: 'openai-completions', apiKeyConfigured: false, vision: true, reasoning: false } });
 
 /** Kept outside the library DB, so SQL tools never expose credentials or unrelated chats. */
@@ -21,6 +21,7 @@ export class AssistantStore {
     mkdirSync(path.join(dir, 'sessions'), { recursive: true });
     this.settings = existsSync(path.join(dir, 'settings.json')) ? this.read('settings.json') : defaults();
     this.settings.pi = { ...defaults().pi, ...this.settings.pi };
+    this.settings.accessMode ??= 'ask';
     // Only our index is authoritative. Never discover harness sessions from their global stores.
     const ids: string[] = existsSync(path.join(dir, 'index.json')) ? this.read('index.json') : [];
     for (const id of ids) {

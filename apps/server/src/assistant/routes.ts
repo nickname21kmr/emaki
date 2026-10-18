@@ -16,9 +16,10 @@ export function assistantRoutes(app: FastifyInstance, ds: DataSource) {
   app.addHook('preClose', async () => { for (const stream of streams) stream.end(); await service.close(); });
   app.get('/api/assistant/settings', () => service.store.publicSettings());
   app.patch('/api/assistant/settings', async (req) => {
-    const body = parse(z.object({ enabled: z.boolean().optional(), backend: z.enum(['codex', 'pi']).nullable().optional(), codexPath: z.string().max(2000).optional(), apiKey: z.string().max(10000).optional(),
+    const body = parse(z.object({ enabled: z.boolean().optional(), accessMode: z.enum(['ask', 'full']).optional(), backend: z.enum(['codex', 'pi']).nullable().optional(), codexPath: z.string().max(2000).optional(), apiKey: z.string().max(10000).optional(),
       pi: z.object({ provider: z.string().max(200), baseUrl: z.union([z.literal(''), z.url().refine(v => /^https?:\/\//.test(v))]), model: z.string().max(2000), api: z.enum(['openai-completions', 'openai-responses', 'anthropic-messages']), vision: z.boolean().default(true), reasoning: z.boolean().default(false) }).optional() }), req.body);
     const s = service.store.settings;
+    if (body.accessMode !== undefined) s.accessMode = body.accessMode;
     if (body.enabled !== undefined) s.enabled = body.enabled;
     if (body.backend !== undefined) s.backend = body.backend;
     if (body.codexPath !== undefined) s.codexPath = body.codexPath;

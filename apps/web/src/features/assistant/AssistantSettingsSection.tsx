@@ -21,6 +21,11 @@ export function AssistantSettingsSection() {
       </Field>
       {query.isError && <p role="alert" className="py-3 text-danger">{query.error.message}</p>}
       {settings?.enabled && <>
+        <BlockRow label="操作权限" hint="完全访问允许助手读写本机文件、运行命令和联网，无需逐次审批。切换会停止当前运行，下次发送消息按新权限继续；需要你补充信息时仍会提问。">
+          <select aria-label="助手操作权限" className={assistantInput} value={settings.accessMode} disabled={busy} onChange={e => void perform(() => save({ accessMode: e.target.value }))}>
+            <option value="ask">按需审批</option><option value="full">完全访问</option>
+          </select>
+        </BlockRow>
         <BlockRow label="运行后端" hint="只创建和恢复 Emaki 自己的对话。重新检测不会改变已选后端。">
           <div className="flex items-center gap-3">
             <select aria-label="助手后端" className={assistantInput} value={settings.backend ?? ''} disabled={busy} onChange={e => void perform(() => save({ backend: e.target.value || null }))}>

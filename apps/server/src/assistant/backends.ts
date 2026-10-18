@@ -46,7 +46,7 @@ function launch(command: string, args: string[], cwd: string, env?: NodeJS.Proce
 }
 
 export class CodexBackend implements AgentBackend {
-  private constructor(private rpc: JsonProcess, private session: StoredSession, private sink: AgentSink, private cwd: string, private instructions: string) {
+  private constructor(private rpc: JsonProcess, private session: StoredSession, private sink: AgentSink, private cwd: string, private instructions: string, private fullAccess: boolean) {
     rpc.onEvent = (message) => this.event(message);
     rpc.onExit = (error) => { sink.disconnected?.(); sink.done(error); };
   }
@@ -57,7 +57,7 @@ export class CodexBackend implements AgentBackend {
     const rpc = launch(binary, ['app-server', '-c', `mcp_servers.emaki.url=${JSON.stringify(endpoint)}`,
       '-c', 'mcp_servers.emaki.bearer_token_env_var="EMAKI_ASSISTANT_TOKEN"', '-c', 'web_search="live"'], cwd,
       { ...process.env, EMAKI_ASSISTANT_TOKEN: session.token });
-    const backend = new CodexBackend(rpc, session, sink, cwd, instructions);
+    const backend = new CodexBackend(rpc, session, sink, cwd, instructions, settings.accessMode === 'full');
     try { await rpc.request({ method: 'initialize', params: { clientInfo: { name: 'emaki', version: '0.1.0' } } }); rpc.send({ method: 'initialized' }); }
     catch (error) { await backend.close(); throw error; }
     return backend;
@@ -73,11 +73,12 @@ export class CodexBackend implements AgentBackend {
   }
   async checkAccount(): Promise<boolean> { const result = await this.rpc.request({ method: 'account/read', params: { refreshToken: false } }); return Boolean(result.account) || result.requiresOpenaiAuth === false; }
   async prompt(text: string, model: string, effort: string) {
+    const permissions = this.fullAccess ? { sandbox: 'danger-full-access', approvalPolicy: 'never' } : { sandbox: 'workspace-write', approvalPolicy: 'on-request' };
     if (!this.session.nativeId) {
-      const result = await this.rpc.request({ method: 'thread/start', params: { model, cwd: this.cwd, sandbox: 'workspace-write', approvalPolicy: 'on-request', developerInstructions: this.instructions } });
+      const result = await this.rpc.request({ method: 'thread/start', params: { model, cwd: this.cwd, ...permissions, developerInstructions: this.instructions } });
       this.session.nativeId = result.thread.id;
     } else {
-      await this.rpc.request({ method: 'thread/resume', params: { threadId: this.session.nativeId, model, cwd: this.cwd, approvalPolicy: 'on-request', developerInstructions: this.instructions } });
+      await this.rpc.request({ method: 'thread/resume', params: { threadId: this.session.nativeId, model, cwd: this.cwd, ...permissions, developerInstructions: this.instructions } });
     }
     const result = await this.rpc.request({ method: 'turn/start', params: { threadId: this.session.nativeId, model, ...(effort ? { effort } : {}), input: [{ type: 'text', text }] } });
     this.turnId = result.turn.id;
@@ -88,6 +89,7 @@ export class CodexBackend implements AgentBackend {
       const id = String(msg.id);
       this.pending.set(id, { id: msg.id, method: msg.method, params: p });
       if (msg.method === 'mcpServer/elicitation/request' && p.mode === 'form' && Object.keys(p.requestedSchema?.properties ?? {}).length === 0) {
+        if (this.fullAccess && p._meta?.codex_approval_kind === 'mcp_tool_call') { this.answer(id, 'approve'); return; }
         this.sink.question({ id, kind: 'approval', title: [p.message, p._meta?.tool_description, p._meta?.tool_params ? JSON.stringify(p._meta.tool_params, null, 2) : ''].filter(Boolean).join('\n') });
       } else if (msg.method === 'item/tool/requestUserInput') {
         this.pending.delete(id);
@@ -98,6 +100,7 @@ export class CodexBackend implements AgentBackend {
           this.sink.question({ id: questionKey, kind: 'input', title: q.question, options: q.options?.map((o: any) => o.label) });
         }
       } else if (msg.method.includes('requestApproval')) {
+        if (this.fullAccess) { this.answer(id, 'approve'); return; }
         this.sink.question({ id, kind: 'approval', title: p.reason ?? p.command ?? 'Agent 请求执行操作' });
       } else {
         this.rpc.send({ id: msg.id, error: { code: -32601, message: 'Emaki does not support this interaction yet' } }); this.pending.delete(id);
@@ -150,7 +153,7 @@ export class PiBackend implements AgentBackend {
     const instructionFile = path.join(cwd, 'instructions.md'); writeFileSync(instructionFile, instructions);
     const gate = path.join(cwd, 'permissions.ts');
     writeFileSync(gate, `export default function(pi) { pi.on('tool_call', async (event, ctx) => {
-      if (['bash','powershell','edit','write'].includes(event.toolName)) {
+      if (${settings.accessMode !== 'full'} && ['bash','powershell','edit','write'].includes(event.toolName)) {
         const ok = await ctx.ui.confirm('允许执行 '+event.toolName+'？', JSON.stringify(event.input).slice(0,3000));
         if (!ok) return { block: true, reason: '用户未批准此操作' };
       }

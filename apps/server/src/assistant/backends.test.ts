@@ -16,9 +16,24 @@ beforeEach(async () => {
   backend = await CodexBackend.open({ codexPath: process.execPath } as PrivateSettings, { token: 'private' } as StoredSession, '.', 'http://localhost/mcp', 'Instructions', sink);
 });
 describe('Codex app-server adapter', () => {
+  it('uses full access for both new and resumed threads without converting questions into approval', async () => {
+    backend = await CodexBackend.open({ codexPath: process.execPath, accessMode: 'full' } as PrivateSettings, { token: 'private' } as StoredSession, '.', 'http://localhost/mcp', '', sink);
+    await backend.prompt('first', 'model', ''); await backend.prompt('second', 'model', '');
+    for (const method of ['thread/start', 'thread/resume']) expect(state.rpc.request).toHaveBeenCalledWith(expect.objectContaining({ method, params: expect.objectContaining({ sandbox: 'danger-full-access', approvalPolicy: 'never' }) }));
+    state.rpc.onEvent({ id: 1, method: 'mcpServer/elicitation/request', params: { mode: 'form', requestedSchema: { properties: {} }, _meta: { codex_approval_kind: 'mcp_tool_call' } } });
+    state.rpc.onEvent({ id: 2, method: 'item/commandExecution/requestApproval', params: { command: 'test' } });
+    expect(state.rpc.send).toHaveBeenCalledWith({ id: 1, result: { action: 'accept', content: {} } });
+    expect(state.rpc.send).toHaveBeenCalledWith({ id: 2, result: { decision: 'accept' } });
+    expect(sink.question).not.toHaveBeenCalled();
+    state.rpc.onEvent({ id: 3, method: 'item/tool/requestUserInput', params: { questions: [{ id: 'choice', question: 'Which images?' }] } });
+    expect(sink.question).toHaveBeenCalledWith(expect.objectContaining({ kind: 'input', title: 'Which images?' }));
+    state.rpc.onEvent({ id: 4, method: 'mcpServer/elicitation/request', params: { mode: 'form', requestedSchema: { properties: {} }, message: 'Unclassified confirmation' } });
+    expect(sink.question).toHaveBeenCalledWith(expect.objectContaining({ id: '4' }));
+  });
   it('creates a native thread once, then resumes only that thread', async () => {
     await backend.prompt('first', 'model', 'low'); await backend.prompt('next', 'model', 'medium');
     expect(state.rpc.request.mock.calls.filter(([m]: any) => m.method === 'thread/start')).toHaveLength(1);
+    for (const method of ['thread/start', 'thread/resume']) expect(state.rpc.request).toHaveBeenCalledWith(expect.objectContaining({ method, params: expect.objectContaining({ sandbox: 'workspace-write', approvalPolicy: 'on-request' }) }));
     expect(state.rpc.request).toHaveBeenCalledWith(expect.objectContaining({ method: 'thread/resume', params: expect.objectContaining({ threadId: 'owned' }) }));
     expect(state.rpc.request).toHaveBeenCalledWith(expect.objectContaining({ method: 'turn/start', params: expect.objectContaining({ effort: 'medium' }) }));
   });

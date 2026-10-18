@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
@@ -25,12 +25,13 @@ const provider = createServer(async (req, res) => {
   const input = JSON.parse(body); providerRequests.push(input);
   const tools = input.tools ?? [];
   const hasToolResponse = input.messages.some((m: any) => m.role === 'tool');
-  const name = tools.find((t: any) => t.function?.name.endsWith('query_database'))?.function.name;
+  const probe = input.messages.some((m: any) => m.role === 'user' && JSON.stringify(m.content).includes('__permission_probe__'));
+  const name = tools.find((t: any) => probe ? t.function?.name === 'write' : t.function?.name.endsWith('query_database'))?.function.name;
   res.writeHead(200, { 'Content-Type': 'text/event-stream' });
   if (holdResponse) { res.flushHeaders(); return; }
   const chunk = (delta: any, finish_reason: string | null = null) => res.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'fixture-model', choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
   if (!hasToolResponse && name) {
-    chunk({ role: 'assistant', tool_calls: [{ index: 0, id: 'query-1', type: 'function', function: { name, arguments: JSON.stringify({ sql: 'SELECT count(*) AS n FROM images', limit: 10 }) } }] }); chunk({}, 'tool_calls');
+    chunk({ role: 'assistant', tool_calls: [{ index: 0, id: 'query-1', type: 'function', function: { name, arguments: JSON.stringify(probe ? { path: 'permission-probe.txt', content: 'fixture only' } : { sql: 'SELECT count(*) AS n FROM images', limit: 10 }) } }] }); chunk({}, 'tool_calls');
   } else { chunk({ role: 'assistant', content: 'fixture-response: MCP 查询完成' }); chunk({}, 'stop'); }
   res.end('data: [DONE]\n\n');
 });
@@ -49,6 +50,14 @@ describe('assistant HTTP and MCP', () => {
     expect((await call('POST', '/sessions', {})).statusCode).toBe(403);
     expect((await call('POST', '/mcp', {})).statusCode).toBe(403);
     expect((await call('POST', '/detect', {})).statusCode).toBe(403);
+  });
+  it('validates and persists access mode without exposing credentials', async () => {
+    expect((await call('GET', '/settings')).json().accessMode).toBe('ask');
+    expect((await call('PATCH', '/settings', { accessMode: 'invalid' })).statusCode).toBe(400);
+    const full = (await call('PATCH', '/settings', { accessMode: 'full' })).json();
+    expect(full.accessMode).toBe('full'); expect(full).not.toHaveProperty('apiKey'); expect(full).not.toHaveProperty('externalToken');
+    expect((await call('GET', '/settings')).json().accessMode).toBe('full');
+    await call('PATCH', '/settings', { accessMode: 'ask' });
   });
   it('serves standard MCP and mutations through the normal datasource', async () => {
     await call('PATCH', '/settings', { enabled: true, backend: 'pi' });
@@ -109,6 +118,30 @@ describe('assistant HTTP and MCP', () => {
     expect(finished.status, JSON.stringify(finished)).toBe('idle');
     expect(finished.messages.filter((m: any) => m.role === 'user')).toHaveLength(3);
     expect(providerRequests.at(-1).messages.some((m: any) => JSON.stringify(m.content).includes('Count images using MCP'))).toBe(true);
+  }, 20000);
+  it('Pi asks before a file write in ask mode and runs it directly in full mode', async () => {
+    for (const accessMode of ['ask', 'full']) {
+      await call('PATCH', '/settings', { accessMode });
+      const session = (await call('POST', '/sessions', {})).json();
+      await call('POST', `/sessions/${session.id}/messages`, { requestId: crypto.randomUUID(), text: '__permission_probe__', model: 'emaki/fixture-model', context: { page: '/gallery', imageIds: [] } });
+      let snapshot: any;
+      for (let i = 0; i < 100; i++) {
+        snapshot = (await call('GET', `/sessions/${session.id}`)).json();
+        if (snapshot.status !== 'running') break;
+        await new Promise(r => setTimeout(r, 50));
+      }
+      const file = path.join(state.dir, 'assistant/workspaces', session.id, 'permission-probe.txt');
+      if (accessMode === 'ask') {
+        expect(snapshot.status, JSON.stringify(snapshot)).toBe('waiting');
+        expect(snapshot.questions[0].kind).toBe('approval');
+        expect(existsSync(file)).toBe(false);
+        await call('POST', `/sessions/${session.id}/stop`, {});
+      } else {
+        expect(snapshot.status, JSON.stringify(snapshot)).toBe('idle');
+        expect(snapshot.questions).toHaveLength(0);
+        expect(readFileSync(file, 'utf8')).toBe('fixture only');
+      }
+    }
   }, 20000);
   it('disables the running backend and rejects old MCP credentials while off', async () => {
     await call('PATCH', '/settings', { enabled: false });

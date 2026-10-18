@@ -2,6 +2,7 @@
 export type AssistantBackend = 'codex' | 'pi';
 export interface AssistantSettings {
   enabled: boolean;
+  accessMode: 'ask' | 'full';
   backend: AssistantBackend | null;
   codexPath: string;
   pi: { provider: string; baseUrl: string; model: string; api: 'openai-completions' | 'openai-responses' | 'anthropic-messages'; apiKeyConfigured: boolean; vision: boolean; reasoning: boolean };
