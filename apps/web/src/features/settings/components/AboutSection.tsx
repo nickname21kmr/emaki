@@ -67,7 +67,7 @@ export function AboutSection({ stats }: { stats?: LibraryStats }) {
 
       <p className="mt-4 flex items-center gap-1.5 pl-1 text-xs text-fg-subtle">
         <ShieldCheck className="size-3.5" />
-        Emaki 是本地应用，图片不会上传到任何地方。
+        图库和本机识别保存在本地；启用 AI 助手后，助手读取的图片和对话会发送给你选择的模型服务。
       </p>
     </SettingsSection>
   );

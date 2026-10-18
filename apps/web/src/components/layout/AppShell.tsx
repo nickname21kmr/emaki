@@ -8,6 +8,7 @@ import { useSettings } from '@/lib/queries';
 import { useGlobalHotkeys } from './useGlobalHotkeys';
 import { ScrollContainerContext } from './ScrollContainer';
 import { Sidebar } from './Sidebar';
+import { AssistantLauncher } from '@/features/assistant/AssistantLauncher';
 
 /**
  * 整体布局：暖灰「桌面」上左边一条窄导航，右边一张圆角「纸」（主内容，独立滚动）。
@@ -68,6 +69,7 @@ export function AppShell() {
       <Lightbox />
       <CommandPalette />
       <HelpDialog />
+      <AssistantLauncher />
     </ScrollContainerContext.Provider>
   );
 }

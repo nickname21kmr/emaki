@@ -119,7 +119,7 @@ function LocalNote({ onSettings }: { onSettings: () => void }) {
     <div className="mt-8 flex items-center gap-4 rounded-[14px] bg-sunken/70 py-3.5 pr-3 pl-4">
       <Emblem size={36} />
       <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-medium text-fg">Emaki 是本地应用，图片不会上传到任何地方。</p>
+        <p className="text-[13px] font-medium text-fg">图库和本机识别保存在本地；启用 AI 助手后，助手读取的图片和对话会发送给你选择的模型服务。</p>
         <p className="mt-0.5 text-[12px] leading-relaxed text-fg-muted">
           识别模型在本机运行；Danbooru 同步只下载标签资料，可以在设置里关掉；查 Pixiv 标签只发作品号，识别后自动查默认关。
         </p>

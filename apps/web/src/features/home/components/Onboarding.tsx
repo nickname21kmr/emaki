@@ -36,7 +36,7 @@ export function Onboarding() {
     empty: {
       glyph: '始',
       title: '从一个图片文件夹开始',
-      body: 'Emaki 会把文件夹里的插画按角色和作品整理好。所有处理都在这台电脑上完成，图片不会上传到任何地方。',
+      body: 'Emaki 会把文件夹里的插画按角色和作品整理好。扫描和识别在这台电脑上完成，不上传图片。可选的 AI 助手默认关闭。',
     },
     ready: {
       glyph: '扫',

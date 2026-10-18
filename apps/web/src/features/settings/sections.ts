@@ -6,6 +6,7 @@ export const SECTIONS = [
   { id: 'dedupe', title: '查重' },
   { id: 'appearance', title: '外观' },
   { id: 'jobs', title: '后台任务' },
+  { id: 'assistant', title: 'AI 助手 · 实验' },
   { id: 'about', title: '关于' },
 ] as const;
 
