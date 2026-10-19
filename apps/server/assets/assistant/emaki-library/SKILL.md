@@ -18,7 +18,7 @@ description: 在 Emaki 中找图、选图、查证角色与来源、整理和编
 ## 按需读取参考
 
 - 查找、筛选、即时统计、理解页面范围或解释识别状态：[查询与选择](references/query-and-selection.md)。
-- “这个角色是谁”、查画师、搜原图或核实来源：[识别与查源](references/identify-and-source.md)，主动查证，不等用户提醒搜图。其中提供多个搜图入口及 references 内可复用的 HTTP 小脚本，调用前按需读取，避免反复猜上传协议。
+- “这个角色是谁”、查画师、搜原图或核实来源：[识别与查源](references/identify-and-source.md)，结合图库内同投稿线索与主动搜图。其中提供多个搜图入口及 references 内可复用的 HTTP 小脚本，调用前按需读取，避免反复猜上传协议。
 - 采纳建议、补来源、角色录入、分类或其他元数据编辑：[元数据与业务流程](references/metadata.md)。查证后需要写入时可组合使用。
 - 多张图片的独立核对、成本选择、委派和中断续跑：[批量任务](references/batch-work.md)。几张简单图片由主对话逐个完成。
 
