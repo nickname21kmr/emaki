@@ -34,6 +34,7 @@ const provider = createServer(async (req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/event-stream' });
   if (holdResponse) { res.flushHeaders(); return; }
   const chunk = (delta: any, finish_reason: string | null = null) => res.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'fixture-model', choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
+  chunk({ role: 'assistant', reasoning_content: 'Read the selected library records first.' });
   if (!hasToolResponse && name) {
     chunk({ role: 'assistant', tool_calls: [{ index: 0, id: 'query-1', type: 'function', function: { name, arguments: JSON.stringify(probe ? { path: 'permission-probe.txt', content: 'fixture only' } : ask ? { title: '关联到已确认的角色吗？', options: ['关联角色', '暂不关联'] } : { sql: 'SELECT count(*) AS n FROM images', limit: 10 }) } }] }); chunk({}, 'tool_calls');
   } else { chunk({ role: 'assistant', content: 'fixture-response: MCP 查询完成' }); chunk({}, 'stop'); }
@@ -152,6 +153,10 @@ describe('assistant HTTP and MCP', () => {
     expect(finished.messages.filter((m: any) => m.role === 'user')).toHaveLength(1);
     expect(finished.status, JSON.stringify(finished)).toBe('idle');
     expect(finished.messages.some((m: any) => m.text.includes('fixture-response'))).toBe(true);
+    expect(finished.messages.some((m: any) => m.reasoning?.text.includes('Read the selected library records first.') && m.reasoning.status === 'completed')).toBe(true);
+    const query = finished.messages.find((m: any) => m.tool && m.text.endsWith('query_database'));
+    expect(query.tool).toMatchObject({ status: 'succeeded', input: expect.stringContaining('SELECT count(*)') });
+    expect(query.tool.output).toContain('n'); expect(query.tool.finishedAt).toBeGreaterThanOrEqual(query.tool.startedAt);
     expect(providerRequests.some(r => r.messages.some((m: any) => m.role === 'tool' && String(m.content).includes('"n":2')))).toBe(true);
     const system = providerRequests.flatMap(r => r.messages).filter((m: any) => m.role === 'system').map((m: any) => JSON.stringify(m.content)).join('\n');
     // The real Pi process must advertise both skills without eagerly loading their bodies.

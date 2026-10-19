@@ -37,10 +37,19 @@ export interface AssistantMessage {
   role: 'user' | 'assistant' | 'tool' | 'system';
   text: string;
   model?: string;
+  createdAt?: number;
   context?: AssistantContext;
   cards?: AssistantCard[];
   undoToken?: string;
   details?: string;
+  tool?: {
+    status: 'running' | 'succeeded' | 'failed' | 'interrupted';
+    input?: string;
+    output?: string;
+    startedAt: number;
+    finishedAt?: number;
+  };
+  reasoning?: { text: string; status: 'running' | 'completed' | 'interrupted'; startedAt: number; finishedAt?: number };
   /** Original user request when continuing interrupted work. */
   resumeOf?: string;
 }

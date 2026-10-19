@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type { StoredSession, PrivateSettings } from './store.ts';
 const state = vi.hoisted(() => ({ rpc: null as any }));
 vi.mock('./rpc.ts', () => ({ JsonProcess: class {
@@ -7,15 +10,28 @@ vi.mock('./rpc.ts', () => ({ JsonProcess: class {
   request = vi.fn(async (m: any) => m.method === 'thread/start' ? { thread: { id: 'owned' } } : m.method === 'turn/start' ? { turn: { id: 'turn' } } : {});
   constructor() { state.rpc = this; }
 } }));
-import { CodexBackend } from './backends.ts';
+import { CodexBackend, PiBackend } from './backends.ts';
 
 let backend: CodexBackend;
-const sink = { text: vi.fn(), tool: vi.fn(), question: vi.fn(), done: vi.fn() };
+const sink = { text: vi.fn(), tool: vi.fn(), reasoning: vi.fn(), question: vi.fn(), done: vi.fn() };
 beforeEach(async () => {
   vi.clearAllMocks();
   backend = await CodexBackend.open({ codexPath: process.execPath } as PrivateSettings, { token: 'private' } as StoredSession, '.', 'http://localhost/mcp', 'Instructions', sink);
 });
 describe('Codex app-server adapter', () => {
+  it('forwards tool arguments, streaming output, completion errors and reasoning summaries', () => {
+    state.rpc.onEvent({ method: 'item/started', params: { item: { id: 'cmd', type: 'commandExecution', command: 'python search.py' } } });
+    state.rpc.onEvent({ method: 'item/commandExecution/outputDelta', params: { itemId: 'cmd', delta: 'connecting' } });
+    state.rpc.onEvent({ method: 'item/completed', params: { item: { id: 'cmd', type: 'commandExecution', command: 'python search.py', exitCode: 1, aggregatedOutput: 'timeout' } } });
+    expect(sink.tool.mock.calls).toEqual([
+      ['cmd', '执行命令', { status: 'running', input: 'python search.py' }],
+      ['cmd', '执行命令', { status: 'running', output: 'connecting', append: true }],
+      ['cmd', '执行命令', { status: 'failed', input: 'python search.py', output: 'timeout' }],
+    ]);
+    state.rpc.onEvent({ method: 'item/reasoning/summaryTextDelta', params: { itemId: 'r', delta: 'Checking sources' } });
+    state.rpc.onEvent({ method: 'item/completed', params: { item: { id: 'r', type: 'reasoning' } } });
+    expect(sink.reasoning.mock.calls).toEqual([['r', 'Checking sources'], ['r', '', true]]);
+  });
   it('uses full access for both new and resumed threads without converting questions into approval', async () => {
     backend = await CodexBackend.open({ codexPath: process.execPath, accessMode: 'full' } as PrivateSettings, { token: 'private' } as StoredSession, '.', 'http://localhost/mcp', '', sink);
     await backend.prompt('first', 'model', ''); await backend.prompt('second', 'model', '');
@@ -57,4 +73,27 @@ describe('Codex app-server adapter', () => {
     state.rpc.onEvent({ method: 'turn/completed', params: { threadId: 'owned', turn: {} } });
     expect(sink.text).toHaveBeenCalledExactlyOnceWith('m', 'hello'); expect(sink.tool).not.toHaveBeenCalled(); expect(sink.done).toHaveBeenCalled();
   });
+});
+
+it('Pi forwards streamed thinking and the full tool lifecycle without duplicating final text', async () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'emaki-pi-events-'));
+  vi.stubEnv('PI_CODING_AGENT_DIR', path.join(cwd, 'empty-config'));
+  try {
+    const pi = await PiBackend.open({ pi: {}, accessMode: 'full' } as PrivateSettings, { token: 'private' } as StoredSession, cwd, 'http://localhost/mcp', 'Instructions', [], sink);
+    state.rpc.onEvent({ type: 'message_start', message: { role: 'assistant' } });
+    state.rpc.onEvent({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: 'Compare source images' } });
+    state.rpc.onEvent({ type: 'message_update', assistantMessageEvent: { type: 'thinking_end', content: 'Compare source images' } });
+    state.rpc.onEvent({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Searching' } });
+    state.rpc.onEvent({ type: 'tool_execution_start', toolCallId: 'call', toolName: 'bash', args: { command: 'python search.py' } });
+    state.rpc.onEvent({ type: 'tool_execution_update', toolCallId: 'call', toolName: 'bash', partialResult: { content: [{ type: 'text', text: 'uploading' }] } });
+    state.rpc.onEvent({ type: 'tool_execution_end', toolCallId: 'call', toolName: 'bash', result: { content: [{ type: 'text', text: 'timeout' }] }, isError: true });
+    expect(sink.reasoning.mock.calls[0]![1]).toBe('Compare source images');
+    expect(sink.reasoning.mock.calls[1]).toEqual([sink.reasoning.mock.calls[0]![0], '', true]);
+    expect(sink.text).toHaveBeenCalledTimes(1);
+    expect(sink.tool.mock.calls.map(c => c[2].status)).toEqual(['running', 'running', 'failed']);
+    expect(sink.tool.mock.calls[0]![2].input).toContain('python search.py');
+    expect(sink.tool.mock.calls[1]![2].output).toContain('uploading');
+    expect(sink.tool.mock.calls[2]![2].output).toContain('timeout');
+    await pi.close();
+  } finally { vi.unstubAllEnvs(); rmSync(cwd, { recursive: true, force: true }); }
 });

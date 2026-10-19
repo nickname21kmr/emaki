@@ -12,6 +12,30 @@ function setup() {
 }
 afterEach(() => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe('assistant ownership and replay', () => {
+  it('updates one tool record, persists reasoning and marks pending activities interrupted on stop/restart', async () => {
+    const s = setup(); s.store.settings.backend = 'codex'; s.store.settings.enabled = true;
+    const session = s.store.create(); let sink!: AgentSink;
+    vi.spyOn(CodexBackend, 'open').mockImplementation(async (_a, _b, _c, _d, _e, events) => {
+      sink = events;
+      return { models: async () => [{ id: 'fixture', efforts: [], vision: true }], prompt: async () => {}, stop: async () => {}, close: async () => {} } as unknown as CodexBackend;
+    });
+    await s.send(session.id, { requestId: 'request', text: 'Search', model: 'fixture', effort: '', context: { page: '/', imageIds: [] } });
+    await vi.waitFor(() => expect(sink).toBeDefined());
+    sink.tool('call', 'bash', { status: 'running', input: 'search' });
+    sink.tool('call', 'bash', { status: 'running', output: `token=${session.token}` });
+    expect(session.messages.find(m => m.id === 'call')!.tool!.output).not.toContain(session.token);
+    sink.tool('call', 'bash', { status: 'succeeded', output: 'found source' });
+    expect(session.messages.filter(m => m.id === 'call')).toHaveLength(1);
+    sink.reasoning!('think', 'checking '); sink.reasoning!('think', 'sources', true);
+    expect(session.messages.find(m => m.reasoning)?.reasoning).toMatchObject({ text: 'checking sources', status: 'completed' });
+    sink.tool('pending', 'fetch', { status: 'running' }); s.flush(session);
+    expect(new AssistantStore(s.dir).get(session.id).messages.find(m => m.id === 'pending')?.tool?.status).toBe('interrupted');
+    await s.stop(session.id);
+    sink.tool('pending', 'fetch', { status: 'succeeded', output: 'late completion' });
+    expect(session.messages.find(m => m.id === 'pending')?.tool?.status).toBe('interrupted');
+    expect(new AssistantStore(s.dir).get(session.id).messages.find(m => m.id === 'call')?.tool?.output).toBe('found source');
+    await s.close();
+  });
   it('migrates existing settings to ask and preserves an explicit full-access choice', () => {
     const s = setup();
     delete (s.store.settings as Partial<typeof s.store.settings>).accessMode;

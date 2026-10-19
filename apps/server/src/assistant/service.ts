@@ -8,6 +8,7 @@ import { AssistantStore, type StoredSession } from './store.ts';
 import { CodexBackend, PiBackend, type AgentBackend, type AgentSink } from './backends.ts';
 import type { ToolHost } from './tools.ts';
 import { prepareSkills } from './skills.ts';
+import { boundedText, interruptActivities } from './activity.ts';
 
 type Operation = { signature: string; result?: unknown; complete: boolean };
 export class AssistantService implements ToolHost {
@@ -32,6 +33,12 @@ export class AssistantService implements ToolHost {
   }
   private changed(s: StoredSession) { if (!this.timers.has(s.id)) this.timers.set(s.id, setTimeout(() => this.flush(s), 100)); }
   private sink(s: StoredSession): AgentSink {
+    const preview = (text: string) => {
+      for (const secret of [s.token, this.store.settings.apiKey, this.store.settings.externalToken]) {
+        if (secret) text = text.split(secret).join('[已隐藏]');
+      }
+      return boundedText(text);
+    };
     return {
       disconnected: () => this.agents.delete(s.id),
       text: (id, delta) => {
@@ -39,10 +46,34 @@ export class AssistantService implements ToolHost {
         if (!msg) { msg = { id, role: 'assistant', text: '', model: s.model }; s.messages.push(msg); }
         msg.text += delta; this.changed(s);
       },
-      tool: (id, text) => { if (!s.messages.some(m => m.id === id)) s.messages.push({ id, role: 'tool', text }); this.changed(s); },
+      tool: (id, text, update) => {
+        if (s.status !== 'running' && s.status !== 'waiting') return;
+        let message = s.messages.find(m => m.id === id);
+        if (!message) { message = { id, role: 'tool', text }; s.messages.push(message); }
+        if (update) {
+          message.tool ??= { status: 'running', startedAt: Date.now() };
+          message.tool.status = update.status;
+          if (update.input !== undefined && (update.input || !message.tool.input)) message.tool.input = preview(update.input);
+          if (update.output !== undefined) message.tool.output = preview((update.append ? message.tool.output ?? '' : '') + update.output);
+          if (update.status !== 'running') message.tool.finishedAt = Date.now();
+        }
+        this.changed(s);
+      },
+      reasoning: (id, delta, done) => {
+        if (s.status !== 'running' && s.status !== 'waiting') return;
+        const reasoningId = `${id}:reasoning`;
+        let message = s.messages.find(m => m.id === reasoningId);
+        if (!message && !delta) return;
+        if (!message) { message = { id: reasoningId, role: 'assistant', text: '', model: s.model, reasoning: { text: '', status: 'running', startedAt: Date.now() } }; s.messages.push(message); }
+        message.reasoning!.text = preview(message.reasoning!.text + delta);
+        message.reasoning!.status = done ? 'completed' : 'running';
+        if (done) message.reasoning!.finishedAt = Date.now();
+        this.changed(s);
+      },
       question: (question) => { s.questions.push(question); s.status = 'waiting'; this.flush(s); },
       done: (error) => {
         if (s.status !== 'running' && s.status !== 'waiting') return;
+        interruptActivities(s);
         s.questions = s.questions.filter(q => q.source === 'emaki'); s.status = error ? 'error' : 'idle';
         if (error) {
           this.markInterrupted(s, 'error');
@@ -106,7 +137,7 @@ export class AssistantService implements ToolHost {
     delete s.interruption;
     s.model = input.model; s.effort = input.effort;
     if (!s.messages.length) s.title = input.text.slice(0, 40);
-    s.messages.push({ id: input.requestId, role: 'user', text: input.text, context: input.context, ...(resumeOf ? { resumeOf } : {}) }); this.flush(s);
+    s.messages.push({ id: input.requestId, role: 'user', text: input.text, createdAt: Date.now(), context: input.context, ...(resumeOf ? { resumeOf } : {}) }); this.flush(s);
     // Accept once; the run outlives the browser request. Reconnection only reads snapshots.
     void (async () => {
       let agent: AgentBackend | undefined;
@@ -171,6 +202,7 @@ export class AssistantService implements ToolHost {
     if (!pending && !this.agents.has(id) && s.status !== 'running' && s.status !== 'waiting') return;
     // Mark idle first so a starting process cannot launch a prompt after cancellation.
     if (s.status === 'running' || s.status === 'waiting') this.markInterrupted(s, 'stopped');
+    interruptActivities(s);
     s.status = 'idle'; s.questions = s.questions.filter(q => q.source === 'emaki'); this.flush(s);
     const agent = this.agents.get(id) ?? await pending?.catch(() => undefined);
     // A harness awaiting input may not acknowledge stop; closing it still completes cancellation.

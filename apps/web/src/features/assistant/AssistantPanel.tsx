@@ -16,6 +16,7 @@ import { composerContext, contextPageLabel, selectionLabel, groupMessages, toggl
 import { useFloatingDrag } from './useFloatingDrag';
 import { openSessionEvents } from './sessionEvents';
 import { useFloatingResize } from './useFloatingResize';
+import { ActivityStatus, ReasoningActivity, ToolActivity, toolGroupLabel } from './AssistantActivity';
 
 export function AssistantPanel() {
   const settings = useAssistantSettings().data, [open, setOpen] = useState(false);
@@ -108,7 +109,7 @@ function Conversation({ backend, close }: { backend: string | null; close: () =>
       {groupMessages(session?.messages ?? []).map(group => {
         const content = group.map(message => <Message key={message.id} message={message} selected={contextIds} select={(card, id, checked) => { setResultSelection(previous => toggleResultImage(previous ?? { cardId: card.id, title: card.title, ids: context.imageIds }, card, id, checked)); input.current?.focus({ preventScroll: true }); }} />);
         return group.length > 1 ? <details key={group[0]!.id} className="rounded-xl border border-line px-3 py-2">
-          <summary className="cursor-pointer text-xs text-fg-muted">{group.length} 条工具记录{group.some(m => m.undoToken) ? ' · 含可撤销操作' : ''}</summary>
+          <summary className="cursor-pointer text-xs text-fg-muted">{toolGroupLabel(group)}</summary>
           <div className="mt-3 space-y-3">{content}</div>
         </details> : content;
       })}
@@ -117,11 +118,11 @@ function Conversation({ backend, close }: { backend: string | null; close: () =>
         <span className="min-w-0 truncate text-xs text-fg-muted" title={interruptedRequest?.text}>接着完成上次请求{interruptedRequest?.context?.imageIds.length ? ` · ${interruptedRequest.context.imageIds.length} 张图片` : ''}</span>
       </div>}
       {session?.questions.map(q => <Question key={q.id} question={q} answer={value => void perform(() => assistantApi.answer(sessionId, q.id, value))} disabled={busy || !connected || (q.source === 'emaki' && Boolean(running))} />)}
-      {running && <p role="status" className="animate-pulse text-xs text-fg-muted">{session?.status === 'waiting' ? '等待你的回应' : '助手正在处理…'}</p>}
       {!connected && <div role="status" className="flex items-center gap-2 text-xs text-fg-muted">正在重新连接…<Button size="sm" variant="ghost" onClick={() => setConnectionAttempt(n => n + 1)}>立即重连</Button></div>}
       {(error || models.error) && <div role="alert" className="space-y-2 rounded-lg bg-danger-soft p-3 text-xs text-danger"><p className="whitespace-pre-wrap break-words">{error || '模型列表暂时未能加载。'}</p>{models.error && <Button size="sm" disabled={models.isFetching} onClick={() => void models.refetch()}>重新加载模型</Button>}</div>}
       <div ref={end} />
     </div>
+    {running && session && <div className="shrink-0 px-3 pb-2"><ActivityStatus session={session} /></div>}
     <form className="border-t border-line p-3" onSubmit={e => { e.preventDefault(); void perform(() => send()); }}>
       <div className="mb-2 flex items-center gap-2 text-[11px] text-fg-muted"><p className="min-w-0 flex-1 truncate" title={viewedId ? '当前查看的图片' : resultSelection?.title ?? contextPageLabel(context.page)}>{viewedId ? '当前查看' : resultSelection ? resultSelection.title : contextPageLabel(context.page)} · {selectionLabel(context.imageIds.length)}</p>{resultSelection && !viewedId && <button type="button" className="shrink-0 text-shu hover:underline" onClick={() => setResultSelection(null)}>使用页面选择</button>}</div>
       <textarea ref={input} aria-label="给助手的消息" placeholder="询问当前图片，或描述你想完成的事情…" className={`${assistantInput} min-h-20 resize-none`} value={text} onChange={e => setText(e.target.value)} disabled={!sessionId} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (!running && !busy) void perform(() => send()); } }} />
@@ -136,6 +137,8 @@ function Conversation({ backend, close }: { backend: string | null; close: () =>
 }
 function Message({ message, selected, select }: { message: AssistantMessage; selected: ReadonlySet<string>; select: (card: AssistantCard, id: string, checked: boolean) => void }) {
   const client = useQueryClient();
+  if (message.reasoning) return <ReasoningActivity message={message} />;
+  if (message.tool) return <ToolActivity message={message} />;
   return <div className={message.role === 'user' ? 'ml-5 rounded-xl bg-sunken p-3 text-sm' : 'text-sm leading-relaxed'}>
         <div className="mb-1 text-[11px] text-fg-subtle">{message.role === 'user' ? '你' : message.role === 'assistant' ? message.model ?? '助手' : message.role === 'tool' ? '操作' : '状态'}</div>
         {message.role === 'assistant' ? <div className="space-y-2 break-words [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-sunken [&_pre]:p-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_a]:text-shu [&_a]:underline"><Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, ...props }) => <a {...props} target="_blank" rel="noreferrer">{children}</a>, img: ({ alt }) => <span>{alt ?? '图片'}</span> }}>{message.text}</Markdown></div> : !message.cards?.some(card => card.title === message.text) && <p className="whitespace-pre-wrap break-words">{message.text}</p>}

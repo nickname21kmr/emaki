@@ -6,10 +6,14 @@ import type { AssistantModel, AssistantQuestion } from '@emaki/shared';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/models';
 import { JsonProcess } from './rpc.ts';
 import type { PrivateSettings, StoredSession } from './store.ts';
+import { toolPreview } from './activity.ts';
+
+export interface ToolUpdate { status: 'running' | 'succeeded' | 'failed'; input?: string; output?: string; append?: boolean }
 
 export interface AgentSink {
   text(id: string, delta: string): void;
-  tool(id: string, text: string): void;
+  tool(id: string, text: string, update?: ToolUpdate): void;
+  reasoning?(id: string, delta: string, done?: boolean): void;
   question(question: AssistantQuestion): void;
   done(error?: string): void;
   disconnected?(): void;
@@ -109,7 +113,18 @@ export class CodexBackend implements AgentBackend {
     }
     if (p.threadId && this.session.nativeId && p.threadId !== this.session.nativeId) return;
     if (msg.method === 'item/agentMessage/delta') this.sink.text(p.itemId, p.delta);
-    if (msg.method === 'item/started' && ['mcpToolCall', 'commandExecution', 'fileChange', 'webSearch', 'dynamicToolCall'].includes(p.item?.type)) this.sink.tool(p.item.id, p.item.tool ?? p.item.type ?? '工具运行中');
+    if (msg.method === 'item/reasoning/summaryTextDelta') this.sink.reasoning?.(p.itemId, p.delta);
+    if (msg.method === 'item/completed' && p.item?.type === 'reasoning') this.sink.reasoning?.(p.item.id, '', true);
+    if (['item/started', 'item/completed'].includes(msg.method) && ['mcpToolCall', 'commandExecution', 'fileChange', 'webSearch', 'dynamicToolCall'].includes(p.item?.type)) {
+      const item = p.item, done = msg.method === 'item/completed';
+      const failed = Boolean(item.error || item.success === false || item.result?.isError || ['failed', 'declined'].includes(item.status) || (typeof item.exitCode === 'number' && item.exitCode !== 0));
+      this.sink.tool(item.id, item.tool ?? ({ commandExecution: '执行命令', fileChange: '修改文件', webSearch: '联网搜索' } as Record<string, string>)[item.type] ?? item.type, {
+        status: done ? (failed ? 'failed' : 'succeeded') : 'running',
+        input: toolPreview(item.arguments ?? item.command ?? item.query ?? item.changes),
+        ...(done ? { output: toolPreview(item.error ?? item.result ?? item.aggregatedOutput ?? item.contentItems ?? item.changes ?? item.action) } : {}),
+      });
+    }
+    if (msg.method === 'item/commandExecution/outputDelta') this.sink.tool(p.itemId, '执行命令', { status: 'running', output: p.delta, append: true });
     if (msg.method === 'turn/completed') { this.turnId = undefined; this.sink.done(p.turn?.error?.message); }
   }
   answer(id: string, value: string) {
@@ -185,8 +200,13 @@ export class PiBackend implements AgentBackend {
   private event(e: any) {
     if (e.type === 'message_start' && e.message?.role === 'assistant') this.messageId = `pi-${Date.now()}-${++this.sequence}`;
     if (e.type === 'message_update' && e.assistantMessageEvent?.type === 'text_delta') this.sink.text(this.messageId, e.assistantMessageEvent.delta);
+    if (e.type === 'message_update' && e.assistantMessageEvent?.type === 'thinking_delta') this.sink.reasoning?.(this.messageId, e.assistantMessageEvent.delta);
+    if (e.type === 'message_update' && e.assistantMessageEvent?.type === 'thinking_end') this.sink.reasoning?.(this.messageId, '', true);
+    if (e.type === 'message_end' && e.message?.role === 'assistant') this.sink.reasoning?.(this.messageId, '', true);
     if (e.type === 'message_end' && e.message?.errorMessage) this.error = e.message.errorMessage;
-    if (e.type === 'tool_execution_start') this.sink.tool(e.toolCallId, e.toolName);
+    if (e.type === 'tool_execution_start') this.sink.tool(e.toolCallId, e.toolName, { status: 'running', input: toolPreview(e.args) });
+    if (e.type === 'tool_execution_update') this.sink.tool(e.toolCallId, e.toolName, { status: 'running', output: toolPreview(e.partialResult) });
+    if (e.type === 'tool_execution_end') this.sink.tool(e.toolCallId, e.toolName, { status: e.isError || e.result?.isError ? 'failed' : 'succeeded', output: toolPreview(e.result) });
     if (e.type === 'agent_settled') { this.sink.done(this.error); this.error = undefined; }
     if (e.type === 'extension_ui_request' && ['confirm', 'input', 'select', 'editor'].includes(e.method)) {
       this.pending.set(e.id, e); this.sink.question({ id: e.id, kind: e.method === 'confirm' ? 'approval' : 'input', title: [e.title, e.message].filter(Boolean).join('\n'), options: e.options });

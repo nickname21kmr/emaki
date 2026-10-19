@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync } from '
 import path from 'node:path';
 import type { AssistantSession, AssistantSettings } from '@emaki/shared';
 import { NotFoundError } from '../http/errors.ts';
+import { interruptActivities } from './activity.ts';
 
 export interface StoredSession extends AssistantSession {
   nativeId?: string;
@@ -30,6 +31,7 @@ export class AssistantStore {
       const lastRequest = [...s.messages].reverse().find(m => m.role === 'user');
       let changed = false;
       if (s.status === 'running' || s.status === 'waiting') {
+        interruptActivities(s);
         s.status = 'idle'; s.questions = s.questions.filter(q => q.source === 'emaki');
         if (lastRequest) s.interruption = { messageId: lastRequest.resumeOf ?? lastRequest.id, reason: 'restart' };
         s.messages.push({ id: randomUUID(), role: 'system', text: '处理已中断。' });
