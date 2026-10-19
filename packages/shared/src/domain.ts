@@ -88,6 +88,8 @@ export interface FocusPoint {
   y: number;
   /** 自动推断的焦点；前端结合原图和容器比例换算，不能直接当 CSS 百分比。 */
   space?: 'image';
+  /** 大腿、脚是画面重点时主体在原图里的高度（外观设置选「跟着构图」时用 y 的替代值）；没有就是 undefined */
+  legsY?: number;
 }
 
 export interface Character {
