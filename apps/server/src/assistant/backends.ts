@@ -7,15 +7,16 @@ import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/models';
 import { JsonProcess } from './rpc.ts';
 import type { PrivateSettings, StoredSession } from './store.ts';
 import { toolPreview } from './activity.ts';
+import { codexToolActivity } from './codexActivity.ts';
 
-export interface ToolUpdate { status: 'running' | 'succeeded' | 'failed'; input?: string; output?: string; append?: boolean }
+export interface ToolUpdate { status: 'running' | 'succeeded' | 'failed' | 'interrupted'; input?: string; output?: string; append?: boolean; progress?: string; durationMs?: number; exitCode?: number }
 
 export interface AgentSink {
   text(id: string, delta: string): void;
   tool(id: string, text: string, update?: ToolUpdate): void;
   reasoning?(id: string, delta: string, done?: boolean): void;
   question(question: AssistantQuestion): void;
-  done(error?: string): void;
+  done(error?: string, interrupted?: boolean): void;
   disconnected?(): void;
 }
 export interface AgentBackend {
@@ -56,6 +57,7 @@ export class CodexBackend implements AgentBackend {
   }
   private pending = new Map<string, { id: string | number; method: string; params: any; questionId?: string; answers?: Record<string, { answers: string[] }> }>();
   private turnId?: string;
+  private toolNames = new Map<string, string>();
   static async open(settings: PrivateSettings, session: StoredSession, cwd: string, endpoint: string, instructions: string, sink: AgentSink) {
     const binary = findCodex(settings.codexPath); if (!binary) throw new Error('未找到 Codex，请在设置中指定路径');
     const rpc = launch(binary, ['app-server', '-c', `mcp_servers.emaki.url=${JSON.stringify(endpoint)}`,
@@ -115,17 +117,24 @@ export class CodexBackend implements AgentBackend {
     if (msg.method === 'item/agentMessage/delta') this.sink.text(p.itemId, p.delta);
     if (msg.method === 'item/reasoning/summaryTextDelta') this.sink.reasoning?.(p.itemId, p.delta);
     if (msg.method === 'item/completed' && p.item?.type === 'reasoning') this.sink.reasoning?.(p.item.id, '', true);
-    if (['item/started', 'item/completed'].includes(msg.method) && ['mcpToolCall', 'commandExecution', 'fileChange', 'webSearch', 'dynamicToolCall'].includes(p.item?.type)) {
-      const item = p.item, done = msg.method === 'item/completed';
-      const failed = Boolean(item.error || item.success === false || item.result?.isError || ['failed', 'declined'].includes(item.status) || (typeof item.exitCode === 'number' && item.exitCode !== 0));
-      this.sink.tool(item.id, item.tool ?? ({ commandExecution: '执行命令', fileChange: '修改文件', webSearch: '联网搜索' } as Record<string, string>)[item.type] ?? item.type, {
-        status: done ? (failed ? 'failed' : 'succeeded') : 'running',
-        input: toolPreview(item.arguments ?? item.command ?? item.query ?? item.changes),
-        ...(done ? { output: toolPreview(item.error ?? item.result ?? item.aggregatedOutput ?? item.contentItems ?? item.changes ?? item.action) } : {}),
-      });
+    if (['item/started', 'item/completed'].includes(msg.method)) {
+      const activity = codexToolActivity(p.item, msg.method === 'item/completed');
+      if (activity) {
+        this.toolNames.set(activity.id, activity.name);
+        this.sink.tool(activity.id, activity.name, activity.update);
+      }
     }
-    if (msg.method === 'item/commandExecution/outputDelta') this.sink.tool(p.itemId, '执行命令', { status: 'running', output: p.delta, append: true });
-    if (msg.method === 'turn/completed') { this.turnId = undefined; this.sink.done(p.turn?.error?.message); }
+    if (['item/commandExecution/outputDelta', 'item/fileChange/outputDelta'].includes(msg.method)) {
+      this.sink.tool(p.itemId, this.toolNames.get(p.itemId) ?? (msg.method.includes('fileChange') ? '修改文件' : '执行命令'), { status: 'running', output: p.delta, append: true });
+    }
+    if (msg.method === 'item/fileChange/patchUpdated') this.sink.tool(p.itemId, '修改文件', { status: 'running', input: toolPreview(p.changes) });
+    if (msg.method === 'item/mcpToolCall/progress') this.sink.tool(p.itemId, this.toolNames.get(p.itemId) ?? 'MCP 工具', { status: 'running', progress: p.message });
+    if (msg.method === 'turn/completed') {
+      this.turnId = undefined; this.toolNames.clear();
+      const error = p.turn?.error?.message ?? (p.turn?.status === 'failed' ? 'Codex 本轮运行失败' : undefined);
+      if (p.turn?.status === 'interrupted') this.sink.done(error, true);
+      else this.sink.done(error);
+    }
   }
   answer(id: string, value: string) {
     const pending = this.pending.get(id); if (!pending) throw new Error('请求已结束');

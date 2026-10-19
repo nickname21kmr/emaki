@@ -17,6 +17,8 @@ it('uses only the current turn for activity and provides thinking content separa
   expect(currentActivity(session)).toMatchObject({ label: '等待模型回应', startedAt: 2000 });
   session.messages.push({ ...tool, id: 'new-tool' });
   expect(currentActivity(session)).toMatchObject({ label: '正在运行 bash', detail: 'python search.py' });
+  session.messages.at(-1)!.tool = { ...tool.tool!, progress: '已读取 3 张图片' };
+  expect(currentActivity(session).detail).toBe('已读取 3 张图片');
   const thought: AssistantMessage = { id: 'think', role: 'assistant', text: '', reasoning: { text: 'Compare the source image', startedAt: 2000, status: 'running' } };
   session.messages = [user, thought];
   expect(currentActivity(session)).toMatchObject({ label: '正在思考', detail: 'Compare the source image' });

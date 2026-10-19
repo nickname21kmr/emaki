@@ -46,6 +46,8 @@ export interface AssistantMessage {
     status: 'running' | 'succeeded' | 'failed' | 'interrupted';
     input?: string;
     output?: string;
+    progress?: string;
+    exitCode?: number;
     startedAt: number;
     finishedAt?: number;
   };

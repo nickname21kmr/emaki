@@ -49,13 +49,18 @@ export class AssistantService implements ToolHost {
       tool: (id, text, update) => {
         if (s.status !== 'running' && s.status !== 'waiting') return;
         let message = s.messages.find(m => m.id === id);
+        if (message?.tool?.finishedAt != null && update?.status === 'running') return;
         if (!message) { message = { id, role: 'tool', text }; s.messages.push(message); }
+        message.text = text;
         if (update) {
           message.tool ??= { status: 'running', startedAt: Date.now() };
           message.tool.status = update.status;
           if (update.input !== undefined && (update.input || !message.tool.input)) message.tool.input = preview(update.input);
           if (update.output !== undefined) message.tool.output = preview((update.append ? message.tool.output ?? '' : '') + update.output);
+          if (update.progress !== undefined) message.tool.progress = preview(update.progress);
+          if (update.exitCode !== undefined) message.tool.exitCode = update.exitCode;
           if (update.status !== 'running') message.tool.finishedAt = Date.now();
+          if (update.status !== 'running' && update.durationMs != null && update.durationMs >= 0) message.tool.startedAt = message.tool.finishedAt! - update.durationMs;
         }
         this.changed(s);
       },
@@ -71,14 +76,15 @@ export class AssistantService implements ToolHost {
         this.changed(s);
       },
       question: (question) => { s.questions.push(question); s.status = 'waiting'; this.flush(s); },
-      done: (error) => {
+      done: (error, interrupted) => {
         if (s.status !== 'running' && s.status !== 'waiting') return;
         interruptActivities(s);
         s.questions = s.questions.filter(q => q.source === 'emaki'); s.status = error ? 'error' : 'idle';
         if (error) {
           this.markInterrupted(s, 'error');
           s.messages.push({ id: randomUUID(), role: 'system', text: '这次处理遇到问题。', details: error });
-        } else delete s.interruption;
+        } else if (interrupted) { this.markInterrupted(s, 'stopped'); s.messages.push({ id: randomUUID(), role: 'system', text: '处理已中断。' }); }
+        else delete s.interruption;
         this.flush(s);
       },
     };

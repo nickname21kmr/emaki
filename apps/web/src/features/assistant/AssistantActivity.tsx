@@ -22,6 +22,8 @@ export function ToolActivity({ message }: { message: AssistantMessage }) {
       <span className="break-all font-medium">{message.text}</span><span className={tool.status === 'failed' ? 'shrink-0 text-danger' : 'shrink-0 text-fg-muted'}>{names[tool.status]}</span>
       <span className="shrink-0 text-fg-subtle">{elapsed(tool.startedAt, tool.finishedAt ?? now)}</span>
     </span></summary>
+    {tool.progress && <p className="mt-2 break-words text-xs text-fg-muted">{tool.progress}</p>}
+    {tool.exitCode != null && <p className="mt-2 text-xs text-fg-muted">退出码：{tool.exitCode}</p>}
     {tool.input && <Output title="调用参数" text={tool.input} />}
     {tool.output ? <Output title={tool.status === 'running' ? '实时输出' : '返回结果'} text={tool.output} /> : <p className="mt-2 text-xs text-fg-muted">{tool.status === 'running' ? '等待工具返回…' : '工具未返回文本内容'}</p>}
   </details>;
@@ -51,7 +53,7 @@ export function currentActivity(session: AssistantSession) {
   const writing = messages.at(-1)?.role === 'assistant' && Boolean(messages.at(-1)?.text);
   return {
     label: session.status === 'waiting' ? '等待你的回应' : tool ? `正在运行 ${tool.text}` : thinking ? '正在思考' : writing ? '正在回复' : '等待模型回应',
-    detail: session.status === 'waiting' ? '' : tool?.tool?.input?.split('\n').filter(Boolean).slice(0, 3).join(' ') ?? thinking?.reasoning?.text.slice(-160) ?? '',
+    detail: session.status === 'waiting' ? '' : tool?.tool?.progress || tool?.tool?.input?.split('\n').filter(Boolean).slice(0, 3).join(' ') || thinking?.reasoning?.text.slice(-160) || '',
     startedAt: session.messages[index]?.createdAt,
   };
 }

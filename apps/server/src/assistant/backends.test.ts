@@ -19,6 +19,27 @@ beforeEach(async () => {
   backend = await CodexBackend.open({ codexPath: process.execPath } as PrivateSettings, { token: 'private' } as StoredSession, '.', 'http://localhost/mcp', 'Instructions', sink);
 });
 describe('Codex app-server adapter', () => {
+  it('routes MCP progress and file patch updates onto the original tool records', async () => {
+    await backend.prompt('test', 'model', '');
+    state.rpc.onEvent({ method: 'item/started', params: { threadId: 'owned', item: { type: 'mcpToolCall', id: 'lookup', server: 'emaki', tool: 'read_media', arguments: { imageId: '42' } } } });
+    state.rpc.onEvent({ method: 'item/mcpToolCall/progress', params: { threadId: 'other', itemId: 'lookup', message: 'unrelated progress' } });
+    state.rpc.onEvent({ method: 'item/mcpToolCall/progress', params: { threadId: 'owned', itemId: 'lookup', message: '读取缩略图' } });
+    expect(sink.tool.mock.calls).toHaveLength(2);
+    expect(sink.tool.mock.calls[1]).toEqual(['lookup', 'emaki · read_media', { status: 'running', progress: '读取缩略图' }]);
+    const changes = [{ path: 'notes.txt', diff: '+ found source' }];
+    state.rpc.onEvent({ method: 'item/fileChange/patchUpdated', params: { threadId: 'owned', itemId: 'patch', changes } });
+    state.rpc.onEvent({ method: 'item/fileChange/outputDelta', params: { threadId: 'owned', itemId: 'patch', delta: 'applying' } });
+    state.rpc.onEvent({ method: 'item/completed', params: { threadId: 'owned', item: { type: 'fileChange', id: 'patch', changes, status: 'completed' } } });
+    expect(sink.tool.mock.calls.at(-3)![2].input).toContain('found source');
+    expect(sink.tool.mock.calls.at(-2)).toEqual(['patch', '修改文件', { status: 'running', append: true, output: 'applying' }]);
+    expect(sink.tool.mock.calls.at(-1)![2].status).toBe('succeeded');
+  });
+  it('reports unsuccessful turns even if Codex omits an error object', () => {
+    state.rpc.onEvent({ method: 'turn/completed', params: { turn: { status: 'failed', error: null } } });
+    expect(sink.done).toHaveBeenLastCalledWith('Codex 本轮运行失败');
+    state.rpc.onEvent({ method: 'turn/completed', params: { turn: { status: 'interrupted', error: null } } });
+    expect(sink.done).toHaveBeenLastCalledWith(undefined, true);
+  });
   it('forwards tool arguments, streaming output, completion errors and reasoning summaries', () => {
     state.rpc.onEvent({ method: 'item/started', params: { item: { id: 'cmd', type: 'commandExecution', command: 'python search.py' } } });
     state.rpc.onEvent({ method: 'item/commandExecution/outputDelta', params: { itemId: 'cmd', delta: 'connecting' } });
@@ -26,7 +47,7 @@ describe('Codex app-server adapter', () => {
     expect(sink.tool.mock.calls).toEqual([
       ['cmd', '执行命令', { status: 'running', input: 'python search.py' }],
       ['cmd', '执行命令', { status: 'running', output: 'connecting', append: true }],
-      ['cmd', '执行命令', { status: 'failed', input: 'python search.py', output: 'timeout' }],
+      ['cmd', '执行命令', { status: 'failed', input: 'python search.py', output: 'timeout', exitCode: 1 }],
     ]);
     state.rpc.onEvent({ method: 'item/reasoning/summaryTextDelta', params: { itemId: 'r', delta: 'Checking sources' } });
     state.rpc.onEvent({ method: 'item/completed', params: { item: { id: 'r', type: 'reasoning' } } });
