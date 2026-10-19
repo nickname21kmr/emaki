@@ -161,11 +161,16 @@ describe('assistant HTTP and MCP', () => {
     await call('POST', `/sessions/${piSession}/stop`, {});
     expect((await call('GET', `/sessions/${piSession}`)).json().status).toBe('idle');
     holdResponse = false;
-    await call('POST', `/sessions/${piSession}/messages`, { ...input, requestId: '00000000-0000-4000-8000-000000000004', text: 'Resume after stop' });
+    expect((await call('GET', `/sessions/${piSession}`)).json().interruption.messageId).toBe(input.requestId);
+    const resume = { requestId: '00000000-0000-4000-8000-000000000004', messageId: input.requestId, model: input.model, effort: '' };
+    expect((await call('POST', `/sessions/${piSession}/resume`, resume)).statusCode).toBe(200);
+    expect((await call('POST', `/sessions/${piSession}/resume`, resume)).statusCode).toBe(200);
     let finished: any;
     for (let i = 0; i < 100; i++) { finished = (await call('GET', `/sessions/${piSession}`)).json(); if (finished.status !== 'running') break; await new Promise(r => setTimeout(r, 100)); }
     expect(finished.status, JSON.stringify(finished)).toBe('idle');
     expect(finished.messages.filter((m: any) => m.role === 'user')).toHaveLength(3);
+    expect(finished.interruption).toBeUndefined();
+    expect(finished.messages.find((m: any) => m.id === resume.requestId).context).toEqual(input.context);
     expect(providerRequests.at(-1).messages.some((m: any) => JSON.stringify(m.content).includes('Count images using MCP'))).toBe(true);
   }, 20000);
   it('Pi asks before a file write in ask mode and runs it directly in full mode', async () => {
@@ -184,7 +189,7 @@ describe('assistant HTTP and MCP', () => {
         expect(snapshot.status, JSON.stringify(snapshot)).toBe('waiting');
         expect(snapshot.questions[0].kind).toBe('approval');
         expect(existsSync(file)).toBe(false);
-        await call('POST', `/sessions/${session.id}/stop`, {});
+        expect((await call('POST', `/sessions/${session.id}/stop`, {})).statusCode).toBe(200);
       } else {
         expect(snapshot.status, JSON.stringify(snapshot)).toBe('idle');
         expect(snapshot.questions).toHaveLength(0);

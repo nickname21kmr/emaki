@@ -37,6 +37,9 @@ export interface AssistantMessage {
   context?: AssistantContext;
   cards?: AssistantCard[];
   undoToken?: string;
+  details?: string;
+  /** Original user request when continuing interrupted work. */
+  resumeOf?: string;
 }
 export interface AssistantSession {
   id: string;
@@ -48,5 +51,6 @@ export interface AssistantSession {
   messages: AssistantMessage[];
   questions: AssistantQuestion[];
   updatedAt: string;
+  interruption?: { messageId: string; reason: 'restart' | 'error' | 'stopped' };
 }
 export interface AssistantDetection { backend: AssistantBackend; available: boolean; path?: string; detail: string; models: AssistantModel[] }

@@ -44,7 +44,10 @@ export class AssistantService implements ToolHost {
       done: (error) => {
         if (s.status !== 'running' && s.status !== 'waiting') return;
         s.questions = []; s.status = error ? 'error' : 'idle';
-        if (error) s.messages.push({ id: randomUUID(), role: 'system', text: error });
+        if (error) {
+          this.markInterrupted(s, 'error');
+          s.messages.push({ id: randomUUID(), role: 'system', text: '这次处理遇到问题。', details: error });
+        } else delete s.interruption;
         this.flush(s);
       },
     };
@@ -95,14 +98,15 @@ export class AssistantService implements ToolHost {
     return result;
   }
   async models(id: string): Promise<AssistantModel[]> { const s = this.store.get(id); return (await this.agent(s)).models(); }
-  async send(id: string, input: { requestId: string; text: string; model: string; effort: string; context: AssistantContext }) {
+  async send(id: string, input: { requestId: string; text: string; model: string; effort: string; context: AssistantContext }, resumeOf?: string) {
     this.assertEnabled(); const s = this.store.get(id);
     if (s.requestIds.includes(input.requestId)) return this.store.publicSession(s);
     if (s.status === 'running' || s.status === 'waiting') throw new ConflictError('这个会话正在运行，请先停止或完成当前交互');
     s.status = 'running'; s.questions = []; s.requestIds.push(input.requestId);
+    delete s.interruption;
     s.model = input.model; s.effort = input.effort;
     if (!s.messages.length) s.title = input.text.slice(0, 40);
-    s.messages.push({ id: input.requestId, role: 'user', text: input.text, context: input.context }); this.flush(s);
+    s.messages.push({ id: input.requestId, role: 'user', text: input.text, context: input.context, ...(resumeOf ? { resumeOf } : {}) }); this.flush(s);
     // Accept once; the run outlives the browser request. Reconnection only reads snapshots.
     void (async () => {
       let agent: AgentBackend | undefined;
@@ -112,7 +116,9 @@ export class AssistantService implements ToolHost {
         const models = await agent.models(), model = models.find(m => m.id === input.model);
         if (!model) throw new BadRequestError('所选模型不在当前后端的模型列表中');
         if (input.effort && !model.efforts.includes(input.effort)) throw new BadRequestError('模型不支持所选思考强度');
-        await agent.prompt(`${input.text}\n\n<pageContext>${JSON.stringify(input.context)}</pageContext>`, input.model, input.effort);
+        const original = resumeOf ? s.messages.find(m => m.id === resumeOf && m.role === 'user') : undefined;
+        const continuation = original ? `\n\n继续完成中断前的请求：\n${original.text}\n沿用已有会话、证据和用户授权，先核对已完成的操作与图库当前状态，再完成剩余工作。下方是原请求的图片范围，页面可能已经变化。` : '';
+        await agent.prompt(`${input.text}${continuation}\n\n<pageContext>${JSON.stringify(input.context)}</pageContext>`, input.model, input.effort);
         this.flush(s);
       } catch (error) {
         if (s.requestIds.at(-1) === input.requestId) this.sink(s).done((error as Error).message);
@@ -120,6 +126,18 @@ export class AssistantService implements ToolHost {
       }
     })();
     return this.store.publicSession(s);
+  }
+  async resume(id: string, input: { requestId: string; messageId: string; model: string; effort: string }) {
+    this.assertEnabled(); const s = this.store.get(id);
+    if (s.requestIds.includes(input.requestId)) return this.store.publicSession(s);
+    if (!s.interruption || s.interruption.messageId !== input.messageId) throw new ConflictError('这项任务的状态已更新，请刷新对话');
+    const original = s.messages.find(m => m.id === input.messageId && m.role === 'user');
+    if (!original?.context) throw new BadRequestError('请在输入框补充要继续处理的内容');
+    return this.send(id, { requestId: input.requestId, text: '继续处理', model: input.model, effort: input.effort, context: original.context }, original.id);
+  }
+  private markInterrupted(s: StoredSession, reason: 'error' | 'stopped') {
+    const original = [...s.messages].reverse().find(m => m.role === 'user');
+    if (original) s.interruption = { messageId: original.resumeOf ?? original.id, reason };
   }
   answer(id: string, request: string, value: string) {
     this.assertEnabled(); const s = this.store.get(id); if (!s.questions.some(q => q.id === request)) throw new ConflictError('交互请求已结束');
@@ -131,9 +149,12 @@ export class AssistantService implements ToolHost {
     const pending = this.starting.get(id);
     if (!pending && !this.agents.has(id) && s.status !== 'running' && s.status !== 'waiting') return;
     // Mark idle first so a starting process cannot launch a prompt after cancellation.
+    if (s.status === 'running' || s.status === 'waiting') this.markInterrupted(s, 'stopped');
     s.status = 'idle'; s.questions = []; this.flush(s);
     const agent = this.agents.get(id) ?? await pending?.catch(() => undefined);
-    try { await agent?.stop(); } finally { await agent?.close(); this.agents.delete(id); }
+    // A harness awaiting input may not acknowledge stop; closing it still completes cancellation.
+    try { await agent?.stop(); } catch { /* Fall back to closing the process below. */ }
+    finally { await agent?.close(); this.agents.delete(id); }
   }
   async close() {
     this.generation++;

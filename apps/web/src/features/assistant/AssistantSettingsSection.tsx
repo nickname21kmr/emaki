@@ -21,12 +21,12 @@ export function AssistantSettingsSection() {
       </Field>
       {query.isError && <p role="alert" className="py-3 text-danger">{query.error.message}</p>}
       {settings?.enabled && <>
-        <BlockRow label="操作权限" hint="完全访问允许助手读写本机文件、运行命令和联网，无需逐次审批。切换会停止当前运行，下次发送消息按新权限继续；需要你补充信息时仍会提问。">
+        <BlockRow label="操作权限" hint="完全访问允许助手读写本机文件、运行命令和联网，无需逐次审批。切换时暂停当前任务，可在对话中继续处理。">
           <select aria-label="助手操作权限" className={assistantInput} value={settings.accessMode} disabled={busy} onChange={e => void perform(() => save({ accessMode: e.target.value }))}>
             <option value="ask">按需审批</option><option value="full">完全访问</option>
           </select>
         </BlockRow>
-        <BlockRow label="运行后端" hint="只创建和恢复 Emaki 自己的对话。重新检测不会改变已选后端。">
+        <BlockRow label="运行后端" hint="选择驱动 Emaki 对话的 agent；模型在对话输入框下方选择。">
           <div className="flex items-center gap-3">
             <select aria-label="助手后端" className={assistantInput} value={settings.backend ?? ''} disabled={busy} onChange={e => void perform(() => save({ backend: e.target.value || null }))}>
               <option value="">选择后端</option><option value="codex">Codex · 已有安装</option><option value="pi">Pi · 内置</option>
@@ -35,7 +35,7 @@ export function AssistantSettingsSection() {
           {results.map(result => <p key={result.backend} className="mt-2 break-words text-xs text-fg-muted">{result.backend === 'pi' ? 'Pi' : 'Codex'} · {result.available ? '可用' : '需配置'} · {result.detail}</p>)}
         </BlockRow>
         <Configuration key={JSON.stringify([settings.backend, settings.codexPath, settings.pi])} settings={settings} save={body => perform(() => save(body))} busy={busy} />
-        <BlockRow label="供外部 Agent 使用的 MCP" hint="连接后可查询和修改图库。凭证仅用于这个 Emaki 实例，请妥善保存。">
+        <BlockRow label="供外部 Agent 使用的 MCP" hint="将连接配置添加到其他 agent，即可查询和修改此图库。配置包含访问凭证。">
           <Button size="sm" onClick={() => void perform(async () => { const c = await assistantApi.mcpConfig(); setExternal(JSON.stringify({ mcpServers: { emaki: { url: c.url, headers: { Authorization: `Bearer ${c.token}` } } } }, null, 2)); })}>显示连接配置</Button>
           {external && <textarea aria-label="MCP 连接配置" readOnly className={`${assistantInput} mt-3 h-44 font-mono text-xs`} value={external} />}
         </BlockRow>

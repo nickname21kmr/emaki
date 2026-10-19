@@ -1,8 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import type { AssistantMessage } from '@emaki/shared';
-import { clampPosition, groupMessages } from './presentation';
+import { clampPosition, composerContext, groupMessages, toggleResultImage } from './presentation';
 
 describe('assistant presentation', () => {
+  it('uses the result selection for both the composer count and outgoing context, including clearing it', () => {
+    const pageSelection = new Set(['page-1', 'page-2', 'page-3', 'page-4', 'page-5']);
+    const card = { id: 'result', title: '识别结果' };
+    const selected = toggleResultImage(null, card, '17329', true);
+    const context = composerContext('/unrecognized', 'unrecognized', pageSelection, undefined, selected);
+    expect(context.imageIds).toEqual(['17329']);
+    expect(context.selectionScope).toBe('assistant-result:result');
+    const cleared = toggleResultImage(selected, card, '17329', false);
+    expect(composerContext('/unrecognized', 'unrecognized', pageSelection, undefined, cleared).imageIds).toEqual([]);
+    expect(composerContext('/unrecognized', 'unrecognized', pageSelection, undefined, null).imageIds).toHaveLength(5);
+    expect(composerContext('/unrecognized', 'unrecognized', pageSelection, 'preview', selected).imageIds).toEqual(['preview']);
+    const mixed = toggleResultImage(selected, { id: 'other-result', title: '其他图片' }, '18042', true);
+    expect(mixed.ids).toEqual(['17329', '18042']);
+    expect(toggleResultImage(mixed, card, '17329', false).ids).toEqual(['18042']);
+  });
   it('groups consecutive tool records while keeping answers and result cards outside', () => {
     const messages: AssistantMessage[] = [
       { id: '1', role: 'user', text: 'apply' },

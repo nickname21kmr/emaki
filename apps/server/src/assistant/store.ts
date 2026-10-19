@@ -27,10 +27,26 @@ export class AssistantStore {
     for (const id of ids) {
       if (!/^[a-f0-9-]{36}$/.test(id)) continue;
       const s: StoredSession = this.read(`sessions/${id}.json`);
+      const lastRequest = [...s.messages].reverse().find(m => m.role === 'user');
+      let changed = false;
       if (s.status === 'running' || s.status === 'waiting') {
         s.status = 'idle'; s.questions = [];
-        s.messages.push({ id: randomUUID(), role: 'system', text: '服务已重启，上次运行已停止；不会自动重复执行。' });
+        if (lastRequest) s.interruption = { messageId: lastRequest.resumeOf ?? lastRequest.id, reason: 'restart' };
+        s.messages.push({ id: randomUUID(), role: 'system', text: '处理已中断。' });
+        changed = true;
       }
+      // Upgrade existing interrupted conversations as well as newly interrupted turns.
+      for (const message of s.messages) {
+        if (message.role !== 'system' || message.text !== '服务已重启，上次运行已停止；不会自动重复执行。') continue;
+        if (message === s.messages.at(-1) && lastRequest && s.status === 'idle') {
+          s.interruption = { messageId: lastRequest.resumeOf ?? lastRequest.id, reason: 'restart' };
+        }
+        message.text = '处理已中断。'; changed = true;
+      }
+      if (s.status === 'error' && !s.interruption && lastRequest) {
+        s.interruption = { messageId: lastRequest.resumeOf ?? lastRequest.id, reason: 'error' }; changed = true;
+      }
+      if (changed) this.write(`sessions/${id}.json`, s);
       this.sessions.set(id, s);
     }
     this.saveSettings();
