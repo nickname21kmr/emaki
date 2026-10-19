@@ -31,8 +31,8 @@ export function PanelSource({ detail }: { detail: ImageDetail }) {
               ) : SITE_LABEL[source.site]}
               {source.artist && <div className="mt-0.5 break-words text-fg-muted">作者 {source.artist}</div>}
             </>
-          ) : <span className="text-fg-subtle">{detail.sourceManual ? '未知（已清除）' : '未知'}</span>}
-          <div className="mt-1 text-[11px] text-fg-subtle">{detail.sourceManual ? '人工确认 · 扫描不会覆盖' : '自动解析'}</div>
+          ) : <span className="text-fg-subtle">{detail.sourceManual ? '已清除' : '未知'}</span>}
+          <div className="mt-1 text-[11px] text-fg-subtle" title={detail.sourceManual ? '扫描时保留此设置，可通过「编辑来源」修改' : undefined}>{detail.sourceManual ? '手动设置' : '自动解析'}</div>
         </div>
         {!editing && <button type="button" className="shrink-0 text-fg-muted hover:text-fg" onClick={() => {
           setUrl(source?.url ?? ''); setArtist(source?.artist ?? ''); setEditing(true);
@@ -49,7 +49,7 @@ export function PanelSource({ detail }: { detail: ImageDetail }) {
               <span className="text-fg-muted">来源作者（可选）</span>
               <input maxLength={200} value={artist} onChange={e => setArtist(e.target.value)} className={`${control} w-full min-w-0`} />
             </label>
-            <p className="text-[11px] leading-relaxed text-fg-subtle">保存后扫描不会覆盖。此处作者仅用于来源展示，画师关联请在「画师」中修改。</p>
+            <p className="text-[11px] leading-relaxed text-fg-subtle">保存的来源会在扫描时保留。此处填写来源页上的作者；图库画师归类在「画师」中编辑。</p>
             <div className="flex flex-wrap gap-2">
               <button type="submit" className={`${control} text-shu-fg`}>保存来源</button>
               <button type="button" className={control} onClick={() => setEditing(false)}>取消</button>

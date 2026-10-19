@@ -102,10 +102,10 @@ function Conversation({ backend, close }: { backend: string | null; close: () =>
       <IconButton label="收起助手" onClick={close}><X /></IconButton>
     </header>
     <div className="border-b border-line px-4 py-2"><select aria-label="Emaki 对话历史" className={`${assistantInput} !py-1.5`} value={sessionId} onChange={e => chooseSession(e.target.value)}>
-      <option value="">选择对话或点击右上角新建</option>{sessions.data?.filter(s => s.backend === backend).map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
+      <option value="">选择历史对话</option>{sessions.data?.filter(s => s.backend === backend).map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
     </select></div>
     <div ref={scroll} onScroll={() => { const el = scroll.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 70; }} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 scrollbar-thin">
-      {!sessionId && <div className="py-8 text-sm leading-7 text-fg-muted"><p className="font-medium text-fg">围绕当前图库，一起处理问题。</p><p>选中图片后，可以询问角色、对照来源，或让助手查询和整理。图片按需读取。</p>{backend ? <Button className="mt-4" disabled={busy} onClick={() => void perform(async () => { const s = await assistantApi.create(); chooseSession(s.id); await sessions.refetch(); })}>开始新对话</Button> : <Link className="text-shu underline" to="/settings#assistant">先在设置中选择后端</Link>}</div>}
+      {!sessionId && <div className="py-8 text-sm leading-7 text-fg-muted"><p className="font-medium text-fg">想找什么图片，或整理哪些内容？</p><p>可以直接提问，也可以选中图片后询问角色、查找来源或采纳建议。</p>{backend ? <Button className="mt-4" disabled={busy} onClick={() => void perform(async () => { const s = await assistantApi.create(); chooseSession(s.id); await sessions.refetch(); })}>开始新对话</Button> : <Link className="text-shu underline" to="/settings#assistant">先在设置中选择 Agent 应用</Link>}</div>}
       {groupMessages(session?.messages ?? []).map(group => {
         const content = group.map(message => <Message key={message.id} message={message} selected={contextIds} select={(card, id, checked) => { setResultSelection(previous => toggleResultImage(previous ?? { cardId: card.id, title: card.title, ids: context.imageIds }, card, id, checked)); input.current?.focus({ preventScroll: true }); }} />);
         return isProcessMessage(group[0]!) ? <ProcessActivity key={group[0]!.id} messages={group}>{content}</ProcessActivity> : content;
@@ -128,7 +128,7 @@ function Conversation({ backend, close }: { backend: string | null; close: () =>
         {!!currentModel?.efforts.length && <select aria-label="思考强度" className="max-w-24 rounded bg-sunken p-1.5 text-xs" disabled={Boolean(running || busy)} value={effort} onChange={e => setEffort(e.target.value)}><option value="">默认</option>{currentModel.efforts.map(e => <option key={e} value={e}>{({ low: '低', medium: '中', high: '高', xhigh: '很高', off: '关闭' } as Record<string, string>)[e] ?? e}</option>)}</select>}
         {running ? <IconButton label="停止助手" onClick={() => void perform(() => assistantApi.stop(sessionId))}><Square /></IconButton> : <IconButton label="发送消息" type="submit" disabled={!text.trim() || !model || busy}><Send /></IconButton>}
       </div>
-      {currentModel && !currentModel.vision && context.imageIds.length > 0 && <p className="mt-1 text-[11px] text-fg-muted">识别画面时请选择支持看图的模型；当前模型可查询图片信息。</p>}
+      {currentModel && !currentModel.vision && context.imageIds.length > 0 && <p className="mt-1 text-[11px] text-fg-muted">要查看这些图片的画面，请切换到支持识图的模型。</p>}
     </form>
   </aside>;
 }

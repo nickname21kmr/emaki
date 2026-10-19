@@ -65,7 +65,7 @@ export class AssistantStore {
     return { ...settings, pi: { ...settings.pi, apiKeyConfigured: Boolean(this.settings.apiKey) } };
   }
   create(): StoredSession {
-    if (!this.settings.backend) throw new Error('请先在设置中选择助手后端');
+    if (!this.settings.backend) throw new Error('请先在设置中选择 Agent 应用');
     const session: StoredSession = { id: randomUUID(), title: '新对话', backend: this.settings.backend, model: '', effort: '', status: 'idle',
       messages: [], questions: [], updatedAt: new Date().toISOString(), token: randomBytes(32).toString('hex'), requestIds: [] };
     this.sessions.set(session.id, session); this.save(session);

@@ -133,8 +133,8 @@ describe('assistant ownership and replay', () => {
     await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
     const question = s.askUser(session.id, '将 17329 关联到已确认的角色吗？', ['关联角色', '暂不关联']);
     expect(s.askUser(session.id, session.questions[0]!.title, session.questions[0]!.options)).toEqual(question);
-    await expect(s.answer(other.id, question.questionId, '关联角色')).rejects.toThrow('交互请求已结束');
-    await expect(s.answer(session.id, question.questionId, '关联角色')).rejects.toThrow('正在运行');
+      await expect(s.answer(other.id, question.questionId, '关联角色')).rejects.toThrow('这条提问已结束');
+      await expect(s.answer(session.id, question.questionId, '关联角色')).rejects.toThrow('助手正在处理');
     sink.done();
     expect(session.questions).toHaveLength(1);
     expect(new AssistantStore(s.dir).get(session.id).questions).toEqual(session.questions);

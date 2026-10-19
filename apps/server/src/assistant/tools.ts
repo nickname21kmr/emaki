@@ -28,7 +28,7 @@ export function createLibraryMcp(app: FastifyInstance, ds: DataSource, file: str
     const body = response.json(); if (response.statusCode >= 400) throw new Error(body.error ?? `HTTP ${response.statusCode}`);
     return body;
   };
-  server.registerTool('describe_database', { description: '查看当前 SQLite 表/视图定义、字段语义。可自由设计查询，不需要预制统计脚本。', inputSchema: {}, annotations: read }, async () => {
+  server.registerTool('describe_database', { description: '查看当前 SQLite 表/视图定义和字段语义，用于设计查询。', inputSchema: {}, annotations: read }, async () => {
     host.assertEnabled();
     return json({ schema: await queryLibrary(file, "SELECT type,name,sql FROM sqlite_schema WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name", [], 500),
       semantics: '主键在 API 中使用字符串；时间为 ISO UTC；布尔值 0/1。images missing/trashed_at/excluded_by 会影响页面可见范围。*_manual 表示人工设置；关联的来源和置信度请查看表定义。original 是原创标记，不代表一个具名角色。前端筛选口径可通过 read_library 对照。' });
