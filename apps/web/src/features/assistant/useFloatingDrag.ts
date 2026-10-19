@@ -12,12 +12,15 @@ export function useFloatingDrag(key: string) {
   });
   const current = useRef(position), suppressClick = useRef(false);
   const gesture = useRef<{ id: number; x: number; y: number; origin: Position; moved: boolean } | null>(null);
+  const place = (next: Position) => {
+    current.current = next; setPosition(next);
+    try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* storage may be disabled */ }
+  };
   const move = (point: Position) => {
     const rect = ref.current?.getBoundingClientRect();
     if (!rect) return;
     const next = clampPosition(point, rect.width, rect.height, window.innerWidth, window.innerHeight);
-    current.current = next; setPosition(next);
-    try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* storage may be disabled */ }
+    place(next);
   };
   useEffect(() => {
     const fit = () => { if (current.current) move(current.current); };
@@ -34,6 +37,7 @@ export function useFloatingDrag(key: string) {
   };
   return {
     ref,
+    place,
     style: position ? { left: position.x, top: position.y, right: 'auto', bottom: 'auto' } : undefined,
     handle: {
       onPointerDown: (e: PointerEvent<HTMLElement>) => {

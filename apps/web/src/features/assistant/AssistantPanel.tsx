@@ -15,6 +15,7 @@ import { assistantInput } from './AssistantSettingsSection';
 import { groupMessages } from './presentation';
 import { useFloatingDrag } from './useFloatingDrag';
 import { openSessionEvents } from './sessionEvents';
+import { useFloatingResize } from './useFloatingResize';
 
 export function AssistantPanel() {
   const settings = useAssistantSettings().data, [open, setOpen] = useState(false);
@@ -31,6 +32,7 @@ function Conversation({ backend, close }: { backend: string | null; close: () =>
   const client = useQueryClient(), location = useLocation();
   const drag = useFloatingDrag('emaki.assistant.panel-position');
   const [expanded, setExpanded] = useState(false), [sessionId, setSessionId] = useState(() => sessionStorage.getItem(`emaki.assistant.${backend}`) ?? '');
+  const resize = useFloatingResize(drag.ref, drag.place, expanded);
   const [session, setSession] = useState<AssistantSession | null>(null), [text, setText] = useState(''), [model, setModel] = useState(''), [effort, setEffort] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [connected, setConnected] = useState(true);
   const selected = useSelection(s => s.ids), scope = useSelection(s => s.scope), lightbox = useLightbox();
@@ -72,7 +74,8 @@ function Conversation({ backend, close }: { backend: string | null; close: () =>
     submission.current = null;
     setText(''); follow.current = true; void sessions.refetch();
   };
-  return <aside ref={el => { drag.ref.current = el; }} style={drag.style} role="dialog" aria-label="Emaki AI 助手" className={`fixed bottom-4 right-4 z-40 flex flex-col overflow-hidden rounded-2xl border border-line-strong bg-sheet shadow-2xl ${expanded ? 'h-[88vh] w-[min(880px,calc(100vw-32px))]' : 'h-[min(700px,85vh)] w-[min(440px,calc(100vw-32px))]'}`}>
+  return <aside ref={el => { drag.ref.current = el; }} style={{ ...drag.style, ...resize.style }} role="dialog" aria-label="Emaki AI 助手" className={`fixed bottom-4 right-4 z-40 flex flex-col overflow-hidden rounded-2xl border border-line-strong bg-sheet shadow-2xl ${expanded ? 'h-[88vh] w-[min(880px,calc(100vw-32px))]' : 'h-[min(700px,85vh)] w-[min(440px,calc(100vw-32px))]'}`}>
+    {resize.handles}
     <header {...drag.handle} title="拖动移动助手" className="flex touch-none select-none cursor-move items-center gap-2 border-b border-line px-4 py-3"><MessageCircle className="size-4 text-shu" /><strong className="flex-1 text-sm">Emaki 助手 <span className="ml-1 text-xs font-normal text-fg-muted">实验</span></strong>
       <IconButton label="新建对话" disabled={!backend || busy} onClick={() => void perform(async () => { const s = await assistantApi.create(); chooseSession(s.id); await sessions.refetch(); })}><Plus /></IconButton>
       <IconButton label={expanded ? '缩小面板' : '展开面板'} onClick={() => setExpanded(!expanded)}>{expanded ? <Minimize2 /> : <Maximize2 />}</IconButton>
