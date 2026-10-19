@@ -12,6 +12,7 @@ export interface ToolHost {
   assertEnabled(): void;
   context(sessionId?: string): AssistantContext | null;
   present(card: AssistantCard, sessionId?: string): void;
+  askUser(sessionId: string, title: string, options?: string[]): { questionId: string };
   operation(scope: string, key: string, signature: string, run: () => Promise<unknown>): Promise<unknown>;
   recordMutation(sessionId: string | undefined, result: any): void;
 }
@@ -51,6 +52,11 @@ export function createLibraryMcp(app: FastifyInstance, ds: DataSource, file: str
     return { content: [{ type: 'image' as const, mimeType: 'image/jpeg', data: bytes.toString('base64') }] };
   });
   server.registerTool('get_page_context', { description: '读取当前 Emaki 会话最近一次用户消息绑定的页面和选择快照。外部 MCP 没有绑定页面时返回 null。', inputSchema: {}, annotations: read }, async () => { host.assertEnabled(); return json(host.context(sessionId)); });
+  if (sessionId) server.registerTool('ask_user', {
+    description: '在当前 Emaki 会话显示问题、可点击选项和自由输入。用于选择下一步，例如认出角色后询问是否关联。立即返回问题编号；请结束本轮，用户回答会作为下一条消息继续会话。已有明确指令时直接执行，不必重复询问。',
+    inputSchema: { title: z.string().trim().min(1).max(1000), options: z.array(z.string().trim().min(1).max(200)).min(2).max(5).optional() },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false },
+  }, async ({ title, options }) => json({ ...host.askUser(sessionId, title, options), status: 'awaiting_user', next: '结束本轮，等待用户的下一条回答。' }));
   server.registerTool('present_result', { description: '把自选图片集合或表格展示到会话。用户可以查看图片、选择其中一部分并将选择反馈给 agent。',
     inputSchema: { title: z.string().max(200), imageIds: z.array(z.string()).max(200).default([]), columns: z.array(z.string().max(100)).max(20).optional(), rows: z.array(z.array(z.union([z.string().max(2000), z.number(), z.boolean(), z.null()])).max(20)).max(200).optional() } }, async (card) => {
     host.assertEnabled(); const result = { ...card, id: randomUUID() }; host.present(result, sessionId); return json(result);

@@ -30,7 +30,7 @@ export class AssistantStore {
       const lastRequest = [...s.messages].reverse().find(m => m.role === 'user');
       let changed = false;
       if (s.status === 'running' || s.status === 'waiting') {
-        s.status = 'idle'; s.questions = [];
+        s.status = 'idle'; s.questions = s.questions.filter(q => q.source === 'emaki');
         if (lastRequest) s.interruption = { messageId: lastRequest.resumeOf ?? lastRequest.id, reason: 'restart' };
         s.messages.push({ id: randomUUID(), role: 'system', text: '处理已中断。' });
         changed = true;

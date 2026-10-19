@@ -116,7 +116,7 @@ function Conversation({ backend, close }: { backend: string | null; close: () =>
         <Button size="sm" disabled={busy || !model || !connected} onClick={() => void perform(resume)}>{session.interruption.reason === 'error' ? '重试并继续' : '继续处理'}</Button>
         <span className="min-w-0 truncate text-xs text-fg-muted" title={interruptedRequest?.text}>接着完成上次请求{interruptedRequest?.context?.imageIds.length ? ` · ${interruptedRequest.context.imageIds.length} 张图片` : ''}</span>
       </div>}
-      {session?.questions.map(q => <Question key={q.id} question={q} answer={value => void perform(() => assistantApi.answer(sessionId, q.id, value))} disabled={busy} />)}
+      {session?.questions.map(q => <Question key={q.id} question={q} answer={value => void perform(() => assistantApi.answer(sessionId, q.id, value))} disabled={busy || !connected || (q.source === 'emaki' && Boolean(running))} />)}
       {running && <p role="status" className="animate-pulse text-xs text-fg-muted">{session?.status === 'waiting' ? '等待你的回应' : '助手正在处理…'}</p>}
       {!connected && <div role="status" className="flex items-center gap-2 text-xs text-fg-muted">正在重新连接…<Button size="sm" variant="ghost" onClick={() => setConnectionAttempt(n => n + 1)}>立即重连</Button></div>}
       {(error || models.error) && <div role="alert" className="space-y-2 rounded-lg bg-danger-soft p-3 text-xs text-danger"><p className="whitespace-pre-wrap break-words">{error || '模型列表暂时未能加载。'}</p>{models.error && <Button size="sm" disabled={models.isFetching} onClick={() => void models.refetch()}>重新加载模型</Button>}</div>}

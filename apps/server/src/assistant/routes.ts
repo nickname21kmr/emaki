@@ -38,7 +38,7 @@ export function assistantRoutes(app: FastifyInstance, ds: DataSource) {
     context: z.object({ page: z.string().max(5000), imageIds: z.array(z.string().max(100)).max(5000), selectionScope: z.string().max(300).optional() }) }), req.body)));
   app.post('/api/assistant/sessions/:id/stop', async (req) => { service.assertEnabled(); await service.stop(id(req.params)); return { ok: true }; });
   app.post('/api/assistant/sessions/:id/resume', (req) => service.resume(id(req.params), parse(z.object({ requestId: z.uuid(), messageId: z.string().min(1).max(200), model: z.string().min(1).max(500), effort: z.string().max(50).default('') }), req.body)));
-  app.post('/api/assistant/sessions/:id/answer', (req) => { const body = parse(z.object({ requestId: z.string().max(200), value: z.string().max(10000) }), req.body); service.answer(id(req.params), body.requestId, body.value); return { ok: true }; });
+  app.post('/api/assistant/sessions/:id/answer', async (req) => { const body = parse(z.object({ requestId: z.string().max(200), value: z.string().max(10000) }), req.body); await service.answer(id(req.params), body.requestId, body.value); return { ok: true }; });
   app.get('/api/assistant/sessions/:id/events', (req, reply) => {
     service.assertEnabled(); const sessionId = id(req.params); service.store.get(sessionId);
     reply.hijack(); reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });

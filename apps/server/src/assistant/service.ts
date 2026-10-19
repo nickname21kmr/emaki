@@ -43,7 +43,7 @@ export class AssistantService implements ToolHost {
       question: (question) => { s.questions.push(question); s.status = 'waiting'; this.flush(s); },
       done: (error) => {
         if (s.status !== 'running' && s.status !== 'waiting') return;
-        s.questions = []; s.status = error ? 'error' : 'idle';
+        s.questions = s.questions.filter(q => q.source === 'emaki'); s.status = error ? 'error' : 'idle';
         if (error) {
           this.markInterrupted(s, 'error');
           s.messages.push({ id: randomUUID(), role: 'system', text: '这次处理遇到问题。', details: error });
@@ -139,8 +139,29 @@ export class AssistantService implements ToolHost {
     const original = [...s.messages].reverse().find(m => m.role === 'user');
     if (original) s.interruption = { messageId: original.resumeOf ?? original.id, reason };
   }
-  answer(id: string, request: string, value: string) {
-    this.assertEnabled(); const s = this.store.get(id); if (!s.questions.some(q => q.id === request)) throw new ConflictError('交互请求已结束');
+  askUser(id: string, title: string, options?: string[]) {
+    this.assertEnabled(); const s = this.store.get(id);
+    if (s.status !== 'running' && s.status !== 'waiting') throw new ConflictError('请在当前任务中提问');
+    const existing = s.questions.find(q => q.source === 'emaki');
+    if (existing) {
+      if (existing.title === title && JSON.stringify(existing.options) === JSON.stringify(options)) return { questionId: existing.id };
+      throw new ConflictError('已有待回答的问题，请将相关选择合并到一个问题中');
+    }
+    const questionId = randomUUID();
+    s.questions.push({ id: questionId, title, options, kind: 'input', source: 'emaki', context: this.context(id) ?? undefined });
+    this.flush(s); return { questionId };
+  }
+  async answer(id: string, request: string, value: string) {
+    this.assertEnabled(); const s = this.store.get(id);
+    if (s.requestIds.includes(request)) return; // Lost HTTP response: do not send the answer twice.
+    const question = s.questions.find(q => q.id === request);
+    if (!question) throw new ConflictError('交互请求已结束');
+    if (question.source === 'emaki') {
+      if (!value.trim()) throw new BadRequestError('请填写回答或选择一项');
+      await this.send(id, { requestId: request, text: `关于「${question.title}」\n${value}`, model: s.model, effort: s.effort,
+        context: question.context ?? { page: '', imageIds: [] } });
+      return;
+    }
     const agent = this.agents.get(id); if (!agent) throw new ConflictError('Agent 连接已结束');
     agent.answer(request, value); s.questions = s.questions.filter(q => q.id !== request); s.status = s.questions.length ? 'waiting' : 'running'; this.flush(s);
   }
@@ -150,7 +171,7 @@ export class AssistantService implements ToolHost {
     if (!pending && !this.agents.has(id) && s.status !== 'running' && s.status !== 'waiting') return;
     // Mark idle first so a starting process cannot launch a prompt after cancellation.
     if (s.status === 'running' || s.status === 'waiting') this.markInterrupted(s, 'stopped');
-    s.status = 'idle'; s.questions = []; this.flush(s);
+    s.status = 'idle'; s.questions = s.questions.filter(q => q.source === 'emaki'); this.flush(s);
     const agent = this.agents.get(id) ?? await pending?.catch(() => undefined);
     // A harness awaiting input may not acknowledge stop; closing it still completes cancellation.
     try { await agent?.stop(); } catch { /* Fall back to closing the process below. */ }

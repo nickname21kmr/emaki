@@ -28,6 +28,9 @@ export interface AssistantQuestion {
   title: string;
   kind: 'approval' | 'input';
   options?: string[];
+  /** App-owned follow-up, answered as a new turn rather than a pending harness RPC. */
+  source?: 'emaki';
+  context?: AssistantContext;
 }
 export interface AssistantMessage {
   id: string;

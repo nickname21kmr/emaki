@@ -26,12 +26,13 @@ const provider = createServer(async (req, res) => {
   const tools = input.tools ?? [];
   const hasToolResponse = input.messages.some((m: any) => m.role === 'tool');
   const probe = input.messages.some((m: any) => m.role === 'user' && JSON.stringify(m.content).includes('__permission_probe__'));
-  const name = tools.find((t: any) => probe ? t.function?.name === 'write' : t.function?.name.endsWith('query_database'))?.function.name;
+  const ask = input.messages.some((m: any) => m.role === 'user' && JSON.stringify(m.content).includes('__question_probe__'));
+  const name = tools.find((t: any) => probe ? t.function?.name === 'write' : t.function?.name.endsWith(ask ? 'ask_user' : 'query_database'))?.function.name;
   res.writeHead(200, { 'Content-Type': 'text/event-stream' });
   if (holdResponse) { res.flushHeaders(); return; }
   const chunk = (delta: any, finish_reason: string | null = null) => res.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'fixture-model', choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
   if (!hasToolResponse && name) {
-    chunk({ role: 'assistant', tool_calls: [{ index: 0, id: 'query-1', type: 'function', function: { name, arguments: JSON.stringify(probe ? { path: 'permission-probe.txt', content: 'fixture only' } : { sql: 'SELECT count(*) AS n FROM images', limit: 10 }) } }] }); chunk({}, 'tool_calls');
+    chunk({ role: 'assistant', tool_calls: [{ index: 0, id: 'query-1', type: 'function', function: { name, arguments: JSON.stringify(probe ? { path: 'permission-probe.txt', content: 'fixture only' } : ask ? { title: '关联到已确认的角色吗？', options: ['关联角色', '暂不关联'] } : { sql: 'SELECT count(*) AS n FROM images', limit: 10 }) } }] }); chunk({}, 'tool_calls');
   } else { chunk({ role: 'assistant', content: 'fixture-response: MCP 查询完成' }); chunk({}, 'stop'); }
   res.end('data: [DONE]\n\n');
 });
@@ -65,6 +66,7 @@ describe('assistant HTTP and MCP', () => {
     const client = new Client({ name: 'test', version: '1' });
     await client.connect(new StreamableHTTPClientTransport(new URL(base + '/api/assistant/mcp'), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
     expect((await client.listTools()).tools.map(t => t.name)).toContain('query_database');
+    expect((await client.listTools()).tools.map(t => t.name)).not.toContain('ask_user');
     const result: any = await client.callTool({ name: 'query_database', arguments: { sql: 'SELECT count(*) AS n FROM images' } });
     expect(JSON.parse(result.content[0].text).rows).toEqual([{ n: 2 }]);
     const media: any = await client.callTool({ name: 'read_media', arguments: { imageId } });
@@ -144,6 +146,26 @@ describe('assistant HTTP and MCP', () => {
     expect(system).toContain('<name>taste-profile</name>');
     expect(system).not.toContain('查源采用');
     expect(finished).not.toHaveProperty('nativeId'); expect(finished).not.toHaveProperty('token');
+  }, 20000);
+  it('delivers an MCP question through real Pi and continues on one user answer', async () => {
+    const session = (await call('POST', '/sessions', {})).json();
+    const context = { page: '/unrecognized', imageIds: [imageId] };
+    await call('POST', `/sessions/${session.id}/messages`, { requestId: crypto.randomUUID(), text: '__question_probe__', model: 'emaki/fixture-model', context });
+    let snapshot: any;
+    await vi.waitFor(async () => {
+      snapshot = (await call('GET', `/sessions/${session.id}`)).json();
+      expect(snapshot.status).toBe('idle'); expect(snapshot.questions).toHaveLength(1);
+    }, { timeout: 10000 });
+    expect(snapshot.questions[0]).toMatchObject({ source: 'emaki', options: ['关联角色', '暂不关联'], context });
+    const answer = { requestId: snapshot.questions[0].id, value: '暂不关联，继续查作者' };
+    expect((await call('POST', `/sessions/${session.id}/answer`, answer)).statusCode).toBe(200);
+    expect((await call('POST', `/sessions/${session.id}/answer`, answer)).statusCode).toBe(200);
+    await vi.waitFor(async () => {
+      snapshot = (await call('GET', `/sessions/${session.id}`)).json(); expect(snapshot.status).toBe('idle');
+    }, { timeout: 10000 });
+    expect(snapshot.questions).toHaveLength(0);
+    expect(snapshot.messages.filter((m: any) => m.role === 'user')).toHaveLength(2);
+    expect(providerRequests.at(-1).messages.some((m: any) => JSON.stringify(m.content).includes(answer.value))).toBe(true);
   }, 20000);
   it('keeps running after SSE disconnect, stops, and resumes its own Pi history', async () => {
     holdResponse = true;
