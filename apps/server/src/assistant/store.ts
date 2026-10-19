@@ -11,7 +11,7 @@ export interface StoredSession extends AssistantSession {
   requestIds: string[];
 }
 export interface PrivateSettings extends AssistantSettings { apiKey: string; externalToken: string }
-const defaults = (): PrivateSettings => ({ enabled: false, accessMode: 'ask', backend: null, codexPath: '', apiKey: '', externalToken: randomBytes(32).toString('hex'),
+const defaults = (): PrivateSettings => ({ enabled: false, accessMode: 'ask', backend: null, codexPath: '', dshPath: '', apiKey: '', externalToken: randomBytes(32).toString('hex'),
   pi: { provider: '', baseUrl: '', model: '', api: 'openai-completions', apiKeyConfigured: false, vision: true, reasoning: false } });
 
 /** Kept outside the library DB, so SQL tools never expose credentials or unrelated chats. */

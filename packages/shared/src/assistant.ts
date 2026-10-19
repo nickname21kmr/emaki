@@ -1,10 +1,11 @@
 /** Provider-neutral UI contract. Native agent history stays with its harness. */
-export type AssistantBackend = 'codex' | 'pi';
+export type AssistantBackend = 'codex' | 'pi' | 'dsh';
 export interface AssistantSettings {
   enabled: boolean;
   accessMode: 'ask' | 'full';
   backend: AssistantBackend | null;
   codexPath: string;
+  dshPath?: string;
   pi: { provider: string; baseUrl: string; model: string; api: 'openai-completions' | 'openai-responses' | 'anthropic-messages'; apiKeyConfigured: boolean; vision: boolean; reasoning: boolean };
 }
 export interface AssistantModel {

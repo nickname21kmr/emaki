@@ -1,11 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
-/** JSONL subprocess transport, shared by Codex app-server and Pi RPC. No shell interpolation. */
+/** JSONL subprocess transport for agent protocols. No shell interpolation. */
 export class JsonProcess {
   readonly child: ChildProcessWithoutNullStreams;
   private next = 0;
-  private pending = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
+  private pending = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void; timer?: NodeJS.Timeout }>();
   onEvent: (message: any) => void = () => {};
   onExit: (message: string) => void = () => {};
   private stderr = '';
@@ -35,7 +35,8 @@ export class JsonProcess {
   request(message: Record<string, unknown>, timeout = 30000): Promise<any> {
     const id = String(++this.next);
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('Agent 响应超时')); }, timeout);
+      // Long-lived ACP prompts settle at completion and are cancelled explicitly.
+      const timer = timeout > 0 ? setTimeout(() => { this.pending.delete(id); reject(new Error('Agent 响应超时')); }, timeout) : undefined;
       this.pending.set(id, { resolve, reject, timer }); this.send({ ...message, id });
     });
   }

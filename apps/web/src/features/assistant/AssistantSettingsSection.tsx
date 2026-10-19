@@ -29,12 +29,12 @@ export function AssistantSettingsSection() {
         <BlockRow label="运行后端" hint="选择驱动 Emaki 对话的 agent；模型在对话输入框下方选择。">
           <div className="flex items-center gap-3">
             <select aria-label="助手后端" className={assistantInput} value={settings.backend ?? ''} disabled={busy} onChange={e => void perform(() => save({ backend: e.target.value || null }))}>
-              <option value="">选择后端</option><option value="codex">Codex · 已有安装</option><option value="pi">Pi · 内置</option>
+              <option value="">选择后端</option><option value="codex">Codex · 已有安装</option><option value="pi">Pi · 内置</option><option value="dsh">DSH · 已有安装</option>
             </select><Button onClick={() => void perform(detect)} loading={busy}>重新检测</Button>
           </div>
-          {results.map(result => <p key={result.backend} className="mt-2 break-words text-xs text-fg-muted">{result.backend === 'pi' ? 'Pi' : 'Codex'} · {result.available ? '可用' : '需配置'} · {result.detail}</p>)}
+          {results.map(result => <p key={result.backend} className="mt-2 break-words text-xs text-fg-muted">{({ pi: 'Pi', codex: 'Codex', dsh: 'DSH' })[result.backend]} · {result.available ? '可用' : '需配置'} · {result.detail}</p>)}
         </BlockRow>
-        <Configuration key={JSON.stringify([settings.backend, settings.codexPath, settings.pi])} settings={settings} save={body => perform(() => save(body))} busy={busy} />
+        <Configuration key={JSON.stringify([settings.backend, settings.codexPath, settings.dshPath, settings.pi])} settings={settings} save={body => perform(() => save(body))} busy={busy} />
         <BlockRow label="供外部 Agent 使用的 MCP" hint="将连接配置添加到其他 agent，即可查询和修改此图库。配置包含访问凭证。">
           <Button size="sm" onClick={() => void perform(async () => { const c = await assistantApi.mcpConfig(); setExternal(JSON.stringify({ mcpServers: { emaki: { url: c.url, headers: { Authorization: `Bearer ${c.token}` } } } }, null, 2)); })}>显示连接配置</Button>
           {external && <textarea aria-label="MCP 连接配置" readOnly className={`${assistantInput} mt-3 h-44 font-mono text-xs`} value={external} />}
@@ -44,7 +44,7 @@ export function AssistantSettingsSection() {
   </SettingsSection>;
 }
 function Configuration({ settings, save, busy }: { settings: AssistantSettings; save: (body: unknown) => Promise<unknown>; busy: boolean }) {
-  const [binary, setBinary] = useState(settings.codexPath), [pi, setPi] = useState(settings.pi), [key, setKey] = useState('');
+  const [binary, setBinary] = useState(settings.backend === 'dsh' ? settings.dshPath ?? '' : settings.codexPath), [pi, setPi] = useState(settings.pi), [key, setKey] = useState('');
   const [available, setAvailable] = useState<{ id: string; name: string }[] | null>(null);
   const [fetching, setFetching] = useState(false), [modelError, setModelError] = useState(''), [search, setSearch] = useState('');
   const selected = new Set(pi.model.split(',').map(id => id.trim()).filter(Boolean));
@@ -59,6 +59,10 @@ function Configuration({ settings, save, busy }: { settings: AssistantSettings; 
     finally { setFetching(false); }
   };
   const resetModels = () => { setAvailable(null); setModelError(''); setSearch(''); };
+  if (settings.backend === 'dsh') return <BlockRow label="DSH 路径" hint="留空时检测本机安装；沿用 DSH 模型与登录配置。Emaki 对话独立保存。思考和文字在 DSH 提交消息后显示。">
+    <input aria-label="DSH 可执行文件路径" className={assistantInput} value={binary} onChange={e => setBinary(e.target.value)} placeholder="自动检测" />
+    <Button className="mt-3" disabled={busy} onClick={() => void save({ dshPath: binary })}>保存路径</Button>
+  </BlockRow>;
   if (settings.backend === 'codex') return <BlockRow label="Codex 路径" hint="留空时自动检测 PATH 和常见安装目录；登录沿用本机 Codex 配置。">
     <input aria-label="Codex 可执行文件路径" className={assistantInput} value={binary} onChange={e => setBinary(e.target.value)} placeholder="自动检测" />
     <Button className="mt-3" disabled={busy} onClick={() => void save({ codexPath: binary })}>保存路径</Button>
