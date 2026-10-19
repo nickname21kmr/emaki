@@ -1,3 +1,4 @@
+import { inferCoverFocus } from '../../services/covers/focus.ts';
 import {
   CONTENT_KINDS,
   UNRECOGNIZED_ANNEX_KINDS,
@@ -307,7 +308,7 @@ export class MockDataSource implements DataSource {
     const covers: Work['covers'] = [];
     for (const c of chars) {
       if (covers.length >= 3 || covers.some((x) => x.imageId === c.coverImageId)) continue;
-      covers.push({ imageId: c.coverImageId!, rating: this.coverRating(c.coverImageId), color: this.coverColor(c.coverImageId), focus: c.coverFocus });
+      covers.push({ imageId: c.coverImageId!, rating: this.coverRating(c.coverImageId), color: this.coverColor(c.coverImageId), focus: this.effectiveFocus(c, c.coverImageId) });
     }
     const first = covers[0] ?? null;
     return {
@@ -364,6 +365,12 @@ export class MockDataSource implements DataSource {
     return row.coverImageId ?? this.coverCands.get(row.id)?.[0]?.img.id ?? null;
   }
 
+  private effectiveFocus(row: CharacterRow, coverId: ID | null): Character['coverFocus'] {
+    if ((row.coverManual ?? row.coverImageId !== null) && row.coverFocus) return row.coverFocus;
+    const image = coverId ? this.db.images.get(coverId) : undefined;
+    return image ? inferCoverFocus(image.tags.map((t) => [t.tag, t.score] as const)) : null;
+  }
+
   async listCoverCandidates(id: ID, limit: number): Promise<CoverCandidatesResponse> {
     const row = this.requireCharacter(id);
     const list = [...(this.coverCands.get(id) ?? [])];
@@ -393,7 +400,7 @@ export class MockDataSource implements DataSource {
       newCount: row.newCount,
       coverImageId: coverId,
       coverRating: this.coverRating(coverId),
-      coverFocus: row.coverFocus,
+      coverFocus: this.effectiveFocus(row, coverId),
       coverManual: row.coverManual ?? row.coverImageId !== null,
       coverColor: this.coverColor(coverId),
       recentCount: idx.charRecentCount.get(row.id) ?? 0,

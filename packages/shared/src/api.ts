@@ -134,7 +134,7 @@ export interface UpdateCharacterBody {
   danbooruTag?: string | null;
   workIds?: ID[];
   coverImageId?: ID | null;
-  coverFocus?: FocusPoint | null;
+  coverFocus?: Pick<FocusPoint, 'x' | 'y'> | null;
   pinned?: boolean;
 }
 
