@@ -37,4 +37,20 @@ describe('assistant presentation', () => {
     expect(clampPosition({ x: -400, y: -500 }, 440, 600, 1280, 720)).toEqual({ x: 8, y: 8 });
     expect(clampPosition({ x: 832, y: 112 }, 880, 634, 1280, 720)).toEqual({ x: 392, y: 78 });
   });
+  it('groups alternating reasoning and tools without crossing replies, cards or user turns', () => {
+    const thought = (id: string): AssistantMessage => ({ id, role: 'assistant', text: '', reasoning: { text: 'checking', status: 'completed', startedAt: 1 } });
+    const tool = (id: string): AssistantMessage => ({ id, role: 'tool', text: 'search' });
+    const messages: AssistantMessage[] = [
+      thought('1'), tool('2'), thought('3'), tool('4'), thought('5'),
+      { id: '6', role: 'tool', text: '结果', cards: [{ id: 'card', title: '图片', imageIds: ['1'] }] },
+      { id: '7', role: 'assistant', text: 'Found it' },
+      thought('8'),
+      { id: '9', role: 'user', text: 'Next' },
+      tool('10'), thought('11'),
+      { id: '12', role: 'system', text: 'Interrupted' },
+    ];
+    expect(groupMessages(messages).map(g => g.map(m => m.id))).toEqual([
+      ['1', '2', '3', '4', '5'], ['6'], ['7'], ['8'], ['9'], ['10', '11'], ['12'],
+    ]);
+  });
 });

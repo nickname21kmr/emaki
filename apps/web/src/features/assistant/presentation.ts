@@ -52,12 +52,14 @@ export function toggleResultImage(current: ResultSelection | null, card: { id: s
   return { cardId: card.id, title: current && current.cardId !== card.id && current.ids.length ? '助手选择' : card.title, ids: [...ids] };
 }
 
+export const isProcessMessage = (message: AssistantMessage) =>
+  !message.cards?.length && (message.role === 'tool' || Boolean(message.reasoning));
+
 export function groupMessages(messages: AssistantMessage[]): AssistantMessage[][] {
   const groups: AssistantMessage[][] = [];
   for (const message of messages) {
     const previous = groups.at(-1);
-    const isLog = (m: AssistantMessage) => m.role === 'tool' && !m.cards?.length;
-    if (isLog(message) && previous && isLog(previous[0]!)) previous.push(message);
+    if (isProcessMessage(message) && previous && isProcessMessage(previous[0]!)) previous.push(message);
     else groups.push([message]);
   }
   return groups;

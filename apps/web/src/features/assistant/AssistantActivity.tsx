@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { AssistantMessage, AssistantSession } from '@emaki/shared';
 import { LoaderCircle, Check, CircleAlert, Pause } from 'lucide-react';
 
@@ -37,12 +37,21 @@ export function ReasoningActivity({ message }: { message: AssistantMessage }) {
   </details>;
 }
 
-export function toolGroupLabel(messages: AssistantMessage[]): string {
+export function processGroupLabel(messages: AssistantMessage[]): string {
   const running = messages.filter(m => m.tool?.status === 'running');
+  const thoughts = messages.filter(m => m.reasoning);
+  const tools = messages.filter(m => m.role === 'tool' && !m.reasoning);
   const success = messages.filter(m => m.tool?.status === 'succeeded').length;
   const failed = messages.filter(m => m.tool?.status === 'failed').length;
   const interrupted = messages.filter(m => m.tool?.status === 'interrupted').length;
-  return [`${messages.length} 条工具记录`, running.length ? `正在运行 ${running.at(-1)!.text}${running.length > 1 ? ` 等 ${running.length} 项` : ''}` : '', success ? `${success} 成功` : '', failed ? `${failed} 失败` : '', interrupted ? `${interrupted} 中断` : '', messages.some(m => m.undoToken) ? '含可撤销操作' : ''].filter(Boolean).join(' · ');
+  return ['处理过程', thoughts.length ? `${thoughts.length} 段思考` : '', tools.length ? `${tools.length} 条工具记录` : '', running.length ? `正在运行 ${running.at(-1)!.text}${running.length > 1 ? ` 等 ${running.length} 项` : ''}` : thoughts.some(m => m.reasoning?.status === 'running') ? '正在思考' : '', success ? `${success} 成功` : '', failed ? `${failed} 失败` : '', interrupted || thoughts.some(m => m.reasoning?.status === 'interrupted') ? '有中断' : '', messages.some(m => m.undoToken) ? '含可撤销操作' : ''].filter(Boolean).join(' · ');
+}
+
+export function ProcessActivity({ messages, children }: { messages: AssistantMessage[]; children: ReactNode }) {
+  return <details className="rounded-xl border border-line px-3 py-2">
+    <summary className="cursor-pointer text-xs text-fg-muted">{processGroupLabel(messages)}</summary>
+    <div className="mt-3 max-h-96 space-y-3 overflow-y-auto">{children}</div>
+  </details>;
 }
 
 export function currentActivity(session: AssistantSession) {

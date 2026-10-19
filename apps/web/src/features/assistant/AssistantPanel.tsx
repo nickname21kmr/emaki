@@ -12,11 +12,11 @@ import { useLightbox, useSelection } from '@/lib/stores';
 import { undo } from '@/lib/queries';
 import { assistantApi, useAssistantSettings } from './client';
 import { assistantInput } from './AssistantSettingsSection';
-import { composerContext, contextPageLabel, selectionLabel, groupMessages, toggleResultImage, type ResultSelection } from './presentation';
+import { composerContext, contextPageLabel, selectionLabel, groupMessages, isProcessMessage, toggleResultImage, type ResultSelection } from './presentation';
 import { useFloatingDrag } from './useFloatingDrag';
 import { openSessionEvents } from './sessionEvents';
 import { useFloatingResize } from './useFloatingResize';
-import { ActivityStatus, ReasoningActivity, ToolActivity, toolGroupLabel } from './AssistantActivity';
+import { ActivityStatus, ReasoningActivity, ToolActivity, ProcessActivity } from './AssistantActivity';
 
 export function AssistantPanel() {
   const settings = useAssistantSettings().data, [open, setOpen] = useState(false);
@@ -108,10 +108,7 @@ function Conversation({ backend, close }: { backend: string | null; close: () =>
       {!sessionId && <div className="py-8 text-sm leading-7 text-fg-muted"><p className="font-medium text-fg">围绕当前图库，一起处理问题。</p><p>选中图片后，可以询问角色、对照来源，或让助手查询和整理。图片按需读取。</p>{backend ? <Button className="mt-4" disabled={busy} onClick={() => void perform(async () => { const s = await assistantApi.create(); chooseSession(s.id); await sessions.refetch(); })}>开始新对话</Button> : <Link className="text-shu underline" to="/settings#assistant">先在设置中选择后端</Link>}</div>}
       {groupMessages(session?.messages ?? []).map(group => {
         const content = group.map(message => <Message key={message.id} message={message} selected={contextIds} select={(card, id, checked) => { setResultSelection(previous => toggleResultImage(previous ?? { cardId: card.id, title: card.title, ids: context.imageIds }, card, id, checked)); input.current?.focus({ preventScroll: true }); }} />);
-        return group.length > 1 ? <details key={group[0]!.id} className="rounded-xl border border-line px-3 py-2">
-          <summary className="cursor-pointer text-xs text-fg-muted">{toolGroupLabel(group)}</summary>
-          <div className="mt-3 space-y-3">{content}</div>
-        </details> : content;
+        return isProcessMessage(group[0]!) ? <ProcessActivity key={group[0]!.id} messages={group}>{content}</ProcessActivity> : content;
       })}
       {session?.interruption && !running && <div className="flex items-center gap-3 rounded-xl bg-sunken p-3">
         <Button size="sm" disabled={busy || !model || !connected} onClick={() => void perform(resume)}>{session.interruption.reason === 'error' ? '重试并继续' : '继续处理'}</Button>
