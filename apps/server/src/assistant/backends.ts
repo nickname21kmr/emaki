@@ -171,7 +171,7 @@ export class PiBackend implements AgentBackend {
   }
   async models(): Promise<AssistantModel[]> {
     const { models } = await this.rpc.request({ type: 'get_available_models' });
-    return models.map((m: any) => ({ id: `${m.provider}/${m.id}`, provider: m.provider, name: `${m.name ?? m.id} · ${m.provider}`, vision: m.input?.includes('image') ?? false,
+    return models.map((m: any) => ({ id: `${m.provider}/${m.id}`, provider: m.provider, name: m.provider === 'emaki' ? (m.name ?? m.id) : `${m.name ?? m.id} · ${m.provider}`, vision: m.input?.includes('image') ?? false,
       efforts: m.reasoning ? getSupportedThinkingLevels(m) : [], defaultEffort: m.reasoning ? getSupportedThinkingLevels(m).find(l => l === 'medium') ?? getSupportedThinkingLevels(m)[0] : '' }));
   }
   async prompt(text: string, model: string, effort: string) {

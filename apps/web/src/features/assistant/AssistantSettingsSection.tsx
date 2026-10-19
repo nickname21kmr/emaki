@@ -50,7 +50,11 @@ function Configuration({ settings, save, busy }: { settings: AssistantSettings; 
   const selected = new Set(pi.model.split(',').map(id => id.trim()).filter(Boolean));
   const readModels = async () => {
     setFetching(true); setModelError('');
-    try { setAvailable(await assistantApi.apiModels({ baseUrl: pi.baseUrl.trim(), api: pi.api, ...(key ? { apiKey: key } : {}) })); }
+    try {
+      const models = await assistantApi.apiModels({ baseUrl: pi.baseUrl.trim(), api: pi.api, ...(key ? { apiKey: key } : {}) });
+      setAvailable(models);
+      setPi(current => ({ ...current, model: [...new Set([...current.model.split(',').map(id => id.trim()).filter(Boolean), ...models.map(m => m.id)])].join(', ') }));
+    }
     catch (e) { setModelError((e as Error).message); }
     finally { setFetching(false); }
   };
