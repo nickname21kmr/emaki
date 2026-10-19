@@ -2,6 +2,7 @@ import type { Settings } from '@emaki/shared';
 import { Grid3x3, LayoutGrid } from 'lucide-react';
 import { Field, Kbd, Segmented, Switch } from '@/components/ui';
 import type { BlurLevel } from '@/lib/blur';
+import type { CoverCrop } from '@/lib/coverCrop';
 import { cn } from '@/lib/cn';
 import { usePrefs } from '@/lib/stores';
 import { useSaveSettings } from '../hooks';
@@ -94,6 +95,19 @@ export function AppearanceSection({ ui }: { ui: Settings['ui'] }) {
             options={[
               { value: 'comfortable', label: '舒展', icon: <LayoutGrid /> },
               { value: 'compact', label: '紧凑', icon: <Grid3x3 /> },
+            ]}
+          />
+        </Field>
+        <Field
+          label="角色封面裁剪"
+          hint="自动选的封面放不下整张图时裁哪里。跟着构图：大腿、脚是画面重点的图往下裁。手动拖过焦点的封面不受影响。"
+        >
+          <Segmented<CoverCrop>
+            value={prefs.coverCrop}
+            onChange={prefs.setCoverCrop}
+            options={[
+              { value: 'head', label: '优先保住头' },
+              { value: 'composition', label: '跟着构图' },
             ]}
           />
         </Field>

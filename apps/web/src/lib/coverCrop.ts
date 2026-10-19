@@ -1,6 +1,14 @@
 import type { FocusPoint } from '@emaki/shared';
 
 export interface ImageSize { width: number; height: number }
+
+/** 外观设置「角色封面裁剪」：优先保住头（默认）/ 跟着构图（大腿、脚是重点时往下） */
+export type CoverCrop = 'head' | 'composition';
+
+/** 按外观设置挑用哪个高度：跟着构图且有 legsY 时用它，其余照旧 */
+export function pickFocus(focus: FocusPoint, mode: CoverCrop): FocusPoint {
+  return mode === 'composition' && focus.space === 'image' && focus.legsY !== undefined ? { ...focus, y: focus.legsY } : focus;
+}
 const clamp = (value: number) => Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0.5));
 
 /**

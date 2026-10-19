@@ -1,5 +1,13 @@
 import { expect, it } from 'vitest';
-import { coverPosition } from './coverCrop';
+import { coverPosition, pickFocus } from './coverCrop';
+
+it('跟着构图时有 legsY 才换高度；保头模式和手动焦点不变', () => {
+  const auto = { x: 0.5, y: 0.35, space: 'image' as const, legsY: 0.7 };
+  expect(pickFocus(auto, 'composition').y).toBe(0.7);
+  expect(pickFocus(auto, 'head').y).toBe(0.35);
+  expect(pickFocus({ x: 0.5, y: 0.35, space: 'image' }, 'composition').y).toBe(0.35);
+  expect(pickFocus({ x: 0.5, y: 0.2, legsY: 0.7 }, 'composition').y).toBe(0.2);
+});
 
 it('keeps the same subject visible in wide, portrait and avatar frames', () => {
   const image={width:2000,height:3200},focus={x:0.5,y:0.3,space:'image' as const};

@@ -1,9 +1,13 @@
 import type { FocusPoint } from '@emaki/shared';
 import { useLayoutEffect, useRef, useState } from 'react';
-import { coverPosition } from '@/lib/coverCrop';
+import { coverPosition, pickFocus } from '@/lib/coverCrop';
+import { usePrefs } from '@/lib/stores';
 
 /** Inferred focal points need measurements; ordinary thumbnails and explicit manual crops stay CSS-only. */
-export function useCoverPosition(focus: FocusPoint | null | undefined, src: string) {
+export function useCoverPosition(rawFocus: FocusPoint | null | undefined, src: string) {
+  // 外观设置「角色封面裁剪」：跟着构图时，大腿、脚是重点的图改用 legsY
+  const mode = usePrefs((s) => s.coverCrop);
+  const focus = rawFocus ? pickFocus(rawFocus, mode) : rawFocus;
   const frameRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const [measured, setMeasured] = useState<{ key: string; value: string } | null>(null);

@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { useShallow } from 'zustand/react/shallow';
 import type { BlurLevel, BlurPrefs } from './blur';
+import type { CoverCrop } from './coverCrop';
 
 // ------------------------------------------------------------------ 偏好（持久化到 localStorage）
 
@@ -38,6 +39,9 @@ interface PrefsState {
   charactersView: CharactersView;
   /** 网格目标行高（px），图库页的缩放滑块 */
   gridRowHeight: number;
+  /** 角色封面裁剪：优先保住头（默认）/ 跟着构图 */
+  coverCrop: CoverCrop;
+  setCoverCrop: (v: CoverCrop) => void;
   sidebarCollapsed: boolean;
   /** 图库 URL 里没写 ?kind 时看哪些类型（默认只看插画，D2）；用户换过就记住 */
   galleryKinds: ContentKind[] | 'all';
@@ -82,6 +86,8 @@ export const usePrefs = create<PrefsState>()(
       setCharactersView: (charactersView) => set({ charactersView }),
       setGridRowHeight: (gridRowHeight) => set({ gridRowHeight }),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
+      coverCrop: 'head',
+      setCoverCrop: (coverCrop) => set({ coverCrop }),
     }),
     { name: 'emaki.prefs' },
   ),
