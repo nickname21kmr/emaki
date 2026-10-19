@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.tsbuildinfo
+__pycache__/
 .DS_Store
 Thumbs.db
 # 运行时数据：数据库、缩略图缓存、模型文件——永远不要提交

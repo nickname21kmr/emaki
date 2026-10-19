@@ -139,12 +139,12 @@ describe('assistant HTTP and MCP', () => {
   });
   it('runs the real Pi harness against a fixture API, including an MCP round trip', async () => {
     const address = provider.address() as { port: number };
-    await call('PATCH', '/settings', { pi: { provider: '', api: 'openai-completions', model: 'fixture-model', baseUrl: `http://127.0.0.1:${address.port}/v1` }, apiKey: 'fixture-key' });
+    await call('PATCH', '/settings', { pi: { provider: '', api: 'openai-completions', model: ' fixture-model, ,fixture-model, ', baseUrl: `http://127.0.0.1:${address.port}/v1` }, apiKey: 'fixture-key' });
     const session = (await call('POST', '/sessions', {})).json();
     piSession = session.id;
     expect((await call('GET', '/sessions/00000000-0000-4000-8000-000000000001')).statusCode).toBe(404);
     const models = (await call('GET', `/sessions/${session.id}/models`)).json();
-    expect(models.some((m: any) => m.id === 'emaki/fixture-model')).toBe(true);
+    expect(models.filter((m: any) => m.provider === 'emaki').map((m: any) => m.id)).toEqual(['emaki/fixture-model']);
     const input = { requestId: '00000000-0000-4000-8000-000000000002', text: 'Count images using MCP', model: 'emaki/fixture-model', effort: '', context: { page: '/gallery', imageIds: [imageId] } };
     expect((await call('POST', `/sessions/${session.id}/messages`, input)).statusCode).toBe(200);
     await call('POST', `/sessions/${session.id}/messages`, input);

@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { AssistantMessage } from '@emaki/shared';
-import { clampPosition, composerContext, groupMessages, toggleResultImage } from './presentation';
+import { clampPosition, composerContext, groupMessages, toggleResultImage, reconcileModelSelection } from './presentation';
 
 describe('assistant presentation', () => {
+  it('recovers removed models and reasoning levels while preserving available user choices', () => {
+    const models = [{ id: 'new', name: 'New', vision: true, efforts: ['low', 'high'], defaultEffort: 'low' }];
+    const saved = { model: 'removed', effort: 'max' };
+    expect(reconcileModelSelection(models, saved, saved)).toEqual({ model: 'new', effort: 'low' });
+    expect(reconcileModelSelection(models, { model: 'new', effort: 'max' }, saved)).toEqual({ model: 'new', effort: 'low' });
+    expect(reconcileModelSelection(models, { model: 'new', effort: '' }, saved)).toEqual({ model: 'new', effort: '' });
+    expect(reconcileModelSelection(models, { model: '', effort: '' }, { model: 'new', effort: 'high' })).toEqual({ model: 'new', effort: 'high' });
+    expect(reconcileModelSelection([], saved, saved)).toEqual({ model: '', effort: '' });
+    expect(reconcileModelSelection([{ ...models[0]!, efforts: [], defaultEffort: '' }], { model: 'new', effort: 'high' }, saved)).toEqual({ model: 'new', effort: '' });
+  });
   it('uses the result selection for both the composer count and outgoing context, including clearing it', () => {
     const pageSelection = new Set(['page-1', 'page-2', 'page-3', 'page-4', 'page-5']);
     const card = { id: 'result', title: '识别结果' };

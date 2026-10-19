@@ -170,7 +170,8 @@ export class PiBackend implements AgentBackend {
     const models: any = existsSync(modelFile) ? JSON.parse(readFileSync(modelFile, 'utf8')) : { providers: {} };
     if (settings.pi.model && settings.pi.baseUrl) {
       models.providers ??= {};
-      models.providers.emaki = { baseUrl: settings.pi.baseUrl, api: settings.pi.api, apiKey: '${EMAKI_PI_API_KEY}', models: settings.pi.model.split(',').map((id) => ({ id: id.trim(), name: id.trim(), input: settings.pi.vision ? ['text', 'image'] : ['text'], reasoning: settings.pi.reasoning })) };
+      const ids = [...new Set(settings.pi.model.split(',').map(id => id.trim()).filter(Boolean))];
+      models.providers.emaki = { baseUrl: settings.pi.baseUrl, api: settings.pi.api, apiKey: '${EMAKI_PI_API_KEY}', models: ids.map(id => ({ id, name: id, input: settings.pi.vision ? ['text', 'image'] : ['text'], reasoning: settings.pi.reasoning })) };
     }
     writeFileSync(path.join(agentDir, 'models.json'), JSON.stringify(models), { mode: 0o600 });
     writeFileSync(path.join(agentDir, 'mcp.json'), JSON.stringify({ mcpServers: { emaki: { url: endpoint, headers: { Authorization: 'Bearer ${EMAKI_ASSISTANT_TOKEN}' }, exposure: 'direct' } } }), { mode: 0o600 });

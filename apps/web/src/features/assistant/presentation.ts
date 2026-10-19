@@ -1,6 +1,16 @@
-import type { AssistantContext, AssistantMessage } from '@emaki/shared';
+import type { AssistantContext, AssistantMessage, AssistantModel } from '@emaki/shared';
 import { KIND_LABEL } from '../../lib/kinds';
 import { THEME_META } from '../unrecognized/themes';
+
+/** Keep user choices when available; recover when API configuration changes. */
+export function reconcileModelSelection(models: AssistantModel[], current: { model: string; effort: string }, saved: { model: string; effort: string }) {
+  const selected = models.find(m => m.id === current.model);
+  const remembered = models.find(m => m.id === saved.model);
+  const chosen = selected ?? remembered ?? models[0];
+  if (!chosen) return { model: '', effort: '' };
+  const effort = selected ? current.effort : remembered ? saved.effort : chosen.defaultEffort ?? '';
+  return { model: chosen.id, effort: !effort || chosen.efforts.includes(effort) ? effort : chosen.defaultEffort ?? '' };
+}
 
 /** Translate saved URLs too, so older messages use the same readable labels. */
 export function contextPageLabel(page: string): string {

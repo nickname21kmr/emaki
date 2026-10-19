@@ -12,6 +12,80 @@ function setup() {
 }
 afterEach(() => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe('assistant ownership and replay', () => {
+  it('does not launch a cancelled prompt when its model lookup finishes late', async () => {
+    const s = setup(); s.store.settings.backend = 'codex'; s.store.settings.enabled = true;
+    const session = s.store.create();
+    let finishModels!: () => void;
+    const pendingModels = new Promise<void>(resolve => { finishModels = resolve; });
+    const models = vi.fn(async () => { await pendingModels; return [{ id: 'fixture', efforts: [], vision: true }]; });
+    const oldPrompt = vi.fn(async () => {}), newPrompt = vi.fn(async () => {});
+    vi.spyOn(CodexBackend, 'open')
+      .mockResolvedValueOnce({ models, prompt: oldPrompt, close: async () => {}, stop: async () => {} } as unknown as CodexBackend)
+      .mockResolvedValueOnce({ models, prompt: newPrompt, close: async () => {}, stop: async () => {} } as unknown as CodexBackend);
+    const input = { requestId: 'first', text: 'Search', model: 'fixture', effort: '', context: { page: '/', imageIds: [] } };
+    await s.send(session.id, input);
+    await vi.waitFor(() => expect(models).toHaveBeenCalledTimes(1));
+    await s.stop(session.id);
+    await s.send(session.id, { ...input, requestId: 'next' });
+    finishModels();
+    await vi.waitFor(() => expect(newPrompt).toHaveBeenCalledTimes(1));
+    expect(oldPrompt).not.toHaveBeenCalled();
+    await s.close();
+  });
+  it('waits for stop before continuing and ignores events from the old connection', async () => {
+    const s = setup(); s.store.settings.backend = 'codex'; s.store.settings.enabled = true;
+    const session = s.store.create(), sinks: AgentSink[] = [];
+    let finishStop!: () => void;
+    const pendingStop = new Promise<void>(resolve => { finishStop = resolve; });
+    const prompt = vi.fn(async () => {}), stop = vi.fn(() => pendingStop), close = vi.fn(async () => {});
+    const open = vi.spyOn(CodexBackend, 'open').mockImplementation(async (_a, _b, _c, _d, _e, sink) => {
+      sinks.push(sink);
+      return { models: async () => [{ id: 'fixture', efforts: [], vision: true }], prompt, stop, close } as unknown as CodexBackend;
+    });
+    const input = { requestId: 'first', text: 'Search', model: 'fixture', effort: '', context: { page: '/', imageIds: [] } };
+    await s.send(session.id, input);
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    const stopping = s.stop(session.id);
+    expect(s.stop(session.id)).toBe(stopping);
+    const continuing = s.send(session.id, { ...input, requestId: 'next' });
+    await Promise.resolve();
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(session.messages.filter(m => m.role === 'user')).toHaveLength(1);
+    finishStop(); await stopping; await continuing;
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(2));
+    sinks[0]!.text('late', 'old reply');
+    sinks[0]!.tool('late-tool', 'old tool', { status: 'running' });
+    sinks[0]!.question({ id: 'late-question', title: 'old question', kind: 'input' });
+    sinks[0]!.disconnected?.(); sinks[0]!.done('old process exit');
+    expect(session.status).toBe('running');
+    expect(session.questions).toHaveLength(0);
+    expect(session.messages.some(m => m.id.startsWith('late'))).toBe(false);
+    await s.models(session.id); expect(open).toHaveBeenCalledTimes(2);
+    sinks[1]!.text('new', 'new reply'); sinks[1]!.done();
+    expect(session.messages.at(-1)?.text).toBe('new reply');
+    expect(stop).toHaveBeenCalledTimes(1); expect(close).toHaveBeenCalledTimes(1);
+    await s.close();
+  });
+  it('cancels a starting connection before it can prompt and opens a fresh one on continue', async () => {
+    const s = setup(); s.store.settings.backend = 'codex'; s.store.settings.enabled = true;
+    const session = s.store.create();
+    let finishOpen!: () => void;
+    const pendingOpen = new Promise<void>(resolve => { finishOpen = resolve; });
+    const prompt = vi.fn(async () => {}), close = vi.fn(async () => {});
+    const open = vi.spyOn(CodexBackend, 'open').mockImplementation(async () => {
+      await pendingOpen;
+      return { models: async () => [{ id: 'fixture', efforts: [], vision: true }], prompt, close, stop: async () => {} } as unknown as CodexBackend;
+    });
+    const input = { requestId: 'first', text: 'Search', model: 'fixture', effort: '', context: { page: '/', imageIds: [] } };
+    await s.send(session.id, input);
+    const stopping = s.stop(session.id);
+    const continuing = s.send(session.id, { ...input, requestId: 'next' });
+    finishOpen(); await stopping; await continuing;
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    expect(open).toHaveBeenCalledTimes(2); expect(close).toHaveBeenCalledTimes(1);
+    expect(session.status).toBe('running');
+    await s.close();
+  });
   it('updates one tool record, persists reasoning and marks pending activities interrupted on stop/restart', async () => {
     const s = setup(); s.store.settings.backend = 'codex'; s.store.settings.enabled = true;
     const session = s.store.create(); let sink!: AgentSink;

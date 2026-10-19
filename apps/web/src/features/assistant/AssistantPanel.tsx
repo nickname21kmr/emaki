@@ -12,7 +12,7 @@ import { useLightbox, useSelection } from '@/lib/stores';
 import { undo } from '@/lib/queries';
 import { assistantApi, useAssistantSettings } from './client';
 import { assistantInput } from './AssistantSettingsSection';
-import { composerContext, contextPageLabel, selectionLabel, groupMessages, isProcessMessage, toggleResultImage, type ResultSelection } from './presentation';
+import { composerContext, contextPageLabel, selectionLabel, groupMessages, isProcessMessage, toggleResultImage, reconcileModelSelection, type ResultSelection } from './presentation';
 import { useFloatingDrag } from './useFloatingDrag';
 import { openSessionEvents } from './sessionEvents';
 import { useFloatingResize } from './useFloatingResize';
@@ -65,10 +65,10 @@ function Conversation({ backend, close }: { backend: string | null; close: () =>
     return () => { disposed = true; closeEvents(); };
   }, [sessionId, client, connectionAttempt]);
   useEffect(() => {
-    if (model || !session || !models.data?.length) return;
-    const chosen = models.data.find(m => m.id === session?.model) ?? models.data[0]!;
-    setModel(chosen.id); setEffort(chosen.efforts.includes(session?.effort ?? '') ? session!.effort : chosen.defaultEffort ?? '');
-  }, [models.data, session?.model, session?.effort, model]);
+    if (!session || !models.data) return;
+    const chosen = reconcileModelSelection(models.data, { model, effort }, session);
+    setModel(chosen.model); setEffort(chosen.effort);
+  }, [models.data, session?.model, session?.effort, model, effort]);
   useEffect(() => { if (follow.current) end.current?.scrollIntoView({ behavior: 'auto' }); }, [session]);
   useEffect(() => {
     // A snapshot can confirm acceptance even when the HTTP response was lost.

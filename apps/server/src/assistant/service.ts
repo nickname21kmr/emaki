@@ -16,6 +16,8 @@ export class AssistantService implements ToolHost {
   readonly store: AssistantStore;
   private agents = new Map<string, AgentBackend>();
   private starting = new Map<string, Promise<AgentBackend>>();
+  private stopping = new Map<string, Promise<void>>();
+  private connections = new Map<string, symbol>();
   private listeners = new Set<(id: string) => void>();
   private timers = new Map<string, NodeJS.Timeout>();
   private operations: Record<string, Operation>;
@@ -33,7 +35,7 @@ export class AssistantService implements ToolHost {
     for (const listener of this.listeners) listener(s.id);
   }
   private changed(s: StoredSession) { if (!this.timers.has(s.id)) this.timers.set(s.id, setTimeout(() => this.flush(s), 100)); }
-  private sink(s: StoredSession): AgentSink {
+  private sink(s: StoredSession, current = () => true): AgentSink {
     const preview = (text: string) => {
       for (const secret of [s.token, this.store.settings.apiKey, this.store.settings.externalToken]) {
         if (secret) text = text.split(secret).join('[已隐藏]');
@@ -41,14 +43,15 @@ export class AssistantService implements ToolHost {
       return boundedText(text);
     };
     return {
-      disconnected: () => this.agents.delete(s.id),
+      disconnected: () => { if (current()) this.agents.delete(s.id); },
       text: (id, delta) => {
+        if (!current() || (s.status !== 'running' && s.status !== 'waiting')) return;
         let msg = s.messages.find(m => m.id === id && m.role === 'assistant');
         if (!msg) { msg = { id, role: 'assistant', text: '', model: s.model }; s.messages.push(msg); }
         msg.text += delta; this.changed(s);
       },
       tool: (id, text, update) => {
-        if (s.status !== 'running' && s.status !== 'waiting') return;
+        if (!current() || (s.status !== 'running' && s.status !== 'waiting')) return;
         let message = s.messages.find(m => m.id === id);
         if (message?.tool?.finishedAt != null && update?.status === 'running') return;
         if (!message) { message = { id, role: 'tool', text }; s.messages.push(message); }
@@ -66,7 +69,7 @@ export class AssistantService implements ToolHost {
         this.changed(s);
       },
       reasoning: (id, delta, done) => {
-        if (s.status !== 'running' && s.status !== 'waiting') return;
+        if (!current() || (s.status !== 'running' && s.status !== 'waiting')) return;
         const reasoningId = `${id}:reasoning`;
         let message = s.messages.find(m => m.id === reasoningId);
         if (!message && !delta) return;
@@ -76,9 +79,9 @@ export class AssistantService implements ToolHost {
         if (done) message.reasoning!.finishedAt = Date.now();
         this.changed(s);
       },
-      question: (question) => { s.questions.push(question); s.status = 'waiting'; this.flush(s); },
+      question: (question) => { if (!current() || (s.status !== 'running' && s.status !== 'waiting')) return; s.questions.push(question); s.status = 'waiting'; this.flush(s); },
       done: (error, interrupted) => {
-        if (s.status !== 'running' && s.status !== 'waiting') return;
+        if (!current() || (s.status !== 'running' && s.status !== 'waiting')) return;
         interruptActivities(s);
         s.questions = s.questions.filter(q => q.source === 'emaki'); s.status = error ? 'error' : 'idle';
         if (error) {
@@ -100,12 +103,14 @@ export class AssistantService implements ToolHost {
       : PiBackend.open(this.store.settings, s, cwd, this.endpoint(), instructions, skills.map(s => s.path), sink);
   }
   private async agent(s: StoredSession) {
+    const stopping = this.stopping.get(s.id); if (stopping) await stopping;
     this.assertEnabled(); const existing = this.agents.get(s.id); if (existing) return existing;
     let pending = this.starting.get(s.id);
     if (!pending) {
       const generation = this.generation;
-      pending = this.open(s).then(async agent => {
-        if (generation !== this.generation || !this.store.settings.enabled) { await agent.close(); throw new Error('AI 助手已关闭或配置已更改'); }
+      const connection = Symbol(s.id); this.connections.set(s.id, connection);
+      pending = this.open(s, this.sink(s, () => this.connections.get(s.id) === connection)).then(async agent => {
+        if (generation !== this.generation || !this.store.settings.enabled || this.connections.get(s.id) !== connection) { await agent.close(); throw new Error('助手连接已停止，请继续对话'); }
         this.agents.set(s.id, agent); this.store.save(s); return agent;
       }).finally(() => this.starting.delete(s.id));
       this.starting.set(s.id, pending);
@@ -139,6 +144,7 @@ export class AssistantService implements ToolHost {
   async models(id: string): Promise<AssistantModel[]> { const s = this.store.get(id); return (await this.agent(s)).models(); }
   async send(id: string, input: { requestId: string; text: string; model: string; effort: string; context: AssistantContext }, resumeOf?: string) {
     this.assertEnabled(); const s = this.store.get(id);
+    const stopping = this.stopping.get(id); if (stopping) { await stopping; this.assertEnabled(); }
     if (s.requestIds.includes(input.requestId)) return this.store.publicSession(s);
     if (s.status === 'running' || s.status === 'waiting') throw new ConflictError('助手正在处理，请等待完成，或点击停止后发送新消息');
     s.status = 'running'; s.questions = []; s.requestIds.push(input.requestId);
@@ -153,6 +159,7 @@ export class AssistantService implements ToolHost {
         agent = await this.agent(s);
         if (s.status !== 'running' || s.requestIds.at(-1) !== input.requestId) return;
         const models = await agent.models(), model = models.find(m => m.id === input.model);
+        if (s.status !== 'running' || s.requestIds.at(-1) !== input.requestId || this.agents.get(id) !== agent) return;
         if (!model) throw new BadRequestError('所选模型已不可用，请从列表中重新选择');
         if (input.effort && !model.efforts.includes(input.effort)) throw new BadRequestError('请从列表中选择此模型可用的思考强度');
         const original = resumeOf ? s.messages.find(m => m.id === resumeOf && m.role === 'user') : undefined;
@@ -204,18 +211,26 @@ export class AssistantService implements ToolHost {
     const agent = this.agents.get(id); if (!agent) throw new ConflictError('Agent 连接已结束');
     agent.answer(request, value); s.questions = s.questions.filter(q => q.id !== request); s.status = s.questions.length ? 'waiting' : 'running'; this.flush(s);
   }
-  async stop(id: string) {
+  stop(id: string): Promise<void> {
+    const existing = this.stopping.get(id); if (existing) return existing;
+    const stopping = this.stopSession(id).finally(() => { if (this.stopping.get(id) === stopping) this.stopping.delete(id); });
+    this.stopping.set(id, stopping);
+    return stopping;
+  }
+  private async stopSession(id: string) {
     const s = this.store.get(id);
     const pending = this.starting.get(id);
     if (!pending && !this.agents.has(id) && s.status !== 'running' && s.status !== 'waiting') return;
+    const connected = this.agents.get(id);
+    this.connections.delete(id); this.agents.delete(id);
     // Mark idle first so a starting process cannot launch a prompt after cancellation.
     if (s.status === 'running' || s.status === 'waiting') this.markInterrupted(s, 'stopped');
     interruptActivities(s);
     s.status = 'idle'; s.questions = s.questions.filter(q => q.source === 'emaki'); this.flush(s);
-    const agent = this.agents.get(id) ?? await pending?.catch(() => undefined);
+    const agent = connected ?? await pending?.catch(() => undefined);
     // A harness awaiting input may not acknowledge stop; closing it still completes cancellation.
     try { await agent?.stop(); } catch { /* Fall back to closing the process below. */ }
-    finally { await agent?.close(); this.agents.delete(id); }
+    finally { await agent?.close(); }
   }
   async close() {
     this.generation++;
