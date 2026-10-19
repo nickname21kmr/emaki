@@ -293,9 +293,11 @@ it('在线精确确认的新角色可建档并关联，普通标签和模糊结�
 
 it('在线未确认名称不造角色，也不把未知标签列为建议', async () => {
   const {createPixivDiscovery}=await import('./discovery.ts');const {DanbooruCatalog}=await import('../danbooru/catalog.ts');
-  const client={autocomplete:vi.fn().mockResolvedValue([{type:'tag',category:4,value:'different_name'}]),tagsByNames:vi.fn(),wikiByTitles:vi.fn()};
+  const client={autocomplete:vi.fn().mockResolvedValue([{type:'tag',category:4,value:'different_name'}]),
+    tagsByNames:vi.fn().mockResolvedValue([{name:'different_name',category:4,post_count:1,is_deprecated:false,antecedent_implications:[],consequent_aliases:[]}]),
+    wikiByTitles:vi.fn().mockResolvedValue([{title:'different_name',other_names:['另一个名字'],is_deleted:false}])};
   const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(1,['未知名字'])},0,createPixivDiscovery(db,new DanbooruCatalog(db,makeCatalog().copyrights),client));
-  expect(summary).toContain('未匹配角色 1');expect(links()).toHaveLength(0);expect(client.tagsByNames).not.toHaveBeenCalled();
+  expect(summary).toContain('未匹配角色 1');expect(links()).toHaveLength(0);expect(client.wikiByTitles).toHaveBeenCalled();
   expect(db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0);
   const {loadSuggestions}=await import('../../datasource/sqlite/suggestions.ts');
   expect(loadSuggestions(ctx,[1],makeCatalog().catalog).get(1)).toBeUndefined();
@@ -568,3 +570,119 @@ function addImage(id: number, post: string) {
     (id,root_id,rel_path,file_name,width,height,bytes,format,sha256,added_at,modified_at,content_kind,source_site,source_post_id)
     VALUES (?,1,?,?,1,1,1,'png',?,'x','x','illustration','pixiv',?)`).run(id, `${post}_p${id}.png`, `${post}_p${id}.png`, `s${id}`, post);
 }
+
+it('未知原文不会被已知但无关的译名挡住，wiki 精确别名可以验证召回候选', async () => {
+  const {createPixivDiscovery}=await import('./discovery.ts'); const {DanbooruCatalog}=await import('../danbooru/catalog.ts');
+  const tag='new_person_(game_a)';
+  const autocomplete=vi.fn(async () => [{type:'tag',category:4,value:tag}]);
+  const discover=createPixivDiscovery(db,new DanbooruCatalog(db,makeCatalog().copyrights),{
+    autocomplete,
+    tagsByNames:async()=>[{name:tag,category:4,post_count:12,is_deprecated:false,antecedent_implications:[],consequent_aliases:[]}],
+    wikiByTitles:async()=>[{title:tag,other_names:['新人物の原名'],is_deleted:false}],
+  });
+  const artwork={...art(2,[]),tags:{tags:[{tag:'新人物の原名',translation:{en:'Alice'}},{tag:'ゲームA'}]}};
+  await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>artwork},0,discover);
+  expect(autocomplete).toHaveBeenCalledWith('新人物の原名',controller.signal);
+  expect(db.prepare('SELECT c.danbooru_tag FROM image_characters ic JOIN characters c ON c.id=ic.character_id').pluck().all()).toEqual([tag,tag]);
+});
+
+it('已知普通译名沿用本地跳过，不为每个普通标签增加联网查询', async () => {
+  const {createPixivDiscovery}=await import('./discovery.ts'); const {DanbooruCatalog}=await import('../danbooru/catalog.ts');
+  name('blue_hair','blue hair',0);
+  const client={autocomplete:vi.fn(),tagsByNames:vi.fn(),wikiByTitles:vi.fn()};
+  const artwork={...art(1,[]),tags:{tags:[{tag:'青い髪',translation:{en:'blue hair'}}]}};
+  await createPixivDiscovery(db,new DanbooruCatalog(db,makeCatalog().copyrights),client)(artwork,controller.signal);
+  expect(client.autocomplete).not.toHaveBeenCalled();
+});
+
+it.each(['correct','wrong','missing','original'] as const)('姓名逆序候选补齐作品元数据，投稿作品为 %s 时的处理', async state => {
+  const {createPixivDiscovery}=await import('./discovery.ts'); const {DanbooruCatalog}=await import('../danbooru/catalog.ts');
+  const dc=new DanbooruCatalog(db,makeCatalog().copyrights);
+  const mk=()=>({catalog:new CharacterCatalog(db,{copyrights:dc}),copyrights:dc});
+  const tag='family_given';
+  const meta=(name:string,category:number)=>({name,category,post_count:30,is_deprecated:false,antecedent_implications:[],consequent_aliases:[]});
+  const discover=createPixivDiscovery(db,dc,{
+    autocomplete:async query=>query==='Given Family'?[{type:'tag-word',category:4,value:tag}]:[],
+    tagsByNames:async tags=>tags.map(t=>meta(t,t===tag?4:3)),
+    wikiByTitles:async tags=>tags.map(t=>({title:t,other_names:t==='new_work'?['新作品']:[],is_deleted:false})),
+    relatedCopyrights:async()=>({query:tag,post_count:30,tag:{name:tag,category:4,post_count:30},related_tags:[{tag:{name:'new_work',category:3,post_count:300},frequency:1}]}),
+  });
+  const artwork={...art(4,['Given Family'],'123',state==='missing'?[]:[state==='wrong'?'ゲームB':'新作品']),isOriginal:state==='original'};
+  await syncPixivCharacters(ctx,job,mk,{artwork:async()=>artwork},0,discover);
+  expect(links()).toHaveLength(state==='correct'?2:0);
+  if(state!=='original')expect(dc.copyrights(tag)).toEqual(['new_work']);
+  if(state==='wrong') {
+    // A contextual rejection must not suppress a later artwork with the right work.
+    await discover(art(4,['Given Family'],'456',['新作品']),controller.signal);
+    expect(createPixivMatcher(db,mk().catalog,dc)(art(4,['Given Family'],'456',['新作品']))).toEqual({tags:[tag],automatic:true});
+  }
+});
+
+it('模糊召回仍须验证完整别名，普通标签和限定词冲突不写成角色', async () => {
+  const {createPixivDiscovery}=await import('./discovery.ts'); const {DanbooruCatalog}=await import('../danbooru/catalog.ts');
+  const dc=new DanbooruCatalog(db,makeCatalog().copyrights);
+  const tag='some_character_(game_a)';
+  const discover=createPixivDiscovery(db,dc,{
+    autocomplete:async()=>[{type:'tag',category:4,value:tag}],
+    tagsByNames:async()=>[{name:tag,category:4,post_count:1,is_deprecated:false,antecedent_implications:[],consequent_aliases:[]}],
+    wikiByTitles:async()=>[{title:tag,other_names:['別人(作品B)'],is_deleted:false}],
+  });
+  await discover(art(1,['別人(作品A)']),controller.signal);
+  expect(dc.get(tag)).toBeNull();
+});
+
+it('补作品失败后已验证名称仍保留，但不绕过作品校验自动关联', async () => {
+  const {createPixivDiscovery}=await import('./discovery.ts'); const {DanbooruCatalog}=await import('../danbooru/catalog.ts');
+  const {DanbooruError}=await import('../danbooru/client.ts');
+  const dc=new DanbooruCatalog(db,makeCatalog().copyrights),tag='verified_character';
+  const discover=createPixivDiscovery(db,dc,{
+    autocomplete:async query=>[{type:'tag',category:4,value:tag,antecedent:query}],
+    tagsByNames:async()=>[{name:tag,category:4,post_count:1,is_deprecated:false,antecedent_implications:[],consequent_aliases:[]}],
+    wikiByTitles:async()=>[],
+    relatedCopyrights:async()=>{throw new DanbooruError('offline','network');},
+  });
+  const mk=()=>({catalog:new CharacterCatalog(db,{copyrights:dc}),copyrights:dc});
+  const summary=await syncPixivCharacters(ctx,job,mk,{artwork:async()=>art(1,['確かな原名'])},0,discover);
+  expect(summary).toContain('建议 2'); expect(links()).toHaveLength(0);
+  expect(db.prepare('SELECT DISTINCT danbooru_tag FROM character_suggestions').pluck().all()).toEqual([tag]);
+});
+
+it('已知名字但缺少作品元数据时会补齐，失败后下一轮仍可恢复', async () => {
+  const {createPixivDiscovery}=await import('./discovery.ts'); const {DanbooruCatalog}=await import('../danbooru/catalog.ts');
+  const dc=new DanbooruCatalog(db,makeCatalog().copyrights),tag='known_without_work';
+  name(tag,'已知角色');
+  const metadata=(name:string,category:number)=>({name,category,post_count:30,is_deprecated:false,antecedent_implications:[],consequent_aliases:[]});
+  dc.upsertBase(metadata(tag,4),'now');
+  const relatedCopyrights=vi.fn().mockRejectedValueOnce(new Error('timeout')).mockResolvedValue({query:tag,post_count:30,tag:{name:tag,category:4,post_count:30},related_tags:[{tag:{name:'game_a',category:3,post_count:300},frequency:1}]});
+  const client={autocomplete:vi.fn(),tagsByNames:async()=>[metadata('game_a',3)],wikiByTitles:async()=>[],relatedCopyrights};
+  await expect(createPixivDiscovery(db,dc,client)(art(3,['已知角色']),controller.signal)).rejects.toThrow('timeout');
+  await createPixivDiscovery(db,dc,client)(art(3,['已知角色']),controller.signal);
+  expect(dc.copyrights(tag)).toEqual(['game_a']);
+  expect(createPixivMatcher(db,new CharacterCatalog(db,{copyrights:dc}),dc)(art(3,['已知角色']))).toEqual({tags:[tag],automatic:true});
+  expect(client.autocomplete).not.toHaveBeenCalled();
+});
+
+it('只有离线词典、没有在线缓存行的角色也能补齐所属作品', async () => {
+  const {createPixivDiscovery}=await import('./discovery.ts'); const {DanbooruCatalog}=await import('../danbooru/catalog.ts');
+  const dc=new DanbooruCatalog(db,makeCatalog().copyrights),tag='dictionary_character';
+  name(tag,'词典角色');
+  const metadata=(name:string,category:number)=>({name,category,post_count:30,is_deprecated:false,antecedent_implications:[],consequent_aliases:[]});
+  const client={autocomplete:vi.fn(),tagsByNames:async(names:string[])=>names.map(n=>metadata(n,n===tag?4:3)),wikiByTitles:async()=>[],
+    relatedCopyrights:async()=>({query:tag,post_count:30,tag:{name:tag,category:4,post_count:30},related_tags:[{tag:{name:'game_a',category:3,post_count:300},frequency:1}]})};
+  await createPixivDiscovery(db,dc,client)(art(3,['词典角色']),controller.signal);
+  expect(dc.copyrights(tag)).toEqual(['game_a']);
+  expect(createPixivMatcher(db,new CharacterCatalog(db,{copyrights:dc}),dc)(art(3,['词典角色']))).toEqual({tags:[tag],automatic:true});
+  expect(client.autocomplete).not.toHaveBeenCalled();
+});
+
+it('召回多个经别名验证的同名角色时仍保持歧义，不自动关联', async () => {
+  const {createPixivDiscovery}=await import('./discovery.ts'); const {DanbooruCatalog}=await import('../danbooru/catalog.ts');
+  const dc=new DanbooruCatalog(db,makeCatalog().copyrights),tags=['one_(game_a)','two_(game_a)'];
+  const client={autocomplete:async()=>tags.map(value=>({type:'tag',value,category:4})),
+    tagsByNames:async()=>tags.map(name=>({name,category:4,post_count:30,is_deprecated:false,antecedent_implications:[],consequent_aliases:[]})),
+    wikiByTitles:async()=>tags.map(title=>({title,other_names:['共享名字'],is_deleted:false}))};
+  const mk=()=>({catalog:new CharacterCatalog(db,{copyrights:dc}),copyrights:dc});
+  await syncPixivCharacters(ctx,job,mk,{artwork:async()=>art(1,['共享名字'])},0,createPixivDiscovery(db,dc,client));
+  expect(links()).toHaveLength(0);
+  expect(db.prepare('SELECT DISTINCT danbooru_tag FROM character_suggestions ORDER BY danbooru_tag').pluck().all()).toEqual(tags);
+});
