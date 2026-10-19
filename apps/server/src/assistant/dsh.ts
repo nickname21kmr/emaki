@@ -4,6 +4,8 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { parseEnv } from 'node:util';
+import { resolveProxy } from '../net/proxy.ts';
 import type { AssistantModel } from '@emaki/shared';
 import { JsonProcess } from './rpc.ts';
 import type { AgentBackend, AgentSink } from './backends.ts';
@@ -11,6 +13,32 @@ import type { PrivateSettings, StoredSession } from './store.ts';
 import { toolPreview } from './activity.ts';
 
 export interface DshInstallation { command: string; args: string[]; cli: string; home: string }
+
+/** Preserve explicit DSH routing; otherwise share Emaki's detected outbound proxy. */
+export async function dshProxyEnvironment(home: string, inherited: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv> {
+  const env = { ...inherited };
+  const keys = ['http_proxy', 'https_proxy', 'all_proxy', 'no_proxy'];
+  const file = path.join(home, '.env');
+  if (existsSync(file)) {
+    const local = parseEnv(readFileSync(file, 'utf8'));
+    for (const key of keys) {
+      if (!env[key]?.trim() && !env[key.toUpperCase()]?.trim()) {
+        const value = local[key]?.trim() || local[key.toUpperCase()]?.trim();
+        if (value) env[key.toUpperCase()] = value;
+      }
+    }
+  }
+  const explicit = keys.slice(0, 3).some(key => env[key]?.trim() || env[key.toUpperCase()]?.trim());
+  if (!explicit) {
+    const proxy = await resolveProxy();
+    if (proxy.url) { env.HTTP_PROXY = proxy.url; env.HTTPS_PROXY = proxy.url; }
+  }
+  // DSH itself bypasses loopback; Python and other child tools also need that policy.
+  const bypass = env.no_proxy?.trim() || env.NO_PROXY?.trim();
+  env.NO_PROXY = [...new Set([...(bypass?.split(',') ?? []), 'localhost', '127.0.0.1', '::1'])].join(',');
+  if (env.no_proxy !== undefined) env.no_proxy = env.NO_PROXY;
+  return env;
+}
 
 /** Resolve installed entry points without running a shell or changing PATH. */
 export function findDsh(manual = ''): DshInstallation | null {
@@ -113,7 +141,7 @@ export function apply(ctx) { ctx.on('agent/created', async ({agent}) => {
     const overlay = path.join(cwd, 'dsh.patch.json'); writeFileSync(overlay, JSON.stringify(patch), { mode: 0o600 });
     // ACP intentionally omits elicitation; user choices are handled by Emaki's ask_user MCP tool.
     const rpc = new JsonProcess(install.command, [...install.args, '--profile', 'acp', '--patch', overlay], cwd,
-      { ...process.env, DSH_HOME: home, DSH_AGENTS_HOME: path.join(cwd, '.agents'), DSH_PERMISSION_MODE: settings.accessMode === 'full' ? 'danger-full-access' : 'workspace-write', ...(install.args.includes('--expose-internals') ? { ELECTRON_RUN_AS_NODE: '1' } : {}) });
+      { ...await dshProxyEnvironment(install.home), DSH_HOME: home, DSH_AGENTS_HOME: path.join(cwd, '.agents'), DSH_PERMISSION_MODE: settings.accessMode === 'full' ? 'danger-full-access' : 'workspace-write', ...(install.args.includes('--expose-internals') ? { ELECTRON_RUN_AS_NODE: '1' } : {}) });
     const backend = new DshBackend(rpc, session, sink, settings.accessMode === 'full', metadata);
     try {
       await backend.request('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'emaki', version: '0.1.0' } }, 60000);

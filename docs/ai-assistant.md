@@ -27,6 +27,8 @@ Pi 可以读取本机 `PI_CODING_AGENT_DIR`（默认 `~/.pi/agent`）的模型�
 
 DSH 使用每个 Emaki 对话目录内的独立 `dsh-home` 和 ACP profile；只引用本机 DSH 的凭证文件，不复制可刷新的登录令牌，不导入其他会话。模型配置复用桌面 profile 的模型条目。`emaki-library` 与 `taste-profile` 仍使用同一份 canonical 技能，复制到当前会话的 `.agents/skills`。恢复时通过 DSH 权限服务应用 Emaki 当前的按需审批或完全访问设置。停止会取消当前工作并关闭本会话的进程；随后可以恢复同一原生会话。
 
+DSH 启动时优先保留进程环境和原 DSH home `.env` 中的代理配置；未配置时沿用 Emaki 检测到的出网代理（包括 Windows 系统代理），只传给本次子进程。localhost MCP 保持直连，终端子进程也获得 loopback 绕过列表。代理设置变更在下次连接 DSH 时生效。网络代理不代替网站登录、验证码或访问权限。
+
 当前 DSH ACP 提交完整思考、回复和工具生命周期后才发送语义更新，因此气泡不会逐 token 显示这部分内容。图片/表格卡片和用户选择使用 Emaki 的 `present_result` / `ask_user` 工具；DSH 专有 UI 卡片和 elicitation 不在此适配器中呈现。
 
 ## 给外部 Agent 配 MCP

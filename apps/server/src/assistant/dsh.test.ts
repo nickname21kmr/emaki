@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { PrivateSettings, StoredSession } from './store.ts';
 const state = vi.hoisted(() => ({ rpc: null as any, config: [] as any[], promptResolve: null as any }));
+vi.mock('../net/proxy.ts', () => ({ resolveProxy: vi.fn(async () => ({ url: 'http://127.0.0.1:7897', source: 'system' })) }));
 vi.mock('./rpc.ts', () => ({ JsonProcess: class {
   onEvent = (_: any) => {}; onExit = (_: any) => {};
   send = vi.fn(); close = vi.fn(async () => {});
@@ -19,7 +20,7 @@ vi.mock('./rpc.ts', () => ({ JsonProcess: class {
   });
   constructor() { state.rpc = this; }
 } }));
-import { DshBackend, findDsh } from './dsh.ts';
+import { DshBackend, findDsh, dshProxyEnvironment } from './dsh.ts';
 let cwd: string, backend: DshBackend, session: StoredSession;
 const sink = { text: vi.fn(), reasoning: vi.fn(), tool: vi.fn(), question: vi.fn(), done: vi.fn() };
 beforeEach(async () => {
@@ -33,6 +34,25 @@ beforeEach(async () => {
 afterEach(async () => { await backend.close(); vi.unstubAllEnvs(); rmSync(cwd, { recursive: true, force: true }); });
 
 describe('DSH ACP adapter', () => {
+  it('inherits system proxy with loopback bypass without mutating parent environment', async () => {
+    const parent = { NO_PROXY: 'example.test' };
+    const env = await dshProxyEnvironment(cwd, parent);
+    expect(env.HTTP_PROXY).toBe('http://127.0.0.1:7897');
+    expect(env.HTTPS_PROXY).toBe(env.HTTP_PROXY);
+    expect(env.NO_PROXY).toBe('example.test,localhost,127.0.0.1,::1');
+    expect(parent).toEqual({ NO_PROXY: 'example.test' });
+  });
+  it('preserves explicit proxy routing and reads only proxy values from the original DSH home', async () => {
+    writeFileSync(path.join(cwd, '.env'), 'HTTPS_PROXY=http://proxy.test:8080\nNO_PROXY=custom.test\nSECRET=not-imported\n');
+    const local = await dshProxyEnvironment(cwd, {});
+    expect(local.HTTPS_PROXY).toBe('http://proxy.test:8080');
+    expect(local.HTTP_PROXY).toBeUndefined(); expect(local.SECRET).toBeUndefined();
+    expect(local.NO_PROXY).toContain('custom.test');
+    const explicit = await dshProxyEnvironment(cwd, { https_proxy: 'http://explicit.test:8081', no_proxy: '*' });
+    expect(explicit.https_proxy).toBe('http://explicit.test:8081');
+    expect(explicit.HTTPS_PROXY).toBeUndefined();
+    expect(explicit.no_proxy).toContain('*');
+  });
   it('creates only an owned session and passes its scoped MCP credentials', () => {
     expect(session.nativeId).toBe('owned');
     expect(state.rpc.request).toHaveBeenCalledWith(expect.objectContaining({ method: 'session/new', params: expect.objectContaining({ cwd, mcpServers: [{ type: 'http', name: 'emaki', url: 'http://localhost/mcp', headers: [{ name: 'Authorization', value: 'Bearer session-secret' }] }] }) }), 60000);
