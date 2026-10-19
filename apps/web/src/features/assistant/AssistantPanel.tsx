@@ -12,7 +12,7 @@ import { useLightbox, useSelection } from '@/lib/stores';
 import { undo } from '@/lib/queries';
 import { assistantApi, useAssistantSettings } from './client';
 import { assistantInput } from './AssistantSettingsSection';
-import { composerContext, groupMessages, toggleResultImage, type ResultSelection } from './presentation';
+import { composerContext, contextPageLabel, selectionLabel, groupMessages, toggleResultImage, type ResultSelection } from './presentation';
 import { useFloatingDrag } from './useFloatingDrag';
 import { openSessionEvents } from './sessionEvents';
 import { useFloatingResize } from './useFloatingResize';
@@ -123,7 +123,7 @@ function Conversation({ backend, close }: { backend: string | null; close: () =>
       <div ref={end} />
     </div>
     <form className="border-t border-line p-3" onSubmit={e => { e.preventDefault(); void perform(() => send()); }}>
-      <div className="mb-2 flex items-center gap-2 text-[11px] text-fg-muted"><p className="min-w-0 flex-1 truncate" title={viewedId ? '当前查看的图片' : resultSelection?.title ?? context.page}>上下文：已选中 {context.imageIds.length} 张 · {viewedId ? '当前查看' : resultSelection ? resultSelection.title : '当前页面'}</p>{resultSelection && !viewedId && <button type="button" className="shrink-0 text-shu hover:underline" onClick={() => setResultSelection(null)}>使用页面选择</button>}</div>
+      <div className="mb-2 flex items-center gap-2 text-[11px] text-fg-muted"><p className="min-w-0 flex-1 truncate" title={viewedId ? '当前查看的图片' : resultSelection?.title ?? contextPageLabel(context.page)}>{viewedId ? '当前查看' : resultSelection ? resultSelection.title : contextPageLabel(context.page)} · {selectionLabel(context.imageIds.length)}</p>{resultSelection && !viewedId && <button type="button" className="shrink-0 text-shu hover:underline" onClick={() => setResultSelection(null)}>使用页面选择</button>}</div>
       <textarea ref={input} aria-label="给助手的消息" placeholder="询问当前图片，或描述你想完成的事情…" className={`${assistantInput} min-h-20 resize-none`} value={text} onChange={e => setText(e.target.value)} disabled={!sessionId} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (!running && !busy) void perform(() => send()); } }} />
       <div className="mt-2 flex items-center gap-2">
         <select aria-label="助手模型" className="min-w-0 flex-1 rounded bg-sunken p-1.5 text-xs" value={model} disabled={Boolean(running || busy)} onChange={e => { setModel(e.target.value); setEffort(models.data?.find(m => m.id === e.target.value)?.defaultEffort ?? ''); }}><option value="">{models.isFetching ? '加载模型…' : '选择模型'}</option>{models.data?.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select>
@@ -139,7 +139,7 @@ function Message({ message, selected, select }: { message: AssistantMessage; sel
   return <div className={message.role === 'user' ? 'ml-5 rounded-xl bg-sunken p-3 text-sm' : 'text-sm leading-relaxed'}>
         <div className="mb-1 text-[11px] text-fg-subtle">{message.role === 'user' ? '你' : message.role === 'assistant' ? message.model ?? '助手' : message.role === 'tool' ? '操作' : '状态'}</div>
         {message.role === 'assistant' ? <div className="space-y-2 break-words [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-sunken [&_pre]:p-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_a]:text-shu [&_a]:underline"><Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, ...props }) => <a {...props} target="_blank" rel="noreferrer">{children}</a>, img: ({ alt }) => <span>{alt ?? '图片'}</span> }}>{message.text}</Markdown></div> : !message.cards?.some(card => card.title === message.text) && <p className="whitespace-pre-wrap break-words">{message.text}</p>}
-        {message.context && <p className="mt-2 text-[11px] text-fg-muted">{message.context.page} · {message.context.imageIds.length} 张图片</p>}
+        {message.context && <p className="mt-2 text-[11px] text-fg-muted">{contextPageLabel(message.context.page)} · {selectionLabel(message.context.imageIds.length)}</p>}
         {message.details && <details className="mt-2 text-xs text-fg-muted"><summary className="cursor-pointer">查看详情</summary><p className="mt-2 whitespace-pre-wrap break-words">{message.details}</p></details>}
         {message.cards?.map(card => <ResultCard key={card.id} card={card} selected={selected} select={(id, checked) => select(card, id, checked)} />)}
         {message.undoToken && <Button className="mt-2" size="sm" onClick={() => void undo(message.undoToken!, client)}>撤销这次修改</Button>}
