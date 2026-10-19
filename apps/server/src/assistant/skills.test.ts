@@ -28,6 +28,10 @@ it('ships complete common packages and runs the original report pipeline outside
       expect(readFileSync(path.join(path.dirname(skill.path), match[1]!), 'utf8').length).toBeGreaterThan(0);
     }
   }
+  // Helpers linked from references travel with the common package for either harness.
+  const helper = 'references/yandex-search.py';
+  expect(readFileSync(path.join(path.dirname(skills[0]!.path), helper), 'utf8')).toBe(
+    readFileSync(path.join(repo, 'apps/server/assets/assistant/emaki-library', helper), 'utf8'));
   const profile = path.dirname(skills[1]!.path), runner = path.join(profile, 'scripts/run.mjs');
   const env = { ...process.env, EMAKI_DATA_DIR: path.join(root, 'wrong-library') };
   const run = (...args: string[]) => execFileSync(process.execPath, [runner, ...args], { cwd: root, env, encoding: 'utf8' });
