@@ -45,22 +45,51 @@ export function AssistantSettingsSection() {
 }
 function Configuration({ settings, save, busy }: { settings: AssistantSettings; save: (body: unknown) => Promise<unknown>; busy: boolean }) {
   const [binary, setBinary] = useState(settings.codexPath), [pi, setPi] = useState(settings.pi), [key, setKey] = useState('');
+  const [available, setAvailable] = useState<{ id: string; name: string }[] | null>(null);
+  const [fetching, setFetching] = useState(false), [modelError, setModelError] = useState(''), [search, setSearch] = useState('');
+  const selected = new Set(pi.model.split(',').map(id => id.trim()).filter(Boolean));
+  const readModels = async () => {
+    setFetching(true); setModelError('');
+    try { setAvailable(await assistantApi.apiModels({ baseUrl: pi.baseUrl.trim(), api: pi.api, ...(key ? { apiKey: key } : {}) })); }
+    catch (e) { setModelError((e as Error).message); }
+    finally { setFetching(false); }
+  };
+  const resetModels = () => { setAvailable(null); setModelError(''); setSearch(''); };
   if (settings.backend === 'codex') return <BlockRow label="Codex 路径" hint="留空时自动检测 PATH 和常见安装目录；登录沿用本机 Codex 配置。">
     <input aria-label="Codex 可执行文件路径" className={assistantInput} value={binary} onChange={e => setBinary(e.target.value)} placeholder="自动检测" />
     <Button className="mt-3" disabled={busy} onClick={() => void save({ codexPath: binary })}>保存路径</Button>
   </BlockRow>;
   if (settings.backend !== 'pi') return null;
-  return <BlockRow label="Pi 模型 API" hint="留空时复用本机 Pi 的模型与 API Key 配置（暂不复用 OAuth 登录）。自定义 API 支持填写多个模型 ID，以逗号分隔。">
+  return <BlockRow label="Pi 模型 API" hint="填写连接后读取模型列表，选择要在气泡中使用的模型；具体模型和思考强度在对话中切换。留空时复用本机 Pi 的模型与 API Key 配置（暂不复用 OAuth 登录）。">
     <div className="space-y-3">
-      <label className="block text-xs text-fg-muted">API 协议<select className={`${assistantInput} mt-1`} value={pi.api} onChange={e => setPi({ ...pi, api: e.target.value as typeof pi.api })}>
+      <label className="block text-xs text-fg-muted">API 协议<select className={`${assistantInput} mt-1`} disabled={fetching} value={pi.api} onChange={e => { setPi({ ...pi, api: e.target.value as typeof pi.api }); resetModels(); }}>
         <option value="openai-completions">OpenAI Chat Completions 兼容</option><option value="openai-responses">OpenAI Responses</option><option value="anthropic-messages">Anthropic Messages</option>
       </select></label>
-      <label className="block text-xs text-fg-muted">API 地址<input className={`${assistantInput} mt-1`} placeholder="https://…/v1" value={pi.baseUrl} onChange={e => setPi({ ...pi, baseUrl: e.target.value })} /></label>
-      <label className="block text-xs text-fg-muted">模型 ID<input className={`${assistantInput} mt-1`} value={pi.model} onChange={e => setPi({ ...pi, model: e.target.value })} /></label>
-      <label className="block text-xs text-fg-muted">API Key<input type="password" autoComplete="new-password" className={`${assistantInput} mt-1`} value={key} placeholder={pi.apiKeyConfigured ? '已保存；留空保持不变' : '填写密钥；本地无鉴权服务可以留空'} onChange={e => setKey(e.target.value)} /></label>
+      <label className="block text-xs text-fg-muted">API 基础地址<input className={`${assistantInput} mt-1`} disabled={fetching} placeholder={pi.api === 'anthropic-messages' ? 'https://api.anthropic.com' : 'https://…/v1'} value={pi.baseUrl} onChange={e => { setPi({ ...pi, baseUrl: e.target.value }); resetModels(); }} /></label>
+      <label className="block text-xs text-fg-muted">API Key<input type="password" autoComplete="new-password" className={`${assistantInput} mt-1`} disabled={fetching} value={key} placeholder={pi.apiKeyConfigured ? '已保存；留空保持不变' : '填写密钥；本地无鉴权服务可以留空'} onChange={e => { setKey(e.target.value); resetModels(); }} /></label>
+      <div className="space-y-2">
+        <Button size="sm" loading={fetching} disabled={busy || fetching || !pi.baseUrl.trim()} onClick={() => void readModels()}>读取模型列表</Button>
+        {modelError && <p role="alert" className="text-xs text-danger">{modelError}</p>}
+        {available && <div className="space-y-2 rounded-lg border border-line p-3">
+          <p className="text-xs text-fg-muted">服务提供 {available.length} 个模型 · 已选 {selected.size} 个</p>
+          {available.length > 0 ? <>
+            <input aria-label="筛选可用模型" className={assistantInput} placeholder="搜索模型名称或 ID" value={search} onChange={e => setSearch(e.target.value)} />
+            <div className="max-h-56 overflow-y-auto space-y-1">
+              {available.filter(m => `${m.id} ${m.name}`.toLowerCase().includes(search.toLowerCase())).map(m => <label key={m.id} className="flex items-start gap-2 rounded px-2 py-1.5 text-xs hover:bg-hover">
+                <input type="checkbox" className="mt-0.5" checked={selected.has(m.id)} onChange={e => {
+                  const ids = new Set(selected); if (e.target.checked) ids.add(m.id); else ids.delete(m.id);
+                  setPi({ ...pi, model: [...ids].join(', ') });
+                }} />
+                <span className="min-w-0 break-all">{m.name}{m.name !== m.id && <span className="block text-fg-muted">{m.id}</span>}</span>
+              </label>)}
+            </div>
+          </> : <p className="text-xs text-fg-muted">服务返回了空列表，可以手动填写模型 ID。</p>}
+        </div>}
+        <label className="block text-xs text-fg-muted">已选模型 ID（也可手填，英文逗号分隔）<input className={`${assistantInput} mt-1`} value={pi.model} onChange={e => setPi({ ...pi, model: e.target.value })} /></label>
+      </div>
       <div className="flex flex-wrap gap-4 text-xs"><label><input type="checkbox" checked={pi.vision} onChange={e => setPi({ ...pi, vision: e.target.checked })} /> 模型支持看图</label><label><input type="checkbox" checked={pi.reasoning} onChange={e => setPi({ ...pi, reasoning: e.target.checked })} /> 模型支持思考强度</label></div>
-      <div className="flex gap-2"><Button disabled={busy} onClick={() => void save({ pi: { provider: pi.provider, baseUrl: pi.baseUrl, model: pi.model, api: pi.api, vision: pi.vision, reasoning: pi.reasoning }, ...(key ? { apiKey: key } : {}) })}>保存 API 配置</Button>
-        {pi.apiKeyConfigured && <Button variant="ghost" disabled={busy} onClick={() => void save({ apiKey: '' })}>清除密钥</Button>}</div>
+      <div className="flex gap-2"><Button disabled={busy || fetching} onClick={() => void save({ pi: { provider: pi.provider, baseUrl: pi.baseUrl.trim(), model: pi.model, api: pi.api, vision: pi.vision, reasoning: pi.reasoning }, ...(key ? { apiKey: key } : {}) })}>保存 API 配置</Button>
+        {pi.apiKeyConfigured && <Button variant="ghost" disabled={busy || fetching} onClick={() => void save({ apiKey: '' })}>清除密钥</Button>}</div>
     </div>
   </BlockRow>;
 }

@@ -6,6 +6,7 @@ export const assistantApi = {
   settings: () => request<AssistantSettings>('GET', '/assistant/settings'),
   saveSettings: (body: unknown) => request<AssistantSettings>('PATCH', '/assistant/settings', body),
   detect: () => request<AssistantDetection[]>('POST', '/assistant/detect', {}),
+  apiModels: (body: { baseUrl: string; api: AssistantSettings['pi']['api']; apiKey?: string }) => request<{ id: string; name: string }[]>('POST', '/assistant/api-models', body),
   mcpConfig: () => request<{ url: string; token: string }>('GET', '/assistant/mcp-config'),
   sessions: () => request<Pick<AssistantSession, 'id' | 'title' | 'backend' | 'updatedAt'>[]>('GET', '/assistant/sessions'),
   create: () => request<AssistantSession>('POST', '/assistant/sessions', {}),

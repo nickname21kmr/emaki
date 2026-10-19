@@ -7,6 +7,7 @@ import { config } from '../config.ts';
 import { parse } from '../http/validate.ts';
 import { AssistantService } from './service.ts';
 import { createLibraryMcp } from './tools.ts';
+import { apiModelsInput, fetchApiModels } from './apiModels.ts';
 
 export function assistantRoutes(app: FastifyInstance, ds: DataSource) {
   const streams = new Set<import('node:http').ServerResponse>();
@@ -28,6 +29,10 @@ export function assistantRoutes(app: FastifyInstance, ds: DataSource) {
     service.store.saveSettings(); await service.close(); return service.store.publicSettings();
   });
   app.post('/api/assistant/detect', () => service.detect());
+  app.post('/api/assistant/api-models', (req) => {
+    service.assertEnabled();
+    return fetchApiModels(parse(apiModelsInput, req.body), service.store.settings);
+  });
   app.get('/api/assistant/mcp-config', () => { service.assertEnabled(); return { url: service.endpoint(), token: service.store.settings.externalToken }; });
   app.get('/api/assistant/sessions', () => { service.assertEnabled(); return [...service.store.sessions.values()].map(s => ({ id: s.id, title: s.title, backend: s.backend, updatedAt: s.updatedAt })).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); });
   app.post('/api/assistant/sessions', () => { service.assertEnabled(); return service.store.publicSession(service.store.create()); });

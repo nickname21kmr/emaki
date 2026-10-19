@@ -29,7 +29,7 @@ export class NetworkError extends Error {
   }
 }
 
-export async function httpFetch(url: string, init: { headers?: Record<string, string>; signal?: AbortSignal } = {}) {
+export async function httpFetch(url: string, init: { headers?: Record<string, string>; signal?: AbortSignal; redirect?: 'follow' | 'error' | 'manual' } = {}) {
   const proxy = await resolveProxy();
   try {
     return await undiciFetch(url, { ...init, dispatcher: dispatcherFor(proxy.url) });

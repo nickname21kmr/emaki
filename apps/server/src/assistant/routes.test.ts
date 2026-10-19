@@ -21,6 +21,9 @@ let app: FastifyInstance, base: string, token: string, imageId: string;
 let piSession: string, holdResponse = false;
 const providerRequests: any[] = [];
 const provider = createServer(async (req, res) => {
+  if (req.method === 'GET' && req.url === '/v1/models') {
+    res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: [{ id: 'fixture-model' }] })); return;
+  }
   let body = ''; for await (const chunk of req) body += chunk;
   const input = JSON.parse(body); providerRequests.push(input);
   const tools = input.tools ?? [];
@@ -51,6 +54,7 @@ describe('assistant HTTP and MCP', () => {
     expect((await call('POST', '/sessions', {})).statusCode).toBe(403);
     expect((await call('POST', '/mcp', {})).statusCode).toBe(403);
     expect((await call('POST', '/detect', {})).statusCode).toBe(403);
+    expect((await call('POST', '/api-models', { baseUrl: 'http://localhost/v1', api: 'openai-responses' })).statusCode).toBe(403);
   });
   it('validates and persists access mode without exposing credentials', async () => {
     expect((await call('GET', '/settings')).json().accessMode).toBe('ask');
@@ -122,6 +126,15 @@ describe('assistant HTTP and MCP', () => {
       expect(restored.characterIds).toEqual(before.characterIds);
       expect(restored.characterSuggestions).toEqual(before.characterSuggestions);
     } finally { await client.close(); }
+  });
+  it('reads draft API models without saving settings or creating a conversation', async () => {
+    const settings = (await call('GET', '/settings')).json(), sessions = (await call('GET', '/sessions')).json();
+    const address = provider.address() as { port: number };
+    const result = await call('POST', '/api-models', { baseUrl: `http://127.0.0.1:${address.port}/v1`, api: 'openai-responses', apiKey: 'draft-only' });
+    expect(result.statusCode).toBe(200);
+    expect(result.json()).toEqual([{ id: 'fixture-model', name: 'fixture-model' }]);
+    expect((await call('GET', '/settings')).json()).toEqual(settings);
+    expect((await call('GET', '/sessions')).json()).toEqual(sessions);
   });
   it('runs the real Pi harness against a fixture API, including an MCP round trip', async () => {
     const address = provider.address() as { port: number };
