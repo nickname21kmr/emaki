@@ -352,7 +352,8 @@ const bullets = (arr) => (arr?.length ? `<ul class="points">${arr.map((x) => `<l
 const sec = (k) => (S.sections ?? {})[k] ?? {};
 const intro = (k) => (sec(k).text ? `<p>${sec(k).text}</p>` : '');
 const note = (k) => (sec(k).note ? `<p class="note">${sec(k).note}</p>` : '');
-const cover = (id) => (id ? `url(http://127.0.0.1:5174/api/images/${id}/thumb?w=480)` : 'none');
+const apiBaseUrl = /*API_BASE_URL*/ "http://127.0.0.1:5174";
+const cover = (id) => (id ? `url(${apiBaseUrl}/api/images/${id}/thumb?w=480)` : 'none');
 let no = 0;
 const H = (t, id = '') => `<h2${id ? ` id="${id}"` : ''}><span class="no">${String(++no).padStart(2, '0')}</span>${t}</h2>`;
 const BASE = [

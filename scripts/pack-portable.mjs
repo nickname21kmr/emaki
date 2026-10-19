@@ -53,7 +53,8 @@ if (!skipInstall) {
 rmSync(zip, { force: true });
 
 // 3. 便携包里用不到的文件
-for (const p of ['.github', '.claude', 'docs', 'apps/web/src', 'apps/web/public', 'apps/server/test', 'vitest.config.ts', '.editorconfig', '.prettierrc']) {
+// taste-profile is a runtime skill shared by the assistant harnesses.
+for (const p of ['.github', '.claude/launch.json', 'docs', 'apps/web/src', 'apps/web/public', 'apps/server/test', 'vitest.config.ts', '.editorconfig', '.prettierrc']) {
   rmSync(path.join(stage, p), { recursive: true, force: true });
 }
 

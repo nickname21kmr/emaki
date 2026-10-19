@@ -134,7 +134,7 @@ export class PiBackend implements AgentBackend {
   private constructor(private rpc: JsonProcess, private session: StoredSession, private sink: AgentSink) {
     rpc.onEvent = (event) => this.event(event); rpc.onExit = (error) => { sink.disconnected?.(); sink.done(error); };
   }
-  static async open(settings: PrivateSettings, session: StoredSession, cwd: string, endpoint: string, instructions: string, skillPath: string, sink: AgentSink) {
+  static async open(settings: PrivateSettings, session: StoredSession, cwd: string, endpoint: string, instructions: string, skillPaths: string[], sink: AgentSink) {
     const agentDir = path.join(cwd, 'pi-config'); mkdirSync(agentDir, { recursive: true });
     // Reuse model/auth configuration only; never read another application's sessions.
     const existing = process.env.PI_CODING_AGENT_DIR ?? path.join(homedir(), '.pi/agent');
@@ -160,7 +160,7 @@ export class PiBackend implements AgentBackend {
     }); }`);
     const entry = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent/rpc-entry'));
     const cli = path.join(path.dirname(entry), 'cli.js');
-    const args = [cli, '--mode', 'rpc', '--tools', '+codemode', '--no-extensions', '-e', 'builtin:mcp', '-e', 'builtin:codemode', '-e', gate, '--no-context-files', '--no-skills', '--skill', skillPath,
+    const args = [cli, '--mode', 'rpc', '--tools', '+codemode', '--no-extensions', '-e', 'builtin:mcp', '-e', 'builtin:codemode', '-e', gate, '--no-context-files', '--no-skills', ...skillPaths.flatMap(p => ['--skill', p]),
       '--no-prompt-templates', '--append-system-prompt', instructionFile, '--session-dir', path.join(cwd, 'history')];
     if (session.nativeId) args.push('--session', session.nativeId);
     const rpc = new JsonProcess(process.execPath, args, cwd, { ...process.env, PI_CODING_AGENT_DIR: agentDir, EMAKI_ASSISTANT_TOKEN: session.token, EMAKI_PI_API_KEY: settings.apiKey || 'local' });

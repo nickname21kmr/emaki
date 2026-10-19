@@ -1,11 +1,11 @@
 ---
 name: taste-profile
-description: 个人喜好分析。根据 Emaki 图库里收藏的插画（识别出的角色、作品、画面标签、保存时间），分析这个人喜欢什么样的角色和画面、口味怎么变化，和 Danbooru 同时期、中文圈画师、同几部作品做对照，生成一份只在本机打开的 HTML 报告。用户说「分析我的喜好 / 收图画像 / 我的 XP / 个人喜好分析」时使用。
+description: 生成完整收藏喜好画像、跨时期趋势分析和 HTML 报告；普通数量、排名和图片筛选使用 emaki-library。根据 Emaki 图库里收藏的插画（识别出的角色、作品、画面标签、保存时间），分析这个人喜欢什么样的角色和画面、口味怎么变化，和 Danbooru 同时期、中文圈画师、同几部作品做对照，生成一份只在本机打开的 HTML 报告。用户说「分析我的喜好 / 收图画像 / 我的 XP / 个人喜好分析」时使用。
 ---
 
 # 个人喜好分析
 
-从 Emaki 的图库数据里分析一个人的收图口味，输出 `data/profile/report.html`。
+从 Emaki 的图库数据里分析一个人的收图口味，使用本技能已有脚本与 `template.html` 生成报告。不要另写一套报表替代它们。
 
 所有中间文件和报告都写在 Emaki 数据目录下的 `profile/`（默认 `data/profile/`，已被 git 忽略）。**任何结果、截图、角色列表都不要提交到仓库，也不要发布或上传。**
 
@@ -19,9 +19,13 @@ description: 个人喜好分析。根据 Emaki 图库里收藏的插画（识别
 
 ## 步骤
 
-所有命令都在 Emaki 仓库根目录运行。数据目录不是默认的 `data/` 时，每条命令都加 `--data <目录>`。
+本技能使用通用 Agent Skills 格式，可由 Claude、Codex 或 Pi 加载，正文和模板共用一份。下列 `<skill>` 替换为当前这个 SKILL.md 所在目录的绝对路径；命令可从任意工作目录运行。
 
-1. **快照**：`node .claude/skills/taste-profile/scripts/snapshot.mjs`
+Emaki 助手会在技能目录生成 `.emaki-runtime.json`，绑定当前应用目录、数据目录、服务地址，以及此会话的 `profile/assistant/<会话 ID>/` 输出目录。脚本自动读取它，不要猜测其他工作树的数据路径。直接在源码仓库使用时，默认仍输出 `data/profile/`；可用 `--data <目录>` 和 `--out <目录>` 显式覆盖。以下步骤始终使用同一输出目录，文中的 `data/profile/` 指该输出目录。
+
+用 `scripts/run.mjs` 启动各步骤，它负责定位 Node 依赖和 TypeScript 加载器。只有模板生成与统计需要运行时才执行相应步骤，不因技能被加载就开始下载对照图片或运行识别。
+
+1. **快照**：`node "<skill>/scripts/run.mjs" snapshot`
    之后只读快照，不碰正在用的库。
 
 2. **看时间是否可信**：用 sqlite 看各个 `library_roots` 下图片的 `modified_at` 分布。
@@ -30,25 +34,25 @@ description: 个人喜好分析。根据 Emaki 图库里收藏的插画（识别
    - 文件名里带时间戳的（`2023_01_12_21_51_57_IMG_….JPG`、`Image_<毫秒>`）不受影响。
 
 3. **统一标签口径**：如果库里同时有 WD 和 PixAI 打的标签（`images.tagger_model`），运行：
-   `node --import tsx .claude/skills/taste-profile/scripts/wd-sample.mts --undated-roots …`
+   `node "<skill>/scripts/run.mjs" wd-sample --undated-roots …`
    - 它把非 WD 的图每个时期抽 600 张，用 WD 重打。
    - 重跑是增量的，只补缺的部分。
    - 不做这一步的话，"换模型"会被误读成"口味变了"。
 
 4. **Danbooru 对照**（可选，但推荐，否则只能和全站二十年的人工标签比）：
-   - `node .claude/skills/taste-profile/scripts/baseline.mjs --undated-roots …`
+   - `node "<skill>/scripts/run.mjs" baseline --undated-roots …`
      - 默认抽三组，每组约 1000 张：`recent`（同时期全站）、`cn`（中文平台来源，也就是中文圈画师）、`works`（用户收得最多的作品）。
      - 会下载约 400 MB，用完删除。
-   - `node --import tsx .claude/skills/taste-profile/scripts/baseline-tag.mts`
+   - `node "<skill>/scripts/run.mjs" baseline-tag`
 
-5. **算数字**：`node .claude/skills/taste-profile/scripts/analyze.mjs --undated-roots … [--private]`
+5. **算数字**：`node "<skill>/scripts/run.mjs" analyze --undated-roots … [--private]`
    - 输出 `data.json`。
    - 先检查控制台的统计单元数量，应该接近插画数；还要看 `data.json` 里的 `uncovered` 是否为空，不为空就回到第 3 步补抽样。
 
 6. **写文字**：读 `data.json`，写 `data/profile/story.json`（格式见下）。这一步决定报告有没有价值，要求见「怎么写」。
 
-7. **生成报告**：`node .claude/skills/taste-profile/scripts/report.mjs`，然后用浏览器打开 `report.html` 检查。
-   - 角色封面从 `http://127.0.0.1:5174` 读取，Emaki 要开着。
+7. **生成报告**：`node "<skill>/scripts/run.mjs" report`，然后在环境允许的预览方式中打开 `report.html` 检查；若浏览器拒绝本地文件协议，不绕过其限制，说明尚未完成视觉检查。
+   - 角色封面从当前 Emaki 服务读取，Emaki 要开着；独立源码运行默认使用 `http://127.0.0.1:5174`。
    - 检查有没有空白的图表，或者 NaN。
 
 ## 怎么读数字（容易出错的地方）

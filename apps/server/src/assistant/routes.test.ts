@@ -138,6 +138,11 @@ describe('assistant HTTP and MCP', () => {
     expect(finished.status, JSON.stringify(finished)).toBe('idle');
     expect(finished.messages.some((m: any) => m.text.includes('fixture-response'))).toBe(true);
     expect(providerRequests.some(r => r.messages.some((m: any) => m.role === 'tool' && String(m.content).includes('"n":2')))).toBe(true);
+    const system = providerRequests.flatMap(r => r.messages).filter((m: any) => m.role === 'system').map((m: any) => JSON.stringify(m.content)).join('\n');
+    // The real Pi process must advertise both skills without eagerly loading their bodies.
+    expect(system).toContain('<name>emaki-library</name>');
+    expect(system).toContain('<name>taste-profile</name>');
+    expect(system).not.toContain('查源采用');
     expect(finished).not.toHaveProperty('nativeId'); expect(finished).not.toHaveProperty('token');
   }, 20000);
   it('keeps running after SSE disconnect, stops, and resumes its own Pi history', async () => {

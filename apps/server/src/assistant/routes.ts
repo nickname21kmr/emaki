@@ -10,7 +10,7 @@ import { createLibraryMcp } from './tools.ts';
 
 export function assistantRoutes(app: FastifyInstance, ds: DataSource) {
   const streams = new Set<import('node:http').ServerResponse>();
-  const service = new AssistantService(path.join(config.dataDir, 'assistant'), path.join(config.repoRoot, 'apps/server/assets/assistant/emaki-library/SKILL.md'), () => {
+  const service = new AssistantService(path.join(config.dataDir, 'assistant'), config.repoRoot, () => {
     const address = app.server.address(); return `http://127.0.0.1:${typeof address === 'object' && address ? address.port : config.port}/api/assistant/mcp`;
   });
   app.addHook('preClose', async () => { for (const stream of streams) stream.end(); await service.close(); });
