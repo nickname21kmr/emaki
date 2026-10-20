@@ -6,11 +6,19 @@ import { defaultFetchLike, type FetchLike, type HttpResponse } from '../../net/h
 export const PixivArtworkSchema = z.object({
   id: z.string(),
   pageCount: z.number().int().positive(),
-  // 页面“原创”标记是独立字段，不在 tags.tags 中。
+  // 独立原创开关；作者也可能只通过 tags.tags 标记原创。
   isOriginal: z.boolean().optional(),
   tags: z.object({ tags: z.array(z.object({ tag: z.string().min(1), translation: z.record(z.string(), z.string()).optional() })) }),
 });
 export type PixivArtwork = z.infer<typeof PixivArtworkSchema>;
+
+const ORIGINAL_TAGS = new Set(['オリジナル', '原创', '原創', 'original']);
+/** Pixiv 的原创开关与原创标签独立；只认完整原文标签，不匹配包含关系或机器译名。 */
+export function isOriginalArtwork(artwork: PixivArtwork): boolean {
+  return artwork.isOriginal === true || artwork.tags.tags.some(
+    ({ tag }) => ORIGINAL_TAGS.has(tag.normalize('NFKC').trim().toLowerCase()),
+  );
+}
 
 export class PixivAccessError extends Error {}
 /** Pixiv 对这一个投稿明确拒绝（400 这类 4xx、200+error）：重试同一投稿没用，跳过它接着查下一个。 */

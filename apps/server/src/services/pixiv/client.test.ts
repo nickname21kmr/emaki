@@ -1,10 +1,20 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { afterEach, expect, it, vi } from 'vitest';
-import { PixivAccessError, PixivClient, PixivPostError } from './client.ts';
+import { isOriginalArtwork, PixivAccessError, PixivClient, PixivPostError } from './client.ts';
 
 vi.mock('node:timers/promises', () => ({ setTimeout: vi.fn().mockResolvedValue(undefined) }));
 afterEach(() => vi.mocked(sleep).mockReset().mockResolvedValue(undefined));
 const ok = () => ({status:200,headers:{get:()=>null},text:async()=>JSON.stringify({error:false,body:{id:'123',pageCount:1,tags:{tags:[]}}})});
+
+it.each(['オリジナル', '原创', '原創', ' Original '])('原创开关关闭时仍接受完整标签 %s', tag => {
+  expect(isOriginalArtwork({ id:'123',pageCount:2,isOriginal:false,tags:{tags:[{tag}]}})).toBe(true);
+});
+it.each(['オリジナルキャラクター', '非原创', 'original character', 'originality'])('不把含原创字样的标签 %s 当作原创标记', tag => {
+  expect(isOriginalArtwork({id:'123',pageCount:1,tags:{tags:[{tag}]}})).toBe(false);
+});
+it('普通标签被翻译为原创不作为原创证据', () => {
+  expect(isOriginalArtwork({id:'123',pageCount:1,tags:{tags:[{tag:'別のタグ',translation:{en:'original'}}]}})).toBe(false);
+});
 
 it.each([true,false])('保留独立的原创标记 %s，即使标签数组没有原创', async isOriginal => {
   const fetch=vi.fn().mockResolvedValue({...ok(),text:async()=>JSON.stringify({error:false,body:{id:'123',pageCount:2,isOriginal,tags:{tags:[{tag:'practice'}]}}})});

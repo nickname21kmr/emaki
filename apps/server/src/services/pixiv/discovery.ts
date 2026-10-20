@@ -1,6 +1,6 @@
 import { searchKey, katakanaToHiragana } from '@emaki/shared';
 import type { Db } from '../../db/connection.ts';
-import type { PixivArtwork } from './client.ts';
+import { isOriginalArtwork, type PixivArtwork } from './client.ts';
 import type { DanbooruClient } from '../danbooru/client.ts';
 import type { DanbooruCatalog } from '../danbooru/catalog.ts';
 import { pickCopyrights } from '../danbooru/copyright.ts';
@@ -119,7 +119,7 @@ export function createPixivDiscovery(db: Db, catalog: DanbooruCatalog, client: C
           onAdded?.([tag.name]);
           await enrichWorks(tag.name);
           // Reordered words alone are not enough: the artwork's work must agree too.
-          if (!exactName && (artwork.isOriginal || !catalog.copyrights(tag.name).some(w => workTags().has(w)))) continue;
+          if (!exactName && (isOriginalArtwork(artwork) || !catalog.copyrights(tag.name).some(w => workTags().has(w)))) continue;
           if (!exactName) {
             const now = new Date().toISOString();
             db.transaction(() => catalog.setOtherNames(tag.name, [...new Set([...(catalog.get(tag.name)?.otherNames ?? []), query])], now))();

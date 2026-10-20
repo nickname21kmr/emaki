@@ -320,11 +320,11 @@ it.each([false,undefined])('原创字段 %s 不会设置原创状态', async isO
   expect(db.prepare('SELECT COUNT(*) FROM images WHERE original_at IS NOT NULL').pluck().get()).toBe(0);
 });
 
-it('原创标记仍保护已有角色和80%以上候选', async () => {
+it.each([true,false])('原创字段/标签仍保护已有角色和80%以上候选（字段 %s）', async isOriginal => {
   const character=makeCatalog().catalog.ensureCharacter(A,'now');
   db.prepare("INSERT INTO image_characters(image_id,character_id,origin,added_at) VALUES (1,?,'manual','now')").run(character.id);
   db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (2,?,0.8,'tagger')").run(B);
-  await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>({...art(2,[]),isOriginal:true})},0);
+  await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>({...art(2,['オリジナル']),isOriginal})},0);
   expect(db.prepare('SELECT COUNT(*) FROM images WHERE original_at IS NOT NULL').pluck().get()).toBe(0);
 });
 
@@ -359,10 +359,26 @@ it('自定义原创角色可按名字关联，多角色投稿的建议显示真�
   expect(db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(2);
 });
 
-it('只含普通词或原创字样不会创建角色，也不会代替用户执行归为原创', async () => {
-  const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(2,['オリジナル','少女','皮鞋'])},0);
+it('只含普通词或含原创字样的复合标签不会自动归为原创', async () => {
+  const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(2,['オリジナルキャラクター','少女','皮鞋'])},0);
   expect(summary).toContain('未匹配角色 1');expect(links()).toHaveLength(0);
   expect(db.prepare('SELECT COUNT(*) FROM images WHERE original_at IS NOT NULL').pluck().get()).toBe(0);
+});
+
+it.each([false,undefined])('明确原创标签补足字段 %s，重试历史未匹配投稿并且不调用角色发现', async isOriginal => {
+  db.exec("UPDATE pixiv_character_checks SET result='unmatched',checked_at='before'");
+  queuePixivImages(ctx);
+  const discover = vi.fn();
+  const client = {artwork: vi.fn(async()=>({...art(2,['オリジナル','練習'],'123',[]),isOriginal}))};
+  const summary = await syncPixivCharacters(ctx,job,makeCatalog,client,0,discover);
+  expect(summary).toContain('原创 2 张');
+  expect(discover).not.toHaveBeenCalled();
+  expect(links()).toHaveLength(0);
+  expect(db.prepare('SELECT COUNT(*) FROM images WHERE original_at IS NOT NULL').pluck().get()).toBe(2);
+  expect(db.prepare("SELECT COUNT(*) FROM pixiv_character_checks WHERE result='original'").pluck().get()).toBe(2);
+  queuePixivImages(ctx);
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).toHaveBeenCalledTimes(1);
 });
 
 it('在线补充同角色不同别名时保留此前已确认的名称', async () => {
@@ -443,6 +459,7 @@ it('只有投稿里的作品标签能确认的角色才自动关联；自建角�
   expect(match(art(1,['アリス','ボブ'],'1',['ゲームA'])).automatic).toBe(false);
   // Pixiv 标了原创：Danbooru 角色只建议，自建角色照样关联
   expect(match({...art(1,['アリス'],'1',['ゲームA']),isOriginal:true}).automatic).toBe(false);
+  expect(match({...art(1,['アリス','オリジナル'],'1',['ゲームA']),isOriginal:false}).automatic).toBe(false);
   expect(match({...art(1,['ミドリ'],'1',[]),isOriginal:true})).toEqual({tags:[`emaki:character:${custom}`],automatic:true});
 });
 

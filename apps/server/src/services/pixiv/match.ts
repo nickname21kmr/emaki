@@ -2,7 +2,7 @@ import { searchKey, katakanaToHiragana } from '@emaki/shared';
 import type { Db, Statement } from '../../db/connection.ts';
 import type { CharacterCatalog } from '../catalog/characterCatalog.ts';
 import type { CopyrightSource } from '../catalog/copyrights.ts';
-import type { PixivArtwork } from './client.ts';
+import { isOriginalArtwork, type PixivArtwork } from './client.ts';
 
 type Index = Map<string, Set<string>>;
 const fullKey = (name: string) => katakanaToHiragana(name.normalize('NFKC').toLowerCase().replace(/[\s_\-·・]+/g, ''));
@@ -91,7 +91,7 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
     // 常用词会按去掉括号的名字撞上别的作品的角色：只有投稿里的作品标签能确认的才自动关联。
     // 自建角色是用户自己起的名字，不用作品确认；Pixiv 标了原创的投稿不自动挂 Danbooru 角色。
     const confirmed = (tag: string) => tag.startsWith(CUSTOM)
-      || (!artwork.isOriginal && copyrights.copyrights(tag).some((w) => workTags.has(w)));
+      || (!isOriginalArtwork(artwork) && copyrights.copyrights(tag).some((w) => workTags.has(w)));
     // 多个别名命中同一角色，按一个角色计；投稿页数不以本地下载的页数代替。
     return { tags: [...matched], automatic: !ambiguous && (artwork.pageCount === 1 || matched.size === 1) && [...matched].every(confirmed) };
   };
