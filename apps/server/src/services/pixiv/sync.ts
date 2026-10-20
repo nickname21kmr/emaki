@@ -6,7 +6,7 @@ import { applyExclusionRules } from '../../datasource/sqlite/exclusions.ts';
 import type { CharacterCatalog } from '../catalog/characterCatalog.ts';
 import type { CopyrightSource } from '../catalog/copyrights.ts';
 import { DanbooruError } from '../danbooru/client.ts';
-import { PixivAccessError, PixivClient, PixivPostError } from './client.ts';
+import { isOriginalArtwork, PixivAccessError, PixivClient, PixivPostError } from './client.ts';
 import { createPixivMatcher, type PixivMatcher } from './match.ts';
 import type { PixivDiscover } from './discovery.ts';
 
@@ -100,7 +100,7 @@ export async function syncPixivCharacters(
     let artwork;
     try {
       artwork = await client.artwork(post.id, job.signal);
-      if (artwork && discover && !artwork.isOriginal) {
+      if (artwork && discover && !isOriginalArtwork(artwork)) {
         try {
           // 写进目录的新角色马上补进索引；后面的请求失败了这部分也不丢
           await discover(artwork, job.signal, (tags) => match?.refresh(tags));
@@ -152,8 +152,9 @@ export async function syncPixivCharacters(
       match = createPixivMatcher(db, fresh.catalog, fresh.copyrights);
       result = match(artwork);
     }
-    if (!result.tags.length && !artwork.isOriginal) { completePost(post.id, 'unmatched'); unmatched++; job.advance(1, summary()); continue; }
-    const outcome = artwork.isOriginal ? 'original' : result.automatic ? 'linked' : 'suggested';
+    const isOriginal = isOriginalArtwork(artwork);
+    if (!result.tags.length && !isOriginal) { completePost(post.id, 'unmatched'); unmatched++; job.advance(1, summary()); continue; }
+    const outcome = isOriginal ? 'original' : result.automatic ? 'linked' : 'suggested';
     const ids: number[] = [];
     db.transaction(() => {
       const rows = current.all(post.id) as { id: number }[];
@@ -165,7 +166,7 @@ export async function syncPixivCharacters(
           continue;
         }
         let linkChanges = 0, suggestionChanges = 0;
-        if (artwork.isOriginal) {
+        if (isOriginal) {
           const work = catalog.ensureWork('original', now);
           db.prepare('UPDATE images SET original_at=? WHERE id=?').run(now,row.id);
           db.prepare('INSERT OR IGNORE INTO image_copyrights(image_id,work_id,score) VALUES (?,?,NULL)').run(row.id,work.id);
