@@ -3,7 +3,6 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AssistantModel, AssistantQuestion } from '@emaki/shared';
-import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/models';
 import { JsonProcess } from './rpc.ts';
 import type { PrivateSettings, StoredSession } from './store.ts';
 import { toolPreview } from './activity.ts';
@@ -265,6 +264,8 @@ export class PiBackend implements AgentBackend {
   }
   async models(): Promise<AssistantModel[]> {
     const { models } = await this.rpc.request({ type: 'get_available_models' });
+    // pi-ai 只在列模型时用到：用到时再加载，助手没开时启动不付这份开销
+    const { getSupportedThinkingLevels } = await import('@earendil-works/pi-ai/models');
     return models.map((m: any) => ({ id: `${m.provider}/${m.id}`, provider: m.provider, name: m.provider === 'emaki' ? (m.name ?? m.id) : `${m.name ?? m.id} · ${m.provider}`, vision: m.input?.includes('image') ?? false,
       efforts: m.reasoning ? getSupportedThinkingLevels(m) : [], defaultEffort: m.reasoning ? getSupportedThinkingLevels(m).find(l => l === 'medium') ?? getSupportedThinkingLevels(m)[0] : '' }));
   }

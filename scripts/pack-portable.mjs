@@ -94,6 +94,20 @@ const sqlitePre = path.join(nm, 'better-sqlite3', 'prebuilds');
 for (const f of existsSync(sqlitePre) ? readdirSync(sqlitePre) : []) if (f !== 'win32-x64.node') rmSync(path.join(sqlitePre, f), { force: true });
 for (const p of ['deps', 'src']) rmSync(path.join(nm, 'better-sqlite3', p), { recursive: true, force: true });
 
+// 3d. 调试映射和类型声明运行时用不到（AI 助手的依赖里各有几千个）；Pi 运行时会读自己的 .md 文档，那些要留着
+let stripped = 0;
+(function strip(dir) {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) strip(p);
+    else if (/\.(js|mjs|cjs|css)\.map$|\.d\.[cm]?ts(\.map)?$/.test(e.name)) {
+      rmSync(p, { force: true });
+      stripped++;
+    }
+  }
+})(nm);
+log(`删掉了 ${stripped} 个调试映射和类型声明文件`);
+
 // 4. 自带 Node.js（就用打包机上这个，版本和测试时一致）
 mkdirSync(path.join(stage, 'runtime'), { recursive: true });
 copyFileSync(process.execPath, path.join(stage, 'runtime', 'node.exe'));
