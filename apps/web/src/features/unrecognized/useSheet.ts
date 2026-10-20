@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { KIND_LABEL } from '@/lib/kinds';
 import { useMutate, useUnrecognizedInfinite, type UnrecognizedParams } from '@/lib/queries';
 import { useSelection } from '@/lib/stores';
+import { useReconcileSelection } from '@/lib/useReconcileSelection';
 import type { AssignTarget, StampEvent } from './types';
 
 const SCOPE = 'unrecognized';
@@ -26,6 +27,8 @@ export function useSheet(params: UnrecognizedParams, enabled: boolean) {
     for (const pg of data?.pages ?? []) for (const x of pg.items) if (!seen.has(x.image.id)) (seen.add(x.image.id), out.push(x.image));
     return out;
   }, [data]);
+  const availableIds = useMemo(() => all.map(it => it.id), [all]);
+  useReconcileSelection(SCOPE, availableIds, query.isSuccess && !query.isFetching);
 
   // ---------------------------------------------------------------- 乐观隐藏
   const [pending, setPending] = useState<ReadonlyMap<ID, number | null>>(() => new Map());

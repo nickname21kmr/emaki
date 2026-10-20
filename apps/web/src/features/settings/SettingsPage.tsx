@@ -15,6 +15,7 @@ import { SettingsToc } from './components/SettingsToc';
 import { TaggerSection } from './components/TaggerSection';
 import { useSectionNav } from './hooks';
 import { isSectionId, type SectionId } from './sections';
+import { AssistantSettingsSection } from '@/features/assistant/AssistantSettingsSection';
 
 /**
  * 设置：左侧吸顶小目录 + 右侧分组卡片。修改即时保存（滑块松手时才保存）。
@@ -69,6 +70,7 @@ export function SettingsPage() {
               <DedupeSection dedupe={settings.data.dedupe} groupCount={stats?.duplicateGroupCount} />
               <AppearanceSection ui={settings.data.ui} />
               <JobsSection />
+              <AssistantSettingsSection />
               <AboutSection stats={stats} />
             </div>
           </div>

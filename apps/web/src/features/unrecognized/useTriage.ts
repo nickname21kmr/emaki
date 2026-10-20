@@ -6,6 +6,7 @@ import { isSensitive } from '@/lib/format';
 import { KIND_LABEL } from '@/lib/kinds';
 import { useMutate, useUnrecognizedInfinite } from '@/lib/queries';
 import { useSelection } from '@/lib/stores';
+import { useReconcileSelection } from '@/lib/useReconcileSelection';
 import type { AggregatedSuggestion, AssignTarget, Direction, StampEvent } from './types';
 
 const SCOPE = 'unrecognized';
@@ -44,6 +45,8 @@ export function useTriage(bucket: 'suggested' | 'untagged') {
     }
     return out;
   }, [data]);
+  const availableIds = useMemo(() => allItems.map(it => it.image.id), [allItems]);
+  useReconcileSelection(SCOPE, availableIds, query.isSuccess && !query.isFetching);
 
   // ---------------------------------------------------------------- 乐观隐藏
   // value = 修改成功的时间；null = 还在请求中

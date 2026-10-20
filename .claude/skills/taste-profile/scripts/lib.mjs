@@ -5,7 +5,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const REPO = path.resolve(SKILL_DIR, '../../..');
+const runtimeFile = path.join(SKILL_DIR, '.emaki-runtime.json');
+const runtime = existsSync(runtimeFile) ? JSON.parse(readFileSync(runtimeFile, 'utf8')) : {};
+export const REPO = path.resolve(runtime.repoRoot ?? path.resolve(SKILL_DIR, '../../..'));
+export const API_BASE_URL = runtime.apiBaseUrl ?? 'http://127.0.0.1:5174';
 const require = createRequire(path.join(REPO, 'apps/server/package.json'));
 export const Database = require('better-sqlite3');
 
@@ -16,8 +19,8 @@ export function args() {
     const i = a.indexOf(k);
     return i >= 0 ? a[i + 1] : undefined;
   };
-  const dataDir = path.resolve(get('--data') ?? process.env.EMAKI_DATA_DIR ?? path.join(REPO, 'data'));
-  const out = path.resolve(get('--out') ?? path.join(dataDir, 'profile'));
+  const dataDir = path.resolve(get('--data') ?? runtime.dataDir ?? process.env.EMAKI_DATA_DIR ?? path.join(REPO, 'data'));
+  const out = path.resolve(get('--out') ?? (get('--data') ? path.join(dataDir, 'profile') : runtime.outDir) ?? path.join(dataDir, 'profile'));
   mkdirSync(out, { recursive: true });
   return { dataDir, out, private: a.includes('--private'), get, has: (k) => a.includes(k) };
 }

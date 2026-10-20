@@ -12,6 +12,7 @@ import { collectionRoutes } from './routes/collections.ts';
 import { imageRoutes } from './routes/images.ts';
 import { libraryRoutes } from './routes/library.ts';
 import { systemRoutes } from './routes/system.ts';
+import { assistantRoutes } from './assistant/routes.ts';
 
 /** 这次启动的 id：撤销栈只在内存里，前端看到它变了就丢掉旧的撤销记录 */
 const bootId = randomUUID();
@@ -58,6 +59,7 @@ export async function buildApp(ds: DataSource, bus: EventBus) {
   collectionRoutes(app, ds);
   imageRoutes(app, ds);
   systemRoutes(app, ds, bus);
+  assistantRoutes(app, ds);
 
   app.get(
     '/api/health',

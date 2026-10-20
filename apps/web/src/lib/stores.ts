@@ -222,6 +222,7 @@ interface SelectionState {
   /** shift+点击：从 anchor 选到 id（需要传入当前顺序） */
   selectRange: (order: ID[], id: ID) => void;
   setMany: (ids: ID[]) => void;
+  retain: (scope: string, available: readonly ID[]) => void;
   clear: () => void;
 }
 
@@ -248,6 +249,12 @@ export const useSelection = create<SelectionState>((set, get) => ({
       return { ids: new Set([...s.ids, ...order.slice(a, b + 1)]), anchor: id };
     }),
   setMany: (ids) => set({ ids: new Set(ids) }),
+  retain: (scope, available) => set((s) => {
+    if (s.scope !== scope || !s.ids.size) return s;
+    const valid = new Set(available), ids = new Set([...s.ids].filter(id => valid.has(id)));
+    if (ids.size === s.ids.size) return s;
+    return { ids, anchor: s.anchor && ids.has(s.anchor) ? s.anchor : null };
+  }),
   clear: () => set({ ids: new Set(), anchor: null }),
 }));
 

@@ -1,5 +1,5 @@
-import type { ImageDetail, ImageItem, ImageSource, Rating } from '@emaki/shared';
-import { Ban, ExternalLink, FolderOpen, Heart, Sparkles, Trash2 } from 'lucide-react';
+import type { ImageDetail, ImageItem, Rating } from '@emaki/shared';
+import { Ban, FolderOpen, Heart, Sparkles, Trash2 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { toast } from 'sonner';
 import { Badge, Button, Seal, Segmented, Skeleton, Tooltip } from '@/components/ui';
@@ -18,20 +18,13 @@ import { PanelArtists } from './PanelArtists';
 import { PanelCharacters } from './PanelCharacters';
 import { PanelCollection } from './PanelCollection';
 import { ActionTile, Section } from './PanelParts';
+import { PanelSource } from './PanelSource';
 import { PanelTags } from './PanelTags';
 import type { ImageActions } from './useImageActions';
 import { useCharacter, useSettings, useTrashHint } from '@/lib/queries';
 import { CharacterAvatar } from '@/features/gallery/CharacterPicker';
 
 const RATINGS = Object.keys(RATING_LABEL) as Rating[];
-
-const SITE_LABEL: Record<ImageSource['site'], string> = {
-  pixiv: 'Pixiv',
-  twitter: 'X / Twitter',
-  danbooru: 'Danbooru',
-  fanbox: 'FANBOX',
-  other: '其他',
-};
 
 /**
  * 看图器右侧的信息面板：一张「纸」浮在深色背景上，和应用主体的纸是同一种材质。
@@ -318,7 +311,7 @@ function Details({ detail: d, onNavigate }: { detail: ImageDetail; onNavigate: (
         </Row>
         <Row label="修改">{formatDateTime(d.modifiedAt)}</Row>
         <Row label="来源">
-          <SourceValue source={d.source} />
+          <PanelSource key={d.id} detail={d} />
         </Row>
         {(d.collection || d.relPath.includes('/')) && (
           <Row label={d.collection ? '收录于' : '合集'}>
@@ -349,32 +342,6 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
       <dt className="text-fg-subtle">{label}</dt>
       <dd className="min-w-0 tabular">{children}</dd>
     </>
-  );
-}
-
-function SourceValue({ source }: { source: ImageSource | null }) {
-  if (!source) return <span className="text-fg-subtle">未知</span>;
-  const site = SITE_LABEL[source.site];
-  return (
-    <div className="min-w-0">
-      {source.url ? (
-        <a
-          href={source.url}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex max-w-full items-center gap-1 font-medium underline-offset-4 transition-colors hover:text-shu-fg hover:underline"
-        >
-          <span className="truncate">
-            {site}
-            {source.postId && <span className="font-normal text-fg-muted"> #{source.postId}</span>}
-          </span>
-          <ExternalLink className="size-3 shrink-0" />
-        </a>
-      ) : (
-        <span>{site}</span>
-      )}
-      {source.artist && <div className="mt-0.5 truncate text-fg-muted">画师 {source.artist}</div>}
-    </div>
   );
 }
 

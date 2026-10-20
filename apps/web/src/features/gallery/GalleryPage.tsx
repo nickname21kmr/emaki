@@ -95,7 +95,7 @@ export function GalleryPage() {
       <EmptyState
         glyph="画"
         title="图库还是空的"
-        description="添加一个存放插画的文件夹，Emaki 会在本地扫描、识别角色并整理它们。图片不会上传到任何地方。"
+        description="添加一个存放插画的文件夹，Emaki 会在本地扫描、识别角色并整理它们。这些本机任务不上传图片。"
         action={
           <Button variant="primary" icon={<FolderPlus className="size-4" />} onClick={() => navigate('/settings')}>
             添加图片文件夹

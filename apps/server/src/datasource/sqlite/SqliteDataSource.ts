@@ -1,3 +1,4 @@
+import { editedSource } from '../../services/source/editSource.ts';
 import type {
   AddLibraryRootBody,
   BulkCollectionsBody,
@@ -601,6 +602,7 @@ export class SqliteDataSource implements DataSource {
       kindReason: row.content_kind_manual ? null : describeKindReason(row.content_kind_source, row.content_kind_evidence),
       collection: this.imageCollection(n),
       artists: imageArtists(this.ctx.db, n),
+      sourceManual: !!this.ctx.stmt('SELECT source_manual FROM images WHERE id = ?').pluck().get(n),
       artistsManual: !!this.ctx.stmt('SELECT artist_manual FROM images WHERE id = ?').pluck().get(n),
     };
   }
@@ -634,10 +636,18 @@ export class SqliteDataSource implements DataSource {
     if (body.kind !== undefined) assertKindValue(body.kind);
     const charIds = body.characterIds ? [...new Set(body.characterIds)].map((c) => this.requireCharacterId(c)) : null;
     const now = iso(this.ctx.clock());
+    const sourceEdit = body.source === undefined ? undefined : editedSource(body.source, this.ctx.stmt('SELECT rel_path FROM images WHERE id = ?').pluck().get(iid) as string);
     // 类型、收藏、分级、角色放进同一次 mutate：一起传时一个 token 撤销全部
     return this.ctx.mutate((u) => {
       // 提示文案和 mock 一致：收藏 > 分级 > 角色 > 类型，只报一条
       let message = '';
+      if (sourceEdit) {
+        u.columns('images', ['source_site', 'source_post_id', 'source_artist', 'source_url', 'source_manual'], [iid]);
+        const src = sourceEdit.source;
+        this.ctx.stmt('UPDATE images SET source_site=?, source_post_id=?, source_artist=?, source_url=?, source_manual=? WHERE id=?')
+          .run(src?.site ?? null, src?.postId ?? null, src?.artist ?? null, src?.url ?? null, sourceEdit.manual ? 1 : 0, iid);
+        message = sourceEdit.manual ? (src ? '已确认来源' : '已清除来源') : '已恢复自动来源';
+      }
       if (body.kind !== undefined) {
         const value = body.kind;
         setKindInTx(this.ctx, u, [iid], value, this.kindDeps);

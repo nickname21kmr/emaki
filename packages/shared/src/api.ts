@@ -203,6 +203,8 @@ export type GetImageResponse = ImageDetail;
 
 /** PATCH /api/images/:id */
 export interface UpdateImageBody {
+  /** Confirm a source URL; null deliberately clears it; 'auto' restores filename parsing. */
+  source?: { url: string; artist?: string } | null | 'auto';
   characterIds?: ID[];
   rating?: Rating;
   favorite?: boolean;

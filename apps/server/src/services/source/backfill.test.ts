@@ -17,5 +17,11 @@ it('只在规则版本变化时重算', () => {
   expect(backfillSources(db)).toBe(0);
   const sites = db.prepare('SELECT source_site FROM images ORDER BY id').pluck().all();
   expect(sites).toEqual(['pixiv', null, 'twitter']);
+  db.prepare("UPDATE images SET source_manual=1, source_site='other', source_post_id=NULL, source_url='https://example.com/original' WHERE id=1").run();
+  db.prepare('UPDATE images SET source_manual=1, source_site=NULL, source_post_id=NULL, source_url=NULL WHERE id=3').run();
+  db.prepare("DELETE FROM settings WHERE key='sourceParserVersion'").run();
+  expect(backfillSources(db)).toBe(1);
+  expect(db.prepare('SELECT source_site, source_url FROM images WHERE id=1').get()).toEqual({ source_site: 'other', source_url: 'https://example.com/original' });
+  expect(db.prepare('SELECT source_site, source_url FROM images WHERE id=3').get()).toEqual({ source_site: null, source_url: null });
   db.close();
 });

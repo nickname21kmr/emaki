@@ -350,8 +350,8 @@ export class Scanner {
         WHERE id=@id`),
       meta: db.prepare('UPDATE images SET bytes=@bytes, modified_at=@modifiedAt, missing=0, trashed_at=NULL WHERE id=@id'),
       move: db.prepare(`UPDATE images SET root_id=@rootId, rel_path=@relPath, file_name=@fileName, modified_at=@modifiedAt, missing=0, trashed_at=NULL,
-          source_site=COALESCE(@site, source_site), source_post_id=COALESCE(@postId, source_post_id),
-          source_artist=COALESCE(@artist, source_artist), source_url=COALESCE(@url, source_url)
+          source_site=CASE WHEN source_manual=1 THEN source_site ELSE COALESCE(@site, source_site) END, source_post_id=CASE WHEN source_manual=1 THEN source_post_id ELSE COALESCE(@postId, source_post_id) END,
+          source_artist=CASE WHEN source_manual=1 THEN source_artist ELSE COALESCE(@artist, source_artist) END, source_url=CASE WHEN source_manual=1 THEN source_url ELSE COALESCE(@url, source_url) END
         WHERE id=@id`),
       error: db.prepare(`INSERT INTO scan_errors (root_id, rel_path, bytes, modified_at, error, at) VALUES (@rootId, @relPath, @bytes, @modifiedAt, @error, @at)
         ON CONFLICT(root_id, rel_path) DO UPDATE SET bytes=excluded.bytes, modified_at=excluded.modified_at, error=excluded.error, at=excluded.at`),

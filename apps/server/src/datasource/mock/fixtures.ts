@@ -43,6 +43,7 @@ export interface CharacterRow {
 }
 
 export interface ImageRow {
+  sourceManual?: boolean;
   id: ID;
   relPath: string;
   fileName: string;
