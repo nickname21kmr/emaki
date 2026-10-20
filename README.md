@@ -2,9 +2,9 @@
 
 给习惯存很多图在自己手机电脑准备的群友准备的，一个在自己电脑上跑的插画整理工具。把存了几万张的二次元图文件夹丢进来，它会认出每张图画的是哪个角色、属于哪部作品，然后按角色 / 作品帮你归好类。漫画、截图、照片、表情包会自动分出去，重复的图也能找出来。
 
-图片不会上传，识别模型在本机跑。
+图片默认不上传，识别模型在本机跑。实验性的 AI 助手默认关闭；开启后，对话和助手查看的图片会发给你选的模型服务，查出处时经你同意可能上传到搜图网站，见 [AI 助手](docs/ai-assistant.md)。
 
-> **English**: Emaki is a local-first anime illustration organizer for Windows. It recognizes characters with a local tagging model (PixAI / WD14, GPU via DirectML), groups your images by character and series, separates comics, screenshots and photos, and finds duplicate or visually similar images. Nothing is uploaded. The UI is in Chinese; a portable build is available on the [Releases](https://github.com/nickname21kmr/emaki/releases/latest) page.
+> **English**: Emaki is a local-first anime illustration organizer for Windows. It recognizes characters with a local tagging model (PixAI / WD14, GPU via DirectML), groups your images by character and series, separates comics, screenshots and photos, and finds duplicate or visually similar images. Nothing is uploaded unless you turn on the experimental AI assistant. The UI is in Chinese; a portable build is available on the [Releases](https://github.com/nickname21kmr/emaki/releases/latest) page.
 
 ![角色页](docs/screenshots/real-characters.webp)
 
@@ -32,6 +32,7 @@
 - **不怕移动硬盘**：图放在移动硬盘上，拔掉或者扫描中途断开，整理结果都不会丢，插回来就恢复。
 - **文件夹可以随时调整**：比如已经加了 `D:/图片/收藏`，又加 `D:/图片`，会问你要不要合并成一个，原来的整理都保留。
 - **联网可选**：同步 Danbooru 能拿到更全的作品和别名。模型没认出的 Pixiv 图，可以按文件名里的作品号去 pixiv.net 读公开标签补角色（只发作品号，不上传图片；识别后自动查默认关，也可以在「未识别」页手动点）。会自动用 Clash、v2rayN 的系统代理；连不上时会说清楚原因，设置里也能「检测网络」。
+- **AI 助手**（实验，默认关）：在「设置 → AI 助手」打开，用 Codex、Pi 或 DSH 帮你找图、查角色和来源、整理图库。开启后，对话、查询结果（文件路径、标签、分级等）和助手查看的图片会发给你选的模型服务；查出处时，经你同意可能把图片上传到 Yandex、SauceNAO 等搜图网站。助手只改 Emaki 里的整理信息，移动和删除图片仍由你在页面上操作；选「完全访问」时它运行命令不再逐次询问。详见 [docs/ai-assistant.md](docs/ai-assistant.md)。
 
 ## 电脑要求
 

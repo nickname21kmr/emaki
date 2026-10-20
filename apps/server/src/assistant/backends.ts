@@ -60,8 +60,9 @@ export class CodexBackend implements AgentBackend {
   private toolNames = new Map<string, string>();
   static async open(settings: PrivateSettings, session: StoredSession, cwd: string, endpoint: string, instructions: string, sink: AgentSink) {
     const binary = findCodex(settings.codexPath); if (!binary) throw new Error('未找到 Codex，请在设置中指定路径');
+    // 实时打开网页不经审批，只在完全访问下开启；按需审批沿用 Codex 默认值
     const rpc = launch(binary, ['app-server', '-c', `mcp_servers.emaki.url=${JSON.stringify(endpoint)}`,
-      '-c', 'mcp_servers.emaki.bearer_token_env_var="EMAKI_ASSISTANT_TOKEN"', '-c', 'web_search="live"'], cwd,
+      '-c', 'mcp_servers.emaki.bearer_token_env_var="EMAKI_ASSISTANT_TOKEN"', ...(settings.accessMode === 'full' ? ['-c', 'web_search="live"'] : [])], cwd,
       { ...process.env, EMAKI_ASSISTANT_TOKEN: session.token });
     const backend = new CodexBackend(rpc, session, sink, cwd, instructions, settings.accessMode === 'full');
     try { await rpc.request({ method: 'initialize', params: { clientInfo: { name: 'emaki', version: '0.1.0' } } }); rpc.send({ method: 'initialized' }); }
@@ -153,12 +154,81 @@ export class CodexBackend implements AgentBackend {
   close() { return this.rpc.close(); }
 }
 
+/**
+ * 在 Pi 进程里运行的审批扩展，前面会拼上 `const config = {...}`。
+ * 按需审批下命令和改文件逐次确认；读文件只放行会话目录、技能和 readable 目录，
+ * 读写 deny 和 hidden（除 readable 外）都直接拒绝，其余路径先确认。路径解析与 Pi 的 resolveToCwd 一致，
+ * Windows 设备路径（\\?\、\\.\）先还原成盘符，指向本机的 UNC 和管理共享直接拒绝。
+ */
+const piGate = String.raw`import path from 'node:path';
+import { realpathSync } from 'node:fs';
+import { homedir, hostname } from 'node:os';
+import { fileURLToPath } from 'node:url';
+const win = process.platform === 'win32';
+const BLOCK = Symbol();
+// 按最近的已存在上级解析链接
+const real = p => { try { return realpathSync.native(p); } catch { const d = path.dirname(p); return d === p ? p : path.join(real(d), path.basename(p)); } };
+const key = p => win ? p.toLowerCase() : p;
+const within = (p, dirs) => dirs.some(d => { const r = path.relative(key(d), key(p)); return r === '' || (r !== '..' && !r.startsWith('..' + path.sep) && !path.isAbsolute(r)); });
+const deny = config.deny.map(real), readable = config.readable.map(real), hidden = config.hidden.map(real);
+function target(raw, cwd) {
+  let p = (raw == null || raw === '' ? '.' : String(raw)).replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, ' ');
+  if (p.startsWith('@')) p = p.slice(1);
+  if (win && p.startsWith('/') && !p.startsWith('//') && !p.includes('\\')) {
+    const m = /^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i.exec(p);
+    if (m) p = m[1].toUpperCase() + ':\\' + (m[2] ?? '').replaceAll('/', '\\');
+  }
+  if (p === '~') p = homedir();
+  else if (p.startsWith('~/') || (win && p.startsWith('~\\'))) p = path.join(homedir(), p.slice(2));
+  else if (/^file:\/\//.test(p)) p = fileURLToPath(p);
+  let full = path.resolve(cwd, p);
+  if (win && full.startsWith('\\\\')) {
+    // \\?\X:\ 和 \\.\X:\ 还是本机盘符，\\?\UNC\ 就是 UNC；GLOBALROOT、Volume{…} 等认不出的设备路径不放
+    const dev = /^\\\\[?.]\\(.*)$/.exec(full);
+    if (dev) {
+      const drive = /^([a-z]:)(\\.*)?$/i.exec(dev[1]);
+      if (drive) full = drive[1] + (drive[2] || '\\');
+      else if (/^unc\\/i.test(dev[1])) full = '\\\\' + dev[1].slice(4);
+      else return BLOCK;
+    }
+    // 管理共享（X$）和指向本机的 UNC 会绕过盘符判断，不放
+    const unc = /^\\\\([^\\]+)\\([^\\]*)/.exec(full);
+    if (unc) {
+      const host = unc[1].toLowerCase().replace(/^\[|\]$/g, ''), me = hostname().toLowerCase();
+      if (/^[a-z]\$$/i.test(unc[2]) || ['localhost', '.', '?', '::1', '0--1.ipv6-literal.net', me].includes(host) || /^127\./.test(host) || host.startsWith(me + '.')) return BLOCK;
+      return full; // 远程网络路径不做 realpath，免得确认前就去连对方主机
+    }
+  }
+  return real(full);
+}
+export default function (pi) {
+  pi.on('tool_call', async (event, ctx) => {
+    if (!config.ask) return;
+    let title = '允许执行 ' + event.toolName + '？';
+    const reads = ['read', 'grep', 'find', 'ls'].includes(event.toolName);
+    // edit/write 也先过 deny/hidden，和读取一致
+    if (reads || ['edit', 'write'].includes(event.toolName)) {
+      let file = null;
+      try { file = target(event.input?.path, ctx?.cwd || config.cwd); } catch {}
+      if (file === BLOCK || (file && (within(file, deny) || (!within(file, readable) && within(file, hidden))))) return { block: true, reason: '助手配置和其他会话不对 agent 开放' };
+      if (reads && file && within(file, readable)) return;
+      if (reads) title = '允许读取会话目录以外的文件？';
+    } else if (!['bash', 'powershell'].includes(event.toolName)) return;
+    const ok = await ctx.ui.confirm(title, JSON.stringify(event.input).slice(0, 3000));
+    if (!ok) return { block: true, reason: '用户未批准此操作' };
+  });
+}
+`;
+
+/** 按需审批下 Pi 读文件的范围：readable 直接放行，hidden 里的其他位置一律拒绝。 */
+export interface PiFileAccess { readable: string[]; hidden: string[] }
+
 export class PiBackend implements AgentBackend {
   private pending = new Map<string, any>();
   private constructor(private rpc: JsonProcess, private session: StoredSession, private sink: AgentSink) {
     rpc.onEvent = (event) => this.event(event); rpc.onExit = (error) => { sink.disconnected?.(); sink.done(error); };
   }
-  static async open(settings: PrivateSettings, session: StoredSession, cwd: string, endpoint: string, instructions: string, skillPaths: string[], sink: AgentSink) {
+  static async open(settings: PrivateSettings, session: StoredSession, cwd: string, endpoint: string, instructions: string, skillPaths: string[], sink: AgentSink, files: PiFileAccess = { readable: [], hidden: [] }) {
     const agentDir = path.join(cwd, 'pi-config'); mkdirSync(agentDir, { recursive: true });
     // Reuse model/auth configuration only; never read another application's sessions.
     const existing = process.env.PI_CODING_AGENT_DIR ?? path.join(homedir(), '.pi/agent');
@@ -176,15 +246,14 @@ export class PiBackend implements AgentBackend {
     writeFileSync(path.join(agentDir, 'models.json'), JSON.stringify(models), { mode: 0o600 });
     writeFileSync(path.join(agentDir, 'mcp.json'), JSON.stringify({ mcpServers: { emaki: { url: endpoint, headers: { Authorization: 'Bearer ${EMAKI_ASSISTANT_TOKEN}' }, exposure: 'direct' } } }), { mode: 0o600 });
     const instructionFile = path.join(cwd, 'instructions.md'); writeFileSync(instructionFile, instructions);
-    const gate = path.join(cwd, 'permissions.ts');
-    writeFileSync(gate, `export default function(pi) { pi.on('tool_call', async (event, ctx) => {
-      if (${settings.accessMode !== 'full'} && ['bash','powershell','edit','write'].includes(event.toolName)) {
-        const ok = await ctx.ui.confirm('允许执行 '+event.toolName+'？', JSON.stringify(event.input).slice(0,3000));
-        if (!ok) return { block: true, reason: '用户未批准此操作' };
-      }
-    }); }`);
     const entry = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent/rpc-entry'));
-    const cli = path.join(path.dirname(entry), 'cli.js');
+    const cli = path.join(path.dirname(entry), 'cli.js'), piPackage = path.resolve(path.dirname(entry), '../..');
+    const gate = path.join(cwd, 'permissions.ts');
+    // pi-config 里有复制来的 API Key，批准了也不给读；Pi 自带文档可以直接读
+    const access = { ask: settings.accessMode !== 'full', cwd, deny: [agentDir],
+      readable: [cwd, ...skillPaths.map(p => path.dirname(p)), ...files.readable, ...['docs', 'examples', 'README.md'].map(p => path.join(piPackage, p))],
+      hidden: files.hidden };
+    writeFileSync(gate, `const config = ${JSON.stringify(access)};\n${piGate}`);
     const args = [cli, '--mode', 'rpc', '--tools', '+codemode', '--no-extensions', '-e', 'builtin:mcp', '-e', 'builtin:codemode', '-e', gate, '--no-context-files', '--no-skills', ...skillPaths.flatMap(p => ['--skill', p]),
       '--no-prompt-templates', '--append-system-prompt', instructionFile, '--session-dir', path.join(cwd, 'history')];
     if (session.nativeId) args.push('--session', session.nativeId);
@@ -203,7 +272,8 @@ export class PiBackend implements AgentBackend {
     const slash = model.indexOf('/');
     await this.rpc.request({ type: 'set_model', provider: model.slice(0, slash), modelId: model.slice(slash + 1) });
     if (effort) await this.rpc.request({ type: 'set_thinking_level', level: effort });
-    await this.rpc.request({ type: 'prompt', message: text });
+    // Pi 要先做完上下文压缩（一次模型调用）才回应 prompt，不设超时；取消靠停止按钮
+    await this.rpc.request({ type: 'prompt', message: text }, 0);
     const state = await this.rpc.request({ type: 'get_state' }); this.session.nativeId = state.sessionFile;
   }
   private messageId = 'pi-0'; private sequence = 0; private error?: string;

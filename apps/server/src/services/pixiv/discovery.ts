@@ -21,6 +21,8 @@ export function createPixivDiscovery(db: Db, catalog: DanbooruCatalog, client: C
   const known = new Set((db.prepare(`SELECT search_key name FROM tag_name_keys
     UNION SELECT name FROM tags UNION SELECT name FROM characters UNION SELECT alias FROM aliases`).all() as { name: string }[]).map(r => searchKey(r.name)));
   const queried = new Map<string, 'unknown' | 'noncharacter' | 'character'>();
+  // 每个角色每轮最多补一次作品，不管成不成；没成的下一轮再试
+  const enrichTried = new Set<string>();
   const knownCharacters = db.prepare(`SELECT DISTINCT k.tag FROM tag_name_keys k
     LEFT JOIN danbooru_tags d ON d.name=k.tag LEFT JOIN tag_i18n i ON i.tag=k.tag
     WHERE k.search_key=? AND COALESCE(NULLIF(d.category,-1),i.category)=4`);
@@ -34,7 +36,8 @@ export function createPixivDiscovery(db: Db, catalog: DanbooruCatalog, client: C
     const workTags = () => new Set(artwork.tags.tags.flatMap(item => [item.tag, ...Object.values(item.translation ?? {})])
       .flatMap(name => (workKeys.all(searchKey(name), name) as { tag: string }[]).map(r => catalog.canonicalize(r.tag))));
     const enrichWorks = async (tag: string) => {
-      if (!client.relatedCopyrights || catalog.copyrights(tag).length || catalog.get(tag)?.relatedFetchedAt) return;
+      if (!client.relatedCopyrights || enrichTried.has(tag) || catalog.copyrights(tag).length || catalog.get(tag)?.relatedFetchedAt) return;
+      enrichTried.add(tag);
       // Dictionary-only characters have no cache row for setCopyrights to update yet.
       if (!catalog.get(tag)) {
         const base = (await client.tagsByNames([tag], signal)).find(t => t.name === tag && t.category === 4);
@@ -43,7 +46,14 @@ export function createPixivDiscovery(db: Db, catalog: DanbooruCatalog, client: C
         db.transaction(() => catalog.upsertBase(base, new Date().toISOString()))();
       }
       const related = await client.relatedCopyrights(tag, signal);
-      if (related.tag?.category !== 4 || catalog.canonicalize(related.tag.name) !== catalog.canonicalize(tag)) return;
+      // 同 danbooru/sync.ts：Danbooru 上查不到这个标签就记成没有作品，以后不再重查
+      if (!related.tag) {
+        signal.throwIfAborted();
+        db.transaction(() => catalog.setCopyrights(tag, [], new Date().toISOString()))();
+        return;
+      }
+      // 别名对不上的留给 danbooru 同步按 sync.ts 的流程 markAlias
+      if (related.tag.category !== 4 || catalog.canonicalize(related.tag.name) !== catalog.canonicalize(tag)) return;
       const candidates = related.related_tags.filter(x => x.tag.category === 3 && x.frequency >= 0.3);
       const names = candidates.map(x => x.tag.name);
       const metadata = names.length ? (await client.tagsByNames(names, signal)).filter(t => t.category === 3 && names.includes(t.name)) : [];

@@ -1,4 +1,5 @@
 import { buildApp } from './app.ts';
+import { killAgentTreesSync } from './assistant/rpc.ts';
 import { config } from './config.ts';
 import { EventBus } from './core/events.ts';
 import type { DataSource } from './datasource/DataSource.ts';
@@ -27,8 +28,11 @@ try {
   await app.listen({ host: config.host, port: config.port });
   app.log.info(`Emaki 后端已启动：http://${config.host}:${config.port}（数据源：${config.dataSource}）`);
   // 优雅退出：关掉 HTTP 再关数据库（WAL 落盘）
-  for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+  const signals: NodeJS.Signals[] = process.platform === 'win32' ? ['SIGINT', 'SIGTERM', 'SIGHUP'] : ['SIGINT', 'SIGTERM'];
+  for (const sig of signals) {
     process.once(sig, async () => {
+      // 关黑色窗口时 Windows 发 SIGHUP，后端比 start.mjs 先收到，约 5 秒后就被强杀：先同步结束 agent 跑的脚本
+      if (sig === 'SIGHUP') killAgentTreesSync();
       awake?.close();
       await app.close();
       await ds.close?.();

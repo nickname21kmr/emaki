@@ -11,4 +11,11 @@ rmSync(dst, { force: true });
 const db = new Database(src, { readonly: true });
 db.exec(`VACUUM INTO '${dst.replace(/\\/g, '/').replace(/'/g, "''")}'`);
 db.close();
+// 快照所在目录助手可以免审批读取：去掉 settings 里的凭证（secret.*），secure_delete 把原记录清零
+const snap = new Database(dst);
+if (snap.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='settings'").get()) {
+  snap.pragma('secure_delete = ON');
+  snap.prepare("DELETE FROM settings WHERE key LIKE 'secret.%'").run();
+}
+snap.close();
 console.log(`快照：${dst}`);

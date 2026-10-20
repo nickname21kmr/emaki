@@ -1,14 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { hostname, tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { StoredSession, PrivateSettings } from './store.ts';
-const state = vi.hoisted(() => ({ rpc: null as any }));
+const state = vi.hoisted(() => ({ rpc: null as any, args: [] as any[] }));
 vi.mock('./rpc.ts', () => ({ JsonProcess: class {
   onEvent = (_: any) => {}; onExit = (_: any) => {};
   send = vi.fn(); close = vi.fn(async () => {});
   request = vi.fn(async (m: any) => m.method === 'thread/start' ? { thread: { id: 'owned' } } : m.method === 'turn/start' ? { turn: { id: 'turn' } } : {});
-  constructor() { state.rpc = this; }
+  constructor(...args: any[]) { state.rpc = this; state.args = args; }
 } }));
 import { CodexBackend, PiBackend } from './backends.ts';
 
@@ -94,6 +95,11 @@ describe('Codex app-server adapter', () => {
     state.rpc.onEvent({ method: 'turn/completed', params: { threadId: 'owned', turn: {} } });
     expect(sink.text).toHaveBeenCalledExactlyOnceWith('m', 'hello'); expect(sink.tool).not.toHaveBeenCalled(); expect(sink.done).toHaveBeenCalled();
   });
+  it('turns on live web search only with full access', async () => {
+    expect(state.args[1].join(' ')).not.toContain('web_search');
+    await CodexBackend.open({ codexPath: process.execPath, accessMode: 'full' } as PrivateSettings, { token: 'private' } as StoredSession, '.', 'http://localhost/mcp', '', sink);
+    expect(state.args[1]).toContain('web_search="live"');
+  });
 });
 
 it('Pi forwards streamed thinking and the full tool lifecycle without duplicating final text', async () => {
@@ -117,4 +123,91 @@ it('Pi forwards streamed thinking and the full tool lifecycle without duplicatin
     expect(sink.tool.mock.calls[2]![2].output).toContain('timeout');
     await pi.close();
   } finally { vi.unstubAllEnvs(); rmSync(cwd, { recursive: true, force: true }); }
+});
+
+it('Pi waits for prompt preflight without a client timeout but keeps it for control requests', async () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'emaki-pi-prompt-'));
+  vi.stubEnv('PI_CODING_AGENT_DIR', path.join(cwd, 'empty-config'));
+  try {
+    const pi = await PiBackend.open({ pi: {}, accessMode: 'ask' } as PrivateSettings, { token: 'private' } as StoredSession, cwd, 'http://localhost/mcp', '', [], sink);
+    await pi.prompt('hello', 'emaki/model', 'high');
+    expect(state.rpc.request).toHaveBeenCalledWith({ type: 'prompt', message: 'hello' }, 0);
+    for (const type of ['set_model', 'set_thinking_level', 'get_state']) expect(state.rpc.request.mock.calls.find(([m]: any) => m.type === type)).toHaveLength(1);
+  } finally { vi.unstubAllEnvs(); rmSync(cwd, { recursive: true, force: true }); }
+});
+
+describe('Pi file access gate', () => {
+  // 目录结构与 service.ts 一致：<数据目录>/assistant/workspaces/<会话>，喜好分析输出在 <数据目录>/profile/assistant
+  async function setup(accessMode: 'ask' | 'full') {
+    const root = mkdtempSync(path.join(tmpdir(), 'emaki-pi-gate-'));
+    const assistant = path.join(root, 'assistant'), cwd = path.join(assistant, 'workspaces', 'session'), profile = path.join(root, 'profile', 'assistant');
+    const skill = path.join(cwd, '.agents/skills/emaki-library/SKILL.md');
+    for (const dir of [path.dirname(skill), path.join(assistant, 'workspaces', 'other'), profile]) mkdirSync(dir, { recursive: true });
+    for (const file of [skill, path.join(cwd, 'notes.md'), path.join(assistant, 'settings.json'), path.join(assistant, 'workspaces', 'other', 'notes.md'), path.join(profile, 'data.json'), path.join(root, 'outside.txt')]) writeFileSync(file, 'x');
+    vi.stubEnv('PI_CODING_AGENT_DIR', path.join(root, 'empty-config'));
+    await PiBackend.open({ pi: {}, accessMode } as PrivateSettings, { token: 'private' } as StoredSession, cwd, 'http://localhost/mcp', '', [skill], sink, { readable: [profile], hidden: [assistant] });
+    vi.unstubAllEnvs();
+    const gate = await import(pathToFileURL(path.join(cwd, 'permissions.ts')).href);
+    let handler!: (event: any, ctx: any) => Promise<any>;
+    gate.default({ on: (_: string, fn: typeof handler) => { handler = fn; } });
+    const confirm = vi.fn(async (_title: string, _body: string) => false);
+    const call = (toolName: string, input: any) => handler({ toolName, input }, { cwd, ui: { confirm } });
+    return { root, assistant, cwd, profile, skill, confirm, call };
+  }
+  const roots: string[] = [];
+  afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+
+  it('reads the session, skills and profile output freely, never assistant settings or other sessions, and asks for the rest', async () => {
+    const { root, assistant, cwd, profile, skill, confirm, call } = await setup('ask'); roots.push(root);
+    for (const file of ['notes.md', '@notes.md', 'sub/../notes.md', path.join(cwd, 'notes.md'), skill, path.join(profile, 'data.json')]) expect(await call('read', { path: file })).toBeUndefined();
+    expect(await call('ls', {})).toBeUndefined();
+    expect(await call('emaki_query', { sql: 'select 1' })).toBeUndefined();
+    expect(confirm).not.toHaveBeenCalled();
+    const settings = path.join(assistant, 'settings.json');
+    for (const file of ['../../settings.json', settings, pathToFileURL(settings).href, 'pi-config/auth.json', '../other/notes.md']) {
+      expect(await call('read', { path: file })).toEqual({ block: true, reason: expect.stringContaining('不对 agent 开放') });
+    }
+    expect(await call('grep', { pattern: 'apiKey', path: '..' })).toMatchObject({ block: true });
+    // 改文件同样不能碰助手配置和 pi-config
+    expect(await call('write', { path: '../../settings.json', content: '{"accessMode":"full"}' })).toEqual({ block: true, reason: expect.stringContaining('不对 agent 开放') });
+    expect(await call('edit', { path: 'pi-config/auth.json' })).toEqual({ block: true, reason: expect.stringContaining('不对 agent 开放') });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(await call('read', { path: path.join(root, 'outside.txt') })).toEqual({ block: true, reason: '用户未批准此操作' });
+    expect(await call('read', { path: '~/.ssh/id_rsa' })).toMatchObject({ block: true });
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(confirm.mock.calls[0]![0]).toContain('读取');
+    confirm.mockResolvedValueOnce(true);
+    expect(await call('read', { path: path.join(root, 'outside.txt') })).toBeUndefined();
+    await call('bash', { command: 'dir' });
+    expect(confirm).toHaveBeenLastCalledWith('允许执行 bash？', expect.stringContaining('dir'));
+    // 会话目录里写文件照常确认
+    await call('write', { path: 'notes.md', content: 'y' });
+    expect(confirm).toHaveBeenLastCalledWith('允许执行 write？', expect.stringContaining('notes.md'));
+    if (process.platform === 'win32') {
+      expect(await call('read', { path: path.join(cwd, 'notes.md').toUpperCase() })).toBeUndefined();
+      // Git Bash 写法 /c/... 同样认得出来
+      const gitBash = `/${settings[0]!.toLowerCase()}${settings.slice(2).replaceAll('\\', '/')}`;
+      expect(await call('read', { path: gitBash })).toMatchObject({ block: true, reason: expect.stringContaining('不对 agent 开放') });
+      // 设备路径、本机 UNC、管理共享不能绕过拦截，也不弹确认
+      const auth = path.join(cwd, 'pi-config', 'auth.json'), other = path.join(assistant, 'workspaces', 'other', 'notes.md');
+      const asked = confirm.mock.calls.length;
+      for (const file of ['//?/' + settings.replaceAll('\\', '/'), '\\\\?\\' + settings, '\\\\.\\' + auth, `\\\\${hostname()}\\${other[0]}$\\${other.slice(3)}`,
+        `\\\\localhost\\${other[0]}$\\${other.slice(3)}`, `\\\\?\\UNC\\127.0.0.1\\${other[0]}$\\${other.slice(3)}`, '\\\\?\\GLOBALROOT\\Device\\HarddiskVolume1\\x']) {
+        expect(await call('read', { path: file })).toEqual({ block: true, reason: expect.stringContaining('不对 agent 开放') });
+      }
+      expect(await call('write', { path: '\\\\.\\' + settings, content: '{}' })).toMatchObject({ block: true, reason: expect.stringContaining('不对 agent 开放') });
+      expect(confirm).toHaveBeenCalledTimes(asked);
+      // 设备路径写法的会话文件仍然放行，远程网络路径照常确认
+      expect(await call('read', { path: '\\\\?\\' + path.join(cwd, 'notes.md') })).toBeUndefined();
+      expect(await call('read', { path: '\\\\nas\\share\\x' })).toEqual({ block: true, reason: '用户未批准此操作' });
+      expect(confirm).toHaveBeenCalledTimes(asked + 1);
+    }
+  });
+  it('does not ask anything with full access', async () => {
+    const { root, assistant, confirm, call } = await setup('full'); roots.push(root);
+    expect(await call('read', { path: path.join(root, 'outside.txt') })).toBeUndefined();
+    expect(await call('read', { path: path.join(assistant, 'settings.json') })).toBeUndefined();
+    expect(await call('bash', { command: 'dir' })).toBeUndefined();
+    expect(confirm).not.toHaveBeenCalled();
+  });
 });

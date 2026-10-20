@@ -199,7 +199,7 @@ describe('DedupeService + 接口（:memory:）', () => {
     expect((await ds.getStats()).duplicateGroupCount).toBe(0);
   });
 
-  it('resolve：副本上手动做的整理并到保留的图上（手动角色、收藏、原创、分级、画师），识别器认的不搬', async () => {
+  it('resolve：副本上手动做的整理并到保留的图上（手动角色、收藏、原创、分级、画师、来源），识别器认的不搬', async () => {
     const db = ds.ctx.db;
     const a = addImage('a.png', 's1', H);
     const b = addImage('a (1).png', 's1', H);
@@ -211,10 +211,20 @@ describe('DedupeService + 接口（:memory:）', () => {
     link.run(b, 3, 'tagger', 0.9, T);
     db.prepare("UPDATE images SET favorite = 1, original_at = ?, rating = 'questionable', rating_manual = 1, artist_manual = 1 WHERE id = ?").run(LATER, b);
     db.prepare("INSERT INTO image_artists (image_id, artist, score) VALUES (?, 'kantoku', 1), (?, 'someone', 0.8)").run(b, a);
+    db.prepare(
+      "UPDATE images SET source_site = 'pixiv', source_post_id = '98785437', source_artist = 'Killy', source_url = 'https://www.pixiv.net/artworks/98785437', source_manual = 1 WHERE id = ?",
+    ).run(b);
     ds.dedupe.runOnce();
     const [g] = await ds.listDuplicates({});
     expect(g!.suggestedKeepId).toBe(String(a));
     await ds.resolveDuplicate(g!.id, [String(a)]);
+    expect(db.prepare('SELECT source_site, source_post_id, source_artist, source_url, source_manual FROM images WHERE id = ?').get(a)).toEqual({
+      source_site: 'pixiv',
+      source_post_id: '98785437',
+      source_artist: 'Killy',
+      source_url: 'https://www.pixiv.net/artworks/98785437',
+      source_manual: 1,
+    });
 
     expect(db.prepare('SELECT character_id, origin, added_at FROM image_characters WHERE image_id = ? ORDER BY character_id').all(a)).toEqual([
       { character_id: 1, origin: 'manual', added_at: T },
@@ -246,17 +256,42 @@ describe('DedupeService + 接口（:memory:）', () => {
     expect((await ds.listWorks({})).find((w) => w.id === wid)!.imageCount).toBe(1);
   });
 
-  it('resolve：保留的图自己改过的分级、画师不被副本覆盖', async () => {
+  it('resolve：保留的图自己改过的分级、画师、来源不被副本覆盖', async () => {
     const db = ds.ctx.db;
     const a = addImage('a.png', 's1', H);
     const b = addImage('a (1).png', 's1', H);
-    db.prepare("UPDATE images SET rating = 'general', rating_manual = 1, artist_manual = 1 WHERE id = ?").run(a);
-    db.prepare("UPDATE images SET rating = 'explicit', rating_manual = 1, artist_manual = 1 WHERE id = ?").run(b);
+    // a 的来源是手动清空的
+    db.prepare("UPDATE images SET rating = 'general', rating_manual = 1, artist_manual = 1, source_manual = 1 WHERE id = ?").run(a);
+    db.prepare(
+      "UPDATE images SET rating = 'explicit', rating_manual = 1, artist_manual = 1, source_site = 'pixiv', source_post_id = '98785437', source_url = 'https://www.pixiv.net/artworks/98785437', source_manual = 1 WHERE id = ?",
+    ).run(b);
     db.prepare("INSERT INTO image_artists (image_id, artist, score) VALUES (?, 'kantoku', 1)").run(b);
     ds.dedupe.runOnce();
     const [g] = await ds.listDuplicates({});
     await ds.resolveDuplicate(g!.id, [String(a)]);
     expect(db.prepare('SELECT rating, favorite FROM images WHERE id = ?').get(a)).toEqual({ rating: 'general', favorite: 0 });
     expect(db.prepare('SELECT count(*) FROM image_artists WHERE image_id = ?').pluck().get(a)).toBe(0);
+    expect(db.prepare('SELECT source_url, source_manual FROM images WHERE id = ?').get(a)).toEqual({ source_url: null, source_manual: 1 });
+  });
+
+  it('resolve：保留的图上自动解析的来源会被副本手动确认的盖掉，有链接的优先于手动清空的', async () => {
+    const db = ds.ctx.db;
+    const a = addImage('11111111_p0.png', 's1', H);
+    const b = addImage('11111111_p0 (1).png', 's1', H);
+    const c = addImage('11111111_p0 (2).png', 's1', H);
+    const auto = db.prepare("UPDATE images SET source_site = 'pixiv', source_post_id = '11111111', source_url = 'https://www.pixiv.net/artworks/11111111' WHERE id = ?");
+    for (const id of [a, b, c]) auto.run(id);
+    db.prepare('UPDATE images SET source_site = NULL, source_post_id = NULL, source_url = NULL, source_manual = 1 WHERE id = ?').run(b);
+    db.prepare("UPDATE images SET source_site = 'twitter', source_post_id = '1234567890', source_url = 'https://x.com/someone/status/1234567890', source_manual = 1 WHERE id = ?").run(c);
+    ds.dedupe.runOnce();
+    const [g] = await ds.listDuplicates({});
+    expect(g!.suggestedKeepId).toBe(String(a));
+    await ds.resolveDuplicate(g!.id, [String(a)]);
+    expect(db.prepare('SELECT source_site, source_post_id, source_url, source_manual FROM images WHERE id = ?').get(a)).toEqual({
+      source_site: 'twitter',
+      source_post_id: '1234567890',
+      source_url: 'https://x.com/someone/status/1234567890',
+      source_manual: 1,
+    });
   });
 });

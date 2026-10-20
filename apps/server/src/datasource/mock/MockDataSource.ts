@@ -1438,6 +1438,8 @@ export class MockDataSource implements DataSource {
       ratingManual: r.ratingManual,
       artists: r.artists,
       artistsManual: r.artistsManual,
+      source: r.source,
+      sourceManual: r.sourceManual,
     }));
     this.carryOver(kept, trashed.filter((img) => this.isVisible(img)));
     for (const img of trashed) img.trashed = true;
@@ -1455,6 +1457,8 @@ export class MockDataSource implements DataSource {
     const rating = strict.find((x) => gone.some((g) => g.ratingManual && g.rating === x));
     const originalAt = gone.map((g) => g.originalAt).filter((x): x is string => !!x).sort()[0];
     const artistSrc = gone.find((g) => g.artistsManual);
+    // 同 sqlite：手动确认的来源，有链接的优先于手动清空的
+    const sourceSrc = gone.find((g) => g.sourceManual && g.source) ?? gone.find((g) => g.sourceManual);
     for (const k of kept) {
       k.characterIds = [...new Set([...k.characterIds, ...gone.flatMap((g) => g.characterIds)])];
       if (gone.some((g) => g.favorite)) k.favorite = true;
@@ -1466,6 +1470,7 @@ export class MockDataSource implements DataSource {
       }
       if (!k.ratingManual && rating) Object.assign(k, { rating, ratingManual: true });
       if (!k.artistsManual && artistSrc) Object.assign(k, { artists: [...(artistSrc.artists ?? [])], artistsManual: true });
+      if (!k.sourceManual && sourceSrc) Object.assign(k, { source: sourceSrc.source ? { ...sourceSrc.source } : null, sourceManual: true });
     }
   }
 

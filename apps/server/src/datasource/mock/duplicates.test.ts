@@ -5,17 +5,20 @@
 import { expect, it } from 'vitest';
 import { mockFactory } from '../../../test/contract/harness.ts';
 
-it('处理重复组：副本上的角色、收藏、原创、手动分级、手动画师并到保留的图上；撤销后还原', async () => {
+it('处理重复组：副本上的角色、收藏、原创、手动分级、手动画师、手动来源并到保留的图上；撤销后还原', async () => {
   const { ds } = await mockFactory();
   await ds.updateImage('i37', { characterIds: ['c4', 'c1'], favorite: true, rating: 'questionable' });
   await ds.bulkImages({ ids: ['i37'], action: { type: 'original', value: true } });
   await ds.bulkImages({ ids: ['i37'], action: { type: 'artist', mode: 'add', artists: ['kantoku'] } });
+  await ds.updateImage('i37', { source: { url: 'https://www.pixiv.net/artworks/98785437', artist: 'Killy' } });
   const before = await ds.getImage('i15');
+  expect(before!.sourceManual).toBe(false);
 
   const r = await ds.resolveDuplicate('d1', ['i15']);
   const kept = (await ds.getImage('i15'))!;
   expect([...kept.characterIds].sort()).toEqual(['c1', 'c4']);
-  expect(kept).toMatchObject({ favorite: true, original: true, rating: 'questionable', artistsManual: true });
+  expect(kept).toMatchObject({ favorite: true, original: true, rating: 'questionable', artistsManual: true, sourceManual: true });
+  expect(kept.source).toMatchObject({ site: 'pixiv', postId: '98785437', artist: 'Killy' });
   expect(kept.artists.map((a) => a.tag)).toEqual(['kantoku']);
 
   await ds.undo(r.undoToken!);

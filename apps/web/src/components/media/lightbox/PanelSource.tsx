@@ -39,7 +39,12 @@ export function PanelSource({ detail }: { detail: ImageDetail }) {
         }}>编辑来源</button>}
       </div>
       {editing && (
-        <form className="space-y-2" onSubmit={e => { e.preventDefault(); change.mutate({ url: url.trim(), artist: artist.trim() }); }}>
+        <form
+          className="space-y-2"
+          onSubmit={e => { e.preventDefault(); change.mutate({ url: url.trim(), artist: artist.trim() }); }}
+          // Esc 只取消编辑；看图器那边已经不会因为这个 Esc 关掉（见 Lightbox 的 onEscapeKeyDown）
+          onKeyDown={e => { if (e.key === 'Escape' && !change.isPending) setEditing(false); }}
+        >
           <fieldset disabled={change.isPending} className="min-w-0 space-y-2">
             <label className="block space-y-1">
               <span className="text-fg-muted">原作链接</span>
@@ -54,7 +59,12 @@ export function PanelSource({ detail }: { detail: ImageDetail }) {
               <button type="submit" className={`${control} text-shu-fg`}>保存来源</button>
               <button type="button" className={control} onClick={() => setEditing(false)}>取消</button>
               <button type="button" className={control} onClick={() => change.mutate(null)}>清除来源</button>
-              {detail.sourceManual && <button type="button" className={control} onClick={() => change.mutate('auto')}>恢复自动解析</button>}
+              {/* 自动来源按当前文件名重算（和扫描、backfill 一致）。改名前带过来的来源不会回来，只能撤销手动编辑找回 */}
+              {detail.sourceManual && (
+                <button type="button" className={control} title="按当前文件名重新解析，改名前的来源不会恢复（可按 Ctrl+Z 撤销）" onClick={() => change.mutate('auto')}>
+                  恢复自动解析
+                </button>
+              )}
             </div>
           </fieldset>
         </form>

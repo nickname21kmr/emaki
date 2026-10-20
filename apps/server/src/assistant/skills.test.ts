@@ -19,7 +19,9 @@ it('ships complete common packages and runs the original report pipeline outside
     CREATE TABLE library_roots(id INTEGER, path TEXT, enabled INTEGER, removed_at TEXT);
     CREATE TABLE images(id INTEGER, root_id INTEGER, file_name TEXT, modified_at TEXT, rating TEXT,
       tagger_model TEXT, tagged_at TEXT, width INTEGER, height INTEGER, added_at TEXT,
-      missing INTEGER, trashed_at TEXT, excluded_by TEXT, content_kind TEXT, rel_path TEXT);`); db.close();
+      missing INTEGER, trashed_at TEXT, excluded_by TEXT, content_kind TEXT, rel_path TEXT);
+    CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT);
+    INSERT INTO settings VALUES ('secret.danbooruApiKey', '"FAKE-DANBOORU-KEY-7f3a"'), ('ui.theme', '"dark"');`); db.close();
   const skills = prepareSkills(repo, cwd, data, 'http://127.0.0.1:43210');
   expect(skills.map(s => s.name)).toEqual(['emaki-library', 'taste-profile']);
   for (const skill of skills) {
@@ -36,9 +38,17 @@ it('ships complete common packages and runs the original report pipeline outside
   const env = { ...process.env, EMAKI_DATA_DIR: path.join(root, 'wrong-library') };
   const run = (...args: string[]) => execFileSync(process.execPath, [runner, ...args], { cwd: root, env, encoding: 'utf8' });
   run('snapshot');
-  const out = path.join(data, 'profile/assistant/session');
+  // 各会话共用一个输出目录，整库快照只留一份
+  const out = path.join(data, 'profile/assistant');
+  const runtime = (dir: string) => JSON.parse(readFileSync(path.join(dir, '.emaki-runtime.json'), 'utf8')).outDir;
+  const other = prepareSkills(repo, path.join(root, 'another session'), data, 'http://127.0.0.1:43210');
+  expect(runtime(profile)).toBe(out); expect(runtime(path.dirname(other[1]!.path))).toBe(out);
   const snapshot = new Database(path.join(out, 'lib.sqlite'), { readonly: true });
-  expect(snapshot.prepare('SELECT value FROM probe').get()).toEqual({ value: 'correct library' }); snapshot.close();
+  expect(snapshot.prepare('SELECT value FROM probe').get()).toEqual({ value: 'correct library' });
+  // 快照目录助手可免审批读取，凭证不能留在文件里（连删掉的页内残留也不行）
+  expect(snapshot.prepare('SELECT key FROM settings').pluck().all()).toEqual(['ui.theme']); snapshot.close();
+  const bytes = readFileSync(path.join(out, 'lib.sqlite'));
+  expect(bytes.includes('FAKE-DANBOORU-KEY')).toBe(false); expect(bytes.includes('secret.danbooruApiKey')).toBe(false);
   // Exercise the real TypeScript loader without downloading models or images.
   expect(run('wd-sample')).toContain('不需要抽样');
   writeFileSync(path.join(out, 'data.json'), JSON.stringify({ periods: [], fixture: '</script>' }));

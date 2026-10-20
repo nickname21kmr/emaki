@@ -1,27 +1,47 @@
 import { useState } from 'react';
 import type { AssistantDetection, AssistantSettings } from '@emaki/shared';
 import { toast } from 'sonner';
-import { Button, Field, Switch } from '@/components/ui';
+import { Button, Dialog, DialogFooter, Field, Switch } from '@/components/ui';
 import { SettingsSection, SettingsCard, BlockRow } from '@/features/settings/components/SettingsSection';
 import { assistantApi, useAssistantSave, useAssistantSettings } from './client';
 
 export const assistantInput = 'w-full rounded-md border border-line-strong bg-sheet px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-shu/30';
+
+/** 开启前要用户看完的说明：哪些内容会离开这台电脑、助手在本机能做什么 */
+export function AssistantDisclosure() {
+  return <ul className="list-disc space-y-2 pl-5 text-[13px] leading-relaxed text-fg-muted">
+    <li>你发给助手的话、发送时的页面地址和选中的图片、助手查到的图库信息（文件路径和文件夹名、角色、标签、分级等），以及助手查看的图片，会发送给你选的模型服务，按该服务计费。</li>
+    <li>查出处时，助手会先问你，你同意后才把去掉元数据的图片副本（装了 Pillow 时还会缩小）上传到 Yandex、SauceNAO 等搜图网站。Agent 应用也可能自己联网搜索网页。</li>
+    <li>助手通过本机的 Codex、Pi 或 DSH 运行。「按需审批」时，改对话目录以外的文件、运行超出沙盒的命令前会先问你，Pi 读对话目录以外的文件也会问，Codex、DSH 读本机文件通常不问；「完全访问」时都不再询问。上传前征求同意、不移动或删除图库文件，靠助手遵守指令，程序不会另外拦截。</li>
+    <li>开启后会检测本机的 Codex、Pi、DSH：启动它们读取登录状态和模型列表，不发送图库内容。关闭开关会结束助手进程，保留设置和对话。</li>
+  </ul>;
+}
+
 export function AssistantSettingsSection() {
   const query = useAssistantSettings(), save = useAssistantSave();
   const [busy, setBusy] = useState(false), [results, setResults] = useState<AssistantDetection[]>([]);
-  const [external, setExternal] = useState('');
+  const [external, setExternal] = useState(''), [confirming, setConfirming] = useState(false);
   const settings = query.data;
   const perform = async (fn: () => Promise<unknown>) => { setBusy(true); try { await fn(); } catch (e) { toast.error((e as Error).message); } finally { setBusy(false); } };
   const detect = async () => { setResults(await assistantApi.detect()); await query.refetch(); };
-  return <SettingsSection id="assistant" description="让助手帮你查找图片、核对角色和整理图库。对话和助手查看的图片会发送给所选模型服务。">
+  const enable = () => { setConfirming(false); void perform(async () => { await save({ enabled: true }); await detect(); }); };
+  return <SettingsSection id="assistant" description="让助手帮你查找图片、核对角色和整理图库。对话、查询结果和助手查看的图片会发送给所选模型服务；查出处时，经你同意可能把图片上传到 Yandex、SauceNAO 等搜图网站。">
     <SettingsCard>
       <Field label="AI 助手（实验）" hint="关闭时停止助手，保留设置和对话。扫描、识别等后台任务在任务列表中管理。">
+        {/* 开启先确认，关闭直接生效 */}
         <Switch label="开启 AI 助手" checked={settings?.enabled ?? false} disabled={busy || !settings}
-          onCheckedChange={enabled => void perform(async () => { await save({ enabled }); if (enabled) await detect(); })} />
+          onCheckedChange={enabled => { if (enabled) setConfirming(true); else void perform(() => save({ enabled: false })); }} />
       </Field>
+      <Dialog open={confirming} onOpenChange={setConfirming} title="开启 AI 助手？" description="这是实验功能。开启前请确认下面几点：" width={520}>
+        <AssistantDisclosure />
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => setConfirming(false)}>取消</Button>
+          <Button variant="primary" onClick={enable}>我已了解，开启</Button>
+        </DialogFooter>
+      </Dialog>
       {query.isError && <p role="alert" className="py-3 text-danger">{query.error.message}</p>}
       {settings?.enabled && <>
-        <BlockRow label="操作权限" hint="完全访问允许助手读写本机文件、运行命令和联网，无需逐次审批。切换时暂停当前任务，可在对话中继续处理。">
+        <BlockRow label="操作权限" hint="按需审批：改对话目录以外的文件、运行超出沙盒的命令前会先问你（Pi 运行命令、改文件、读对话目录以外的文件都会问）；Codex、DSH 读本机文件通常不问。完全访问：读写本机文件、运行命令和联网都不再逐次询问，上传图片到搜图网站前征求同意只靠助手遵守指令。切换时暂停当前任务，可在对话中继续处理。">
           <select aria-label="助手操作权限" className={assistantInput} value={settings.accessMode} disabled={busy} onChange={e => void perform(() => save({ accessMode: e.target.value }))}>
             <option value="ask">按需审批</option><option value="full">完全访问</option>
           </select>
@@ -63,7 +83,7 @@ function Configuration({ settings, save, busy }: { settings: AssistantSettings; 
     <input aria-label="DSH 可执行文件路径" className={assistantInput} value={binary} onChange={e => setBinary(e.target.value)} placeholder="自动检测" />
     <Button className="mt-3" disabled={busy} onClick={() => void save({ dshPath: binary })}>保存路径</Button>
   </BlockRow>;
-  if (settings.backend === 'codex') return <BlockRow label="Codex 路径" hint="留空自动查找本机 Codex，沿用其登录配置。">
+  if (settings.backend === 'codex') return <BlockRow label="Codex 路径" hint="留空自动查找本机 Codex，沿用其登录配置。对话记录由 Codex 自己保存在 ~/.codex，删除 Emaki 数据不会清理，需要时在 Codex 里归档或删除。">
     <input aria-label="Codex 可执行文件路径" className={assistantInput} value={binary} onChange={e => setBinary(e.target.value)} placeholder="自动检测" />
     <Button className="mt-3" disabled={busy} onClick={() => void save({ codexPath: binary })}>保存路径</Button>
   </BlockRow>;

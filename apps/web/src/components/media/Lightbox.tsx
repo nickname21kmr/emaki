@@ -8,7 +8,7 @@ import { useLocation, useNavigate } from 'react-router';
 import { imageUrl } from '@/lib/api';
 import { blurLabel, blurReason } from '@/lib/blur';
 import { formatCount } from '@/lib/format';
-import { useHotkey } from '@/lib/hotkeys';
+import { isTypingTarget, useHotkey } from '@/lib/hotkeys';
 import { useImage } from '@/lib/queries';
 import { useBlurPrefs, useLightbox } from '@/lib/stores';
 import { findCachedImage, preloadAhead, preloadNeighbors, whenDecoded } from './lightbox/cache';
@@ -76,6 +76,12 @@ export function Lightbox() {
             contentRef.current?.focus();
           }}
           onEscapeKeyDown={(e) => {
+            // 焦点在看图器里的输入框（来源表单）时，Esc 交给输入框自己处理，不关看图器，免得填了一半的内容没了。
+            // Radix 在 document 捕获阶段就处理 Esc，输入框的 onKeyDown 拦不住，只能在这里拦
+            if (isTypingTarget(e.target)) {
+              e.preventDefault();
+              return;
+            }
             // 放大状态下 Esc 先还原缩放
             if (escapeRef.current()) e.preventDefault();
           }}

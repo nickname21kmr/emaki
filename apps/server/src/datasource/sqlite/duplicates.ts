@@ -1,7 +1,7 @@
 /**
  * 重复组的查询与处理（T16）。组本身由 services/dedupe/DedupeService 生成。
  * resolve 把没选中的移到系统回收站（逐个核实），不可撤销；一张都没删（全部保留）时可撤销。
- * 删之前把副本上手动做的整理（手动角色、收藏、原创、分级、画师）并到保留的图上，免得跟着副本一起没了。
+ * 删之前把副本上手动做的整理（手动角色、收藏、原创、分级、画师、来源）并到保留的图上，免得跟着副本一起没了。
  */
 import type { Db } from '../../db/connection.ts';
 import type { DuplicateGroup, ID, ListDuplicatesQuery, MutationResult } from '@emaki/shared';
@@ -35,8 +35,8 @@ export const SET_FOLDER_MAX = 500;
 const RATING_ORDER = `CASE d.rating WHEN 'explicit' THEN 3 WHEN 'questionable' THEN 2 WHEN 'sensitive' THEN 1 ELSE 0 END`;
 
 /**
- * 移到回收站之前，把副本上用户手动做的整理并到保留的图上：手动归的角色、收藏、归为原创、手动分级、手动改的画师。
- * 保留的图自己已有的不动（已有的角色、改过的分级和画师）。识别器认的不搬，保留的图自己会认。必须在事务内调用
+ * 移到回收站之前，把副本上用户手动做的整理并到保留的图上：手动归的角色、收藏、归为原创、手动分级、手动改的画师、手动确认的来源。
+ * 保留的图自己已有的不动（已有的角色、改过的分级、画师和来源）。识别器认的不搬，保留的图自己会认。必须在事务内调用
  */
 function carryOver(db: Db, keep: number[], gone: number[], now: string): void {
   const p = { k: JSON.stringify(keep), g: JSON.stringify(gone), now };
@@ -61,6 +61,18 @@ function carryOver(db: Db, keep: number[], gone: number[], now: string): void {
     `UPDATE images SET rating_manual = 1, rating = (SELECT d.rating FROM images d WHERE ${G} AND d.rating_manual = 1 ORDER BY ${RATING_ORDER} DESC LIMIT 1)
      WHERE ${K} AND rating_manual = 0 AND EXISTS (SELECT 1 FROM images d WHERE ${G} AND d.rating_manual = 1)`,
   ).run(p);
+  // 来源：取第一张手动确认过的副本（有链接的优先于手动清空的）。保留的图自己确认过的不动，自动解析出来的可以被盖掉。
+  // 要放在画师前面，画师那段没有手动副本时会提前 return
+  const srcId = db
+    .prepare(`SELECT d.id FROM images d WHERE ${G} AND d.source_manual = 1 ORDER BY d.source_url IS NULL, d.id LIMIT 1`)
+    .pluck()
+    .get(p) as number | undefined;
+  if (srcId !== undefined)
+    db.prepare(
+      `UPDATE images SET (source_site, source_post_id, source_artist, source_url, source_manual) =
+         (SELECT source_site, source_post_id, source_artist, source_url, 1 FROM images WHERE id = @srcId)
+       WHERE ${K} AND source_manual = 0`,
+    ).run({ ...p, srcId });
   // 画师：取第一张手动改过的副本，整组照搬
   const src = db.prepare(`SELECT d.id FROM images d WHERE ${G} AND d.artist_manual = 1 ORDER BY d.id LIMIT 1`).pluck().get(p) as number | undefined;
   if (src === undefined) return;

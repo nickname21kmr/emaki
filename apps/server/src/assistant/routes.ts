@@ -1,13 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import path from 'node:path';
 import { z } from 'zod';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { DataSource } from '../datasource/DataSource.ts';
 import { config } from '../config.ts';
+import { BadRequestError } from '../http/errors.ts';
 import { parse } from '../http/validate.ts';
 import { AssistantService } from './service.ts';
-import { createLibraryMcp } from './tools.ts';
 import { apiModelsInput, fetchApiModels } from './apiModels.ts';
+
+const origin = (url: string) => (URL.canParse(url) ? new URL(url).origin : '');
 
 export function assistantRoutes(app: FastifyInstance, ds: DataSource) {
   const streams = new Set<import('node:http').ServerResponse>();
@@ -20,6 +21,9 @@ export function assistantRoutes(app: FastifyInstance, ds: DataSource) {
     const body = parse(z.object({ enabled: z.boolean().optional(), accessMode: z.enum(['ask', 'full']).optional(), backend: z.enum(['codex', 'pi', 'dsh']).nullable().optional(), codexPath: z.string().max(2000).optional(), dshPath: z.string().max(2000).optional(), apiKey: z.string().max(10000).optional(),
       pi: z.object({ provider: z.string().max(200), baseUrl: z.union([z.literal(''), z.url().refine(v => /^https?:\/\//.test(v))]), model: z.string().max(100000), api: z.enum(['openai-completions', 'openai-responses', 'anthropic-messages']), vision: z.boolean().default(true), reasoning: z.boolean().default(false) }).optional() }), req.body);
     const s = service.store.settings;
+    // 已保存的 key 只属于原来的 API 主机，换了地址不能默默带过去（和读取模型列表同一规则）。放在所有赋值之前，拒绝时设置不变
+    if (body.pi?.baseUrl && body.apiKey === undefined && s.apiKey && origin(s.pi.baseUrl) !== origin(body.pi.baseUrl))
+      throw new BadRequestError('API 地址已更换，请填写对应的 API Key');
     if (body.accessMode !== undefined) s.accessMode = body.accessMode;
     if (body.enabled !== undefined) s.enabled = body.enabled;
     if (body.backend !== undefined) s.backend = body.backend;
@@ -60,7 +64,11 @@ export function assistantRoutes(app: FastifyInstance, ds: DataSource) {
   app.post('/api/assistant/mcp', async (req, reply) => {
     const token = req.headers.authorization?.replace(/^Bearer /, '') ?? '';
     const auth = service.authorize(token);
-    const server = createLibraryMcp(app, ds, path.join(config.dataDir, 'emaki.sqlite'), service, auth.scope, auth.sessionId);
+    // MCP SDK 和 sharp 用到时才加载，助手没开时启动不付这份开销
+    const [{ StreamableHTTPServerTransport }, { createLibraryMcp }] = await Promise.all([import('@modelcontextprotocol/sdk/server/streamableHttp.js'), import('./tools.ts')]);
+    // SQL 工具直接读库文件，只有真实 SQLite 数据源才提供；--mock 下不能去读开发机上的真实图库
+    const file = config.dataSource === 'sqlite' ? path.join(config.dataDir, 'emaki.sqlite') : null;
+    const server = createLibraryMcp(app, ds, file, service, auth.scope, auth.sessionId);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport); reply.hijack();
     reply.raw.once('close', () => { void server.close(); });

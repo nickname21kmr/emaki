@@ -2,7 +2,7 @@
 // 已在运行时只打开浏览器。只用 Node 内置模块，不需要 tsx。
 // 用法：node scripts/start.mjs [--rebuild] [--mock] [--no-open] [--app]；Windows 上双击仓库根目录的 start.bat。
 // --app：用 Edge / Chrome 的应用窗口打开（像桌面程序，没有地址栏），关掉这个窗口后端也跟着退出。桌面快捷方式用的就是它。
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -167,7 +167,14 @@ const server = spawn(process.execPath, ['--import', 'tsx', path.join('apps', 'se
 // 应用窗口关掉后是我们主动结束的后端：正常退出（start.bat 遇到非 0 会停下来等按键）
 let closing = false;
 server.on('exit', (code) => process.exit(closing ? 0 : (code ?? 1)));
-for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => server.kill(sig));
+// Windows 上连整棵进程树一起结束：AI 助手拉起的 agent 和它跑的命令是后端的子进程，只结束后端会留下孤儿进程
+const stopServer = (sig) => {
+  if (process.platform === 'win32' && server.pid && server.exitCode === null) {
+    spawnSync(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe'), ['/T', '/F', '/PID', String(server.pid)], { stdio: 'ignore', timeout: 5000 });
+  } else server.kill(sig);
+};
+// SIGHUP：直接关掉这个黑色窗口
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => stopServer(sig));
 
 // 每 300ms 探测一次，最长 60 秒
 const deadline = Date.now() + 60_000;
@@ -180,7 +187,7 @@ while (Date.now() < deadline) {
       void closed.then(() => {
         log('Emaki 窗口已关闭，正在退出…');
         closing = true;
-        server.kill();
+        stopServer();
       });
     } else {
       log(`Emaki 已启动：${url}（关闭这个窗口即退出）`);

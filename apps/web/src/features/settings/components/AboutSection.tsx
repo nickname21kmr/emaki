@@ -67,7 +67,7 @@ export function AboutSection({ stats }: { stats?: LibraryStats }) {
 
       <p className="mt-4 flex items-center gap-1.5 pl-1 text-xs text-fg-subtle">
         <ShieldCheck className="size-3.5" />
-        图库和本机识别保存在本地；启用 AI 助手后，助手读取的图片和对话会发送给你选择的模型服务。
+        图库和本机识别保存在本地。启用 AI 助手（实验，默认关闭）后，助手读取的图片和对话会发送给你选择的模型服务；查出处时，经你同意还可能把图片上传到 Yandex、SauceNAO 等搜图网站。
       </p>
     </SettingsSection>
   );

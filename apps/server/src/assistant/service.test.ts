@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -136,7 +136,8 @@ describe('assistant ownership and replay', () => {
     expect(s.store.publicSettings()).not.toHaveProperty('apiKey');
   });
   it('persists only owned sessions, clears stale runs on restart', () => {
-    const s = setup(); s.store.settings.backend = 'codex';
+    // 助手开着时重启修正才落盘（关着时启动不写文件）
+    const s = setup(); s.store.settings.backend = 'codex'; s.store.settings.enabled = true; s.store.saveSettings();
     const session = s.store.create(); session.status = 'running'; session.nativeId = 'private-native'; s.flush(session);
     session.messages.push({ id: 'request', role: 'user', text: '修改选中图片', context: { page: '/unrecognized', imageIds: ['17329'] } }); s.flush(session);
     const restored = new AssistantStore(s.dir).get(session.id);
@@ -237,5 +238,47 @@ describe('assistant ownership and replay', () => {
     await expect(s.operation('scope', 'op', 'body', async () => { throw new Error('connection lost after write'); })).rejects.toThrow();
     const restored = new AssistantService(s.dir, '', () => '');
     const run = vi.fn(); await expect(restored.operation('scope', 'op', 'body', run)).rejects.toThrow('待核对'); expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe('agent process lifecycle', () => {
+  it('lists models through one cached temporary connection instead of a process per viewed session', async () => {
+    const s = setup(); s.store.settings.backend = 'codex'; s.store.settings.enabled = true;
+    const a = s.store.create(), b = s.store.create(); a.updatedAt = '2000-01-01T00:00:00.000Z';
+    const close = vi.fn(async () => {});
+    const open = vi.spyOn(CodexBackend, 'open').mockRejectedValueOnce(new Error('未找到 Codex')).mockImplementation(async (_settings, stored) => {
+      expect([a.id, b.id]).not.toContain(stored.id); expect(stored.token).toBe('');
+      return { models: async () => [{ id: 'fixture', efforts: [], vision: true }], prompt: async () => {}, stop: async () => {}, close } as unknown as CodexBackend;
+    });
+    await expect(s.models(a.id)).rejects.toThrow('未找到 Codex');
+    expect(await s.models(a.id)).toEqual([{ id: 'fixture', efforts: [], vision: true }]);
+    expect(await s.models(b.id)).toHaveLength(1);
+    expect(open).toHaveBeenCalledTimes(2); expect(close).toHaveBeenCalledTimes(1);
+    expect(readdirSync(path.join(s.dir, 'workspaces'))).toEqual([]);
+    expect(a.updatedAt).toBe('2000-01-01T00:00:00.000Z');
+    // 改设置会走 close()，之后重新读取
+    await s.close(); await s.models(b.id);
+    expect(open).toHaveBeenCalledTimes(3); expect(close).toHaveBeenCalledTimes(2);
+  });
+  it('closes an idle agent after its turn and reopens it on the next message', async () => {
+    const s = setup(); s.store.settings.backend = 'codex'; s.store.settings.enabled = true; s.idleMs = 20;
+    const session = s.store.create(); let sink!: AgentSink;
+    const prompt = vi.fn(async () => {}), close = vi.fn(async () => {});
+    const open = vi.spyOn(CodexBackend, 'open').mockImplementation(async (_a, _b, _c, _d, _e, events) => {
+      sink = events;
+      return { models: async () => [{ id: 'fixture', efforts: [], vision: true }], prompt, stop: async () => {}, close } as unknown as CodexBackend;
+    });
+    const input = { requestId: 'first', text: 'Search', model: 'fixture', effort: '', context: { page: '/', imageIds: [] } };
+    await s.send(session.id, input);
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    sink.done();
+    await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+    await s.send(session.id, { ...input, requestId: 'next' });
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(2));
+    expect(open).toHaveBeenCalledTimes(2);
+    // 还在运行的不回收
+    await new Promise(resolve => setTimeout(resolve, 60));
+    expect(close).toHaveBeenCalledTimes(1);
+    await s.close();
   });
 });

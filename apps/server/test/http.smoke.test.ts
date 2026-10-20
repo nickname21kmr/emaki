@@ -3,7 +3,7 @@
  * 确认路由、zod 校验、错误处理接线正确。数据用契约夹具（固定 NOW，id 是 i1 / c1 / w1 这种 mock id）。
  * 最后一条用例从 src/app.ts、src/routes/*.ts 里扫出全部路由，确保这里每个都测到了（新增路由忘了补冒烟会失败）。
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,6 +19,16 @@ vi.mock('../src/system/pickFolder.ts', () => ({ pickFolder: async () => 'D:/Pick
 vi.mock('../src/net/check.ts', () => ({
   checkNetwork: async () => ({ proxy: { url: null, source: null, note: null }, targets: [], summary: '测试' }),
 }));
+// buildApp 会在 dataDir/assistant 下建目录、改写会话和设置，换成临时目录，不碰真实的 data/
+const dataState = vi.hoisted(() => ({ dir: '' }));
+vi.mock('../src/config.ts', async (importOriginal) => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { config } = await importOriginal<typeof import('../src/config.ts')>();
+  dataState.dir = mkdtempSync(join(tmpdir(), 'emaki-smoke-'));
+  return { config: { ...config, dataDir: dataState.dir } };
+});
 
 const SRC = path.resolve(import.meta.dirname, '../src');
 const prevLogLevel = process.env.EMAKI_LOG_LEVEL;
@@ -26,6 +36,7 @@ process.env.EMAKI_LOG_LEVEL = 'silent';
 afterAll(() => {
   if (prevLogLevel === undefined) delete process.env.EMAKI_LOG_LEVEL;
   else process.env.EMAKI_LOG_LEVEL = prevLogLevel;
+  if (dataState.dir) rmSync(dataState.dir, { recursive: true, force: true, maxRetries: 4 });
 });
 
 let app: FastifyInstance;
@@ -356,6 +367,10 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
       dataDir: expect.any(String),
       bootId: expect.any(String),
     });
+    // 助手的会话和设置写在临时目录里，不是仓库的 data/
+    expect(json.dataDir).toBe(dataState.dir);
+    // 助手关着时启动不建目录、不写文件
+    expect(existsSync(path.join(dataState.dir, 'assistant'))).toBe(false);
   });
 
   route('POST /api/system/pick-folder', async () => {

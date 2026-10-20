@@ -1,9 +1,10 @@
-"""Search one authorized local image; save the result page for source verification."""
+"""Reverse-search one local image the user agreed to upload; send a cleaned query copy, never the original bytes."""
 
 import argparse
+import io
 import json
-import mimetypes
 from pathlib import Path
+import re
 import sys
 from urllib.parse import urljoin, urlsplit
 
@@ -14,12 +15,114 @@ from urllib3.util.retry import Retry
 
 
 ORIGIN = "https://yandex.ru"
+QUERY_SIDE = 1280  # 查询图最长边，够搜图用
+# PNG 只留画面需要的块；tEXt/iTXt/zTXt/eXIf/tIME、iCCP 等一律不传
+PNG_KEEP = {b"IHDR", b"PLTE", b"IDAT", b"IEND", b"tRNS", b"gAMA", b"cHRM", b"sRGB", b"sBIT", b"pHYs", b"acTL", b"fcTL", b"fdAT"}
+# WebP 同样只留画面块；"VP8 " 末尾的空格不能少
+WEBP_KEEP = {b"VP8 ", b"VP8L", b"VP8X", b"ALPH", b"ANIM", b"ANMF"}
+# 扫描数据里 FF00 是转义、FFD0-FFD7 是 RST，其余 FFxx 才是下一个标记
+JPEG_NEXT_MARKER = re.compile(rb"\xff[^\x00\xd0-\xd7]")
 
 
 class SearchError(Exception):
     def __init__(self, status, message):
         super().__init__(message)
         self.status = status
+
+
+def strip_jpeg(data):
+    """Keep JFIF/Adobe headers, tables and scans; drop APP1-APP13/APP15 (EXIF, GPS, XMP, IPTC, MPF, ICC) and comments."""
+    out, i = bytearray(b"\xff\xd8"), 2
+    while i + 1 < len(data):
+        if data[i] != 0xFF:  # 段之间多出的字节（pixiv 图常见）跳过不传，和解码器一样找下一个标记
+            i = data.find(b"\xff", i)
+            if i < 0:
+                break
+            continue
+        marker = data[i + 1]
+        if marker == 0xFF:
+            i += 1
+            continue
+        if marker == 0xD9:  # 结束标记之后的附加数据（多图、动态照片）不上传
+            break
+        if 0xD0 <= marker <= 0xD7 or marker == 0x01:
+            out += data[i:i + 2]
+            i += 2
+            continue
+        end = i + 2 + int.from_bytes(data[i + 2:i + 4], "big")
+        if end > len(data) or end < i + 4:
+            raise SearchError("invalid_input", "Malformed JPEG")
+        if marker == 0xDA:
+            found = JPEG_NEXT_MARKER.search(data, end)
+            end = found.start() if found else len(data)
+        # APP0 只留 JFIF 头，JFXX 等扩展段可能带缩略图
+        if not (0xE1 <= marker <= 0xED or marker in (0xEF, 0xFE) or (marker == 0xE0 and data[i + 4:i + 9] != b"JFIF\0")):
+            out += data[i:end]
+        i = end
+    return bytes(out + b"\xff\xd9")
+
+
+def strip_png(data):
+    out, i = bytearray(data[:8]), 8
+    while i + 12 <= len(data):
+        kind = data[i + 4:i + 8]
+        end = i + 12 + int.from_bytes(data[i:i + 4], "big")
+        if kind in PNG_KEEP:
+            out += data[i:end]
+        i = end
+        if kind == b"IEND":
+            break
+    return bytes(out)
+
+
+def strip_webp(data):
+    # 只走到 RIFF 头声明的长度，后面附加的字节不上传
+    chunks, i, stop = [], 12, min(len(data), 8 + int.from_bytes(data[4:8], "little"))
+    while i + 8 <= stop:
+        kind, size = data[i:i + 4], int.from_bytes(data[i + 4:i + 8], "little")
+        end = i + 8 + size + (size & 1)
+        if kind in WEBP_KEEP:
+            chunk = bytearray(data[i:end])
+            if kind == b"VP8X" and len(chunk) > 8:
+                chunk[8] &= 0xD3  # 清掉 ICC、EXIF、XMP 标志
+            chunks.append(bytes(chunk))
+        i = end
+    body = b"WEBP" + b"".join(chunks)
+    return b"RIFF" + len(body).to_bytes(4, "little") + body
+
+
+def strip_metadata(data):
+    """Drop metadata blocks losslessly; pixels stay as they are."""
+    if data.startswith(b"\xff\xd8"):
+        return strip_jpeg(data), "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return strip_png(data), "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return strip_webp(data), "image/webp"
+    raise SearchError("invalid_input", "Without Pillow only JPEG, PNG or WebP can be cleaned; make a JPEG or PNG copy first")
+
+
+def query_copy(image):
+    """Return (bytes, mime, note) to upload. With Pillow: a downscaled JPEG re-encode. Without: metadata stripped only."""
+    data = image.read_bytes()
+    if not data:
+        raise SearchError("invalid_input", "The query image is empty")
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        return (*strip_metadata(data), "metadata stripped; not downscaled (Pillow not installed)")
+    with Image.open(io.BytesIO(data)) as source:
+        picture = ImageOps.exif_transpose(source)  # 第一帧，按 EXIF 方向摆正
+    picture.thumbnail((QUERY_SIDE, QUERY_SIDE))
+    if picture.mode != "RGB":
+        rgba = picture.convert("RGBA")
+        picture = Image.new("RGB", rgba.size, "white")
+        picture.paste(rgba, mask=rgba.getchannel("A"))
+    picture.info.clear()  # 不把原图的 EXIF、ICC、注释带进新文件
+    out = io.BytesIO()
+    picture.save(out, "JPEG", quality=90)
+    # 重新编码的结果也再过一遍，保证上传的字节里没有元数据段
+    return (*strip_metadata(out.getvalue()), f"re-encoded JPEG, longest side <= {QUERY_SIDE}px, no metadata")
 
 
 def check_response(response):
@@ -59,12 +162,7 @@ def search(session, image, out, timeout=40):
     stage = "input"
     result = {"status": "error", "stage": stage}
     try:
-        mime = mimetypes.guess_type(image.name)[0]
-        if mime not in ("image/jpeg", "image/png", "image/webp", "image/gif"):
-            raise SearchError("invalid_input", "Use a JPEG, PNG, WebP or GIF query image")
-        payload = image.read_bytes()
-        if not payload:
-            raise SearchError("invalid_input", "The query image is empty")
+        payload, mime, query_note = query_copy(image)
         stage = "home"
         check_response(session.get(ORIGIN + "/images/", timeout=(10, timeout)))
         stage = "upload"
@@ -97,7 +195,7 @@ def search(session, image, out, timeout=40):
         html_path.write_bytes(response.content)
         page = check_response(response)
         result = {
-            "status": "page_received", "stage": stage, "result_url": response.url,
+            "status": "page_received", "stage": stage, "result_url": response.url, "uploaded": query_note,
             "html_path": str(html_path.resolve()), **summarize(page, response.url),
             "note": "Inspect candidates and verify the source image; page_received does not mean a match was found.",
         }
@@ -109,17 +207,29 @@ def search(session, image, out, timeout=40):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("image", type=Path, help="Authorized local query image")
+    parser.add_argument("image", type=Path, help="Local image the user agreed to upload; only a cleaned copy is sent")
     parser.add_argument("--out", required=True, type=Path, help="Separate output folder for this query")
     route = parser.add_mutually_exclusive_group()
     route.add_argument("--direct", action="store_true", help="Ignore environment proxies for this Yandex session")
     route.add_argument("--proxy", help="Explicit existing proxy URL; otherwise use the environment")
     parser.add_argument("--timeout", type=float, default=40, help="Read timeout in seconds per request (default: 40)")
+    parser.add_argument("--query-only", action="store_true", help="Only write the cleaned query copy into --out (e.g. for other search sites); no network")
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+    if args.query_only:
+        try:
+            payload, mime, note = query_copy(args.image)
+        except (SearchError, OSError, ValueError) as error:
+            print(json.dumps({"status": getattr(error, "status", "error"), "error": str(error)}, ensure_ascii=False))
+            return 1
+        args.out.mkdir(parents=True, exist_ok=True)
+        saved = args.out / ("query" + {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[mime])
+        saved.write_bytes(payload)
+        print(json.dumps({"status": "query_saved", "path": str(saved.resolve()), "mime": mime, "note": note}, ensure_ascii=False))
+        return 0
     with requests.Session() as session:
         session.trust_env = not (args.direct or args.proxy)
         if args.proxy:

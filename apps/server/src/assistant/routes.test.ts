@@ -8,16 +8,18 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { createServer } from 'node:http';
 import type { FastifyInstance } from 'fastify';
 
-const state = vi.hoisted(() => ({ dir: '' }));
+// 业务数据走 MockDataSource，SQL 工具读这里自带的 emaki.sqlite；source 可切成 'mock' 检查演示模式
+const state = vi.hoisted(() => ({ dir: '', source: 'sqlite' }));
 vi.mock('../config.ts', async importOriginal => {
   const { config } = await importOriginal<typeof import('../config.ts')>();
-  return { config: { ...config, get dataDir() { return state.dir; }, dataSource: 'mock', webDist: '/nonexistent' } };
+  return { config: { ...config, get dataDir() { return state.dir; }, get dataSource() { return state.source; }, webDist: '/nonexistent' } };
 });
 import { buildApp } from '../app.ts';
 import { EventBus } from '../core/events.ts';
 import { MockDataSource } from '../datasource/mock/MockDataSource.ts';
+import { sharp } from '../services/image/sharpConfig.ts';
 
-let app: FastifyInstance, base: string, token: string, imageId: string;
+let app: FastifyInstance, base: string, token: string, imageId: string, ds: MockDataSource;
 let piSession: string, holdResponse = false;
 const providerRequests: any[] = [];
 const provider = createServer(async (req, res) => {
@@ -44,7 +46,7 @@ const call = async (method: any, url: string, payload?: unknown) => app.inject({
 beforeAll(async () => {
   state.dir = mkdtempSync(path.join(tmpdir(), 'emaki-route-test-'));
   const db = new Database(path.join(state.dir, 'emaki.sqlite')); db.exec('CREATE TABLE images(id INTEGER PRIMARY KEY); INSERT INTO images VALUES(1),(2);'); db.close();
-  const bus = new EventBus(), ds = new MockDataSource(bus); imageId = (await ds.listImages({ limit: 1 })).items[0]!.id;
+  const bus = new EventBus(); ds = new MockDataSource(bus); imageId = (await ds.listImages({ limit: 1 })).items[0]!.id;
   app = await buildApp(ds, bus); base = await app.listen({ host: '127.0.0.1', port: 0 });
   await new Promise<void>(resolve => provider.listen(0, '127.0.0.1', resolve));
 });
@@ -83,6 +85,68 @@ describe('assistant HTTP and MCP', () => {
     expect(await client.callTool({ name: 'update_images', arguments: body })).toEqual(changed);
     const img = (await app.inject({ url: `/api/images/${imageId}`, headers: { host: 'localhost' } })).json(); expect(img.favorite).toBe(true);
     await client.close();
+  });
+  const connect = async () => {
+    const client = new Client({ name: 'path-test', version: '1' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(base + '/api/assistant/mcp'), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
+    return client;
+  };
+  it('read_library only reaches whitelisted routes after URL normalization', async () => {
+    const other = (await call('POST', '/sessions', {})).json().id;
+    const client = await connect();
+    try {
+      // inject 会把 \ 当 /、消掉 .. 和 %2e，这些都不能绕到别的接口
+      for (const path of [
+        `/api/images/x\\..\\..\\assistant\\sessions\\${other}`,
+        '/api/images/x\\..\\..\\assistant\\mcp-config',
+        '/api/images/x\\%2e%2e\\%2e%2e\\settings',
+        '/api/images/x\\..\\..\\events',
+        '/api/images/%2e%2e',
+        '//evil.example/api/stats',
+        '/api/stats#x',
+      ]) {
+        const result: any = await client.callTool({ name: 'read_library', arguments: { path } });
+        expect(result.isError, path).toBe(true);
+        expect(result.content[0].text, path).toContain('不支持的读取路径');
+      }
+      const list: any = await client.callTool({ name: 'read_library', arguments: { path: '/api/images?limit=1' } });
+      expect(JSON.parse(list.content[0].text).items).toHaveLength(1);
+      const one: any = await client.callTool({ name: 'read_library', arguments: { path: `/api/images/${imageId}` } });
+      expect(JSON.parse(one.content[0].text).id).toBe(imageId);
+    } finally { await client.close(); }
+  });
+  it('read_media decodes the same broken JPEG and BMP files as thumbnails', async () => {
+    const jpeg = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#c33' } }).jpeg().toBuffer();
+    const sos = jpeg.indexOf(Buffer.from([0xff, 0xda]));
+    // pixiv 常见：「Corrupt JPEG data: 4 extraneous bytes before marker 0xda」
+    const broken = Buffer.concat([jpeg.subarray(0, sos), Buffer.from([0, 0, 0, 0]), jpeg.subarray(sos)]);
+    // 2x2 的 24 位 BMP，每行补齐到 4 字节
+    const bmp = Buffer.alloc(54 + 16);
+    bmp.write('BM'); bmp.writeUInt32LE(bmp.length, 2); bmp.writeUInt32LE(54, 10);
+    bmp.writeUInt32LE(40, 14); bmp.writeInt32LE(2, 18); bmp.writeInt32LE(2, 22); bmp.writeUInt16LE(1, 26); bmp.writeUInt16LE(24, 28); bmp.writeUInt32LE(16, 34);
+    bmp.fill(0x80, 54);
+    const spy = vi.spyOn(ds, 'getOriginal')
+      .mockResolvedValueOnce({ kind: 'buffer', contentType: 'image/jpeg', body: broken })
+      .mockResolvedValueOnce({ kind: 'buffer', contentType: 'image/bmp', body: bmp });
+    const client = await connect();
+    try {
+      for (const name of ['broken jpeg', 'bmp']) {
+        const media: any = await client.callTool({ name: 'read_media', arguments: { imageId } });
+        expect(media.isError, `${name}: ${JSON.stringify(media.content)}`).not.toBe(true);
+        expect(Buffer.from(media.content[0].data, 'base64').subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));
+      }
+    } finally { spy.mockRestore(); await client.close(); }
+  });
+  it('offers no SQL tools on mock data instead of reading a library file', async () => {
+    state.source = 'mock';
+    const client = await connect();
+    try {
+      const names = (await client.listTools()).tools.map(t => t.name);
+      expect(names).not.toContain('query_database'); expect(names).not.toContain('describe_database');
+      expect(client.getInstructions()).toContain('read_library');
+      const stats: any = await client.callTool({ name: 'read_library', arguments: { path: '/api/stats' } });
+      expect(stats.isError).not.toBe(true);
+    } finally { state.source = 'sqlite'; await client.close(); }
   });
   it('edits sources through MCP with validation, retry deduplication and undo', async () => {
     const client = new Client({ name: 'source-test', version: '1' });
@@ -237,6 +301,22 @@ describe('assistant HTTP and MCP', () => {
       }
     }
   }, 20000);
+  it('does not carry a saved API key to a different API origin', async () => {
+    const pi = (baseUrl: string) => ({ provider: '', api: 'openai-completions', model: 'fixture-model', baseUrl });
+    const saved = (await call('GET', '/settings')).json();
+    expect(saved.pi.apiKeyConfigured).toBe(true);
+    const moved = await call('PATCH', '/settings', { pi: pi('https://relay.example/v1') });
+    expect(moved.statusCode).toBe(400); expect(moved.json().error).toContain('API Key');
+    expect((await call('GET', '/settings')).json()).toEqual(saved);
+    // 同一主机换路径照常保存，key 保留
+    const samePath = new URL(saved.pi.baseUrl); samePath.pathname = '/other/v1';
+    const same = await call('PATCH', '/settings', { pi: pi(samePath.href) });
+    expect(same.statusCode).toBe(200); expect(same.json().pi.apiKeyConfigured).toBe(true);
+    // 带上新 key，或先清除 key，才能换到别的主机
+    expect((await call('PATCH', '/settings', { pi: pi('https://relay.example/v1'), apiKey: 'relay-key' })).statusCode).toBe(200);
+    expect((await call('PATCH', '/settings', { apiKey: '' })).statusCode).toBe(200);
+    expect((await call('PATCH', '/settings', { pi: pi('https://other.example/v1') })).statusCode).toBe(200);
+  });
   it('disables the running backend and rejects old MCP credentials while off', async () => {
     await call('PATCH', '/settings', { enabled: false });
     expect((await call('GET', '/sessions')).statusCode).toBe(403);

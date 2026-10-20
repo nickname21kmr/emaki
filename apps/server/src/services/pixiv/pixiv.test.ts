@@ -675,6 +675,34 @@ it('只有离线词典、没有在线缓存行的角色也能补齐所属作品'
   expect(client.autocomplete).not.toHaveBeenCalled();
 });
 
+it('补作品没结果时每个角色每轮只问一次；Danbooru 上没有的记下来，下一轮也不再问', async () => {
+  const {createPixivDiscovery}=await import('./discovery.ts'); const {DanbooruCatalog}=await import('../danbooru/catalog.ts');
+  const dc=new DanbooruCatalog(db,makeCatalog().copyrights);
+  const metadata=(name:string,category:number)=>({name,category,post_count:30,is_deprecated:false,antecedent_implications:[],consequent_aliases:[]});
+  // gone：Danbooru 上查不到；renamed：返回的是改过的名字；dict_only：只有词典，查不到第 4 类
+  name('gone_character','消失角色'); name('renamed_character','改名角色'); name('dict_only','词典孤儿');
+  dc.upsertBase(metadata('gone_character',4),'now'); dc.upsertBase(metadata('renamed_character',4),'now');
+  const relatedCopyrights=vi.fn(async(tag:string)=>({query:tag,post_count:30,
+    tag:tag==='gone_character'?null:{name:'new_name',category:4,post_count:30},related_tags:[]}));
+  const tagsByNames=vi.fn(async()=>[]);
+  const client={autocomplete:vi.fn(),tagsByNames,wikiByTitles:async()=>[],relatedCopyrights};
+  const round=async()=>{
+    const discover=createPixivDiscovery(db,dc,client);
+    for(let i=0;i<3;i++) await discover(art(1,['消失角色','改名角色','词典孤儿'],String(i)),controller.signal);
+  };
+  await round();
+  const calls=()=>relatedCopyrights.mock.calls.map(c=>c[0]).sort();
+  expect(calls()).toEqual(['gone_character','renamed_character']);
+  expect(tagsByNames).toHaveBeenCalledTimes(1);
+  expect(dc.get('gone_character')!.relatedFetchedAt).not.toBeNull();
+  expect(dc.get('renamed_character')!.relatedFetchedAt).toBeNull();
+  await round();
+  // 查不到的不再问；改名和缺第 4 类的下一轮再试一次
+  expect(calls()).toEqual(['gone_character','renamed_character','renamed_character']);
+  expect(tagsByNames).toHaveBeenCalledTimes(2);
+  expect(client.autocomplete).not.toHaveBeenCalled();
+});
+
 it('召回多个经别名验证的同名角色时仍保持歧义，不自动关联', async () => {
   const {createPixivDiscovery}=await import('./discovery.ts'); const {DanbooruCatalog}=await import('../danbooru/catalog.ts');
   const dc=new DanbooruCatalog(db,makeCatalog().copyrights),tags=['one_(game_a)','two_(game_a)'];

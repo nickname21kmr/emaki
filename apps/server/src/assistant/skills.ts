@@ -14,7 +14,8 @@ export function prepareSkills(repoRoot: string, cwd: string, dataDir: string, ap
     if (name === 'taste-profile') {
       writeFileSync(path.join(dir, '.emaki-runtime.json'), JSON.stringify({
         repoRoot, dataDir, apiBaseUrl,
-        outDir: path.join(dataDir, 'profile', 'assistant', path.basename(cwd)),
+        // 所有会话共用一个输出目录：快照原地覆盖（整库一份几百 MB），WD 抽样和对照缓存也能接着用
+        outDir: path.join(dataDir, 'profile', 'assistant'),
       }, null, 2));
     }
     const file = path.join(dir, 'SKILL.md');
