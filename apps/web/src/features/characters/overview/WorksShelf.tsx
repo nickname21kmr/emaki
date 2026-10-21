@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Button, Chip, ChipAvatar, EmptyState, ErrorState, SectionTitle } from '@/components/ui';
 import { formatCount } from '@/lib/format';
 import { useStats } from '@/lib/queries';
-import { EndMark, NewCharacterButton } from './SectionBar';
+import { EndMark } from './SectionBar';
 import { useSentinel } from './useSentinel';
 import { WorkFanCard, WorkFanSkeleton } from './WorkFanCard';
 import { useWorkIndex, workAvatar } from './works';
@@ -19,7 +19,7 @@ const GRID = 'grid grid-cols-2 gap-x-4 gap-y-6 lg:grid-cols-3 lg:gap-x-6 xl:grid
  * 总览的「作品」小节（OV-3）：作品扇形卡网格，分批渲染；长尾作品收成 chip；
  * 末尾引导去「按角色浏览全部」（列表视图）。
  */
-export function WorksShelf({ onPick, onCreate, onShowAll }: { onPick: (id: ID) => void; onCreate: () => void; onShowAll: () => void }) {
+export function WorksShelf({ onPick, onShowAll }: { onPick: (id: ID) => void; onShowAll: () => void }) {
   const { works: all, isLoading, isError, error, refetch } = useWorkIndex();
   const { data: stats } = useStats();
   // 「原创」是汇总分类，包含大量尚无具体角色的图，不作为一部作品参加排行。
@@ -33,7 +33,6 @@ export function WorksShelf({ onPick, onCreate, onShowAll }: { onPick: (id: ID) =
     <SectionTitle
       className="mb-5"
       hint={works.length ? `${formatCount(works.length)} 部 · 按张数` : undefined}
-      actions={<NewCharacterButton onClick={onCreate} />}
     >
       作品
     </SectionTitle>

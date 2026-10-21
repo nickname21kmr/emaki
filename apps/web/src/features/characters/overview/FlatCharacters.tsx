@@ -7,7 +7,7 @@ import { formatCount } from '@/lib/format';
 import type { CharactersView } from '@/lib/stores';
 import { CharacterRows, ListHeader, ListSkeleton } from './CharacterList';
 import { useCharactersParams, useFlatCharacters, type WorkScope } from './params';
-import { EndMark, NewCharacterButton, SectionBar, SortMenu } from './SectionBar';
+import { EndMark, SectionBar, SortMenu } from './SectionBar';
 import { ShelfGrid, ShelfSkeleton } from './ShelfGrid';
 import { useSentinel } from './useSentinel';
 import type { WorkIndex } from './works';
@@ -89,7 +89,6 @@ export function FlatCharacters({
         </Button>
       )}
       <SortMenu value={sort} onChange={onSortChange} />
-      <NewCharacterButton onClick={() => onCreate(q || undefined)} />
     </>
   );
 

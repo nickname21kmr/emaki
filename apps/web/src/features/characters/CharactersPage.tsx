@@ -15,6 +15,7 @@ import { NewCharacterDialog } from './overview/NewCharacterDialog';
 import { OverviewRecent } from './overview/OverviewRecent';
 import { useCharactersParams, type WorkScope } from './overview/params';
 import { SearchBar } from './overview/SearchBar';
+import { NewCharacterButton } from './overview/SectionBar';
 import { TopBento } from './overview/TopBento';
 import { WorkChips } from './overview/WorkChips';
 import { WorksShelf } from './overview/WorksShelf';
@@ -103,11 +104,14 @@ export function CharactersPage() {
           )
         }
         actions={
-          <CustomMatchPill
-            count={stats?.customMatchableCount ?? 0}
-            active={source === 'custom'}
-            onToggle={() => params.setSource(source === 'custom' ? undefined : 'custom')}
-          />
+          <>
+            <CustomMatchPill
+              count={stats?.customMatchableCount ?? 0}
+              active={source === 'custom'}
+              onToggle={() => params.setSource(source === 'custom' ? undefined : 'custom')}
+            />
+            <NewCharacterButton onClick={() => openCreate(qTrimmed || undefined)} />
+          </>
         }
       >
         <SearchBar q={params.q} onCommit={params.setQ} view={view} onViewChange={setView} inputRef={searchRef} />
@@ -163,7 +167,6 @@ export function CharactersPage() {
                 <OverviewRecent byId={byId} onSeeAll={() => selectWork('recent', true)} />
                 <WorksShelf
                   onPick={(id) => selectWork(id, true)}
-                  onCreate={() => openCreate()}
                   onShowAll={() => {
                     setView('list');
                     scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
