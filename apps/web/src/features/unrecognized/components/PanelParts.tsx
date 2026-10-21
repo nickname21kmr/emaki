@@ -73,9 +73,9 @@ export function SuggestionRow({
           <span className="truncate text-[15px] font-semibold tracking-tight">{name}</span>
           {isNew && <Badge className="shrink-0">新角色</Badge>}
         </span>
-        {sourceLabel && <span className="mt-1 block text-[11px] text-fg-subtle">{sourceLabel}</span>}
         <span className="mt-0.5 block truncate text-[12px] text-fg-muted">{workName ?? '未知作品'}</span>
       </span>
+      {sourceLabel && <span className="shrink-0 text-[11px] text-fg-muted">{sourceLabel}</span>}
       {valueLabel != null && <span className="shrink-0 text-right leading-none tabular">
         <span className="text-[17px] font-semibold tracking-tight">{valueLabel}</span>
         {valueUnit && <span className="ml-0.5 text-[11px] text-fg-muted">{valueUnit}</span>}
