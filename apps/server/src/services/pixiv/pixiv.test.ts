@@ -675,6 +675,13 @@ it('原文带作品限定时保留限定；尚未解析的角色标签不会被�
   expect(match(artwork)).toEqual({tags:[A],automatic:false});
 });
 
+it('带括号的角色不能被同名频道当成作品跳过，缺少其正确别名时不自动关联整篇', () => {
+  name('other_channel','ユニ',3); name(B,'ユニ(作品B)'); name('game_a','作品A',3);
+  const {catalog,copyrights}=makeCatalog();
+  const artwork:PixivArtwork={id:'123',pageCount:2,tags:{tags:[{tag:'アリス'},{tag:'ユニ(作品A)',translation:{en:'Bob (Game A)'}},{tag:'ゲームA'}]}};
+  expect(createPixivMatcher(db,catalog,copyrights)(artwork)).toEqual({tags:[A],automatic:false});
+});
+
 it('分级标签及无身份依据的普通译名，不展开成同名角色列表', () => {
   name(B,'R-18G');name(A,'little sister');name(B,'little sister');
   const {catalog,copyrights}=makeCatalog();

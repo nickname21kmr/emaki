@@ -53,6 +53,13 @@ const RAW_NAMES_SQL = `
     UNION SELECT j.value, d.name FROM danbooru_tags d, json_each(CASE WHEN json_valid(d.other_names) THEN d.other_names ELSE '[]' END) j
       WHERE d.category=4 AND d.not_found=0 AND j.type='text'
   `;
+const RAW_WORK_NAMES_SQL = `
+    SELECT j.value AS name,t.tag,3 AS category FROM tag_i18n t,json_each(CASE WHEN json_valid(t.aliases) THEN t.aliases ELSE '[]' END) j
+      WHERE t.category=3 AND j.type='text'
+    UNION SELECT zh,tag,3 FROM tag_i18n WHERE category=3 AND zh IS NOT NULL
+    UNION SELECT j.value,d.name,3 FROM danbooru_tags d,json_each(CASE WHEN json_valid(d.other_names) THEN d.other_names ELSE '[]' END) j
+      WHERE d.category=3 AND d.not_found=0 AND j.type='text'
+  `;
 type Row = { name: string; tag: string; category: number };
 export type PixivMatcher = ((artwork: PixivArtwork) => { tags: string[]; automatic: boolean }) & {
   /** discovery 新写入的标签：只按这些标签补进索引，不全量重建（全量一次一两秒，卡住主线程） */
@@ -86,10 +93,16 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
       if (r.category === 4) {
         tag = normalizeTag(r.tag);
       }
-      add(r.category === 4 ? characters : works, r.name, tag);
+      if (r.category === 4) add(characters, r.name, tag);
+      else {
+        const key = fullKey(r.name);
+        const tags = works.get(key) ?? new Set<string>();
+        tags.add(tag); works.set(key,tags);
+      }
     }
   };
   ingest(db.prepare(SQL).all() as Row[]);
+  ingest(db.prepare(RAW_WORK_NAMES_SQL).all() as Row[]);
   const ingestFullNames = (rows: { name: string; tag: string }[]) => {
     for (const row of rows) {
       const key = fullKey(row.name);
@@ -111,6 +124,7 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
   // 按标签过滤的同一条查询，SQLite 会把条件下推到每个分支
   let scoped: Statement | undefined;
   let scopedFullNames: Statement | undefined;
+  let scopedWorkNames: Statement | undefined;
   const identities = (name: string) => new Set([...(fullNames.get(fullKey(name)) ?? [])].map(normalizeTag));
   // 作品的子系列、歌曲等可确认父作品，但不反向展开成所有子作品。
   const expandWorks = (tags: Iterable<string>): Set<string> => {
@@ -120,8 +134,8 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
       const next: string[] = [];
       for (const tag of frontier) {
         const qualifier = /_\(([^()]+)\)$/.exec(tag)?.[1];
-        const parents = [...(copyrights.impliesClosure?.(tag) ?? []), ...(qualifier ? works.get(searchKey(qualifier)) ?? [] : [])];
-        for (const parent of parents) if (!out.has(parent) && works.get(searchKey(parent))?.has(parent)) {
+        const parents = [...(copyrights.impliesClosure?.(tag) ?? []), ...(qualifier ? works.get(fullKey(qualifier)) ?? [] : [])];
+        for (const parent of parents) if (!out.has(parent) && works.get(fullKey(parent))?.has(parent)) {
           out.add(parent); next.push(parent);
         }
       }
@@ -134,11 +148,11 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
     const workTags = expandWorks(names.flatMap(group => {
       const raw = group[0]!;
       if (general.has(searchKey(raw))) return [];
-      const direct = works.get(searchKey(raw));
+      const direct = works.get(fullKey(raw));
       if (direct?.size) return [...direct];
       if (characters.has(searchKey(raw))) return [];
       // 译名同时是角色短名时，不把它凭空变成作品上下文。
-      return group.slice(1).filter(n => !characters.has(searchKey(n))).flatMap(n => [...(works.get(searchKey(n)) ?? [])]);
+      return group.slice(1).filter(n => !characters.has(searchKey(n))).flatMap(n => [...(works.get(fullKey(n)) ?? [])]);
     }));
     const matched = new Set<string>();
     const exactNames = new Set<string>();
@@ -148,9 +162,9 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
     for (const group of names) {
       const original = group[0]!;
       // 原文明示普通词或 cosplay 时不认角色；普通译名不能否定明确的原文角色名。
-      if (/^R-18(?:G)?$/i.test(original) || works.has(searchKey(original)) || qualifiedGeneral.has(fullKey(original)) || /\((?:cosplay|コスプレ)\)/i.test(original.normalize('NFKC')) || general.has(searchKey(original))) continue;
+      if (/^R-18(?:G)?$/i.test(original) || works.has(fullKey(original)) || qualifiedGeneral.has(fullKey(original)) || /\((?:cosplay|コスプレ)\)/i.test(original.normalize('NFKC')) || general.has(searchKey(original))) continue;
       const qualifier = /\(([^()]+)\)$/.exec(original.normalize('NFKC'))?.[1];
-      const scope = qualifier ? expandWorks(works.get(searchKey(qualifier)) ?? []) : workTags;
+      const scope = qualifier ? expandWorks(works.get(fullKey(qualifier)) ?? []) : workTags;
       const strict = identities(original);
       const compatible = (tag: string) => tag.startsWith(CUSTOM) || copyrights.copyrights(tag).some(w => scope.has(w));
       let raw = qualifier && strict.size ? strict : characters.get(searchKey(original));
@@ -236,6 +250,8 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
       }
       scoped ??= db.prepare(`SELECT * FROM (${SQL}) WHERE tag IN (SELECT value FROM json_each(?))`);
       ingest(scoped.all(JSON.stringify(tags)) as Row[]);
+      scopedWorkNames ??= db.prepare(`SELECT * FROM (${RAW_WORK_NAMES_SQL}) WHERE tag IN (SELECT value FROM json_each(?))`);
+      ingest(scopedWorkNames.all(JSON.stringify(tags)) as Row[]);
       scopedFullNames ??= db.prepare(`SELECT * FROM (${RAW_NAMES_SQL}) WHERE tag IN (SELECT value FROM json_each(?))`);
       ingestFullNames(scopedFullNames.all(JSON.stringify(tags)) as { name: string; tag: string }[]);
     },
