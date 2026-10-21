@@ -1,5 +1,6 @@
+import type { Character } from '@emaki/shared';
 import { CornerDownLeft, Plus } from 'lucide-react';
-import { useEffect, useMemo, useState, type KeyboardEvent, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { Chip, ChipAvatar, Kbd, SearchInput, Spinner } from '@/components/ui';
 import { NewCharacterDialog } from '@/features/characters/overview/NewCharacterDialog';
 import { cn } from '@/lib/cn';
@@ -18,20 +19,29 @@ export function CharacterSearch({
   recent,
   onPick,
   onCreate,
+  createdCharacter,
   placeholder = '搜索其他角色…',
 }: {
   inputRef: RefObject<HTMLInputElement | null>;
   recent: AssignTarget[];
   onPick: (t: AssignTarget) => void;
-  /** 可由外部承接新建弹窗；未传时直接在此新建并归入。 */
+  /** 可由外部承接新建弹窗；未传时直接在此新建。 */
   onCreate?: (name: string) => void;
+  createdCharacter?: Character | null;
   placeholder?: string;
 }) {
   const [q, setQ] = useState('');
   const [createName, setCreateName] = useState<string | null>(null);
   const createCharacter = onCreate ?? setCreateName;
+  const listRef = useRef<HTMLDivElement>(null);
+  const returningFromCreate = useRef(false);
   const [focused, setFocused] = useState(false);
   const [active, setActive] = useState(0);
+  useEffect(() => {
+    if (!createdCharacter) return;
+    returningFromCreate.current = true;
+    setQ(createdCharacter.name);
+  }, [createdCharacter]);
   const term = useDebounced(q.trim(), 150);
   const search = useSearch(term);
 
@@ -60,6 +70,12 @@ export function CharacterSearch({
   const canCreate = typing && !searching && term === q.trim() && !results.some((r) => r.name === q.trim());
   const count = list.length + (canCreate ? 1 : 0);
   const activeIndex = Math.min(active, Math.max(0, count - 1));
+  useEffect(() => {
+    if (focused && returningFromCreate.current && !searching && count > 0 && listRef.current) {
+      listRef.current.scrollIntoView({ block: 'nearest' });
+      returningFromCreate.current = false;
+    }
+  }, [focused, searching, count]);
 
   // 换了一批结果就回到第一条
   useEffect(() => setActive(0), [term, focused]);
@@ -92,8 +108,6 @@ export function CharacterSearch({
 
   const create = () => {
     const name = q.trim();
-    setQ('');
-    inputRef.current?.blur();
     createCharacter(name);
   };
   const showList = focused && (typing || recent.length > 0);
@@ -119,6 +133,7 @@ export function CharacterSearch({
 
       {showList && (
         <div
+          ref={listRef}
           role="listbox"
           aria-label={typing ? '搜索结果' : '本次用过的角色'}
           className="mt-2 animate-fade-in overflow-hidden rounded-[14px] bg-raised py-1.5 shadow-[0_0_0_1px_var(--c-line),var(--shadow-card)]"
@@ -174,7 +189,7 @@ export function CharacterSearch({
               )}
             >
               <Plus className="size-4" />
-              新建角色「{q.trim()}」并归入
+              新建角色「{q.trim()}」
             </button>
           )}
         </div>
@@ -202,8 +217,8 @@ export function CharacterSearch({
         open={createName !== null}
         onOpenChange={(v) => { if (!v) setCreateName(null); }}
         initialName={createName ?? ''}
-        submitLabel="创建并归入"
-        onCreated={(c) => pick({ id: c.id, name: c.name, workName: null, coverImageId: c.coverImageId })}
+        onCreated={(c) => setQ(c.name)}
+        onReturn={() => { returningFromCreate.current = true; inputRef.current?.focus(); }}
       />
     </div>
   );

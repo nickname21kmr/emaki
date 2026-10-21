@@ -51,6 +51,7 @@ export function CharacterPicker({
 }: CharacterPickerProps) {
   const [openState, setOpenState] = useState(false);
   const [createName, setCreateName] = useState<string | null>(null);
+  const [searchName, setSearchName] = useState('');
   const open = openProp ?? openState;
   const setOpen = (v: boolean) => {
     setOpenState(v);
@@ -77,7 +78,8 @@ export function CharacterPicker({
               title={title}
               meta={meta}
               selectedIds={selectedIds}
-              onCreate={(name) => { setCreateName(name); setOpen(false); }}
+              initialQuery={searchName}
+              onCreate={(name) => { setSearchName(name); setCreateName(name); setOpen(false); }}
               onPick={(c) => {
                 onPick(c);
                 setOpen(false);
@@ -88,10 +90,9 @@ export function CharacterPicker({
       </Popover.Root>
       <NewCharacterDialog
         open={createName !== null}
-        onOpenChange={(v) => { if (!v) setCreateName(null); }}
+        onOpenChange={(v) => { if (!v) { setCreateName(null); setOpen(true); } }}
         initialName={createName ?? ''}
-        submitLabel="创建并归入"
-        onCreated={(c) => { useRecentCharacters.getState().push(c); onPick(c); }}
+        onCreated={(c) => setSearchName(c.name)}
       />
     </>
   );
@@ -108,6 +109,7 @@ interface PickerRow {
 export function CharacterPickerPanel({
   onPick,
   onCreate,
+  initialQuery = '',
   selectedIds,
   title,
   meta,
@@ -115,12 +117,13 @@ export function CharacterPickerPanel({
 }: {
   onPick: (character: Character) => void;
   onCreate?: (name: string) => void;
+  initialQuery?: string;
   selectedIds?: readonly ID[];
   title?: ReactNode;
   meta?: ReactNode;
   className?: string;
 }) {
-  const [text, setText] = useState('');
+  const [text, setText] = useState(initialQuery);
   const q = useDebounced(text.trim(), 160);
   const typing = text.trim() !== q;
 
@@ -209,7 +212,7 @@ export function CharacterPickerPanel({
           <div className="px-4 py-8 text-center">
             <div className="text-[13px] font-medium">{q ? `没有找到「${q}」` : '还没有角色'}</div>
             <div className="mt-1 text-xs leading-relaxed text-fg-subtle">
-              {q ? '可以换个名字搜索，或在下方新建角色并归入。' : '输入名字即可搜索或新建角色。'}
+              {q ? '可以换个名字搜索，或在下方新建角色。' : '输入名字即可搜索或新建角色。'}
             </div>
           </div>
         )}
@@ -235,7 +238,7 @@ export function CharacterPickerPanel({
           <Command.Item value="create-character" onSelect={() => onCreate?.(q)}
             className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-3 text-[13px] text-shu-fg outline-none data-[selected=true]:bg-shu-soft">
             <Plus className="size-4 shrink-0" />
-            <span className="min-w-0 break-words">新建角色「{q}」并归入</span>
+            <span className="min-w-0 break-words">新建角色「{q}」</span>
           </Command.Item>
         )}
       </Command.List>

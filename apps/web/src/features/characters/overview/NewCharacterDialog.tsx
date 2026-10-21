@@ -19,11 +19,12 @@ export function NewCharacterDialog({
   initialName,
   initialWorkId,
   onCreated,
-  submitLabel,
+  onReturn,
 }: {
-  /** 传了就不跳转到新角色页，交给调用方（未识别里「新建并归入」） */
+  /** 传了就不跳转到新角色页，创建后返回调用处 */
   onCreated?: (c: Character) => void;
-  submitLabel?: string;
+  /** 关闭表单后恢复调用处的焦点。 */
+  onReturn?: () => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** 从「没有找到『xxx』」进来时预填搜索词 */
@@ -35,6 +36,7 @@ export function NewCharacterDialog({
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
+      onCloseAutoFocus={onReturn ? (e) => { e.preventDefault(); onReturn(); } : undefined}
       width={520}
       title="新建角色"
       description="填写角色名字，可补充所属作品、别名和 Danbooru 标签。"
@@ -43,7 +45,6 @@ export function NewCharacterDialog({
         initialName={initialName}
         initialWorkId={initialWorkId}
         onCreated={onCreated}
-        submitLabel={submitLabel}
         onDone={() => onOpenChange(false)}
       />
     </Dialog>
@@ -54,13 +55,11 @@ function NewCharacterForm({
   initialName,
   initialWorkId,
   onCreated,
-  submitLabel = '创建角色',
   onDone,
 }: {
   initialName?: string;
   initialWorkId?: ID;
   onCreated?: (c: Character) => void;
-  submitLabel?: string;
   onDone: () => void;
 }) {
   const navigate = useNavigate();
@@ -167,7 +166,7 @@ function NewCharacterForm({
           取消
         </Button>
         <Button type="submit" variant="primary" loading={create.isPending} disabled={!trimmed}>
-          {submitLabel}
+          创建角色
         </Button>
       </DialogFooter>
     </form>
