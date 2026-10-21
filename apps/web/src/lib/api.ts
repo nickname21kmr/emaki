@@ -27,6 +27,7 @@ import type {
   ID,
   Job,
   JobKind,
+  StartJobBody,
   ListCharactersQuery,
   ListCharactersResponse,
   ListContentKindsResponse,
@@ -188,7 +189,7 @@ export const api = {
   removeLibraryRoot: (id: ID) => del<MutationResult>(`/library-roots/${encodeURIComponent(id)}`),
 
   jobs: () => get<ListJobsResponse>('/jobs'),
-  startJob: (kind: JobKind) => post<Job>('/jobs', { kind }),
+  startJob: (kind: JobKind, options?: Pick<StartJobBody, 'refreshPixiv'>) => post<Job>('/jobs', { kind, ...options }),
   cancelJob: (id: ID) => del<{ ok: true }>(`/jobs/${encodeURIComponent(id)}`),
 
   undo: (token: string) => post<MutationResult>(`/undo/${encodeURIComponent(token)}`),

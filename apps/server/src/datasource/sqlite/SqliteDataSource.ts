@@ -23,6 +23,7 @@ import type {
   ImageItem,
   Job,
   JobKind,
+  StartJobBody,
   LibraryStats,
   ListCharactersQuery,
   ListCharactersResponse,
@@ -96,7 +97,7 @@ import { hydrateImages, IMAGE_COLS, type ImageRow } from './hydrate.ts';
 import { listImages } from './queries/listImages.ts';
 import { loadSuggestions } from './suggestions.ts';
 import { dismissPixivCharacterChecks } from './pixivChecks.ts';
-import { pendingPixivCount, queuePixivImages, resetPixivBackoff, syncPixivCharacters } from '../../services/pixiv/sync.ts';
+import { clearPendingPixivCache, pendingPixivCount, queuePixivImages, resetPixivBackoff, syncPixivCharacters } from '../../services/pixiv/sync.ts';
 import { refreshPixivAliases } from '../../services/pixiv/aliases.ts';
 import { createPixivDiscovery } from '../../services/pixiv/discovery.ts';
 import { DanbooruClient } from '../../services/danbooru/client.ts';
@@ -1311,8 +1312,16 @@ export class SqliteDataSource implements DataSource {
   async listJobs(): Promise<Job[]> {
     return this.ctx.jobs.list();
   }
-  async startJob(kind: JobKind): Promise<Job> {
-    if (kind === 'pixiv-tags') { queuePixivImages(this.ctx); resetPixivBackoff(); }
+  async startJob(kind: JobKind, options: Pick<StartJobBody, 'refreshPixiv'> = {}): Promise<Job> {
+    if (options.refreshPixiv && kind !== 'pixiv-tags') throw new BadRequestError('刷新 Pixiv 标签只用于补充 Pixiv 角色');
+    if (kind === 'pixiv-tags') {
+      // Repeated starts must not reset checks or invalidate cache during an active run.
+      const active = this.ctx.jobs.list().find(j => j.kind === kind && (j.status === 'running' || j.status === 'queued'));
+      if (active) return active;
+      queuePixivImages(this.ctx);
+      if (options.refreshPixiv) clearPendingPixivCache(this.ctx);
+      resetPixivBackoff();
+    }
     if (kind === 'scan') this.requests.requestFull();
     // 用户手动点的：之前读不到、正在退避的图也马上重试（比如刚把移动硬盘插回去）
     if (kind === 'tag' || kind === 'artists') resetIoBackoff();

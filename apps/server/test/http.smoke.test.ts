@@ -467,6 +467,11 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     expect(status).toBe(200);
     expect(json).toMatchObject({ id: expect.any(String), kind: 'dedupe', status: expect.stringMatching(/^(queued|running)$/) });
     expect((await call('POST', '/api/jobs', { kind: 'format-c' })).status).toBe(400);
+    const start=vi.spyOn(ds,'startJob');
+    expect((await call('POST','/api/jobs',{kind:'pixiv-tags',refreshPixiv:true})).status).toBe(200);
+    expect(start).toHaveBeenLastCalledWith('pixiv-tags',{refreshPixiv:true});
+    expect((await call('POST','/api/jobs',{kind:'scan',refreshPixiv:true})).status).toBe(400);
+    expect((await call('POST','/api/jobs',{kind:'pixiv-tags',refreshPixiv:'yes'})).status).toBe(400);
   });
 
   route('DELETE /api/jobs/:id', async () => {

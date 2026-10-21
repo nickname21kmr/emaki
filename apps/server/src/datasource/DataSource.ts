@@ -24,6 +24,7 @@ import type {
   ImageItem,
   Job,
   JobKind,
+  StartJobBody,
   LibraryStats,
   ListCharactersQuery,
   ListCharactersResponse,
@@ -143,7 +144,7 @@ export interface DataSource {
 
   // 后台任务
   listJobs(): Promise<Job[]>;
-  startJob(kind: JobKind): Promise<Job>;
+  startJob(kind: JobKind, options?: Pick<StartJobBody, 'refreshPixiv'>): Promise<Job>;
   cancelJob(id: ID): Promise<void>;
 
   // 撤销

@@ -11,7 +11,8 @@ import { CopyrightResolver } from '../catalog/copyrights.ts';
 import { TagResultWriter } from '../tagger/writer.ts';
 import { PixivAccessError, PixivClient, type PixivArtwork } from './client.ts';
 import { createPixivMatcher } from './match.ts';
-import { pendingPixivCount, queuePixivImages, resetPixivBackoff, syncPixivCharacters } from './sync.ts';
+import { clearPendingPixivCache, pendingPixivCount, queuePixivImages, resetPixivBackoff, syncPixivCharacters } from './sync.ts';
+import { cacheArtwork } from './cache.ts';
 
 let db: Db;
 let ctx: ReturnType<typeof createContext>;
@@ -47,6 +48,48 @@ beforeEach(() => {
   queuePixivImages(ctx);
 });
 afterEach(() => db.close());
+
+it('同投稿后加入的图片和文件变化复用原始标签；未匹配也不重复联网', async () => {
+  const client={artwork:vi.fn().mockResolvedValue(art(1,['不认识的名字']))};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  addImage(3,'123');
+  db.exec("UPDATE images SET modified_at='new' WHERE id=1");
+  queuePixivImages(ctx);
+  const summary=await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).toHaveBeenCalledTimes(1);
+  expect(summary).toContain('复用缓存 1 个投稿 · 联网查询 0 个投稿');
+  expect(db.prepare('SELECT COUNT(*) FROM pixiv_artwork_cache').pluck().get()).toBe(1);
+});
+
+it('显式刷新只清除待补投稿的缓存；成功后重新填入并采用网页的新标签', async () => {
+  const client={artwork:vi.fn().mockResolvedValue(art(1,['不认识的名字']))};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  cacheArtwork(db,art(1,['アリス'],'456'),'before');
+  cacheArtwork(db,art(1,['アリス'],'789'),'before');
+  db.exec("INSERT INTO pixiv_unavailable_posts(post_id,checked_at) VALUES ('789','before')");
+  queuePixivImages(ctx);
+  clearPendingPixivCache(ctx);
+  expect(db.prepare('SELECT post_id FROM pixiv_artwork_cache ORDER BY post_id').pluck().all()).toEqual(['456','789']);
+  client.artwork.mockResolvedValue(art(1,['アリス']));
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).toHaveBeenCalledTimes(2);
+  expect(links()).toHaveLength(2);
+});
+
+it('获取失败不写缓存，重试成功后再保存；取消后的响应也不写入', async () => {
+  const client={artwork:vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(art(1,['アリス']))};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(db.prepare('SELECT COUNT(*) FROM pixiv_artwork_cache').pluck().get()).toBe(0);
+  resetPixivBackoff();
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).toHaveBeenCalledTimes(2);
+  expect(db.prepare('SELECT COUNT(*) FROM pixiv_artwork_cache').pluck().get()).toBe(1);
+  addImage(3,'456'); queuePixivImages(ctx,[3]);
+  await expect(syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>{
+    controller.abort(); return art(1,['アリス'],'456');
+  }},0)).rejects.toThrow();
+  expect(db.prepare("SELECT COUNT(*) FROM pixiv_artwork_cache WHERE post_id='456'").pluck().get()).toBe(0);
+});
 
 it('404 按投稿持久记忆，补跑和同投稿新图片不重复联网，换投稿仍可检查', async () => {
   const client={artwork:vi.fn().mockResolvedValue(null)};
@@ -94,8 +137,9 @@ it('首次模型低置信度候选自动登记，页面角色不同仍可关联�
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
   expect(client.artwork).toHaveBeenCalledTimes(1);
   // 没有匹配的投稿也只自动查询一次，手动补跑可重新登记。
+  db.exec("UPDATE images SET source_post_id='456' WHERE id=2");
   queuePixivImages(ctx,[2]);
-  client.artwork.mockResolvedValue(art(1,['不存在的标签']));
+  client.artwork.mockResolvedValue(art(1,['不存在的标签'],'456'));
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
   queuePixivImages(ctx,[2]);
   expect(pendingPixivCount(ctx)).toBe(0);
@@ -355,6 +399,7 @@ it('自定义原创角色可按名字关联，多角色投稿的建议显示真�
   expect(pendingPixivCount(ctx)).toBe(0);
   queuePixivImages(ctx);
   expect(pendingPixivCount(ctx)).toBe(2);
+  clearPendingPixivCache(ctx); // 显式重新获取：网页的角色标签已经改变。
   await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(3,['原创角色甲'])},0);
   expect(links()).toEqual([{image_id:1,character_id:ids[0]},{image_id:2,character_id:ids[0]}]);
   expect(db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(2);
@@ -596,7 +641,7 @@ it('原创投稿撞上 Danbooru 角色名：归为原创、只给建议，不新
     .toEqual([{danbooru_tag:A,character_id:null}]);
 });
 
-it('用户撤掉的 Pixiv 关联和原创，手动补跑不再写回；未匹配的投稿仍会重查', async () => {
+it('用户撤掉的 Pixiv 关联和原创不再写回；未匹配的投稿复用缓存重算', async () => {
   db.exec("UPDATE images SET source_post_id='456' WHERE id=2");
   addImage(3,'789');
   queuePixivImages(ctx);
@@ -610,16 +655,16 @@ it('用户撤掉的 Pixiv 关联和原创，手动补跑不再写回；未匹配
   db.exec('DELETE FROM image_characters; UPDATE images SET original_at=NULL WHERE id=2; DELETE FROM image_copyrights WHERE image_id=2');
   queuePixivImages(ctx);
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
-  expect(client.artwork.mock.calls.map(c=>c[0])).toEqual(['123','456','789','789']);
+  expect(client.artwork.mock.calls.map(c=>c[0])).toEqual(['123','456','789']);
   expect(links()).toHaveLength(0);
   expect(db.prepare('SELECT COUNT(*) FROM images WHERE original_at IS NOT NULL').pluck().get()).toBe(0);
 });
 
-it.each(['pixiv','tagger'])('手动补跑重查仍保留的旧建议（来源 %s），自动模型补充不重复请求', async source => {
+it.each(['pixiv','tagger'])('手动补跑按新词库重算旧建议（来源 %s），不重复请求 Pixiv', async source => {
   if(source==='tagger') for(const id of [1,2]) {
     db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (?,?,0.75,'tagger')").run(id,A);
   }
-  const client={artwork:vi.fn().mockResolvedValue(art(1,['アリス'],'123',[]))};
+  const client={artwork:vi.fn().mockResolvedValue(art(1,['アリス'],'123',['新ゲーム名']))};
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
   expect(links()).toHaveLength(0);
   expect(db.prepare('SELECT DISTINCT result FROM pixiv_character_checks').pluck().all()).toEqual(['suggested']);
@@ -629,9 +674,9 @@ it.each(['pixiv','tagger'])('手动补跑重查仍保留的旧建议（来源 %s
   expect(client.artwork).toHaveBeenCalledTimes(1);
   queuePixivImages(ctx);
   expect(pendingPixivCount(ctx)).toBe(2);
-  client.artwork.mockResolvedValue(art(1,['アリス']));
+  name('game_a','新ゲーム名',3); // 新词库能确认作品，直接复用首次获取的标签。
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
-  expect(client.artwork).toHaveBeenCalledTimes(2); // 同投稿只请求一次，不逐图重复查。
+  expect(client.artwork).toHaveBeenCalledTimes(1);
   expect(links()).toHaveLength(2);
   expect(db.prepare('SELECT COUNT(*) FROM character_suggestions').pluck().get()).toBe(0);
 });
@@ -693,6 +738,7 @@ it('补跑成功后替换旧 Pixiv 建议，保留模型原分数；请求失败
   await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(2,['アリス','ボブ'])},0);
   db.prepare("UPDATE character_suggestions SET source='tagger',score=0.75 WHERE image_id=1 AND danbooru_tag=?").run(A);
   queuePixivImages(ctx);
+  clearPendingPixivCache(ctx);
   await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>{throw new Error('offline');}},0);
   expect(db.prepare("SELECT COUNT(*) FROM character_suggestions WHERE source='pixiv'").pluck().get()).toBe(3);
   resetPixivBackoff();

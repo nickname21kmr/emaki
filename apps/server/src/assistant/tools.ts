@@ -104,11 +104,11 @@ export function createLibraryMcp(app: FastifyInstance, ds: DataSource, file: str
     host.recordMutation(sessionId, result); return json(result);
   });
   server.registerTool('manage_job', { description: '列出、取消或启动 Emaki 已有后台任务。start 使用应用现有任务范围，可能覆盖全库，只有用户要求该范围时使用。停止 agent 不会自动取消这些任务。',
-    inputSchema: { action: z.enum(['list', 'cancel', 'start']), id: z.string().optional(), kind: z.enum(['scan', 'thumbnail', 'tag', 'danbooru-sync', 'dedupe', 'artists', 'pixiv-tags']).optional(), operationId: z.string().min(1).max(100).optional() } }, async (args) => {
+    inputSchema: { action: z.enum(['list', 'cancel', 'start']), id: z.string().optional(), kind: z.enum(['scan', 'thumbnail', 'tag', 'danbooru-sync', 'dedupe', 'artists', 'pixiv-tags']).optional(), refreshPixiv: z.boolean().optional().describe('仅 pixiv-tags：主动重新获取标签；默认复用投稿缓存。'), operationId: z.string().min(1).max(100).optional() } }, async (args) => {
     host.assertEnabled(); if (args.action === 'list') return json(await ds.listJobs());
     if (!args.operationId) throw new Error('写操作需要 operationId');
     return json(await host.operation(scope, args.operationId, JSON.stringify(['manage_job', args]), () => args.action === 'cancel'
-      ? invoke('DELETE', `/api/jobs/${encodeURIComponent(args.id ?? '')}`) : invoke('POST', '/api/jobs', { kind: args.kind })));
+      ? invoke('DELETE', `/api/jobs/${encodeURIComponent(args.id ?? '')}`) : invoke('POST', '/api/jobs', { kind: args.kind, refreshPixiv: args.refreshPixiv })));
   });
   return server;
 }

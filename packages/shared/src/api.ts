@@ -566,6 +566,8 @@ export type ListJobsResponse = Job[];
 /** POST /api/jobs */
 export interface StartJobBody {
   kind: JobKind;
+  /** 仅 pixiv-tags：重新获取待补投稿的标签；默认复用缓存。 */
+  refreshPixiv?: boolean;
 }
 
 /**

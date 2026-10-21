@@ -7,11 +7,12 @@ import { makeTmpDir } from '../../../test/helpers/tmp.ts';
 import { SqliteDataSource } from './SqliteDataSource.ts';
 
 // 不联网：把 Pixiv 补充换成一直跑到被取消的假任务，待查数量由测试控制
-const fake = vi.hoisted(() => ({ pending: 0, runs: 0 }));
+const fake = vi.hoisted(() => ({ pending: 0, runs: 0, clears: 0 }));
 vi.mock('../../services/pixiv/sync.ts', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../services/pixiv/sync.ts')>()),
   pendingPixivCount: () => fake.pending,
   queuePixivImages: () => {},
+  clearPendingPixivCache: () => { fake.clears++; },
   syncPixivCharacters: (_ctx: unknown, job: JobContext) => {
     fake.runs++;
     return new Promise<string>((resolve) => job.signal.addEventListener('abort', () => resolve('已取消')));
@@ -26,6 +27,7 @@ describe('设置：识别后自动查 Pixiv 标签', () => {
   beforeEach(async () => {
     fake.pending = 0;
     fake.runs = 0;
+    fake.clears = 0;
     dir = makeTmpDir('pixiv-settings');
     ds = await SqliteDataSource.open(new EventBus(), path.join(dir, 'data'), { memory: true, autoJobs: false, importDict: false });
   });
@@ -62,5 +64,19 @@ describe('设置：识别后自动查 Pixiv 标签', () => {
     await ds.updateSettings({ tagger: { pixiv: false } });
     expect(await pixivJobs()).toEqual(['running']);
     expect(fake.runs).toBe(1);
+  });
+
+  it('普通补跑保留缓存，显式刷新才清缓存；运行中重复启动不干扰当前任务', async () => {
+    fake.pending=3;
+    const first=await ds.startJob('pixiv-tags');
+    expect(fake.clears).toBe(0);
+    expect((await ds.startJob('pixiv-tags',{refreshPixiv:true})).id).toBe(first.id);
+    expect(fake.clears).toBe(0);
+    expect(fake.runs).toBe(1);
+    await ds.cancelJob(first.id);
+    await vi.waitFor(async()=>expect((await ds.listJobs()).some(j=>j.status==='running')).toBe(false));
+    await ds.startJob('pixiv-tags',{refreshPixiv:true});
+    expect(fake.clears).toBe(1);
+    expect(fake.runs).toBe(2);
   });
 });

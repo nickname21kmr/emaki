@@ -1,4 +1,4 @@
-import { setTimeout as sleep } from 'node:timers/promises';
+import { setTimeout as sleep, setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import type { JobContext } from '../../core/jobs.ts';
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import { ART_KINDS_SQL, IN_COMIC_I, QUEUE } from '../../datasource/sqlite/sql.ts';
@@ -9,6 +9,7 @@ import { DanbooruError } from '../danbooru/client.ts';
 import { isOriginalArtwork, PixivAccessError, PixivClient, PixivPostError } from './client.ts';
 import { createPixivMatcher, type PixivMatcher } from './match.ts';
 import type { PixivDiscover } from './discovery.ts';
+import { cachedArtwork, cacheArtwork } from './cache.ts';
 
 const ELIGIBLE = `${ART_KINDS_SQL} AND i.shelved_at IS NULL AND i.original_at IS NULL
   AND i.collection_id IS NULL AND NOT ${IN_COMIC_I} AND i.source_site='pixiv' AND i.source_post_id IS NOT NULL
@@ -55,6 +56,12 @@ export function queuePixivImages(ctx: SqliteContext, ids?: number[]): void {
     .run(...(automatic ? [JSON.stringify(ids)] : []));
 }
 
+/** Explicit refresh only invalidates posts that this run can actually process. */
+export function clearPendingPixivCache(ctx: SqliteContext): void {
+  ctx.db.prepare(`DELETE FROM pixiv_artwork_cache WHERE post_id IN
+    (SELECT i.source_post_id FROM v_counted_images i WHERE ${PENDING})`).run();
+}
+
 /** 待补的图片数，不含退避中的投稿（Pipeline 据此决定要不要自动排任务） */
 export function pendingPixivCount(ctx: SqliteContext): number {
   return ctx.db.prepare(`SELECT COUNT(*) FROM v_counted_images i WHERE ${READY}`).pluck().get(backoffPosts()) as number;
@@ -73,8 +80,9 @@ export async function syncPixivCharacters(
     WHERE ${READY} ORDER BY i.source_post_id`).all(backoffPosts()) as { id: string }[];
   job.setTotal(posts.length);
   let linked = 0, original = 0, suggested = 0, unavailable = 0, unmatched = 0, failed = 0;
+  let requested = 0, cached = 0;
   let danbooruDown = '';
-  const summary = () => `Pixiv 标签：关联 ${linked} 张 · 原创 ${original} 张 · 建议 ${suggested} 张 · 不可访问 ${unavailable} 个投稿 · 未匹配角色 ${unmatched} 个投稿 · 失败 ${failed} 个投稿${danbooruDown && `（Danbooru 连不上，这轮只用本地词库：${danbooruDown}）`}`;
+  const summary = () => `Pixiv 标签：关联 ${linked} 张 · 原创 ${original} 张 · 建议 ${suggested} 张 · 不可访问 ${unavailable} 个投稿 · 未匹配角色 ${unmatched} 个投稿 · 失败 ${failed} 个投稿 · 复用缓存 ${cached} 个投稿 · 联网查询 ${requested} 个投稿${danbooruDown && `（Danbooru 连不上，这轮只用本地词库：${danbooruDown}）`}`;
   if (!posts.length) return summary();
   // 匹配索引全量建一次要一两秒（卡主线程）：第一次用到时才建，之后只增量补
   let match: PixivMatcher | undefined;
@@ -95,14 +103,25 @@ export async function syncPixivCharacters(
   const liveCustom = db.prepare('SELECT 1 FROM characters WHERE id=? AND danbooru_tag IS NULL');
   for (let n = 0; n < posts.length; n++) {
     job.signal.throwIfAborted();
-    if (n && intervalMs) await sleep(intervalMs, undefined, { signal: job.signal });
+    const post = posts[n]!;
+    let artwork = cachedArtwork(db, post.id);
+    if (artwork) await yieldToEventLoop(undefined, { signal: job.signal });
+    // Cached matching is local and needs no network pacing. Still yield between posts.
+    if (!artwork && requested && intervalMs) await sleep(intervalMs, undefined, { signal: job.signal });
     // 同道有更急的任务（扫描、缩略图、查重）：让出。放在间隔之后，续跑时第一个请求离上一个也隔够了；没查的行 checked_at 仍为空
     if (job.shouldYield()) { job.requeue(); return `${summary()}（已让出，稍后继续）`; }
-    const post = posts[n]!;
-    job.setMessage(`读取 Pixiv 标签 ${n + 1}/${posts.length} · ${summary()}`);
-    let artwork;
+    job.setMessage(`${artwork ? '匹配已缓存的' : '读取'} Pixiv 标签 ${n + 1}/${posts.length} · ${summary()}`);
     try {
-      artwork = await client.artwork(post.id, job.signal);
+      if (!artwork) {
+        requested++;
+        const fetched = await client.artwork(post.id, job.signal);
+        job.signal.throwIfAborted();
+        if (fetched) {
+          if (fetched.id !== post.id) throw new Error('Pixiv 返回的作品 ID 不匹配');
+          cacheArtwork(db, fetched, new Date(ctx.clock()).toISOString());
+        }
+        artwork = fetched ?? undefined;
+      } else cached++;
       if (artwork && discover && !isOriginalArtwork(artwork)) {
         try {
           // 写进目录的新角色马上补进索引；后面的请求失败了这部分也不丢
