@@ -83,6 +83,15 @@ describe('TagResultWriter', () => {
     return new TagResultWriter(db, new CharacterCatalog(db, { copyrights, localizer }), copyrights, { repo: REPO, ...TH });
   };
 
+  it('80% threshold accepts the exact boundary and keeps 79.89% as a suggestion', () => {
+    const copyrights = new CopyrightResolver(db, OFFLINE);
+    const catalog = new CharacterCatalog(db, { copyrights });
+    const w = new TagResultWriter(db, catalog, copyrights, { repo: REPO, ...TH, autoAcceptThreshold: 0.8 });
+    w.writeBatch([ok(1, [['mika_(blue_archive)', 0.7989]]), ok(2, [['mika_(blue_archive)', 0.8]])]);
+    expect(db.prepare('SELECT image_id, score FROM character_suggestions').all()).toEqual([{ image_id: 1, score: 0.7989 }]);
+    expect(db.prepare('SELECT image_id, score FROM image_characters').all()).toEqual([{ image_id: 2, score: 0.8 }]);
+  });
+
   it('按规则写：自动采纳、建议、作品、分级', () => {
     writer().writeBatch([ok(1, [['mika_(blue_archive)', 0.95], ['hina_(blue_archive)', 0.5]], 'sensitive')]);
     expect(db.prepare("SELECT name, source FROM characters WHERE danbooru_tag = 'mika_(blue_archive)'").get()).toEqual({ name: 'Mika', source: 'danbooru' });

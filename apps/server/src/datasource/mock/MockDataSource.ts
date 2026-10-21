@@ -454,6 +454,7 @@ export class MockDataSource implements DataSource {
         name: ch?.name ?? humanizeTag(tag),
         workName: work?.name ?? null,
         score,
+        source: 'tagger',
       };
     });
   }

@@ -1,5 +1,15 @@
 import { expect, it } from 'vitest';
-import { toCjkDate } from './format';
+import { formatConfidence, toCjkDate } from './format';
+
+it('confidence stays visibly below the adoption threshold without losing stored precision', () => {
+  expect(formatConfidence(0.7989)).toBe('79.89%');
+  expect(formatConfidence(0.7994)).toBe('79.94%');
+  expect(formatConfidence(0.79999999)).toBe('79.99%');
+  expect(formatConfidence(0.8)).toBe('80%');
+  expect(formatConfidence(0.85)).toBe('85%');
+  expect(formatConfidence(0)).toBe('0%');
+  expect(formatConfidence(1)).toBe('100%');
+});
 
 it('toCjkDate：年份逐字、月日用「十」、星期几', () => {
   const cases: [number, number, number, string][] = [

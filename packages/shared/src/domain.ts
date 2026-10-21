@@ -263,6 +263,8 @@ export interface ContentKindSummary {
 }
 
 export interface CharacterSuggestion {
+  /** 建议的依据；Pixiv 标签没有模型置信度。 */
+  source: 'tagger' | 'pixiv';
   /** 如果库里已有该角色则给出 id，否则为 null（采纳时会新建角色） */
   characterId: ID | null;
   danbooruTag: string;

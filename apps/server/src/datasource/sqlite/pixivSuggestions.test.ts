@@ -37,6 +37,7 @@ it('按 character_id 显示真名；没有 character_id 的占位行不显示', 
     ['Test Girl', null],
     ['小雪', x],
   ]);
+  expect((await ds.getImage(img('i27')))!.characterSuggestions.map(s => s.source)).toEqual(['tagger', 'pixiv']);
 });
 
 it('已经归到这个自建角色的图不再显示它的建议', async () => {

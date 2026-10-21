@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent, type MouseEvent } from 'react';
 import { clampPosition, type Position } from './presentation';
+import { dragMotion } from './dragMotion';
 
 /** A handle moves its whole floating surface. Positions are local to this browser. */
 export function useFloatingDrag(key: string) {
@@ -11,8 +12,9 @@ export function useFloatingDrag(key: string) {
     } catch { return null; }
   });
   const current = useRef(position), suppressClick = useRef(false);
-  const gesture = useRef<{ id: number; x: number; y: number; origin: Position; moved: boolean } | null>(null);
+  const gesture = useRef<{ id: number; x: number; y: number; origin: Position; moved: boolean; motion: ReturnType<typeof dragMotion> } | null>(null);
   const place = (next: Position) => {
+    if (current.current?.x === next.x && current.current?.y === next.y) return;
     current.current = next; setPosition(next);
     try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* storage may be disabled */ }
   };
@@ -23,15 +25,18 @@ export function useFloatingDrag(key: string) {
     place(next);
   };
   useEffect(() => {
-    const fit = () => { if (current.current) move(current.current); };
+    const fit = () => { if (!gesture.current && current.current) move(current.current); };
     const observer = new ResizeObserver(fit);
     if (ref.current) observer.observe(ref.current);
     window.addEventListener('resize', fit); fit();
-    return () => { observer.disconnect(); window.removeEventListener('resize', fit); };
+    return () => { observer.disconnect(); window.removeEventListener('resize', fit); gesture.current?.motion.cancel(); gesture.current = null; };
   }, [key]);
   const finish = (e: PointerEvent<HTMLElement>) => {
     if (gesture.current?.id !== e.pointerId) return;
-    suppressClick.current = gesture.current.moved;
+    const g = gesture.current;
+    suppressClick.current = g.moved;
+    if (g.moved) place(g.motion.finish());
+    else g.motion.cancel();
     gesture.current = null;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
   };
@@ -46,14 +51,15 @@ export function useFloatingDrag(key: string) {
         if (control && control !== e.currentTarget) return;
         const rect = ref.current?.getBoundingClientRect(); if (!rect) return;
         suppressClick.current = false;
-        gesture.current = { id: e.pointerId, x: e.clientX, y: e.clientY, origin: { x: rect.left, y: rect.top }, moved: false };
+        gesture.current = { id: e.pointerId, x: e.clientX, y: e.clientY, origin: { x: rect.left, y: rect.top }, moved: false,
+          motion: dragMotion(ref.current!, rect, { x: window.innerWidth, y: window.innerHeight }) };
         e.currentTarget.setPointerCapture(e.pointerId);
       },
       onPointerMove: (e: PointerEvent<HTMLElement>) => {
         const g = gesture.current; if (!g || g.id !== e.pointerId) return;
         const dx = e.clientX - g.x, dy = e.clientY - g.y;
         if (!g.moved && Math.hypot(dx, dy) < 5) return;
-        g.moved = true; move({ x: g.origin.x + dx, y: g.origin.y + dy });
+        g.moved = true; e.preventDefault(); g.motion.move({ x: g.origin.x + dx, y: g.origin.y + dy });
       },
       onPointerUp: finish,
       onPointerCancel: finish,

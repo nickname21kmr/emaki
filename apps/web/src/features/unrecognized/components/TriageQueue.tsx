@@ -6,7 +6,7 @@ import { memo, useCallback, useEffect, useRef } from 'react';
 import { Thumb } from '@/components/media/Thumb';
 import { Spinner } from '@/components/ui';
 import { cn } from '@/lib/cn';
-import { formatCount, formatPercent } from '@/lib/format';
+import { formatCount, formatConfidence } from '@/lib/format';
 import type { ClickModifiers, Triage } from '../useTriage';
 import { FreshButton } from './FreshButton';
 import { EASE_OUT } from '@/lib/motion';
@@ -243,7 +243,7 @@ const QueueRow = memo(function QueueRow({
               </span>
               <span className="shrink-0 text-[10.5px] text-fg-subtle tabular">{position}</span>
             </span>
-            {top && top.score > 0 ? (
+            {top?.source === 'pixiv' ? <span className="mt-1 block text-[11px] text-fg-subtle">Pixiv 标签</span> : top && top.score > 0 ? (
               <span className="mt-1 flex items-center gap-2">
                 <span className="relative h-[3px] w-full max-w-16 overflow-hidden rounded-full bg-line">
                   <span
@@ -251,7 +251,7 @@ const QueueRow = memo(function QueueRow({
                     style={{ width: `${top.score * 100}%` }}
                   />
                 </span>
-                <span className="text-[11px] text-fg-muted tabular">{formatPercent(top.score)}</span>
+                <span className="text-[11px] text-fg-muted tabular">{formatConfidence(top.score)}</span>
               </span>
             ) : (
               <span className="mt-1 block truncate text-[11px] text-fg-subtle">{image.fileName}</span>

@@ -53,6 +53,9 @@ export const formatDateTime = (iso: string) => dtf.format(new Date(iso));
 
 export const formatPercent = (v: number, digits = 0) => `${(v * 100).toFixed(digits)}%`;
 
+/** Keep confidence below a threshold visibly below it, rather than rounding up. */
+export const formatConfidence = (v: number) => `${Math.floor(Math.max(0, Math.min(1, v)) * 10_000 + 1e-9) / 100}%`;
+
 export const RATING_LABEL = {
   general: '全年龄',
   sensitive: '轻微',
