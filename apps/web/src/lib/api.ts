@@ -19,6 +19,7 @@ import type {
   CoverCandidatesQuery,
   CoverCandidatesResponse,
   CreateCharacterBody,
+  CustomCharacterMatch,
   CreateExclusionBody,
   GetCharacterResponse,
   GetImageResponse,
@@ -132,6 +133,7 @@ export const api = {
   works: (q: ListWorksQuery = {}) => get<ListWorksResponse>('/works', q),
   work: (id: ID) => get<Work>(`/works/${encodeURIComponent(id)}`),
 
+  customCharacterMatches: () => get<CustomCharacterMatch[]>('/characters/danbooru-matches'),
   characters: (q: ListCharactersQuery = {}) => get<ListCharactersResponse>('/characters', q),
   topCharacters: (q: TopCharactersQuery = {}) => get<TopCharactersResponse>('/characters/top', q),
   character: (id: ID) => get<GetCharacterResponse>(`/characters/${encodeURIComponent(id)}`),

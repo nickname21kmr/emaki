@@ -117,6 +117,12 @@ describe('统计、作品、角色、搜索（routes/library.ts）', () => {
     expect(json.map((c: { id: string }) => c.id)).toEqual(['c1', 'c4', 'c2']);
   });
 
+  route('GET /api/characters/danbooru-matches', async () => {
+    const { status, json } = await call('GET', '/api/characters/danbooru-matches');
+    expect(status).toBe(200);
+    expect(Array.isArray(json)).toBe(true);
+  });
+
   route('GET /api/characters/:id', async () => {
     const { status, json } = await call('GET', '/api/characters/c1');
     expect(status).toBe(200);

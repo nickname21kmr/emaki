@@ -29,6 +29,7 @@ import {
   type Character,
   type CharacterSuggestion,
   type CreateCharacterBody,
+  type CustomCharacterMatch,
   type CreateExclusionBody,
   type DuplicateGroup,
   type Exclusion,
@@ -521,7 +522,6 @@ export class MockDataSource implements DataSource {
     const duplicateGroupCount = this.db.duplicates.filter(
       (d) => !d.resolved && d.imageIds.filter((id) => this.db.images.get(id) && this.isVisible(this.db.images.get(id)!)).length > 1,
     ).length;
-    const customMatchable = [...this.db.characters.values()].filter((c) => c.source === 'custom' && !c.danbooruTag);
     return {
       imageCount: idx.visible.length - excluded,
       characterCount: [...this.db.characters.values()].filter((c) => (idx.charImageCount.get(c.id) ?? 0) > 0).length,
@@ -529,8 +529,8 @@ export class MockDataSource implements DataSource {
       unrecognizedCount: unrecognized,
       duplicateGroupCount,
       excludedCount: excluded,
-      // mock：假设第一个未绑定的自建角色在 Danbooru 上有同名标签
-      customMatchableCount: Math.min(1, customMatchable.length),
+      // mock 没有 Danbooru 匹配词库，不生成虚构的待确认结果
+      customMatchableCount: 0,
       totalBytes: bytes,
       addedLast7Days: days,
       lastScanAt,
@@ -739,6 +739,10 @@ export class MockDataSource implements DataSource {
         return true;
       })
       .map((row) => this.toCharacter(row));
+  }
+
+  async listCustomCharacterMatches(): Promise<CustomCharacterMatch[]> {
+    return [];
   }
 
   async listCharacters(query: ListCharactersQuery): Promise<ListCharactersResponse> {

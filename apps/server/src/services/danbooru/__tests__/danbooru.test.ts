@@ -13,7 +13,7 @@ import { HumanizeLocalizer } from '../../i18n/localizer.ts';
 import { DanbooruCatalog } from '../catalog.ts';
 import { DanbooruClient } from '../client.ts';
 import { guessCopyrightFromQualifier, pickCopyrights, type CopyrightCandidate } from '../copyright.ts';
-import { decideMatch, findDanbooruMatches, recomputeCustomMatches } from '../matcher.ts';
+import { decideAutomaticMatch, automaticCustomMatches, decideMatch, findDanbooruMatches, recomputeCustomMatches } from '../matcher.ts';
 import { RateLimiter } from '../rateLimiter.ts';
 import { createDanbooruSyncRunner } from '../sync.ts';
 
@@ -278,6 +278,14 @@ describe('matcher', () => {
   it('未花 + 蔚蓝档案 → 匹配', () => expect(match(custom('未花', true))).toBe('mika_(blue_archive)'));
   it('我的原创角色 → 不匹配', () => expect(match(custom('我的原创角色', true))).toBeNull());
 
+  it('忽略匹配后，即使标签由服装变体规范到本体，也保持忽略', () => {
+    const id = custom('圣园未花', true);
+    db.prepare("INSERT INTO custom_character_matches (character_id, danbooru_tag, score, reason, computed_at, dismissed) VALUES (?, 'mika_(swimsuit)_(blue_archive)', 1, 'x', 'x', 1)").run(id);
+    recomputeCustomMatches(db, catalog());
+    expect(db.prepare('SELECT danbooru_tag, dismissed FROM custom_character_matches WHERE character_id = ?').get(id)).toEqual({ danbooru_tag: 'mika_(blue_archive)', dismissed: 1 });
+    expect(automaticCustomMatches(db, catalog())).toEqual([]);
+  });
+
   it('recomputeCustomMatches 写表 / 删表', () => {
     const id = custom('圣园未花', true);
     recomputeCustomMatches(db, catalog());
@@ -285,5 +293,30 @@ describe('matcher', () => {
     db.prepare("UPDATE characters SET name = '我的原创角色' WHERE id = ?").run(id);
     recomputeCustomMatches(db, catalog(), [id]);
     expect(db.prepare('SELECT count(*) FROM custom_character_matches').pluck().get()).toBe(0);
+  });
+});
+
+
+describe('自动关联判定与建议评分分开', () => {
+  const candidate = (tag: string, count = 10) => ({ danbooruTag: tag, score: 1, postCount: count, reason: 'zh:同名', nameKind: 'zh', workMatch: 'unknown' as const, existingCharacterId: null });
+  it('两个同名身份即使投稿量悬殊也不能自动选；作品冲突可排除，服装变体可归同一身份', () => {
+    const a = candidate('girl_a', 10000), b = candidate('girl_b', 1);
+    expect(decideMatch([a, b])?.danbooruTag).toBe('girl_a');
+    expect(decideAutomaticMatch([a, b], (t) => t)).toBeNull();
+    expect(decideAutomaticMatch([a, { ...b, workMatch: 'different' }], (t) => t)?.danbooruTag).toBe('girl_a');
+    expect(decideAutomaticMatch([a, b], () => 'same_girl')?.danbooruTag).toBe('same_girl');
+  });
+  it('仅昵称或标签简写需要作品相符；官方名称也不能越过作品冲突', () => {
+    const a = { ...candidate('girl_a'), nameKind: 'alias' };
+    expect(decideAutomaticMatch([a], (t) => t)).toBeNull();
+    expect(decideAutomaticMatch([{ ...a, workMatch: 'same' }], (t) => t)?.danbooruTag).toBe('girl_a');
+    expect(decideAutomaticMatch([{ ...candidate('girl_a'), workMatch: 'different' }], (t) => t)).toBeNull();
+  });
+  it('本地缓存已确认不存在的标签不参与匹配', () => {
+    db.exec(`INSERT INTO characters (name, source, created_at) VALUES ('测试角色', 'custom', 'x');
+      INSERT INTO tag_i18n (tag, category, zh) VALUES ('gone_girl', 4, '测试角色');
+      INSERT INTO tag_name_keys (search_key, tag, kind, source) VALUES ('测试角色', 'gone_girl', 'zh', 'dict');
+      INSERT INTO danbooru_tags (name, category, not_found, fetched_at) VALUES ('gone_girl', -1, 1, 'x');`);
+    expect(automaticCustomMatches(db, catalog())).toEqual([]);
   });
 });

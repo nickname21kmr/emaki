@@ -27,6 +27,7 @@ export interface DanbooruSyncDeps {
   localizer: Localizer;
   getDanbooru(): { enabled: boolean; username: string; apiKey: string | null };
   setLastSyncAt(iso: string): void;
+  associateCustomCharacters?: () => void;
   relocalizeAll?: ApplyDeps['relocalizeAll'];
   now?: () => number;
   // 测试注入
@@ -51,6 +52,7 @@ export function createDanbooruSyncRunner(deps: DanbooruSyncDeps): JobRunner {
     const settings = deps.getDanbooru();
     const apply = () => {
       const r = applyToLibrary({ db, danbooru, getCatalog: deps.getCatalog, localizer: deps.localizer, relocalizeAll: deps.relocalizeAll });
+      deps.associateCustomCharacters?.();
       deps.localizer.invalidate();
       return r;
     };

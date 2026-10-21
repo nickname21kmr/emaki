@@ -13,6 +13,7 @@ import type {
   ContentKindSummary,
   CoverCandidatesResponse,
   CreateCharacterBody,
+  CustomCharacterMatch,
   CreateExclusionBody,
   DuplicateGroup,
   Exclusion,
@@ -200,6 +201,7 @@ export class SqliteDataSource implements DataSource {
     // 作品同理：Danbooru 改过名的版权标签，新旧两个名字各建了一部（用户 2026-09-29）
     const works = consolidateWorkTags(db, { canonicalize: (t) => danbooru.canonicalize(t), localizer });
     if (works.merged || works.renamed) console.log(`[作品] 收拢改过名的作品：合并 ${works.merged} 部，改标签 ${works.renamed} 部`);
+    ds.characters.associateAutomatic();
     ds.pipeline.register({
       tag: createTagStage({
         db,
@@ -232,7 +234,9 @@ export class SqliteDataSource implements DataSource {
           const discovery = settings.enabled ? createPixivDiscovery(db, danbooru, new DanbooruClient({
             login: settings.username || undefined, apiKey: getDanbooruApiKey(db) ?? undefined,
           })) : undefined;
-          return syncPixivCharacters(ds.ctx, job, makeCatalog, undefined, 1000, discovery);
+          const result = await syncPixivCharacters(ds.ctx, job, makeCatalog, undefined, 1000, discovery);
+          ds.characters.associateAutomatic();
+          return result;
         },
       },
       danbooru: {
@@ -244,6 +248,7 @@ export class SqliteDataSource implements DataSource {
           localizer,
           relocalizeAll,
           getDanbooru: () => ({ ...readSettings(db).danbooru, apiKey: getDanbooruApiKey(db) }),
+          associateCustomCharacters: () => ds.characters.associateAutomatic(),
           setLastSyncAt: (at) => patchSettingsInternal(db, 'danbooru', { lastSyncAt: at }),
         }),
       },
@@ -526,6 +531,19 @@ export class SqliteDataSource implements DataSource {
   }
   async getWork(id: ID): Promise<Work | null> {
     return this.library.getWork(id);
+  }
+  async listCustomCharacterMatches(): Promise<CustomCharacterMatch[]> {
+    const rows = this.ctx.db.prepare(`SELECT c.id, c.name, m.danbooru_tag AS tag
+      FROM custom_character_matches m JOIN characters c ON c.id = m.character_id
+      WHERE c.source = 'custom' AND c.danbooru_tag IS NULL AND m.dismissed = 0 ORDER BY c.name, c.id`).all() as { id: number; name: string; tag: string }[];
+    const catalog = this.makeCatalog().catalog;
+    return rows.map((r) => {
+      const tag = this.danbooru.normalizeTag(r.tag);
+      const described = catalog.describeTag(tag);
+      return { characterId: String(r.id), characterName: r.name, danbooruTag: tag, matchName: described.name,
+        workName: described.workName, existingCharacterId: described.characterId === null ? null : String(described.characterId),
+        existingCharacterName: described.characterId === null ? null : described.name };
+    });
   }
   async listCharacters(query: ListCharactersQuery): Promise<ListCharactersResponse> {
     return this.library.listCharacters(query);

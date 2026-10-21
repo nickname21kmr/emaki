@@ -15,6 +15,7 @@ import type {
   ContentKindSummary,
   CoverCandidatesResponse,
   CreateCharacterBody,
+  CustomCharacterMatch,
   CreateExclusionBody,
   DuplicateGroup,
   Exclusion,
@@ -79,6 +80,7 @@ export interface DataSource {
   getWork(id: ID): Promise<Work | null>;
 
   // 角色
+  listCustomCharacterMatches(): Promise<CustomCharacterMatch[]>;
   listCharacters(query: ListCharactersQuery): Promise<ListCharactersResponse>;
   topCharacters(query: TopCharactersQuery): Promise<Character[]>;
   getCharacter(id: ID): Promise<GetCharacterResponse | null>;

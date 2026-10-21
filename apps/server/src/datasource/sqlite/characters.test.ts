@@ -187,3 +187,74 @@ describe('新建的角色被合并掉、编号又给了新角色：撤销更早�
     expect(dumpCore(db())).toEqual(snap);
   });
 });
+
+
+describe('自建角色的自动 Danbooru 关联', () => {
+  const seed = () => {
+    db().exec(`INSERT INTO tag_i18n (tag, category, zh, aliases, copyright_guess, post_count)
+      VALUES ('nia_liston', 4, NULL, '[]', 'kyouran_reijou_nia_liston', 11);
+      INSERT INTO tag_name_keys (search_key, tag, kind, source) VALUES ('にありすとん', 'nia_liston', 'other_name', 'danbooru');`);
+  };
+
+  it('新建时以精确别名自动绑定，保留用户名字；撤销连同自动补的作品一起还原', async () => {
+    seed();
+    const before = dumpCore(db());
+    const made = await ds.createCharacter({ name: '倪亚·利斯顿', aliases: ['ニア・リストン'], workIds: [] });
+    expect(made.character).toMatchObject({ name: '倪亚·利斯顿', source: 'danbooru', danbooruTag: 'nia_liston' });
+    expect(made.character.workIds).toHaveLength(1);
+    expect(await ds.listCustomCharacterMatches()).toEqual([]);
+    await ds.undo(made.undoToken!);
+    expect(dumpCore(db())).toEqual(before);
+  });
+
+  it('已有角色编辑别名后自动绑定，不搬动图片；撤销恢复标签、别名和所属作品', async () => {
+    seed();
+    const made = await ds.createCharacter({ name: '倪亚·利斯顿', workIds: [] });
+    const imageId = Number(env.id('image', 'i24'));
+    db().prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (?, ?, 'manual', 'x')").run(imageId, Number(made.character.id));
+    const before = dumpCore(db());
+    const result = await ds.updateCharacter(made.character.id, { aliases: ['ニア・リストン'] });
+    expect((await ds.getCharacter(made.character.id))!.character.danbooruTag).toBe('nia_liston');
+    expect(db().prepare('SELECT character_id FROM image_characters WHERE image_id = ?').pluck().all(imageId)).toEqual([Number(made.character.id)]);
+    await ds.undo(result.undoToken!);
+    expect(dumpCore(db())).toEqual(before);
+  });
+
+  it('明确忽略过的匹配不会因编辑或再次匹配自动绑定', async () => {
+    const made = await ds.createCharacter({ name: '倪亚·利斯顿', aliases: ['ニア・リストン'], workIds: [] });
+    seed();
+    db().prepare("INSERT INTO custom_character_matches (character_id, danbooru_tag, score, reason, dismissed, computed_at) VALUES (?, 'nia_liston', 0.9, 'other_name', 1, 'x')").run(Number(made.character.id));
+    await ds.updateCharacter(made.character.id, { aliases: ['ニア・リストン'] });
+    expect((await ds.getCharacter(made.character.id))!.character.danbooruTag).toBeNull();
+    expect(await ds.listCustomCharacterMatches()).toEqual([]);
+  });
+
+  it('同标签已属于已有角色时保留待确认的合并结果，不自动合并', async () => {
+    seed();
+    const target = await ds.createCharacter({ name: '已有倪亚', danbooruTag: 'nia_liston', workIds: [] });
+    const made = await ds.createCharacter({ name: '倪亚·利斯顿', aliases: ['ニア・リストン'], workIds: [] });
+    expect(made.character.source).toBe('custom');
+    expect(await ds.listCustomCharacterMatches()).toMatchObject([{ characterId: made.character.id, danbooruTag: 'nia_liston', existingCharacterId: target.character.id, existingCharacterName: '已有倪亚' }]);
+    expect((await ds.getStats()).customMatchableCount).toBe(1);
+    const merge = await ds.mergeCharacter(made.character.id, target.character.id);
+    expect(await ds.listCustomCharacterMatches()).toEqual([]);
+    await ds.undo(merge.undoToken!);
+    expect(await ds.listCustomCharacterMatches()).toHaveLength(1);
+  });
+
+  it('多个自建角色争用同一标签时不按处理顺序绑定；已有标签重定向也视为占用', async () => {
+    seed();
+    const a = await ds.createCharacter({ name: '甲', workIds: [], aliases: [] });
+    const b = await ds.createCharacter({ name: '乙', workIds: [], aliases: [] });
+    for (const id of [a.character.id, b.character.id]) db().prepare("INSERT INTO aliases (owner_type, owner_id, alias, search_key, origin, visible, position) VALUES ('character', ?, 'ニア・リストン', 'にありすとん', 'user', 1, 0)").run(Number(id));
+    await ds.updateCharacter(a.character.id, { aliases: ['ニア・リストン'] });
+    await ds.updateCharacter(b.character.id, { aliases: ['ニア・リストン'] });
+    expect(db().prepare("SELECT COUNT(*) FROM characters WHERE danbooru_tag='nia_liston'").pluck().get()).toBe(0);
+    expect(await ds.listCustomCharacterMatches()).toHaveLength(2);
+    await ds.updateCharacter(b.character.id, { aliases: [] });
+    db().prepare('INSERT INTO danbooru_tag_redirects (tag, character_id) VALUES (?, ?)').run('nia_liston', Number(c('c1')));
+    await ds.updateCharacter(a.character.id, { aliases: ['ニア・リストン'] });
+    expect(db().prepare("SELECT COUNT(*) FROM characters WHERE danbooru_tag='nia_liston'").pluck().get()).toBe(0);
+    expect(await ds.listCustomCharacterMatches()).toMatchObject([{ existingCharacterId: c('c1') }]);
+  });
+});

@@ -65,6 +65,10 @@ export const qk = {
 
 // ------------------------------------------------------------------ 读取
 
+export const useCustomCharacterMatches = (enabled: boolean) => useQuery({
+  queryKey: ['custom-character-matches'], queryFn: api.customCharacterMatches, enabled,
+});
+
 export const useStats = () => useQuery({ queryKey: qk.stats, queryFn: api.stats });
 
 /** 合集（T38）：书架列表和一本的详情。写操作走 useMutate，成功后全部失效 */

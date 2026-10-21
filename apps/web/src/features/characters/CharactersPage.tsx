@@ -107,8 +107,7 @@ export function CharactersPage() {
           <>
             <CustomMatchPill
               count={stats?.customMatchableCount ?? 0}
-              active={source === 'custom'}
-              onToggle={() => params.setSource(source === 'custom' ? undefined : 'custom')}
+              onViewCustom={() => params.setSource('custom')}
             />
             <NewCharacterButton onClick={() => openCreate(qTrimmed || undefined)} />
           </>
