@@ -14,6 +14,7 @@ import { createExclusionInTx } from './exclusions.ts';
 import { assertKindValue, setKindInTx, type KindDeps } from './kinds.ts';
 import type { CollectionsHook } from '../../services/collections/CollectionService.ts';
 import { iso, parseId } from './sql.ts';
+import { dismissPixivCharacterChecks } from './pixivChecks.ts';
 
 export const RATING_LABEL: Record<Rating, string> = { general: '全年龄', sensitive: '轻微', questionable: '较敏感', explicit: '限制级' };
 
@@ -61,6 +62,9 @@ export class BulkOps {
         const ch = this.characterName(a.characterId);
         return this.ctx.mutate((u) => {
           u.set('image_characters', 'character_id = ? AND image_id IN (SELECT value FROM json_each(?))', [ch.id, json]);
+          const removed = db.prepare('SELECT image_id FROM image_characters WHERE character_id = ? AND image_id IN (SELECT value FROM json_each(?))')
+            .pluck().all(ch.id,json) as number[];
+          dismissPixivCharacterChecks(db,u,removed,now);
           db.prepare('DELETE FROM image_characters WHERE character_id = ? AND image_id IN (SELECT value FROM json_each(?))').run(ch.id, json);
           return { message: `已从「${ch.name}」移除 ${n} 张图` };
         });

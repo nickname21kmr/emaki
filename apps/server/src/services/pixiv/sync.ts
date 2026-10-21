@@ -39,8 +39,8 @@ const backoffPosts = (): string => {
 const READY = `${PENDING} AND i.source_post_id NOT IN (SELECT value FROM json_each(?))`;
 
 /**
- * 模型每批写入后登记首次补充；显式补跑只选未识别队列，重试没写过东西的（未匹配、失败、跳过）和换了投稿/文件的。
- * 上次关联过、归过原创或给过建议、现在又回到未识别的，是用户撤掉的，补跑不再写回。
+ * 模型每批写入后登记首次补充；显式补跑还重查未匹配、失败、跳过，以及仍保留建议的图片。
+ * 关联/原创被撤掉、明确移除过角色、或建议已被清空的图片不重新写回；换投稿/文件时可重新检查。
  */
 export function queuePixivImages(ctx: SqliteContext, ids?: number[]): void {
   const automatic = ids !== undefined;
@@ -49,7 +49,9 @@ export function queuePixivImages(ctx: SqliteContext, ids?: number[]): void {
     AND ${automatic ? 'i.id IN (SELECT value FROM json_each(?))' : QUEUE}
     ON CONFLICT(image_id) DO UPDATE SET post_id=excluded.post_id,modified_at=excluded.modified_at,checked_at=NULL,result=NULL
     WHERE pixiv_character_checks.post_id<>excluded.post_id OR pixiv_character_checks.modified_at<>excluded.modified_at
-    ${automatic ? '' : "OR COALESCE(pixiv_character_checks.result,'') NOT IN ('linked','original','suggested')"}`)
+    ${automatic ? '' : `OR COALESCE(pixiv_character_checks.result,'') NOT IN ('linked','original','suggested','dismissed')
+      OR (pixiv_character_checks.result='suggested' AND EXISTS
+        (SELECT 1 FROM character_suggestions cs WHERE cs.image_id=excluded.image_id))`}`)
     .run(...(automatic ? [JSON.stringify(ids)] : []));
 }
 
@@ -81,7 +83,7 @@ export async function syncPixivCharacters(
     return match;
   };
   const current = db.prepare(`SELECT i.id FROM v_counted_images i WHERE ${PENDING} AND i.source_post_id=?`);
-  // result：linked / original / suggested / unmatched / unavailable / skipped，补跑据此决定重不重试
+  // result：linked / original / suggested / unmatched / unavailable / skipped / dismissed，补跑据此决定重不重试
   const complete = db.prepare(`UPDATE pixiv_character_checks SET checked_at=?,result=? WHERE image_id=?`);
   const completePost = (id: string, result: string) => db.transaction(() => {
     for (const row of current.all(id) as {id:number}[]) complete.run(new Date(ctx.clock()).toISOString(),result,row.id);

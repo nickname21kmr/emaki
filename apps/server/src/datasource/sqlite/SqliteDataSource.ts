@@ -95,6 +95,7 @@ import { config } from '../../config.ts';
 import { hydrateImages, IMAGE_COLS, type ImageRow } from './hydrate.ts';
 import { listImages } from './queries/listImages.ts';
 import { loadSuggestions } from './suggestions.ts';
+import { dismissPixivCharacterChecks } from './pixivChecks.ts';
 import { pendingPixivCount, queuePixivImages, resetPixivBackoff, syncPixivCharacters } from '../../services/pixiv/sync.ts';
 import { refreshPixivAliases } from '../../services/pixiv/aliases.ts';
 import { createPixivDiscovery } from '../../services/pixiv/discovery.ts';
@@ -662,6 +663,8 @@ export class SqliteDataSource implements DataSource {
       if (charIds) {
         u.set('image_characters', 'image_id = ?', [iid]);
         const ids = JSON.stringify(charIds);
+        const removed = this.ctx.stmt('SELECT 1 FROM image_characters WHERE image_id = ? AND character_id NOT IN (SELECT value FROM json_each(?)) LIMIT 1').get(iid,ids);
+        if (removed) dismissPixivCharacterChecks(this.ctx.db,u,[iid],now);
         this.ctx.stmt('DELETE FROM image_characters WHERE image_id = @iid AND character_id NOT IN (SELECT value FROM json_each(@ids))').run({ iid, ids });
         this.ctx
           .stmt(

@@ -349,11 +349,11 @@ it('自定义原创角色可按名字关联，多角色投稿的建议显示真�
   // 自建角色的建议带真外键
   expect(db.prepare("SELECT danbooru_tag,character_id FROM character_suggestions WHERE image_id=1 ORDER BY character_id").all())
     .toEqual(ids.map((id)=>({danbooru_tag:`emaki:character:${id}`,character_id:id})));
-  // 给过建议的投稿，手动补跑不再重查；文件换了才重查
-  queuePixivImages(ctx);
+  // 自动识别不重复查；保留着的自建角色建议也可以显式补跑。
+  queuePixivImages(ctx,[1,2]);
   expect(pendingPixivCount(ctx)).toBe(0);
-  db.exec("UPDATE images SET modified_at='y'");
   queuePixivImages(ctx);
+  expect(pendingPixivCount(ctx)).toBe(2);
   await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(3,['原创角色甲'])},0);
   expect(links()).toEqual([{image_id:1,character_id:ids[0]},{image_id:2,character_id:ids[0]}]);
   expect(db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(2);
@@ -612,6 +612,51 @@ it('用户撤掉的 Pixiv 关联和原创，手动补跑不再写回；未匹配
   expect(client.artwork.mock.calls.map(c=>c[0])).toEqual(['123','456','789','789']);
   expect(links()).toHaveLength(0);
   expect(db.prepare('SELECT COUNT(*) FROM images WHERE original_at IS NOT NULL').pluck().get()).toBe(0);
+});
+
+it.each(['pixiv','tagger'])('手动补跑重查仍保留的旧建议（来源 %s），自动模型补充不重复请求', async source => {
+  if(source==='tagger') for(const id of [1,2]) {
+    db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (?,?,0.75,'tagger')").run(id,A);
+  }
+  const client={artwork:vi.fn().mockResolvedValue(art(1,['アリス'],'123',[]))};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(links()).toHaveLength(0);
+  expect(db.prepare('SELECT DISTINCT result FROM pixiv_character_checks').pluck().all()).toEqual(['suggested']);
+  expect(db.prepare('SELECT DISTINCT source FROM character_suggestions').pluck().all()).toEqual([source]);
+  queuePixivImages(ctx,[1,2]);
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).toHaveBeenCalledTimes(1);
+  queuePixivImages(ctx);
+  expect(pendingPixivCount(ctx)).toBe(2);
+  client.artwork.mockResolvedValue(art(1,['アリス']));
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).toHaveBeenCalledTimes(2); // 同投稿只请求一次，不逐图重复查。
+  expect(links()).toHaveLength(2);
+  expect(db.prepare('SELECT COUNT(*) FROM character_suggestions').pluck().get()).toBe(0);
+});
+
+it('旧建议已经清空、或实际移除过角色时不因手动补跑写回', async () => {
+  await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(1,['アリス'],'123',[])},0);
+  db.exec("DELETE FROM character_suggestions WHERE image_id=1; UPDATE pixiv_character_checks SET result='dismissed' WHERE image_id=2");
+  queuePixivImages(ctx);
+  expect(pendingPixivCount(ctx)).toBe(0);
+  const client={artwork:vi.fn().mockResolvedValue(art(1,['アリス']))};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).not.toHaveBeenCalled();
+});
+
+it('移除标记不阻止换投稿后首次补充，也不覆盖请求期间的人工移除', async () => {
+  db.exec("UPDATE pixiv_character_checks SET result='dismissed',checked_at='before'; UPDATE images SET source_post_id='456' WHERE id=1");
+  queuePixivImages(ctx,[1,2]);
+  expect(pendingPixivCount(ctx)).toBe(1);
+  const client={artwork:vi.fn().mockImplementation(async()=>{
+    db.exec("UPDATE pixiv_character_checks SET result='dismissed',checked_at='during-request' WHERE image_id=1");
+    return art(1,['アリス'],'456');
+  })};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).toHaveBeenCalledTimes(1);
+  expect(links()).toHaveLength(0);
+  expect(db.prepare('SELECT checked_at FROM pixiv_character_checks WHERE image_id=1').pluck().get()).toBe('during-request');
 });
 
 it('请求失败的投稿进退避：之后的自动补充不再请求，手动补跑清掉退避后重试', async () => {
