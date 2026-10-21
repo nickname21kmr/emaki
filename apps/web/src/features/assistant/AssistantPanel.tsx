@@ -31,8 +31,9 @@ function FloatingLauncher({ open }: { open: () => void }) {
 
 function Conversation({ backend, close }: { backend: string | null; close: () => void }) {
   const client = useQueryClient(), location = useLocation();
-  const drag = useFloatingDrag('emaki.assistant.panel-position');
-  const [expanded, setExpanded] = useState(false), [sessionId, setSessionId] = useState(() => sessionStorage.getItem(`emaki.assistant.${backend}`) ?? '');
+  const [expanded, setExpanded] = useState(false);
+  const drag = useFloatingDrag(`emaki.assistant.panel-position${expanded ? '.expanded' : ''}`);
+  const [sessionId, setSessionId] = useState(() => sessionStorage.getItem(`emaki.assistant.${backend}`) ?? '');
   const resize = useFloatingResize(drag.ref, drag.place, expanded);
   const [session, setSession] = useState<AssistantSession | null>(null), [text, setText] = useState(''), [model, setModel] = useState(''), [effort, setEffort] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [connected, setConnected] = useState(true);

@@ -1,16 +1,18 @@
-import { useEffect, useRef, useState, type PointerEvent, type MouseEvent } from 'react';
+import { useLayoutEffect, useRef, useState, type PointerEvent, type MouseEvent } from 'react';
 import { clampPosition, type Position } from './presentation';
 import { dragMotion } from './dragMotion';
 
-/** A handle moves its whole floating surface. Positions are local to this browser. */
+function readPosition(key: string): Position | null {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) ?? 'null');
+    return Number.isFinite(value?.x) && Number.isFinite(value?.y) ? value : null;
+  } catch { return null; }
+}
+
+/** A handle moves its whole floating surface. Each storage key has its own position. */
 export function useFloatingDrag(key: string) {
   const ref = useRef<HTMLElement | null>(null);
-  const [position, setPosition] = useState<Position | null>(() => {
-    try {
-      const value = JSON.parse(localStorage.getItem(key) ?? 'null');
-      return Number.isFinite(value?.x) && Number.isFinite(value?.y) ? value : null;
-    } catch { return null; }
-  });
+  const [position, setPosition] = useState<Position | null>(() => readPosition(key));
   const current = useRef(position), suppressClick = useRef(false);
   const gesture = useRef<{ id: number; x: number; y: number; origin: Position; moved: boolean; motion: ReturnType<typeof dragMotion> } | null>(null);
   const place = (next: Position) => {
@@ -24,7 +26,12 @@ export function useFloatingDrag(key: string) {
     const next = clampPosition(point, rect.width, rect.height, window.innerWidth, window.innerHeight);
     place(next);
   };
-  useEffect(() => {
+  useLayoutEffect(() => {
+    // Restore the new mode before paint; fitting an expanded panel must not
+    // overwrite the compact panel's saved position.
+    const restored = readPosition(key);
+    current.current = restored;
+    setPosition(restored);
     const fit = () => { if (!gesture.current && current.current) move(current.current); };
     const observer = new ResizeObserver(fit);
     if (ref.current) observer.observe(ref.current);
