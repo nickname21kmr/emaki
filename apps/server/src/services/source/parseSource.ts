@@ -4,7 +4,7 @@
  */
 import type { ImageSource } from '@emaki/shared';
 
-export const SOURCE_PARSER_VERSION = 2;
+export const SOURCE_PARSER_VERSION = 3;
 
 const EXT = /\.[^.]+$/; // 包括 .jpg_large
 const COPY_SUFFIX = /(\s*\(\d+\)|\s*-\s*(副本|复制|copy)(\s*\(\d+\))?)$/i;
@@ -21,6 +21,9 @@ const GDL_FANBOX = /^(\d{4,9})_(\d{1,3})$/;
 // A hexadecimal suffix can end in digits: never interpret that tail as a post ID.
 const PIXIV = /(?<![\da-f])(\d{4,10})_(?:p\d{1,4}|ugoira\d*)(?!\d)/i;
 const PIXIV_HASHED = /^(\d{4,10})-[0-9a-f]{32}_(?:p\d{1,4}|ugoira\d*)(?!\d)/i;
+// Downloader template: artwork ID_title_page. Require a readable title so dates
+// and numeric-only filenames do not become Pixiv sources.
+const PIXIV_TITLED = /^(\d{4,10})_((?![0-9a-f]{32}_\d+$)(?=[^/]*\p{L}).+)_\d{1,4}$/iu;
 const PIXIV_APP = /^illust_(\d{4,10})(?:_|$)/i;
 const PIXIVUTIL_DIR = /^(.+) \((\d+)\)$/;
 const GDL_PIXIV_DIR = /^(\d+) (.+)$/;
@@ -91,8 +94,8 @@ export function parseSource(relPath: string): ImageSource | null {
     if (m) return { site: 'fanbox', postId: m[1]!, artist: parent, url: `https://${parent}.fanbox.cc/posts/${m[1]!}` };
   }
 
-  // 7 / 8. pixiv 原图名、手机 App 保存名
-  m = PIXIV_HASHED.exec(stem) ?? PIXIV.exec(stem) ?? PIXIV_APP.exec(stem);
+  // 7 / 8. pixiv 原图名、下载器标题名、手机 App 保存名
+  m = PIXIV_HASHED.exec(stem) ?? PIXIV_TITLED.exec(stem) ?? PIXIV.exec(stem) ?? PIXIV_APP.exec(stem);
   if (m) {
     const postId = m[1]!;
     const artist =
