@@ -6,6 +6,8 @@ import { isOriginalArtwork, type PixivArtwork } from './client.ts';
 
 type Index = Map<string, Set<string>>;
 const fullKey = (name: string) => katakanaToHiragana(name.normalize('NFKC').toLowerCase().replace(/[\s_\-·・]+/g, ''));
+// 井ノ上 / 井の上 / 井上这类连接字写法；只省略两个汉字之间的「の」。
+const nameVariantKey = (key: string) => key.replace(/(\p{Script=Han})の(?=\p{Script=Han})/gu, '$1');
 // 只为完整姓名增加免作品标签的通道：分词姓名，或至少四字、含两个汉字的姓名。
 // 短名仍走原来的作品校验；限定词不能被搜索归一化丢掉后当作完整姓名。
 function isFullName(name: string): boolean {
@@ -57,15 +59,21 @@ export type PixivMatcher = ((artwork: PixivArtwork) => { tags: string[]; automat
   refresh(tags: string[]): void;
 };
 
-/** 精确匹配名称/别名，不按包含关系猜角色；同名时用投稿里的作品标签消歧。 */
+/** 优先精确匹配名称/别名，作品内补充连接字变体；不按包含关系猜角色，同名时用作品消歧。 */
 export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights: CopyrightSource): PixivMatcher {
   const characters: Index = new Map();
   const fullNames: Index = new Map();
+  const nameVariants: Index = new Map();
   const fullNameKeys = new Map<string, Set<string>>();
   const works: Index = new Map();
   const general = new Set<string>();
   const qualifiedGeneral = new Set<string>();
   const normalized = new Map<string, string>();
+  const normalizeTag = (tag: string) => {
+    const value = normalized.get(tag) ?? (tag.startsWith(CUSTOM) ? tag : catalog.normalizeTag(tag));
+    normalized.set(tag, value);
+    return value;
+  };
   const ingest = (rows: Row[]) => {
     for (const r of rows) {
       if (r.category === 0) {
@@ -76,8 +84,7 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
       }
       let tag = r.tag;
       if (r.category === 4) {
-        tag = normalized.get(r.tag) ?? (r.tag.startsWith(CUSTOM) ? r.tag : catalog.normalizeTag(r.tag));
-        normalized.set(r.tag, tag);
+        tag = normalizeTag(r.tag);
       }
       add(r.category === 4 ? characters : works, r.name, tag);
     }
@@ -90,6 +97,12 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
       const tags = fullNames.get(key) ?? new Set<string>();
       tags.add(row.tag);
       fullNames.set(key, tags);
+      const variant = nameVariantKey(key);
+      if (variant !== key) {
+        const variants = nameVariants.get(variant) ?? new Set<string>();
+        variants.add(row.tag);
+        nameVariants.set(variant, variants);
+      }
       const keys = fullNameKeys.get(row.tag) ?? new Set<string>();
       keys.add(key);
       fullNameKeys.set(row.tag, keys);
@@ -108,7 +121,18 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
     for (const group of names) {
       // 原文明示普通词或 cosplay 时不认角色；普通译名不能否定明确的原文角色名。
       if (qualifiedGeneral.has(fullKey(group[0]!)) || /\((?:cosplay|コスプレ)\)/i.test(group[0]!.normalize('NFKC')) || general.has(searchKey(group[0]!))) continue;
-      const raw = characters.get(searchKey(group[0]!));
+      let raw = characters.get(searchKey(group[0]!));
+      // 精确原文未命中时，才在同一作品内找完整姓名的连接字变体。
+      // 不以译名、任意编辑距离或同投稿其他图片的角色替代原文身份依据。
+      if (!raw?.size && workTags.size && !isOriginalArtwork(artwork) && isFullName(group[0]!)) {
+        const key = fullKey(group[0]!);
+        const variant = nameVariantKey(key);
+        const alternatives = new Set([
+          ...(nameVariants.get(variant) ?? []),
+          ...(variant !== key ? fullNames.get(variant) ?? [] : []),
+        ].map(normalizeTag).filter(tag => copyrights.copyrights(tag).some(work => workTags.has(work))));
+        if (alternatives.size) raw = alternatives;
+      }
       const translations = group.slice(1).filter((n) => !general.has(searchKey(n)) && !qualifiedGeneral.has(fullKey(n)));
       let candidates = new Set(raw?.size ? raw : translations.flatMap((n) => [...(characters.get(searchKey(n)) ?? [])]));
       // 原文同名时，用同一个 Pixiv 标签的译名交叉确认；不同标签仍各自解析。
@@ -126,11 +150,7 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
       }
       if (candidates.size > 1) ambiguous = true;
       // 仅认页面原文的完整姓名，不把机器译名或去掉限定词后的搜索命中升级为证据。
-      const exact = new Set([...(fullNames.get(fullKey(group[0]!)) ?? [])].map(t => {
-        const tag = normalized.get(t) ?? (t.startsWith(CUSTOM) ? t : catalog.normalizeTag(t));
-        normalized.set(t, tag);
-        return tag;
-      }));
+      const exact = new Set([...(fullNames.get(fullKey(group[0]!)) ?? [])].map(normalizeTag));
       if (candidates.size === 1 && exact.size === 1) {
         const tag = [...candidates][0]!;
         if (exact.has(tag) && isFullName(tag)) exactNames.add(tag);
@@ -158,6 +178,10 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
           const values = fullNames.get(key)!;
           values.delete(t);
           if (!values.size) fullNames.delete(key);
+          const variant = nameVariantKey(key);
+          const variants = nameVariants.get(variant);
+          variants?.delete(t);
+          if (!variants?.size) nameVariants.delete(variant);
         }
         fullNameKeys.delete(t);
       }

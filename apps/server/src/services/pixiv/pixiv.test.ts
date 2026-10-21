@@ -524,6 +524,68 @@ it('完整姓名与低分模型一致时直接写入角色并移除旧建议', a
   expect(db.prepare("SELECT COUNT(*) FROM character_suggestions WHERE danbooru_tag=?").pluck().get(tag)).toBe(0);
 });
 
+it.each(['井上たきな','井の上たきな','井ノ上たきな'])('有作品标签时可匹配姓名中连接字的有无：%s', raw => {
+  const tag=takina(); const {catalog,copyrights}=makeCatalog();
+  expect(createPixivMatcher(db,catalog,copyrights)(art(5,[raw]))).toEqual({tags:[tag],automatic:true});
+});
+
+it('姓名变体不能绕过作品、原创、限定词和多图多角色规则，也不做任意错字匹配', () => {
+  const tag=takina(); const {catalog,copyrights}=makeCatalog(); const match=createPixivMatcher(db,catalog,copyrights);
+  expect(match(art(5,['井上たきな'],'123',[])).tags).toEqual([]);
+  expect(match(art(5,['井上たきな'],'123',['ゲームB'])).tags).toEqual([]);
+  expect(match({...art(5,['井上たきな']),isOriginal:true}).tags).toEqual([]);
+  expect(match(art(5,['井上たきな(別作品)'])).tags).toEqual([]);
+  expect(match(art(5,['井上たきな(コスプレ)'])).tags).toEqual([]);
+  expect(match(art(5,['井下たきな'])).tags).toEqual([]);
+  expect(match(art(5,['井上たきな誕生日'])).tags).toEqual([]);
+  expect(match(art(5,['井上'])).tags).toEqual([]);
+  expect(match(art(5,['井上たきな','ボブ']))).toEqual({tags:[tag,B],automatic:false});
+});
+
+it('不同角色的姓名变体撞名时保留歧义，作品可以排除其他作品的候选', () => {
+  const tag=takina(), other='inoue_takina_other';
+  name(other,'井の上たきな');
+  db.prepare("INSERT INTO danbooru_tags(name,category,copyrights,other_names,fetched_at) VALUES (?,4,?,?, 'now')")
+    .run(other,JSON.stringify(['game_a']),JSON.stringify(['井の上たきな']));
+  let c=makeCatalog(); let match=createPixivMatcher(db,c.catalog,c.copyrights);
+  const ambiguous=match(art(5,['井上たきな'],'123',['ゲームA']));
+  expect(ambiguous.automatic).toBe(false);
+  expect(ambiguous.tags.sort()).toEqual([tag,other].sort());
+  db.prepare('UPDATE danbooru_tags SET copyrights=? WHERE name=?').run(JSON.stringify(['game_b']),other);
+  c=makeCatalog(); match=createPixivMatcher(db,c.catalog,c.copyrights);
+  expect(match(art(5,['井上たきな'],'123',['ゲームA']))).toEqual({tags:[tag],automatic:true});
+});
+
+it('连接字变体支持反向匹配，刷新别名后移除过期变体', () => {
+  const tag=takina();
+  db.prepare('DELETE FROM tag_name_keys WHERE tag=? AND search_key=?').run(tag,searchKey('井ノ上たきな'));
+  db.prepare('UPDATE danbooru_tags SET other_names=? WHERE name=?').run(JSON.stringify(['井上たきな']),tag);
+  const {catalog,copyrights}=makeCatalog(); const match=createPixivMatcher(db,catalog,copyrights);
+  expect(match(art(5,['井の上たきな']))).toEqual({tags:[tag],automatic:true});
+  db.prepare('UPDATE danbooru_tags SET other_names=? WHERE name=?').run(JSON.stringify(['井ノ上たきな']),tag);
+  match.refresh([tag]);
+  expect(match(art(5,['井上たきな']))).toEqual({tags:[tag],automatic:true});
+  db.prepare("UPDATE danbooru_tags SET other_names='[]' WHERE name=?").run(tag);
+  match.refresh([tag]);
+  expect(match(art(5,['井上たきな'])).tags).toEqual([]);
+});
+
+it('历史未匹配的多页单角色投稿可按姓名变体补充，已有角色和高分模型结果保留', async () => {
+  const tag=takina();
+  addImage(3,'123'); addImage(4,'123');
+  const ch=makeCatalog().catalog.ensureCharacter(A,'now');
+  db.prepare("INSERT INTO image_characters(image_id,character_id,origin,added_at) VALUES (3,?,'manual','now')").run(ch.id);
+  db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (1,?,0.7971,'tagger'),(4,?,0.9,'tagger')").run(tag,B);
+  db.exec("UPDATE pixiv_character_checks SET result='unmatched',checked_at='before'");
+  queuePixivImages(ctx);
+  const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(5,['井上たきな'])},0);
+  expect(summary).toContain('关联 2 张');
+  expect(db.prepare('SELECT c.danbooru_tag FROM image_characters ic JOIN characters c ON c.id=ic.character_id WHERE image_id=1').pluck().get()).toBe(tag);
+  expect(db.prepare('SELECT character_id FROM image_characters WHERE image_id=3').pluck().get()).toBe(ch.id);
+  expect(db.prepare('SELECT COUNT(*) FROM image_characters WHERE image_id=4').pluck().get()).toBe(0);
+  expect(db.prepare("SELECT score FROM character_suggestions WHERE image_id=4 AND danbooru_tag=?").pluck().get(B)).toBe(0.9);
+});
+
 it('原创投稿撞上 Danbooru 角色名：归为原创、只给建议，不新建角色', async () => {
   const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>({...art(1,['アリス']),isOriginal:true})},0);
   expect(summary).toContain('原创 2 张');
