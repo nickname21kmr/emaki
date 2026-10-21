@@ -3,6 +3,26 @@ import { openDatabase } from '../../db/connection.ts';
 import { migrate } from '../../db/migrate.ts';
 import { backfillSources } from './backfill.ts';
 
+it('upgrades hashed Pixiv names and incorrect hash-tail IDs while keeping manual sources', () => {
+  const db = openDatabase(':memory:');
+  migrate(db);
+  db.exec("INSERT INTO library_roots (path) VALUES ('D:/Pics'); INSERT INTO settings(key,value) VALUES ('sourceParserVersion','1') ON CONFLICT(key) DO UPDATE SET value='1'");
+  const name = '147194731-a43ba74e1434ae6ed317cb7671cc2574_p45.jpg';
+  const insert = db.prepare(`INSERT INTO images (root_id,rel_path,file_name,width,height,bytes,format,sha256,added_at,modified_at,source_site,source_post_id,source_manual)
+    VALUES (1,?,?,1,1,1,'jpg',?,'x','x',?,?,?)`);
+  insert.run(name,name,'a','pixiv','2574',0);
+  insert.run(`copy/${name}`,name,'b','other','manual-id',1);
+  db.exec(`INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES
+    (1,'stale_pixiv_character',0,'pixiv'),(1,'model_character',0.75,'tagger'),(2,'manual_source_suggestion',0,'pixiv')`);
+  expect(backfillSources(db)).toBe(1);
+  expect(db.prepare('SELECT source_site,source_post_id FROM images ORDER BY id').all()).toEqual([
+    {source_site:'pixiv',source_post_id:'147194731'}, {source_site:'other',source_post_id:'manual-id'},
+  ]);
+  expect(backfillSources(db)).toBe(0);
+  expect(db.prepare('SELECT danbooru_tag FROM character_suggestions ORDER BY danbooru_tag').pluck().all()).toEqual(['manual_source_suggestion','model_character']);
+  db.close();
+});
+
 it('只在规则版本变化时重算', () => {
   const db = openDatabase(':memory:');
   migrate(db);

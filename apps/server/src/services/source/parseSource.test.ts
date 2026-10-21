@@ -18,6 +18,10 @@ describe('parseSource', () => {
     ['98765432_ugoira0.jpg', pixiv('98765432')],
     ['illust_98765432_20240101_123456.jpg', pixiv('98765432')],
     ['sub/123456789_p0 (1).png', pixiv('123456789')],
+    ['147888074-793357d9c084fa59acaba10b6b552ff7_p0.jpg', pixiv('147888074')],
+    ['147194731-a43ba74e1434ae6ed317cb7671cc2574_p45.jpg', pixiv('147194731')],
+    [`downloads/98765432-${MD5.toUpperCase()}_p12_master1200 (1).png`, pixiv('98765432')],
+    [`98765432-${MD5}_ugoira0.jpg`, pixiv('98765432')],
     [
       'twitter/someartist/1789012345678901234_1.jpg',
       { site: 'twitter', postId: '1789012345678901234', artist: 'someartist', url: 'https://x.com/someartist/status/1789012345678901234' },
@@ -57,6 +61,10 @@ describe('parseSource', () => {
     'wallpaper_1920x1080.png',
     'Screenshot_2024.png',
     '1234567890123_p0.png',
+    `${MD5}_p0.jpg`,
+    '147888074-793357d9c084fa59acaba10b6b5522574_p0.jpg',
+    `1234567890123-${MD5}_p0.jpg`,
+    `147888074-${MD5}_p12345.jpg`,
   ])('%s → null', (relPath) => {
     expect(parseSource(relPath)).toBeNull();
   });
