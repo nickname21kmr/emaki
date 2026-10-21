@@ -91,6 +91,7 @@ export async function syncPixivCharacters(
   const insert = db.prepare("INSERT OR IGNORE INTO image_characters (image_id,character_id,origin,score,added_at) VALUES (?,?,'tagger',NULL,?)");
   // 自建角色的建议：danbooru_tag 写伪标签占主键，character_id 写真外键（读的时候看 character_id）
   const suggest = db.prepare("INSERT OR IGNORE INTO character_suggestions (image_id,danbooru_tag,character_id,score,source) VALUES (?,?,?,0,'pixiv')");
+  const clearPixivSuggestions = db.prepare("DELETE FROM character_suggestions WHERE image_id=? AND source='pixiv'");
   const liveCustom = db.prepare('SELECT 1 FROM characters WHERE id=? AND danbooru_tag IS NULL');
   for (let n = 0; n < posts.length; n++) {
     job.signal.throwIfAborted();
@@ -155,8 +156,8 @@ export async function syncPixivCharacters(
       result = match(artwork);
     }
     const isOriginal = isOriginalArtwork(artwork);
-    if (!result.tags.length && !isOriginal) { completePost(post.id, 'unmatched'); unmatched++; job.advance(1, summary()); continue; }
-    const outcome = isOriginal ? 'original' : result.automatic ? 'linked' : 'suggested';
+    const noMatch = !result.tags.length && !isOriginal;
+    const outcome = isOriginal ? 'original' : noMatch ? 'unmatched' : result.automatic ? 'linked' : 'suggested';
     const ids: number[] = [];
     db.transaction(() => {
       const rows = current.all(post.id) as { id: number }[];
@@ -168,6 +169,8 @@ export async function syncPixivCharacters(
           continue;
         }
         let linkChanges = 0, suggestionChanges = 0;
+        // 成功取回投稿后才刷新来源建议；失败时保留旧值，同名模型分数也不动。
+        if (clearPixivSuggestions.run(row.id).changes) ids.push(row.id);
         if (isOriginal) {
           const work = catalog.ensureWork('original', now);
           db.prepare('UPDATE images SET original_at=? WHERE id=?').run(now,row.id);
@@ -196,6 +199,7 @@ export async function syncPixivCharacters(
       if (ids.length) applyExclusionRules(ctx, { imageIds: ids });
     })();
     if (ids.length) ctx.touch();
+    if (noMatch) unmatched++;
     job.advance(1, summary());
   }
   return summary();

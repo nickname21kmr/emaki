@@ -92,13 +92,12 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
   ingest(db.prepare(SQL).all() as Row[]);
   const ingestFullNames = (rows: { name: string; tag: string }[]) => {
     for (const row of rows) {
-      if (!isFullName(row.name)) continue;
       const key = fullKey(row.name);
       const tags = fullNames.get(key) ?? new Set<string>();
       tags.add(row.tag);
       fullNames.set(key, tags);
       const variant = nameVariantKey(key);
-      if (variant !== key) {
+      if (variant !== key && isFullName(row.name)) {
         const variants = nameVariants.get(variant) ?? new Set<string>();
         variants.add(row.tag);
         nameVariants.set(variant, variants);
@@ -112,16 +111,56 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
   // 按标签过滤的同一条查询，SQLite 会把条件下推到每个分支
   let scoped: Statement | undefined;
   let scopedFullNames: Statement | undefined;
+  const identities = (name: string) => new Set([...(fullNames.get(fullKey(name)) ?? [])].map(normalizeTag));
+  // 作品的子系列、歌曲等可确认父作品，但不反向展开成所有子作品。
+  const expandWorks = (tags: Iterable<string>): Set<string> => {
+    const out = new Set(tags);
+    let frontier = [...out];
+    for (let depth=0;depth<5 && frontier.length;depth++) {
+      const next: string[] = [];
+      for (const tag of frontier) {
+        const qualifier = /_\(([^()]+)\)$/.exec(tag)?.[1];
+        const parents = [...(copyrights.impliesClosure?.(tag) ?? []), ...(qualifier ? works.get(searchKey(qualifier)) ?? [] : [])];
+        for (const parent of parents) if (!out.has(parent) && works.get(searchKey(parent))?.has(parent)) {
+          out.add(parent); next.push(parent);
+        }
+      }
+      frontier = next;
+    }
+    return out;
+  };
   const match = (artwork: PixivArtwork): { tags: string[]; automatic: boolean } => {
     const names = artwork.tags.tags.map((t) => [t.tag, ...Object.values(t.translation ?? {})]);
-    const workTags = new Set(names.flatMap((group) => group.flatMap((n) => [...(works.get(searchKey(n)) ?? [])])));
+    const workTags = expandWorks(names.flatMap(group => {
+      const raw = group[0]!;
+      if (general.has(searchKey(raw))) return [];
+      const direct = works.get(searchKey(raw));
+      if (direct?.size) return [...direct];
+      if (characters.has(searchKey(raw))) return [];
+      // 译名同时是角色短名时，不把它凭空变成作品上下文。
+      return group.slice(1).filter(n => !characters.has(searchKey(n))).flatMap(n => [...(works.get(searchKey(n)) ?? [])]);
+    }));
     const matched = new Set<string>();
     const exactNames = new Set<string>();
+    const qualifiedNames = new Set<string>();
     let ambiguous = false;
+    let unresolved = false;
     for (const group of names) {
+      const original = group[0]!;
       // 原文明示普通词或 cosplay 时不认角色；普通译名不能否定明确的原文角色名。
-      if (qualifiedGeneral.has(fullKey(group[0]!)) || /\((?:cosplay|コスプレ)\)/i.test(group[0]!.normalize('NFKC')) || general.has(searchKey(group[0]!))) continue;
-      let raw = characters.get(searchKey(group[0]!));
+      if (/^R-18(?:G)?$/i.test(original) || works.has(searchKey(original)) || qualifiedGeneral.has(fullKey(original)) || /\((?:cosplay|コスプレ)\)/i.test(original.normalize('NFKC')) || general.has(searchKey(original))) continue;
+      const qualifier = /\(([^()]+)\)$/.exec(original.normalize('NFKC'))?.[1];
+      const scope = qualifier ? expandWorks(works.get(searchKey(qualifier)) ?? []) : workTags;
+      const strict = identities(original);
+      const compatible = (tag: string) => tag.startsWith(CUSTOM) || copyrights.copyrights(tag).some(w => scope.has(w));
+      let raw = qualifier && strict.size ? strict : characters.get(searchKey(original));
+      if (qualifier && !strict.size && !scope.size) {
+        if (raw?.size || group.slice(1).some(n => characters.has(searchKey(n)))) unresolved = true;
+        continue;
+      }
+      // 例如「ビンタ」译为 slap：没有相应作品依据时，它是普通动作，不是同名角色。
+      if (group.slice(1).some(n => general.has(searchKey(n))) && !isFullName(original)
+        && ![...(raw ?? [])].some(compatible)) continue;
       // 精确原文未命中时，才在同一作品内找完整姓名的连接字变体。
       // 不以译名、任意编辑距离或同投稿其他图片的角色替代原文身份依据。
       if (!raw?.size && workTags.size && !isOriginalArtwork(artwork) && isFullName(group[0]!)) {
@@ -144,16 +183,25 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
           if (narrowed.length) candidates = new Set(narrowed);
         }
       }
-      if (candidates.size > 1 && workTags.size) {
-        const narrowed = [...candidates].filter((tag) => copyrights.copyrights(tag).some((w) => workTags.has(w)));
-        if (narrowed.length) candidates = new Set(narrowed);
+      if (scope.size) {
+        const narrowed = [...candidates].filter(compatible);
+        // 完整原文姓名可以是跨作品图集中的另一人物；短名、译名和丢掉限定词的命中须符合上下文。
+        if (narrowed.length || !(strict.size === 1 && raw?.size === 1 && !qualifier)) {
+          if (!narrowed.length && candidates.size && (qualifier || raw?.size === 1)) unresolved = true;
+          candidates = new Set(narrowed);
+        }
       }
+      // 普通描述的译名同时命中多个角色，没有原文身份或作品依据时不展开同名目录。
+      if (!raw?.size && !scope.size && candidates.size > 1) continue;
       if (candidates.size > 1) ambiguous = true;
       // 仅认页面原文的完整姓名，不把机器译名或去掉限定词后的搜索命中升级为证据。
-      const exact = new Set([...(fullNames.get(fullKey(group[0]!)) ?? [])].map(normalizeTag));
-      if (candidates.size === 1 && exact.size === 1) {
+      if (candidates.size === 1 && strict.size === 1) {
         const tag = [...candidates][0]!;
-        if (exact.has(tag) && isFullName(tag)) exactNames.add(tag);
+        if (strict.has(tag) && isFullName(original) && isFullName(tag)) exactNames.add(tag);
+        if (strict.has(tag) && qualifier) qualifiedNames.add(tag);
+      }
+      if (qualifier && scope.size && candidates.size === 1) {
+        qualifiedNames.add([...candidates][0]!);
       }
       for (const tag of candidates) matched.add(tag);
     }
@@ -164,10 +212,11 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
       if (isOriginalArtwork(artwork)) return false;
       const knownWorks = copyrights.copyrights(tag);
       return knownWorks.some(w => workTags.has(w))
+        || (knownWorks.length > 0 && qualifiedNames.has(tag))
         || (!workTags.size && knownWorks.length > 0 && exactNames.has(tag));
     };
     // 多个别名命中同一角色，按一个角色计；投稿页数不以本地下载的页数代替。
-    return { tags: [...matched], automatic: !ambiguous && (artwork.pageCount === 1 || matched.size === 1) && [...matched].every(confirmed) };
+    return { tags: [...matched], automatic: matched.size > 0 && !ambiguous && !unresolved && (artwork.pageCount === 1 || matched.size === 1) && [...matched].every(confirmed) };
   };
   return Object.assign(match, {
     refresh(tags: string[]) {
