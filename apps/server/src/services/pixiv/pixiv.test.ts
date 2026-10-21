@@ -449,7 +449,7 @@ it('补别名时有更急的任务就让出，没补的留到下一轮', async (
   expect(db.prepare('SELECT COUNT(*) FROM danbooru_tags WHERE wiki_fetched_at IS NULL').pluck().get()).toBe(50);
 });
 
-it('只有投稿里的作品标签能确认的角色才自动关联；自建角色不用确认', () => {
+it('短名仍由投稿里的作品标签确认；自建角色不用确认', () => {
   const custom=Number(db.prepare("INSERT INTO characters(name,source,created_at) VALUES ('ミドリ','custom','now')").run().lastInsertRowid);
   const {catalog,copyrights}=makeCatalog();const match=createPixivMatcher(db,catalog,copyrights);
   expect(match(art(1,['アリス'],'1',[]))).toEqual({tags:[A],automatic:false});
@@ -461,6 +461,67 @@ it('只有投稿里的作品标签能确认的角色才自动关联；自建角�
   expect(match({...art(1,['アリス'],'1',['ゲームA']),isOriginal:true}).automatic).toBe(false);
   expect(match({...art(1,['アリス','オリジナル'],'1',['ゲームA']),isOriginal:false}).automatic).toBe(false);
   expect(match({...art(1,['ミドリ'],'1',[]),isOriginal:true})).toEqual({tags:[`emaki:character:${custom}`],automatic:true});
+});
+
+function takina() {
+  const tag = 'inoue_takina';
+  name(tag, '井ノ上たきな'); name(tag, 'たきな'); name(tag, '井上泷奈');
+  db.prepare("UPDATE tag_i18n SET zh='井上泷奈' WHERE tag=?").run(tag);
+  db.prepare("INSERT INTO danbooru_tags(name,category,copyrights,other_names,fetched_at) VALUES (?,4,?,?, 'now')")
+    .run(tag, JSON.stringify(['game_a']), JSON.stringify(['井ノ上たきな','たきな']));
+  return tag;
+}
+
+it.each(['井ノ上たきな','井上泷奈','Inoue Takina','inoue_takina'])('完整原文姓名 %s 唯一命中时不要求重复写作品标签', raw => {
+  const tag=takina(); const {catalog,copyrights}=makeCatalog();
+  expect(createPixivMatcher(db,catalog,copyrights)(art(1,[raw],'123',[]))).toEqual({tags:[tag],automatic:true});
+});
+
+it('完整姓名仍保留短名、译名、限定词、作品冲突、原创和多图多角色的限制', () => {
+  const tag=takina(); const {catalog,copyrights}=makeCatalog(); const match=createPixivMatcher(db,catalog,copyrights);
+  expect(match(art(1,['たきな'],'123',[]))).toEqual({tags:[tag],automatic:false});
+  expect(match({id:'123',pageCount:1,tags:{tags:[{tag:'別の人物',translation:{en:'Inoue Takina'}}]}}).automatic).toBe(false);
+  expect(match(art(1,['井ノ上たきな(別作品)'],'123',[])).automatic).toBe(false);
+  expect(match(art(1,['井ノ上たきな'],'123',['ゲームB'])).automatic).toBe(false);
+  expect(match({...art(1,['井ノ上たきな'],'123',[]),isOriginal:true}).automatic).toBe(false);
+  expect(match(art(1,['井ノ上たきな','オリジナル'],'123',[])).automatic).toBe(false);
+  expect(match(art(6,['井ノ上たきな'],'123',[])).automatic).toBe(true);
+  expect(match(art(6,['井ノ上たきな','ボブ'],'123',['ゲームB'])).automatic).toBe(false);
+});
+
+it('完整姓名同名、普通词、缺少角色作品资料时仍不直接关联', () => {
+  const tag=takina();
+  name(B,'井ノ上たきな');
+  db.prepare("UPDATE tag_i18n SET aliases=? WHERE tag=?").run(JSON.stringify(['井ノ上たきな']),B);
+  let c=makeCatalog();
+  expect(createPixivMatcher(db,c.catalog,c.copyrights)(art(1,['井ノ上たきな'],'123',[])).automatic).toBe(false);
+  name('inoue_takina_(cosplay)','井ノ上たきな',0);
+  c=makeCatalog();
+  expect(createPixivMatcher(db,c.catalog,c.copyrights)(art(1,['井ノ上たきな(コスプレ)'],'123',[])).tags).toEqual([]);
+  db.prepare("UPDATE danbooru_tags SET copyrights='[]' WHERE name=?").run(tag);
+  db.prepare('DELETE FROM tag_name_keys WHERE tag=?').run(B);
+  db.prepare("UPDATE tag_i18n SET aliases='[]' WHERE tag=?").run(B);
+  c=makeCatalog();
+  expect(createPixivMatcher(db,c.catalog,c.copyrights)(art(1,['井ノ上たきな'],'123',[])).automatic).toBe(false);
+});
+
+it('新发现的完整姓名增量刷新后可以直接关联，精确索引不会只在启动时建立', () => {
+  const {catalog,copyrights}=makeCatalog(); const match=createPixivMatcher(db,catalog,copyrights);
+  expect(match(art(1,['井ノ上たきな'],'123',[])).tags).toEqual([]);
+  const tag=takina(); match.refresh([tag]);
+  expect(match(art(1,['井ノ上たきな'],'123',[]))).toEqual({tags:[tag],automatic:true});
+  db.prepare("UPDATE danbooru_tags SET other_names='[]' WHERE name=?").run(tag);
+  match.refresh([tag]);
+  expect(match(art(1,['井ノ上たきな'],'123',[])).automatic).toBe(false);
+});
+
+it('完整姓名与低分模型一致时直接写入角色并移除旧建议', async () => {
+  const tag=takina();
+  db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (1,?,0.7549,'tagger')").run(tag);
+  const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(1,['井ノ上たきな'],'123',[])},0);
+  expect(summary).toContain('关联 2 张');
+  expect(links()).toHaveLength(2);
+  expect(db.prepare("SELECT COUNT(*) FROM character_suggestions WHERE danbooru_tag=?").pluck().get(tag)).toBe(0);
 });
 
 it('原创投稿撞上 Danbooru 角色名：归为原创、只给建议，不新建角色', async () => {
