@@ -1,6 +1,6 @@
 import type { Character, ID } from '@emaki/shared';
 import { Command } from 'cmdk';
-import { Check, CornerDownLeft, Search } from 'lucide-react';
+import { Check, CornerDownLeft, Plus, Search } from 'lucide-react';
 import { Popover } from 'radix-ui';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Thumb } from '@/components/media/Thumb';
@@ -8,6 +8,7 @@ import { Kbd, Skeleton, Spinner } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import { useSearch, useTopCharacters, useWorks } from '@/lib/queries';
+import { NewCharacterDialog } from '@/features/characters/overview/NewCharacterDialog';
 import { useRecentCharacters } from './recentCharacters';
 import { useDebounced } from './useDebounced';
 
@@ -49,6 +50,7 @@ export function CharacterPicker({
   onOpenChange,
 }: CharacterPickerProps) {
   const [openState, setOpenState] = useState(false);
+  const [createName, setCreateName] = useState<string | null>(null);
   const open = openProp ?? openState;
   const setOpen = (v: boolean) => {
     setOpenState(v);
@@ -56,31 +58,42 @@ export function CharacterPicker({
   };
 
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger asChild>{children}</Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          side={side}
-          align={align}
-          sideOffset={10}
-          collisionPadding={16}
-          className={cn(
-            'z-[70] w-[340px] overflow-hidden rounded-xl bg-raised text-fg shadow-pop ring-1 ring-line',
-            'origin-[var(--radix-popover-content-transform-origin)] data-[state=open]:animate-rise',
-          )}
-        >
-          <CharacterPickerPanel
-            title={title}
-            meta={meta}
-            selectedIds={selectedIds}
-            onPick={(c) => {
-              onPick(c);
-              setOpen(false);
-            }}
-          />
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+    <>
+      <Popover.Root open={open} onOpenChange={setOpen}>
+        <Popover.Trigger asChild>{children}</Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Content
+            side={side}
+            align={align}
+            sideOffset={10}
+            collisionPadding={16}
+            onCloseAutoFocus={(e) => { if (createName !== null) e.preventDefault(); }}
+            className={cn(
+              'z-[70] w-[340px] overflow-hidden rounded-xl bg-raised text-fg shadow-pop ring-1 ring-line',
+              'origin-[var(--radix-popover-content-transform-origin)] data-[state=open]:animate-rise',
+            )}
+          >
+            <CharacterPickerPanel
+              title={title}
+              meta={meta}
+              selectedIds={selectedIds}
+              onCreate={(name) => { setCreateName(name); setOpen(false); }}
+              onPick={(c) => {
+                onPick(c);
+                setOpen(false);
+              }}
+            />
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
+      <NewCharacterDialog
+        open={createName !== null}
+        onOpenChange={(v) => { if (!v) setCreateName(null); }}
+        initialName={createName ?? ''}
+        submitLabel="创建并归入"
+        onCreated={(c) => { useRecentCharacters.getState().push(c); onPick(c); }}
+      />
+    </>
   );
 }
 
@@ -94,12 +107,14 @@ interface PickerRow {
 /** 选择器本体（不带弹出框），想内嵌在别的面板里时直接用它 */
 export function CharacterPickerPanel({
   onPick,
+  onCreate,
   selectedIds,
   title,
   meta,
   className,
 }: {
   onPick: (character: Character) => void;
+  onCreate?: (name: string) => void;
   selectedIds?: readonly ID[];
   title?: ReactNode;
   meta?: ReactNode;
@@ -146,7 +161,8 @@ export function CharacterPickerPanel({
   }, [q, search.data, recents, top.data, workName]);
 
   const flat = groups.flatMap((g) => g.rows);
-  const firstPickable = flat.find((r) => !selected.has(r.character.id))?.character.id ?? '';
+  const canCreate = !!onCreate && !!q && !typing && !search.isFetching && !search.isError && !!search.data && !flat.some((r) => r.character.name === q);
+  const firstPickable = flat.find((r) => !selected.has(r.character.id))?.character.id ?? (canCreate ? 'create-character' : '');
 
   // 结果变化时高亮第一项，保证直接回车就能选中
   const [active, setActive] = useState('');
@@ -193,7 +209,7 @@ export function CharacterPickerPanel({
           <div className="px-4 py-8 text-center">
             <div className="text-[13px] font-medium">{q ? `没有找到「${q}」` : '还没有角色'}</div>
             <div className="mt-1 text-xs leading-relaxed text-fg-subtle">
-              {q ? '试试日文名、英文名或作品名；也可以去「角色」页新建自建角色。' : '扫描并识别图片后，角色会出现在这里。'}
+              {q ? '可以换个名字搜索，或在下方新建角色并归入。' : '输入名字即可搜索或新建角色。'}
             </div>
           </div>
         )}
@@ -215,6 +231,13 @@ export function CharacterPickerPanel({
               ))}
             </Command.Group>
           ))}
+        {canCreate && (
+          <Command.Item value="create-character" onSelect={() => onCreate?.(q)}
+            className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-3 text-[13px] text-shu-fg outline-none data-[selected=true]:bg-shu-soft">
+            <Plus className="size-4 shrink-0" />
+            <span className="min-w-0 break-words">新建角色「{q}」并归入</span>
+          </Command.Item>
+        )}
       </Command.List>
 
       <div className="flex items-center gap-3 border-t border-line px-4 py-2 text-[11px] text-fg-subtle">

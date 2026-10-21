@@ -1,6 +1,7 @@
 import { CornerDownLeft, Plus } from 'lucide-react';
 import { useEffect, useMemo, useState, type KeyboardEvent, type RefObject } from 'react';
 import { Chip, ChipAvatar, Kbd, SearchInput, Spinner } from '@/components/ui';
+import { NewCharacterDialog } from '@/features/characters/overview/NewCharacterDialog';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import { useSearch } from '@/lib/queries';
@@ -22,11 +23,13 @@ export function CharacterSearch({
   inputRef: RefObject<HTMLInputElement | null>;
   recent: AssignTarget[];
   onPick: (t: AssignTarget) => void;
-  /** 传了就在结果末尾加「新建自建角色「xxx」并归入」（T34c） */
+  /** 可由外部承接新建弹窗；未传时直接在此新建并归入。 */
   onCreate?: (name: string) => void;
   placeholder?: string;
 }) {
   const [q, setQ] = useState('');
+  const [createName, setCreateName] = useState<string | null>(null);
+  const createCharacter = onCreate ?? setCreateName;
   const [focused, setFocused] = useState(false);
   const [active, setActive] = useState(0);
   const term = useDebounced(q.trim(), 150);
@@ -54,7 +57,7 @@ export function CharacterSearch({
   const list = typing ? results : recent;
   const searching = typing && (term !== q.trim() || search.isFetching) && !results.length;
   // 结果回来之后才出现，免得手快回车误开新建（RV-T-14 ③）
-  const canCreate = !!onCreate && typing && !searching && term === q.trim() && !results.some((r) => r.name === q.trim());
+  const canCreate = typing && !searching && term === q.trim() && !results.some((r) => r.name === q.trim());
   const count = list.length + (canCreate ? 1 : 0);
   const activeIndex = Math.min(active, Math.max(0, count - 1));
 
@@ -91,7 +94,7 @@ export function CharacterSearch({
     const name = q.trim();
     setQ('');
     inputRef.current?.blur();
-    onCreate?.(name);
+    createCharacter(name);
   };
   const showList = focused && (typing || recent.length > 0);
 
@@ -171,7 +174,7 @@ export function CharacterSearch({
               )}
             >
               <Plus className="size-4" />
-              新建自建角色「{q.trim()}」并归入
+              新建角色「{q.trim()}」并归入
             </button>
           )}
         </div>
@@ -195,6 +198,13 @@ export function CharacterSearch({
           ))}
         </div>
       )}
+      <NewCharacterDialog
+        open={createName !== null}
+        onOpenChange={(v) => { if (!v) setCreateName(null); }}
+        initialName={createName ?? ''}
+        submitLabel="创建并归入"
+        onCreated={(c) => pick({ id: c.id, name: c.name, workName: null, coverImageId: c.coverImageId })}
+      />
     </div>
   );
 }

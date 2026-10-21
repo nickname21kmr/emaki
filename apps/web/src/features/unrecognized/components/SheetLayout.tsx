@@ -197,6 +197,7 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
         open={createName !== null}
         onOpenChange={(o) => !o && setCreateName(null)}
         initialName={createName ?? ''}
+        submitLabel="创建并归入"
         onCreated={(c) => sheet.assign({ id: c.id, name: c.name, workName: null, coverImageId: null })}
       />
     </>
