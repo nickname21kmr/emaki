@@ -561,6 +561,40 @@ it('新发现的完整姓名增量刷新后可以直接关联，精确索引不�
   expect(match(art(1,['井ノ上たきな'],'123',[])).automatic).toBe(false);
 });
 
+it('刷新被移除的别名后，有作品上下文也不再使用旧搜索索引', () => {
+  const tag=takina(); const {catalog,copyrights}=makeCatalog();
+  const match=createPixivMatcher(db,catalog,copyrights);
+  expect(match(art(1,['井ノ上たきな']))).toEqual({tags:[tag],automatic:true});
+  db.prepare('DELETE FROM tag_name_keys WHERE tag=? AND search_key=?').run(tag,searchKey('井ノ上たきな'));
+  db.prepare("UPDATE danbooru_tags SET other_names='[]' WHERE name=?").run(tag);
+  match.refresh([tag]);
+  expect(match(art(1,['井ノ上たきな']))).toEqual({tags:[],automatic:false});
+});
+
+it('刷新一个同名角色不会清掉另一个角色的名称', () => {
+  name(A,'共用名称'); name(B,'共用名称');
+  const {catalog,copyrights}=makeCatalog(); const match=createPixivMatcher(db,catalog,copyrights);
+  expect(match(art(1,['共用名称'],'123',[])).tags).toEqual([A,B]);
+  db.prepare('DELETE FROM tag_name_keys WHERE tag=? AND search_key=?').run(A,searchKey('共用名称'));
+  db.prepare("UPDATE tag_i18n SET aliases='[]' WHERE tag=?").run(A);
+  match.refresh([A]);
+  expect(match(art(1,['共用名称'],'123',['ゲームB']))).toEqual({tags:[B],automatic:true});
+});
+
+it('刷新服装变体保留同一身份的其他名称，移除变体的过期别名', () => {
+  const variant='alice_(costume)'; name(variant,'衣装アリス');
+  const {copyrights}=makeCatalog();
+  const catalog=new CharacterCatalog(db,{copyrights,normalizeTag:t=>t===variant?A:t});
+  const match=createPixivMatcher(db,catalog,copyrights);
+  expect(match(art(1,['衣装アリス']))).toEqual({tags:[A],automatic:true});
+  db.prepare('DELETE FROM tag_name_keys WHERE tag=? AND search_key=?').run(variant,searchKey('衣装アリス'));
+  db.prepare("UPDATE tag_i18n SET aliases='[]' WHERE tag=?").run(variant);
+  match.refresh([variant]);
+  expect(match(art(1,['衣装アリス']))).toEqual({tags:[],automatic:false});
+  expect(match(art(1,['アリス']))).toEqual({tags:[A],automatic:true});
+  expect(match(art(1,[variant]))).toEqual({tags:[A],automatic:true});
+});
+
 it('完整姓名与低分模型一致时直接写入角色并移除旧建议', async () => {
   const tag=takina();
   db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (1,?,0.7549,'tagger')").run(tag);

@@ -69,6 +69,7 @@ export type PixivMatcher = ((artwork: PixivArtwork) => { tags: string[]; automat
 /** 优先精确匹配名称/别名，作品内补充连接字变体；不按包含关系猜角色，同名时用作品消歧。 */
 export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights: CopyrightSource): PixivMatcher {
   const characters: Index = new Map();
+  const characterKeys = new Map<string, Set<string>>();
   const fullNames: Index = new Map();
   const nameVariants: Index = new Map();
   const fullNameKeys = new Map<string, Set<string>>();
@@ -93,7 +94,14 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
       if (r.category === 4) {
         tag = normalizeTag(r.tag);
       }
-      if (r.category === 4) add(characters, r.name, tag);
+      if (r.category === 4) {
+        const key = searchKey(r.name);
+        if (!key) continue;
+        add(characters, r.name, tag);
+        const keys = characterKeys.get(tag) ?? new Set<string>();
+        keys.add(key);
+        characterKeys.set(tag, keys);
+      }
       else {
         const key = fullKey(r.name);
         const tags = works.get(key) ?? new Set<string>();
@@ -235,7 +243,20 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
   return Object.assign(match, {
     refresh(tags: string[]) {
       if (!tags.length) return;
-      for (const t of tags) {
+      // Remove old search keys as well as exact names. Tags that normalize to
+      // the same identity share entries, so reload all of their contributors.
+      const identities = new Set(tags.flatMap(t => [normalizeTag(t), t.startsWith(CUSTOM) ? t : catalog.normalizeTag(t)]));
+      const affected = new Set([...tags, ...identities]);
+      for (const [raw, canonical] of normalized) if (identities.has(canonical)) affected.add(raw);
+      for (const tag of identities) {
+        for (const key of characterKeys.get(tag) ?? []) {
+          const values = characters.get(key)!;
+          values.delete(tag);
+          if (!values.size) characters.delete(key);
+        }
+        characterKeys.delete(tag);
+      }
+      for (const t of affected) {
         normalized.delete(t);
         for (const key of fullNameKeys.get(t) ?? []) {
           const values = fullNames.get(key)!;
@@ -248,12 +269,13 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
         }
         fullNameKeys.delete(t);
       }
+      const json = JSON.stringify([...affected]);
       scoped ??= db.prepare(`SELECT * FROM (${SQL}) WHERE tag IN (SELECT value FROM json_each(?))`);
-      ingest(scoped.all(JSON.stringify(tags)) as Row[]);
+      ingest(scoped.all(json) as Row[]);
       scopedWorkNames ??= db.prepare(`SELECT * FROM (${RAW_WORK_NAMES_SQL}) WHERE tag IN (SELECT value FROM json_each(?))`);
-      ingest(scopedWorkNames.all(JSON.stringify(tags)) as Row[]);
+      ingest(scopedWorkNames.all(json) as Row[]);
       scopedFullNames ??= db.prepare(`SELECT * FROM (${RAW_NAMES_SQL}) WHERE tag IN (SELECT value FROM json_each(?))`);
-      ingestFullNames(scopedFullNames.all(JSON.stringify(tags)) as { name: string; tag: string }[]);
+      ingestFullNames(scopedFullNames.all(json) as { name: string; tag: string }[]);
     },
   });
 }
