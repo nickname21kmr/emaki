@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { decodeBmp } from '../image/bmp.ts';
 import { sharp } from '../image/sharpConfig.ts';
 import type { TaggerModelSpec } from './models.ts';
+import { looksLikeHtmlAnimation, htmlAnimationFirstFrame } from '../image/htmlAnimation.ts';
 
 const WHITE = { r: 255, g: 255, b: 255, alpha: 1 };
 /** 一张图解码缩放最多给这么久（libvips 自己中止）；几亿像素的大图也就几秒，卡住多半是文件有问题 */
@@ -13,6 +14,7 @@ const SHARP_TIMEOUT = { seconds: 60 };
 
 /** BMP（sharp 不支持）先用自己的解码器转成 raw，再走同样的流程 */
 function open(input: string | Buffer) {
+  if (Buffer.isBuffer(input) && looksLikeHtmlAnimation(input)) input = htmlAnimationFirstFrame(input);
   if (Buffer.isBuffer(input) && input[0] === 0x42 && input[1] === 0x4d) {
     const raw = decodeBmp(input);
     if (raw) return sharp(raw.data, { raw: { width: raw.width, height: raw.height, channels: raw.channels } }).timeout(SHARP_TIMEOUT);

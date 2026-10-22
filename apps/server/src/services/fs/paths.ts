@@ -1,7 +1,7 @@
 /** 图库文件相关的路径工具：扩展名、跳过规则、路径换算。 */
 import path from 'node:path';
 
-export const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.jpe', '.jfif', '.png', '.apng', '.webp', '.gif', '.avif', '.bmp']);
+export const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.jpe', '.jfif', '.png', '.apng', '.webp', '.gif', '.avif', '.bmp', '.html', '.htm']);
 // 旧版 Chrome 另存推特图时得到的扩展名：a.jpg_large / a.png_orig / a.jpg-large
 const TWITTER_EXT = /\.(jpe?g|png|webp|gif)[_-](large|orig|medium|small|thumb|\d+x\d+)$/i;
 

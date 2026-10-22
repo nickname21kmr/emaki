@@ -19,6 +19,7 @@ export interface ClassRow {
   width: number;
   height: number;
   format: ImageFormat;
+  frame_count?: number | null;
   camera: string | null;
   content_kind_manual: number;
   tagged_at: string | null;
@@ -35,7 +36,7 @@ export interface Classification {
 }
 
 /** 只能接在 FROM images 后面（不带别名）：comic_root = 在按漫画导入的范围里（comicAreas.ts） */
-export const CLASS_COLS = `id, file_name, rel_path, width, height, format, camera, content_kind_manual, tagged_at,
+export const CLASS_COLS = `id, file_name, rel_path, width, height, format, frame_count, camera, content_kind_manual, tagged_at,
   ${IN_COMIC('images')} AS comic_root`;
 /** 分类、主题、质量分用到的全部标签名：回填只读这些（RV-T-6） */
 export const CLASSIFY_TAG_NAMES: readonly string[] = [...new Set([...SIGNAL_TAGS, ...THEME_TAG_NAMES])];
@@ -49,6 +50,7 @@ export function computeClassification(r: ClassRow, tags: [string, number][] | nu
     width: r.width,
     height: r.height,
     format: r.format,
+    pages: r.frame_count ?? 1,
     camera: r.camera,
     tags: tagged ? new Map(tags) : null,
     comicRoot: !!r.comic_root,

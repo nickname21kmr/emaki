@@ -25,7 +25,7 @@ export type ImageStatus =
   /** 被用户排除，不参与统计和浏览 */
   | 'excluded';
 
-export type ImageFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'avif' | 'bmp';
+export type ImageFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'avif' | 'bmp' | 'html';
 
 /**
  * 图片内容类型（T27）。插画是默认类型；其余统称「别册」：不计入角色张数、不进未识别队列（漫画除外，见 T27 补充）。

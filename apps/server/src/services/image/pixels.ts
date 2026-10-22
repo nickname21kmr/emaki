@@ -8,6 +8,7 @@ import { writeFileAtomic } from '../fs/atomicWrite.ts';
 import { decodeBmp } from './bmp.ts';
 import { computeDHash } from './dhash.ts';
 import { SHARP_INPUT, sharp } from './sharpConfig.ts';
+import { htmlAnimationFirstFrame } from './htmlAnimation.ts';
 
 export const WEBP = { quality: 80, effort: 4, smartSubsample: true } as const;
 const MAX_WEBP = 16383; // WebP 单边上限
@@ -23,6 +24,7 @@ export const thumbPath = (root: string, sha: string, w: number) => path.join(roo
 
 /** BMP 走自己的解码器，其余格式直接交给 sharp；统一做 EXIF 自动旋转 */
 export function openSharp(input: Buffer | string, format: ImageFormat): Sharp {
+  if (format === 'html' && Buffer.isBuffer(input)) return sharp(htmlAnimationFirstFrame(input),SHARP_INPUT);
   if (format === 'bmp' && Buffer.isBuffer(input)) {
     const raw = decodeBmp(input);
     if (!raw) throw new Error('不支持的 BMP 变体');

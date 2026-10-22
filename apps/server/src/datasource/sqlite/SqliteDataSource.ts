@@ -74,6 +74,8 @@ import { Pipeline } from '../../services/pipeline.ts';
 import { Scanner } from '../../services/scan/Scanner.ts';
 import { ScanRequests } from '../../services/scan/ScanRequests.ts';
 import { backfillSources } from '../../services/source/backfill.ts';
+import { htmlAnimationCache, readHtmlAnimation } from '../../services/image/htmlAnimation.ts';
+import { sha256Buffer } from '../../services/fs/hash.ts';
 import { backfillClassification } from '../../services/classify/backfill.ts';
 import { recordRootModeUndo, syncRootModes } from '../../services/classify/rootMode.ts';
 import type { UndoRecorder } from './undo.ts';
@@ -740,7 +742,10 @@ export class SqliteDataSource implements DataSource {
     } catch {
       return null;
     }
-    return { kind: 'path', contentType: MIME[row.format], filePath: abs, etag: `"${row.sha256.slice(0, 20)}"`, cacheControl: 'private, no-cache' };
+    const html = row.format === 'html' ? await readHtmlAnimation(abs) : null;
+    const sha = html ? sha256Buffer(html) : row.sha256;
+    const filePath = html ? await htmlAnimationCache(html,this.ctx.dataDir,sha) : abs;
+    return { kind: 'path', contentType: MIME[row.format], filePath, etag: `"${sha.slice(0, 20)}"`, cacheControl: 'private, no-cache' };
   }
 
   async revealImage(id: ID): Promise<void> {

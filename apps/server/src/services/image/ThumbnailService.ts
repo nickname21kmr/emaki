@@ -16,6 +16,7 @@ import { computeDHash } from './dhash.ts';
 import { readCameraFromExif, readJpegExifHead } from './exif.ts';
 import { computeDominantColor, fitBox, openSharp, processPixels, thumbPath, WEBP } from './pixels.ts';
 import { sharp } from './sharpConfig.ts';
+import { probeImage } from './probe.ts';
 
 export interface ThumbRow {
   id: number;
@@ -23,13 +24,14 @@ export interface ThumbRow {
   format: ImageFormat;
   rel_path: string;
   root_path: string;
+  frame_count?: number | null;
 }
 
 /** 超过这个大小的原图直接把路径交给 sharp，不整个读进内存 */
 const MAX_BUFFERED = 256 * 1024 * 1024;
 const BATCH = 200;
 
-const PENDING_WHERE = `i.thumb_at IS NULL AND i.decode_error IS NULL AND i.missing = 0 AND i.trashed_at IS NULL`;
+const PENDING_WHERE = `(i.thumb_at IS NULL OR (i.frame_count IS NULL AND i.format IN ('webp','png','avif','gif','html'))) AND i.decode_error IS NULL AND i.missing = 0 AND i.trashed_at IS NULL`;
 /** 还没读过 EXIF 相机的 JPEG（T27）：非 JPEG 直接写 ''，不读文件 */
 const CAMERA_WHERE = `i.format = 'jpeg' AND i.camera IS NULL AND i.missing = 0 AND i.trashed_at IS NULL`;
 const ROOT_JOIN = `JOIN library_roots r ON r.id = i.root_id AND r.enabled = 1 AND r.removed_at IS NULL`;
@@ -95,6 +97,7 @@ export class ThumbnailService {
     }
 
     try {
+      await this.frameMetadata(row,input);
       if (width === 960) {
         await writeFileAtomic(file, await openSharp(input, row.format).resize(fitBox(960)).webp({ ...WEBP, quality: 82 }).toBuffer());
       } else {
@@ -121,6 +124,14 @@ export class ThumbnailService {
     const f480 = thumbPath(this.d.thumbsRoot, row.sha256, 480);
     const f240 = thumbPath(this.d.thumbsRoot, row.sha256, 240);
     if (!existsSync(f480)) return this.generate(row, 480);
+    if (row.frame_count == null && ['webp','png','avif','gif','html'].includes(row.format)) {
+      try { await this.frameMetadata(row,toAbs(row.root_path,row.rel_path)); }
+      catch (error) {
+        this.d.db.prepare('UPDATE images SET decode_error=? WHERE sha256=?')
+          .run(`读取动画帧信息失败：${(error as Error).message}`,row.sha256);
+        return null;
+      }
+    }
     // 只有 480 没有 240（写完 480 进程就被打断）：generate(480) 会直接返回，得先从 480 缩出 240
     if (!existsSync(f240)) await this.generate(row, 240);
     const [c, h] = await Promise.all([computeDominantColor(await readFile(f240)), computeDHash(await readFile(f480))]);
@@ -128,6 +139,17 @@ export class ThumbnailService {
       .prepare('UPDATE images SET dominant_color=@c, dhash=@h, thumb_at=@now, decode_error=NULL WHERE sha256=@sha')
       .run({ c, h, now: new Date(this.d.now?.() ?? Date.now()).toISOString(), sha: row.sha256 });
     return f480;
+  }
+
+  private async frameMetadata(row: ThumbRow, input: Buffer | string): Promise<void> {
+    const known = this.d.db.prepare('SELECT frame_count FROM images WHERE id=?').pluck().get(row.id);
+    if (known != null) return;
+    const probe = await probeImage(input);
+    this.d.db.prepare('UPDATE images SET frame_count=? WHERE sha256=?').run(probe.pages,row.sha256);
+    if ((probe.pages > 1 && probe.format !== 'gif') || probe.format === 'html') {
+      const ids = this.d.db.prepare('SELECT id FROM images WHERE sha256=?').pluck().all(row.sha256) as number[];
+      backfillClassification(this.d.db,{ids});
+    }
   }
 
   /** 还没做过像素处理的图数量（Pipeline 用来决定要不要排缩略图任务） */
@@ -183,7 +205,7 @@ export class ThumbnailService {
   async runBackfill(ctx: JobContext): Promise<string> {
     const total = this.pendingCount();
     ctx.setTotal(total);
-    const batchStmt = this.d.db.prepare(`SELECT i.id, i.sha256, i.format, i.rel_path, r.path AS root_path
+    const batchStmt = this.d.db.prepare(`SELECT i.id, i.sha256, i.format, i.rel_path, i.frame_count, r.path AS root_path
       FROM images i ${ROOT_JOIN}
       WHERE ${PENDING_WHERE} AND i.id < @last
       ORDER BY i.id DESC LIMIT ${BATCH}`);
@@ -223,6 +245,7 @@ export class ThumbnailService {
       }
     }
     await this.queue.onIdle();
+    this.d.onCamerasUpdated?.();
     const cams = await this.backfillCameras(ctx);
     return `生成缩略图：完成 ${ok} 张，失败 ${failed} 张${cams ? `；认出 ${cams} 张相机照片` : ''}`;
   }

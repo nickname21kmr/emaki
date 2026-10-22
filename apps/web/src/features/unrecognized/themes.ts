@@ -47,7 +47,7 @@ export const ANNEX_HINT: Record<UnrecognizedAnnexKind, string> = {
   text: '文档、笔记、满屏文字',
   photo: '相机拍的照片、真人、实物',
   meme: '表情、梗图',
-  animated: 'GIF 动图',
+  animated: 'GIF、动画 WebP / PNG、HTML 逐帧动画',
 };
 
 export const ORDER_NOTE = {
