@@ -56,12 +56,13 @@ export function preloadNeighbors(client: QueryClient, ids: ID[], index: number) 
   const prev = ids[index - 1];
   const after = ids[index + 2];
   if (next) {
-    warm(imageUrl.thumb(next, 960));
-    warm(imageUrl.file(next));
+    const version=findCachedImage(client,next)?.modifiedAt;
+    warm(imageUrl.thumb(next, 960, version));
+    warm(imageUrl.file(next, version));
     void client.prefetchQuery({ queryKey: qk.image(next), queryFn: () => api.image(next), staleTime: 30_000 });
   }
-  if (prev) warm(imageUrl.thumb(prev, 960));
-  if (after) warm(imageUrl.thumb(after, 960));
+  if (prev) warm(imageUrl.thumb(prev, 960, findCachedImage(client,prev)?.modifiedAt));
+  if (after) warm(imageUrl.thumb(after, 960, findCachedImage(client,after)?.modifiedAt));
 }
 
 /** 等一张图解码好（失败或超时也放行），放映换片前用，避免交叉淡化时露出底色 */
@@ -72,8 +73,11 @@ export function whenDecoded(src: string, timeout = 3000): Promise<void> {
 }
 
 /** 放映会绕回开头：按循环取后两张，预加载 960 缩略图 */
-export function preloadAhead(ids: ID[], index: number) {
+export function preloadAhead(client: QueryClient, ids: ID[], index: number) {
   for (const k of [1, 2]) {
-    if (ids.length > k) warm(imageUrl.thumb(ids[(index + k) % ids.length]!, 960));
+    if (ids.length > k) {
+      const id=ids[(index+k)%ids.length]!;
+      warm(imageUrl.thumb(id, 960, findCachedImage(client,id)?.modifiedAt));
+    }
   }
 }

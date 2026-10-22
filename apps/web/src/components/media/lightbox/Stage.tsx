@@ -10,7 +10,7 @@ import { clampPan, zoomAround, type ZoomApi, type ZoomBounds } from './useZoomPa
 import { EASE_OUT } from '@/lib/motion';
 import type { LightboxRect } from '@/lib/stores';
 
-export type StageMeta = Pick<ImageItem, 'width' | 'height' | 'rating' | 'dominantColor' | 'fileName'>;
+export type StageMeta = Pick<ImageItem, 'width' | 'height' | 'rating' | 'dominantColor' | 'fileName'> & Partial<Pick<ImageItem,'modifiedAt'>>;
 
 /** 图片四周留白：左右给切换箭头，上下给顶栏和缩放提示 */
 const PAD_X = 84;
@@ -195,7 +195,7 @@ export function Stage({
           }}
         >
           <StageImage
-            key={id}
+            key={`${id}:${meta.modifiedAt??''}`}
             id={id}
             meta={meta}
             blurred={blurred}
@@ -313,9 +313,9 @@ function StageImage({
       )}
       style={{ backgroundColor: placeholder || thumbLoaded || fullLoaded ? undefined : meta.dominantColor }}
     >
-      {placeholder && !fullLoaded && <img src={imageUrl.thumb(id, placeholder)} alt="" draggable={false} className={imgClass} />}
+      {placeholder && !fullLoaded && <img src={imageUrl.thumb(id, placeholder, meta.modifiedAt)} alt="" draggable={false} className={imgClass} />}
       <img
-        src={imageUrl.thumb(id, 960)}
+        src={imageUrl.thumb(id, 960, meta.modifiedAt)}
         alt=""
         draggable={false}
         // 看图器里正在看的这张优先：网格里几十张缩略图同时在下载时，它不用排队
@@ -331,7 +331,7 @@ function StageImage({
       />
       {!fullFailed && (
         <img
-          src={imageUrl.file(id)}
+          src={imageUrl.file(id, meta.modifiedAt)}
           alt={meta.fileName}
           draggable={false}
           decoding="async"

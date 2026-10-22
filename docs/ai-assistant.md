@@ -4,7 +4,9 @@
 
 ## 使用
 
-助手可通过 MCP `import_images` 将已下载的本地图片复制到已有图库目录，保留原下载和旧版图片；先用 `read_library /api/library-roots` 选择目标。工具按文件内容查重、避开重名，返回可立即查询的图片 ID，随后可补来源、角色和画师并展示。缩略图、识别和查重复用现有任务链，无需额外全库扫描。HTTP 接口为 `POST /api/images/import`，参数 `{rootId, dir, files:[{path, fileName?}]}`；一次 1–20 个本地普通图片文件，每个最多 128 MiB。撤销仅将本次新增副本移到系统回收站，已存在的图片不受影响。
+助手通过 MCP `replace_image` 将下载的高清版替换到原图片，保留图片 ID、角色、来源、画师和收藏，更新尺寸和缩略图，并支持撤销恢复原版本。用户已要求为某张图找高清版或替换时直接执行；新增还是替换不明确时通过 `ask_user` 提供选择。
+
+新增图片使用 `import_images`；通过 `read_library /api/library-roots` 选择目录，按内容复用完全相同的现有文件。重名返回 `needs_confirm` 和已有图片 ID，只有明确要保留两个版本时才设置 `keepBoth=true`。工具返回可立即查询的图片 ID，无需额外全库扫描。HTTP 接口为 `POST /api/images/import`，参数 `{rootId, dir, files:[{path, fileName?}], keepBoth?}`；替换为 `POST /api/images/:id/replace`，参数 `{path}`。本地普通图片文件每个最多 128 MiB，新增每次 1–20 张。两者均保留原下载；新增的撤销将副本送到系统回收站，替换的撤销恢复原文件内容与媒体字段，之后的元数据修改保留。原版本与恢复记录存放在数据目录 `image-replacements`，服务重启后仍保留备份（撤销按钮沿用现有进程内撤销栈）。
 
 1. 打开开关，弹窗会列出开启后哪些内容会发出去、助手在本机能做什么，确认后才开启，并检测本机 Agent 应用。检测只检查安装、认证状态和模型列表，不发起推理，也不发送图库内容。
 2. 在设置页选择 Agent 应用：
@@ -41,7 +43,8 @@ DSH 启动时优先保留进程环境和原 DSH home `.env` 中的代理配置�
 
 | 工具 | 能力 |
 | --- | --- |
-| `import_images` | 将本地下载图片复制入库，返回图片 ID；精确查重、避免重名覆盖，支持撤销新增副本 |
+| `import_images` | 新增下载图片，精确查重；重名时给出选择，支持撤销新增副本 |
+| `replace_image` | 将下载的高清版替换到原图片，保留 ID 与元数据，支持撤销恢复 |
 | `describe_database` / `query_database` | 当前表结构、自由只读 SQL；关联、统计、抽样由 agent 自行组织 |
 | `read_library` | 读取应用现有图库、角色、作品、任务、未识别等 API，保留页面口径 |
 | `read_media` | 实际看图，也支持按像素裁剪局部 |

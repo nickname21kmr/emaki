@@ -115,6 +115,25 @@ describe('assistant HTTP and MCP', () => {
       const failed:any=await client.callTool({name:'import_images',arguments:{...args,operationId:'import-invalid-file'}});
       expect(failed.isError).toBe(true);
       expect(JSON.parse(failed.content[0].text).items[0].error).toBe('not an image');
+      spy.mockResolvedValueOnce({ok:true,message:'1 张待选择保存方式',undoToken:null,items:[{path:file,status:'failed',code:'needs_confirm',existingImageId:imageId,error:'替换还是保留两个版本？'}]});
+      const pending:any=await client.callTool({name:'import_images',arguments:{...args,operationId:'import-name-conflict'}});
+      expect(pending.isError).not.toBe(true);
+      expect(JSON.parse(pending.content[0].text).items[0]).toMatchObject({code:'needs_confirm',existingImageId:imageId});
+    } finally {spy.mockRestore();await client.close();}
+  });
+  it('replaces existing media through the idempotent business API',async()=>{
+    const client=await connect(),file=path.join(state.dir,'high-resolution.png');
+    const result={ok:true as const,message:'已替换图片',undoToken:'replace-test-undo',imageId,absPath:file};
+    const spy=vi.spyOn(ds,'replaceImage').mockResolvedValue(result);
+    try {
+      expect((await client.listTools()).tools.map(t=>t.name)).toContain('replace_image');
+      const args={operationId:'replace-image-contract',imageId,path:file};
+      const replaced:any=await client.callTool({name:'replace_image',arguments:args});
+      expect(replaced.isError).not.toBe(true);expect(JSON.parse(replaced.content[0].text)).toEqual(result);
+      expect(await client.callTool({name:'replace_image',arguments:args})).toEqual(replaced);
+      expect(spy).toHaveBeenCalledExactlyOnceWith(imageId,{path:file});
+      const conflict:any=await client.callTool({name:'replace_image',arguments:{...args,path:file+'-other'}});
+      expect(conflict.isError).toBe(true);
     } finally {spy.mockRestore();await client.close();}
   });
   it('read_library only reaches whitelisted routes after URL normalization', async () => {

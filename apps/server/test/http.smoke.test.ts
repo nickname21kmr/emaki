@@ -75,6 +75,11 @@ function route(key: string, body: () => Promise<void>) {
 }
 
 describe('统计、作品、角色、搜索（routes/library.ts）', () => {
+  route('POST /api/images/:id/replace', async () => {
+    expect((await call('POST','/api/images/img1/replace',{})).status).toBe(400);
+    const response=await call('POST','/api/images/img1/replace',{path:'D:/download.png'});
+    expect(response.status).toBe(400);expect(response.json.error).toContain('演示图库');
+  });
   route('POST /api/images/import', async () => {
     expect((await call('POST','/api/images/import',{rootId:'root1',files:[]})).status).toBe(400);
     const response=await call('POST','/api/images/import',{rootId:'root1',files:[{path:'D:/download.png'}]});

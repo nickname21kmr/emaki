@@ -266,7 +266,7 @@ function LightboxView({
 
   useEffect(() => {
     preloadNeighbors(client, ids, index);
-    if (slideshow) preloadAhead(ids, index);
+    if (slideshow) preloadAhead(client, ids, index);
   }, [client, ids, index, slideshow]);
 
   escapeRef.current = () => {
@@ -296,7 +296,7 @@ function LightboxView({
     const s = useLightbox.getState();
     if (!s.open || s.returning || s.ids.length < 2) return;
     const next = (s.index + 1) % s.ids.length;
-    void whenDecoded(imageUrl.thumb(s.ids[next]!, 960)).then(() => {
+    void whenDecoded(imageUrl.thumb(s.ids[next]!, 960, findCachedImage(client,s.ids[next]!)?.modifiedAt)).then(() => {
       const t = useLightbox.getState();
       // 等的时候被手动翻页或关掉了，就不再自动前进
       if (t.open && !t.returning && t.ids === s.ids && t.index === s.index) useLightbox.setState({ index: next, originRect: null });

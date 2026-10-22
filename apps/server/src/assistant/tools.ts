@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { openSharp } from '../services/image/pixels.ts';
 import type { FastifyInstance } from 'fastify';
-import type { AssistantCard, AssistantContext, ImportImagesResult } from '@emaki/shared';
+import type { AssistantCard, AssistantContext, ImportImagesResult, ReplaceImageResult } from '@emaki/shared';
 import type { DataSource } from '../datasource/DataSource.ts';
 import { queryLibrary } from './query.ts';
 
@@ -88,15 +88,25 @@ export function createLibraryMcp(app: FastifyInstance, ds: DataSource, file: str
     host.recordMutation(sessionId, result); return json(result);
   });
   server.registerTool('import_images', {
-    description: '将服务器上已下载的本地图片复制入库，保留下载文件，不替换旧图。先用 read_library /api/library-roots 确定 rootId，dir 为该图库内的相对目录；files[].path 使用绝对路径，fileName 可选。完全相同且仍在磁盘上的已入库图片会复用 ID，同名不同内容自动另起文件名。逐项返回 imported/existing/failed 和图片 ID，可继续 edit_source、update_images 并 present_result。返回后已可查询，无需再全库扫描；缩略图、识别和查重接入现有任务链。撤销仅将本次新建副本移到系统回收站。重试复用 operationId。',
+    description: '将已下载的本地图片新增入库。用户要求为现有图片找高清版或替换时，直接用 replace_image 保留原图片 ID；新增还是替换不明确时，用 ask_user 提供选择。先用 read_library /api/library-roots 确定 rootId，dir 为相对目录，files[].path 为绝对路径。完全相同的现有文件复用 ID；重名默认返回 code=needs_confirm 和 existingImageId，不自动另起文件名。用户选择保留两个版本时才传 keepBoth=true。逐项返回 imported/existing/failed，可继续补元数据并展示；无需全库扫描。撤销将新增副本移到回收站，下载文件保留。重试复用 operationId。',
     inputSchema: { operationId:z.string().min(1).max(100), rootId:z.string().min(1).max(100), dir:z.string().max(200).default(''),
+      keepBoth:z.boolean().optional(),
       files:z.array(z.object({path:z.string().min(1).max(4000),fileName:z.string().min(1).max(200).optional()})).min(1).max(20) },
     annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true},
   }, async ({operationId,...body}) => {
     host.assertEnabled();
     const result = await host.operation(scope,operationId,JSON.stringify(['import_images',body]),()=>invoke('POST','/api/images/import',body)) as ImportImagesResult;
     if (result.items.some(i=>i.status==='imported')) host.recordMutation(sessionId,result);
-    return {...json(result),...(result.items.every(i=>i.status==='failed') ? {isError:true} : {})};
+    return {...json(result),...(result.items.every(i=>i.status==='failed' && i.code!=='needs_confirm') ? {isError:true} : {})};
+  });
+  server.registerTool('replace_image', {
+    description:'用下载好的原图、高清版替换一张现有图片。用户已要求为这张图找高清版、升级或替换时直接执行；新增还是替换不明确时先用 ask_user。imageId 指向要替换的原图片，即使下载文件名不同也可替换。保留 ID、角色、画师、来源、收藏和其他元数据，更新尺寸与缩略图；格式变化时同步扩展名。原版本有备份，返回撤销 token，下载文件保留。随后回读并 present_result。重试复用 operationId。',
+    inputSchema:{operationId:z.string().min(1).max(100),imageId:z.string().min(1).max(100),path:z.string().min(1).max(4000)},
+    annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:true},
+  },async({operationId,imageId,path})=>{
+    host.assertEnabled();
+    const result=await host.operation(scope,operationId,JSON.stringify(['replace_image',imageId,path]),()=>invoke('POST',`/api/images/${encodeURIComponent(imageId)}/replace`,{path})) as ReplaceImageResult;
+    if(result.undoToken) host.recordMutation(sessionId,result);return json(result);
   });
   server.registerTool('edit_source', { description: '确认或修改一张图片的原作来源。source={url,artist?} 自动解析站点和作品号；人工确认优先于扫描。source=null 清除并锁定为空；source="auto" 解除人工锁定并按文件名重算。artist 是来源显示文字，不代替图片画师关联。返回撤销 token，重试复用 operationId。',
     inputSchema: { operationId: z.string().min(1).max(100), imageId: z.string().min(1).max(100), source: sourceEditSchema }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true } }, async ({ operationId, imageId, source }) => {

@@ -27,7 +27,7 @@ const inside = (child: string, parent: string) => {
 type Root = { id: number; path: string; enabled: number };
 type Imported = { id: number; rootId: number; rel: string; abs: string; sha: string; bytes: number };
 
-function destination(ctx: SqliteContext, rootId: string, dir: string) {
+export function destination(ctx: SqliteContext, rootId: string, dir: string) {
   const id = parseId(rootId);
   const root = id === null ? undefined : ctx.db.prepare('SELECT id,path,enabled FROM library_roots WHERE id=? AND removed_at IS NULL').get(id) as Root | undefined;
   if (!root) throw new NotFoundError('图库文件夹');
@@ -51,7 +51,7 @@ function destination(ctx: SqliteContext, rootId: string, dir: string) {
 }
 
 /** Bounded reads of regular files only: not a URL downloader or a directory importer. */
-async function imageBytes(file: string) {
+export async function imageBytes(file: string) {
   if (!path.isAbsolute(file)) throw new BadRequestError('请提供下载图片在服务器上的绝对路径');
   if (!(await stat(file)).isFile()) throw new BadRequestError('请选择普通图片文件');
   const handle = await open(file, 'r');
@@ -103,6 +103,13 @@ export async function importImages(ctx: SqliteContext, body: ImportImagesBody, o
         continue;
       }
       const ext = path.extname(name), stem = name.slice(0, name.length-ext.length);
+      const namedRel = dir ? `${dir}/${name}` : name;
+      const namedRow = ctx.db.prepare('SELECT id FROM images WHERE root_id=? AND rel_path=? COLLATE NOCASE').get(root.id,namedRel) as {id:number}|undefined;
+      if (!body.keepBoth && (namedRow || existsSync(path.join(folder,name)))) {
+        items.push({path:file.path,status:'failed',code:'needs_confirm',existingImageId:namedRow ? String(namedRow.id) : undefined,
+          error:`已有同名文件「${name}」，请选择替换原图还是保留两个版本。明确要替换时使用 replace_image；保留两个版本时设置 keepBoth。`});
+        continue;
+      }
       const occupied = ctx.db.prepare('SELECT 1 FROM images WHERE root_id=? AND rel_path=? COLLATE NOCASE');
       let n=0, target='', rel='';
       const tmp = path.join(folder, `.emaki-import-${randomUUID()}.tmp`);
@@ -114,7 +121,10 @@ export async function importImages(ctx: SqliteContext, body: ImportImagesBody, o
           n++;
           rel = dir ? `${dir}/${next}` : next;
           target = path.join(folder,next);
-          if (occupied.get(root.id,rel) || existsSync(target)) continue;
+          if (occupied.get(root.id,rel) || existsSync(target)) {
+            if (!body.keepBoth) throw new ConflictError('目标文件已出现，请确认替换或保留两个版本后重试');
+            continue;
+          }
           try {
             // Atomic publication with no overwrite; FAT/network drives use exclusive copy.
             try { linkSync(tmp,target); }
@@ -123,7 +133,10 @@ export async function importImages(ctx: SqliteContext, body: ImportImagesBody, o
               copyFileSync(tmp,target,constants.COPYFILE_EXCL);
             }
             published = true; break;
-          } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+            if (!body.keepBoth) throw new ConflictError('目标文件已出现，请确认替换或保留两个版本后重试');
+          }
         }
         const now = new Date(ctx.clock()).toISOString();
         const source = parseSource(rel, readSettings(ctx.db).tagger.pixivFilenameMode);
@@ -145,8 +158,10 @@ export async function importImages(ctx: SqliteContext, body: ImportImagesBody, o
       } finally { if (existsSync(tmp)) unlinkSync(tmp); }
     } catch (error) { items.push({path:file.path,status:'failed',error:(error as Error).message}); }
   }
-  const imported=created.length, existing=items.filter(i=>i.status==='existing').length, failed=items.filter(i=>i.status==='failed').length;
-  const message=`已入库 ${imported} 张${existing ? `，${existing} 张已在图库` : ''}${failed ? `，${failed} 张失败` : ''}`;
+  const imported=created.length, existing=items.filter(i=>i.status==='existing').length;
+  const pending=items.filter(i=>i.status==='failed' && i.code==='needs_confirm').length;
+  const failed=items.filter(i=>i.status==='failed' && i.code!=='needs_confirm').length;
+  const message=`已入库 ${imported} 张${existing ? `，${existing} 张已在图库` : ''}${pending ? `，${pending} 张待选择保存方式` : ''}${failed ? `，${failed} 张失败` : ''}`;
   if (!created.length) return {ok:true,message,undoToken:null,items};
   ctx.touch();
   options.afterImport(created.map(r=>r.id));

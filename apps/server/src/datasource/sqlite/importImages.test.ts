@@ -42,24 +42,31 @@ it('copies validated bytes, immediately returns real image IDs, preserves source
   expect(summary).toMatchObject({added:0,updated:0,missing:0});
 });
 
-it('exact duplicates reuse existing IDs, including duplicate paths within a batch, and never overwrite names',async()=>{
+it('exact duplicates reuse IDs; different contents with the same name require a choice',async()=>{
   const file=await source(),one=item(await run([{path:file}],'')).imageId;
   const again=await run([{path:file},{path:file,fileName:'different.png'}]);
   expect(again.undoToken).toBeNull();expect(again.items.map(i=>i.status)).toEqual(['existing','existing']);
   expect(again.items.every(i=>i.status!=='failed' && i.imageId===one)).toBe(true);
   const other=await sharp({create:{width:12,height:14,channels:3,background:'#2c9'}}).png().toBuffer();
   await writeFile(file,other);
-  const next=item(await run([{path:file}],'') );
+  const conflict=await run([{path:file}],'');
+  expect(conflict.items[0]).toMatchObject({status:'failed',code:'needs_confirm',existingImageId:one});
+  expect(conflict.undoToken).toBeNull();
+  expect(await readFile(path.join(lib,'image.png'))).toEqual(image);
+  const next=item(await ds.importImages({rootId,dir:'',files:[{path:file}],keepBoth:true}));
   expect(next.imageId).not.toBe(one);expect(path.basename(next.absPath)).toBe('image (1).png');
   expect(await readFile(path.join(lib,'image.png'))).toEqual(image);
 });
 
-it('never overwrites an unindexed disk file, and reports per-file validation failures',async()=>{
+it('asks about unindexed same-name files and reports per-file validation failures',async()=>{
   await writeFile(path.join(lib,'image.png'),'keep-me');
   const good=await source(),bad=await source('page.jpg',Buffer.from('<html>not an image</html>'));
   const result=await run([{path:good},{path:bad},{path:good,fileName:'../escape.png'},{path:'relative.png'}],'');
-  expect(result.items.map(i=>i.status)).toEqual(['imported','failed','failed','failed']);
+  expect(result.items.map(i=>i.status)).toEqual(['failed','failed','failed','failed']);
+  expect(result.items[0]).toMatchObject({code:'needs_confirm'});
   expect(await readFile(path.join(lib,'image.png'),'utf8')).toBe('keep-me');
+  expect(await readdir(lib)).toEqual(['image.png']);
+  await ds.importImages({rootId,dir:'',files:[{path:good}],keepBoth:true});
   expect(await readdir(lib)).toEqual(['image (1).png','image.png']);
   expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM images').pluck().get()).toBe(1);
 });
@@ -123,5 +130,104 @@ it('HTTP validates requests and returns immediately readable imported records',a
     expect(response.statusCode).toBe(200);
     const imageId=response.json().items[0].imageId;
     expect((await app.inject({url:`/api/images/${imageId}`})).json()).toMatchObject({id:imageId,width:12,height:14});
+  } finally {await app.close();}
+});
+
+it('replaces the original identity and preserves associations, metadata and later edits through undo',async()=>{
+  const original=item(await run([{path:await source()}])),oldStat=await stat(original.absPath);
+  const id=original.imageId;
+  const char=ds.ctx.db.prepare("INSERT INTO characters(name,source,created_at) VALUES('测试角色','custom','2026-01-01')").run().lastInsertRowid;
+  ds.ctx.db.prepare("INSERT INTO image_characters(image_id,character_id,origin,added_at) VALUES(?,?,'manual','2026-01-01')").run(id,char);
+  ds.ctx.db.prepare("UPDATE images SET favorite=1,rating='sensitive',rating_manual=1,original_at='2026-01-01',source_site='pixiv',source_post_id='12345678',source_url='https://www.pixiv.net/artworks/12345678',source_manual=1,tagged_at='2026-01-01' WHERE id=?").run(id);
+  const hd=await sharp(image).resize(36,42).png().toBuffer(),file=await source('different-download-name.png',hd);
+  const before=await ds.getImage(id),result=await ds.replaceImage(id,{path:file});
+  expect(result).toMatchObject({imageId:id,absPath:original.absPath,undoToken:expect.any(String)});
+  expect(await readFile(original.absPath)).toEqual(hd);expect(await readFile(file)).toEqual(hd);
+  expect(await ds.getImage(id)).toMatchObject({id,width:36,height:42,favorite:true,rating:'sensitive',characterIds:[String(char)],source:before!.source,original:true});
+  expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM images').pluck().get()).toBe(1);
+  expect(ds.ctx.db.prepare('SELECT tagged_at FROM images WHERE id=?').pluck().get(id)).toBe('2026-01-01');
+  ds.requests.requestFull();
+  const summary=await ds.scanner.scan({signal:new AbortController().signal,setTotal(){},advance(){},setMessage(){},shouldYield:()=>false,requeue(){},yielded:false});
+  expect(summary).toMatchObject({added:0,updated:0,missing:0});
+  expect(ds.ctx.db.prepare('SELECT tagged_at FROM images WHERE id=?').pluck().get(id)).toBe('2026-01-01');
+  // Undo restores media only, retaining subsequent metadata edits.
+  await ds.updateImage(id,{favorite:false});
+  await ds.undo(result.undoToken!);
+  expect(await readFile(original.absPath)).toEqual(image);
+  expect((await stat(original.absPath)).mtimeMs).toBeCloseTo(oldStat.mtimeMs,0);
+  expect(await ds.getImage(id)).toMatchObject({id,width:12,height:14,favorite:false,rating:'sensitive',characterIds:[String(char)],source:before!.source});
+  expect(await readFile(file)).toEqual(hd);
+});
+
+it('updates extensions for a new format, retains ID, and restores the original filename on undo',async()=>{
+  const original=item(await run([{path:await source()}])),jpg=await sharp(image).resize(24,28).jpeg().toBuffer();
+  const result=await ds.replaceImage(original.imageId,{path:await source('high.jpg',jpg)});
+  expect(result.absPath).toBe(path.join(lib,'插画','image.jpg'));
+  expect(await stat(original.absPath).catch(()=>null)).toBeNull();
+  expect(await readFile(result.absPath)).toEqual(jpg);
+  expect(await ds.getImage(original.imageId)).toMatchObject({fileName:'image.jpg',format:'jpeg',width:24,height:28});
+  await ds.undo(result.undoToken!);
+  expect(await readFile(original.absPath)).toEqual(image);
+  expect(await stat(result.absPath).catch(()=>null)).toBeNull();
+  expect(await ds.getImage(original.imageId)).toMatchObject({fileName:'image.png',format:'png',width:12,height:14});
+});
+
+it('same bytes are a no-op; new-format name collisions require a choice',async()=>{
+  const file=await source(),original=item(await run([{path:file}]));
+  expect(await ds.replaceImage(original.imageId,{path:file})).toMatchObject({undoToken:null,imageId:original.imageId});
+  const jpg=await source('high.jpg',await sharp(image).jpeg().toBuffer());
+  await writeFile(path.join(lib,'插画','image.jpg'),'existing-unindexed');
+  await expect(ds.replaceImage(original.imageId,{path:jpg})).rejects.toThrow('同名文件');
+  expect(await readFile(original.absPath)).toEqual(image);
+  expect(await readFile(path.join(lib,'插画','image.jpg'),'utf8')).toBe('existing-unindexed');
+});
+
+it.each(['png','jpeg'] as const)('rolls back file and database if replacement persistence fails (%s)',async format=>{
+  const original=item(await run([{path:await source()}])),before=await ds.getImage(original.imageId);
+  const hd=await source('high.'+format,await sharp(image).resize(36,42).toFormat(format).toBuffer());
+  ds.ctx.db.exec("CREATE TRIGGER reject_replace BEFORE UPDATE ON images BEGIN SELECT RAISE(ABORT,'fixture replacement failure'); END");
+  await expect(ds.replaceImage(original.imageId,{path:hd})).rejects.toThrow('fixture replacement failure');
+  expect(await readFile(original.absPath)).toEqual(image);expect(await ds.getImage(original.imageId)).toEqual(before);
+  expect(await readdir(path.dirname(original.absPath))).toEqual(['image.png']);
+});
+
+it('rejects invalid downloads, disabled roots, changed original bytes and changed files during undo',async()=>{
+  const original=item(await run([{path:await source()}])),hd=await source('hd.png',await sharp(image).resize(24,28).png().toBuffer());
+  await expect(ds.replaceImage(original.imageId,{path:await source('bad.jpg',Buffer.from('not an image'))})).rejects.toThrow();
+  ds.ctx.db.prepare('UPDATE library_roots SET enabled=0 WHERE id=?').run(rootId);
+  await expect(ds.replaceImage(original.imageId,{path:hd})).rejects.toThrow('启用');
+  ds.ctx.db.prepare('UPDATE library_roots SET enabled=1 WHERE id=?').run(rootId);
+  const result=await ds.replaceImage(original.imageId,{path:hd});
+  await writeFile(result.absPath,'user changed it');
+  await expect(ds.undo(result.undoToken!)).rejects.toThrow('变化');
+  await expect(ds.replaceImage(original.imageId,{path:hd})).rejects.toThrow('变化');
+  expect(await readFile(result.absPath,'utf8')).toBe('user changed it');
+});
+
+it('a queued thumbnail for the old version cannot cache new bytes under the old hash',async()=>{
+  const original=item(await run([{path:await source()}]));
+  ds.thumbs.queue.pause();
+  const pending=ds.getThumbnail(original.imageId,960);
+  try {
+    await ds.replaceImage(original.imageId,{path:await source('hd.png',await sharp(image).resize(24,28).png().toBuffer())});
+  } finally {ds.thumbs.queue.start();}
+  expect(await pending).toBeNull();
+  const current=await ds.getThumbnail(original.imageId,960);
+  expect(current?.kind).toBe('path');
+  if(current?.kind==='path') expect(await sharp(current.filePath).metadata()).toMatchObject({width:24,height:28});
+});
+
+it('HTTP replacement returns the same ID and updated bytes, size and conditional cache validators',async()=>{
+  const original=item(await run([{path:await source()}])),app=Fastify();imageRoutes(app,ds);
+  try {
+    const oldFile=await app.inject({url:`/api/images/${original.imageId}/file`});
+    const file=await source('hd.png',await sharp(image).resize(24,28).png().toBuffer());
+    const result=await app.inject({method:'POST',url:`/api/images/${original.imageId}/replace`,payload:{path:file}});
+    expect(result.statusCode).toBe(200);expect(result.json().imageId).toBe(original.imageId);
+    expect((await app.inject({url:`/api/images/${original.imageId}`})).json()).toMatchObject({width:24,height:28});
+    const newFile=await app.inject({url:`/api/images/${original.imageId}/file`,headers:{'if-none-match':String(oldFile.headers.etag)}});
+    expect(newFile.statusCode).toBe(200);expect(newFile.headers.etag).not.toBe(oldFile.headers.etag);
+    expect(newFile.rawPayload).toEqual(await readFile(file));
+    expect(newFile.headers['cache-control']).toBe('private, no-cache');
   } finally {await app.close();}
 });

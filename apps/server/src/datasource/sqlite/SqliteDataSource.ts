@@ -24,6 +24,8 @@ import type {
   ImageItem,
   ImportImagesBody,
   ImportImagesResult,
+  ReplaceImageBody,
+  ReplaceImageResult,
   Job,
   JobKind,
   StartJobBody,
@@ -125,6 +127,7 @@ import { LibraryQueries } from './library.ts';
 import { TagResultWriter } from '../../services/tagger/writer.ts';
 import { moveBack, moveImageFiles, normalizeSubdir, type MoveRow } from './move.ts';
 import { importImages } from './importImages.ts';
+import { replaceImage } from './replaceImage.ts';
 import { artistNames, imageArtists, linkGroups, listArtists as listArtistsQuery, tagNames } from './artists.ts';
 import { artistLinksMessage, linkTags, planArtistLinks } from '../artistEdits.ts';
 import { adoptFromRemovedParents, diskCaseRel, mergeChildRoots, relUnder, type ChildRoot } from './roots.ts';
@@ -158,6 +161,12 @@ export interface SqliteOpenOptions {
  * 文件监听用 Node 自带的 fs.watch（不装 chokidar），相似查重用 MIH（不用 BK-tree）。
  */
 export class SqliteDataSource implements DataSource {
+  async replaceImage(id: ID, body: ReplaceImageBody): Promise<ReplaceImageResult> {
+    return replaceImage(this.ctx,id,body,ids=>{
+      this.collectionsHook(null,ids);
+      this.pipeline.afterImport();
+    });
+  }
   async importImages(body: ImportImagesBody): Promise<ImportImagesResult> {
     return importImages(this.ctx, body, {
       trashImpl: this.importTrashImpl,

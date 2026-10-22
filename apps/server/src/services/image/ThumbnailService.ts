@@ -96,6 +96,9 @@ export class ThumbnailService {
       throw err;
     }
 
+    // A queued request may refer to the version before an explicit replacement.
+    // Never store bytes from the new file under the old SHA cache key.
+    if (this.d.db.prepare('SELECT sha256 FROM images WHERE id=?').pluck().get(row.id) !== row.sha256) return null;
     try {
       await this.frameMetadata(row,input);
       if (width === 960) {

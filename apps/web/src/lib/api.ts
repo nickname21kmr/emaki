@@ -29,6 +29,8 @@ import type {
   ID,
   ImportImagesBody,
   ImportImagesResult,
+  ReplaceImageBody,
+  ReplaceImageResult,
   Job,
   JobKind,
   StartJobBody,
@@ -126,12 +128,13 @@ const del = <T>(path: string) => request<T>('DELETE', path);
 
 /** 图片 URL（不走 fetch，直接给 <img src>） */
 export const imageUrl = {
-  thumb: (id: ID, width: 240 | 480 | 960 = 480) => `/api/images/${encodeURIComponent(id)}/thumb?w=${width}`,
-  file: (id: ID) => `/api/images/${encodeURIComponent(id)}/file`,
+  thumb: (id: ID, width: 240 | 480 | 960 = 480, version?: string) => `/api/images/${encodeURIComponent(id)}/thumb?w=${width}${version ? `&v=${encodeURIComponent(version)}` : ''}`,
+  file: (id: ID, version?: string) => `/api/images/${encodeURIComponent(id)}/file${version ? `?v=${encodeURIComponent(version)}` : ''}`,
 };
 
 export const api = {
   importImages: (body: ImportImagesBody) => post<ImportImagesResult>('/images/import',body),
+  replaceImage: (id: ID, body: ReplaceImageBody) => post<ReplaceImageResult>(`/images/${encodeURIComponent(id)}/replace`,body),
   stats: () => get<GetStatsResponse>('/stats'),
   contentKinds: () => get<ListContentKindsResponse>('/content-kinds'),
 
