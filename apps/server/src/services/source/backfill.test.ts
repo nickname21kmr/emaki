@@ -3,18 +3,21 @@ import { openDatabase } from '../../db/connection.ts';
 import { migrate } from '../../db/migrate.ts';
 import { backfillSources } from './backfill.ts';
 
-it('upgrades downloader titles from version 2 without replacing manually confirmed sources', () => {
+it.each([
+  [2, '144506494_キス魔な山賊に襲われたミミちゃん４_3.jpg', '144506494'],
+  [3, '104714967_３人で奉仕.jpg', '104714967'],
+])('upgrades downloader titles from version %s without replacing manually confirmed sources', (version, name, postId) => {
   const db = openDatabase(':memory:');
   migrate(db);
-  db.exec("INSERT INTO library_roots (path) VALUES ('D:/Pics'); INSERT INTO settings(key,value) VALUES ('sourceParserVersion','2') ON CONFLICT(key) DO UPDATE SET value='2'");
-  const name = '144506494_キス魔な山賊に襲われたミミちゃん４_3.jpg';
+  db.exec("INSERT INTO library_roots (path) VALUES ('D:/Pics')");
+  db.prepare("INSERT INTO settings(key,value) VALUES ('sourceParserVersion',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(version));
   const insert = db.prepare(`INSERT INTO images (root_id,rel_path,file_name,width,height,bytes,format,sha256,added_at,modified_at,source_site,source_manual)
     VALUES (1,?,?,1,1,1,'jpg',?,'x','x',?,?)`);
   insert.run(name,name,'a',null,0);
   insert.run(`copy/${name}`,name,'b','other',1);
   expect(backfillSources(db)).toBe(1);
   expect(db.prepare('SELECT source_site,source_post_id FROM images ORDER BY id').all()).toEqual([
-    {source_site:'pixiv',source_post_id:'144506494'}, {source_site:'other',source_post_id:null},
+    {source_site:'pixiv',source_post_id:postId}, {source_site:'other',source_post_id:null},
   ]);
   expect(backfillSources(db)).toBe(0);
   db.close();
