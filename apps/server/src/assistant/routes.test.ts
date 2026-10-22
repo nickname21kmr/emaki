@@ -92,6 +92,31 @@ describe('assistant HTTP and MCP', () => {
     await client.connect(new StreamableHTTPClientTransport(new URL(base + '/api/assistant/mcp'), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
     return client;
   };
+  it('exposes import destinations and imports through the idempotent business API', async () => {
+    const client = await connect();
+    const file=path.join(state.dir,'download.png');
+    const result={ok:true as const,message:'已入库 1 张',undoToken:'import-test-undo',items:[{path:file,status:'imported' as const,imageId,absPath:file}]};
+    const spy=vi.spyOn(ds,'importImages').mockResolvedValue(result);
+    try {
+      expect((await client.listTools()).tools.map(t=>t.name)).toContain('import_images');
+      const roots:any=await client.callTool({name:'read_library',arguments:{path:'/api/library-roots'}});
+      const targets=JSON.parse(roots.content[0].text);
+      expect(targets).toEqual((await ds.getSettings()).libraryRoots);
+      const args={operationId:'import-files-contract',rootId:targets[0].id,dir:'下载图片',files:[{path:file}]};
+      const imported:any=await client.callTool({name:'import_images',arguments:args});
+      expect(imported.isError).not.toBe(true);
+      expect(JSON.parse(imported.content[0].text)).toEqual(result);
+      expect(await client.callTool({name:'import_images',arguments:args})).toEqual(imported);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith({rootId:targets[0].id,dir:'下载图片',files:[{path:file}]});
+      const changed:any=await client.callTool({name:'import_images',arguments:{...args,dir:'other'}});
+      expect(changed.isError).toBe(true);
+      spy.mockResolvedValueOnce({ok:true,message:'已入库 0 张，1 张失败',undoToken:null,items:[{path:file,status:'failed',error:'not an image'}]});
+      const failed:any=await client.callTool({name:'import_images',arguments:{...args,operationId:'import-invalid-file'}});
+      expect(failed.isError).toBe(true);
+      expect(JSON.parse(failed.content[0].text).items[0].error).toBe('not an image');
+    } finally {spy.mockRestore();await client.close();}
+  });
   it('read_library only reaches whitelisted routes after URL normalization', async () => {
     const other = (await call('POST', '/sessions', {})).json().id;
     const client = await connect();

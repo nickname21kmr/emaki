@@ -46,6 +46,14 @@ function setup(o: { scan?: ScanSummary; tagPending?: number; tagReady?: boolean;
 }
 
 describe('Pipeline', () => {
+  it('显式导入直接续接缩略图、识别和查重，不再扫描；暂停的识别保持暂停',async()=>{
+    const p=setup({tagPending:1});p.pipeline.afterImport();
+    expect(p.enqueued).toEqual(['tag','thumbnail']);
+    await p.pipeline.runner('thumbnail')(ctx());
+    expect(p.enqueued).toContain('dedupe');expect(p.enqueued).not.toContain('scan');
+    const paused=setup({tagPending:1});paused.pipeline.notePaused('tag');paused.pipeline.afterImport();
+    expect(paused.enqueued).toEqual(['thumbnail']);
+  });
   it('设置里打开时：首次模型识别完成后自动排 Pixiv 补充，取消时不排；重启已有待补记录可续跑', async () => {
     const p=setup();
     p.pipeline.register({pixiv:{enabled:()=>true,pendingCount:()=>2,run:async()=> 'Pixiv 完成'}});

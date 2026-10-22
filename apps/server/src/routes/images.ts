@@ -11,6 +11,10 @@ const tagList = qList(z.string().min(1).max(100)).refine((a) => a.length <= CUST
 
 /** 图片、未识别、重复、排除 */
 export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
+  app.post('/api/images/import', (req) => ds.importImages(parse(z.object({
+    rootId: z.string().min(1).max(100), dir: z.string().max(200).default(''),
+    files: z.array(z.object({path:z.string().min(1).max(4000),fileName:z.string().min(1).max(200).optional()})).min(1).max(20),
+  }),req.body)));
   app.get('/api/images', (req) => {
     const q = parse(
       z.object({

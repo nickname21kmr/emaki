@@ -22,6 +22,8 @@ import type {
   ImageDetail,
   ImageFormat,
   ImageItem,
+  ImportImagesBody,
+  ImportImagesResult,
   Job,
   JobKind,
   StartJobBody,
@@ -122,6 +124,7 @@ import { applyExclusionRules, applyExclusionRulesTracked, ExclusionQueries, reve
 import { LibraryQueries } from './library.ts';
 import { TagResultWriter } from '../../services/tagger/writer.ts';
 import { moveBack, moveImageFiles, normalizeSubdir, type MoveRow } from './move.ts';
+import { importImages } from './importImages.ts';
 import { artistNames, imageArtists, linkGroups, listArtists as listArtistsQuery, tagNames } from './artists.ts';
 import { artistLinksMessage, linkTags, planArtistLinks } from '../artistEdits.ts';
 import { adoptFromRemovedParents, diskCaseRel, mergeChildRoots, relUnder, type ChildRoot } from './roots.ts';
@@ -155,6 +158,16 @@ export interface SqliteOpenOptions {
  * 文件监听用 Node 自带的 fs.watch（不装 chokidar），相似查重用 MIH（不用 BK-tree）。
  */
 export class SqliteDataSource implements DataSource {
+  async importImages(body: ImportImagesBody): Promise<ImportImagesResult> {
+    return importImages(this.ctx, body, {
+      trashImpl: this.importTrashImpl,
+      afterImport: (ids) => {
+        this.collectionsHook(null, ids.length ? ids : 'all');
+        if (ids.length) this.pipeline.afterImport();
+      },
+    });
+  }
+  private readonly importTrashImpl?: TrashImpl;
   /**
    * T01：打开 / 创建 `${dataDir}/emaki.sqlite`，开启 WAL 和外键，跑迁移（db/migrate.ts），
    * 创建 UndoStack 和 JobQueue（runner 由 T07 接上 services/*）。
@@ -343,6 +356,7 @@ export class SqliteDataSource implements DataSource {
   private readonly exclusions: ExclusionQueries;
 
   protected constructor(db: Db, bus: EventBus, dataDir: string, opts: SqliteOpenOptions) {
+    this.importTrashImpl = opts.trashImpl;
     const jobs = new JobQueue(bus, (kind) => this.pipeline.runner(kind));
     this.ctx = createContext({ db, bus, dataDir, clock: opts.clock ?? Date.now, undo: new UndoStack(), jobs });
     this.thumbs = new ThumbnailService({

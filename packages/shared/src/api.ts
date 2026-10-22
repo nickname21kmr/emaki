@@ -58,6 +58,18 @@ export interface MutationResult {
   undoToken: string | null;
 }
 
+/** POST /api/images/import: copy downloaded local files into an existing library root. */
+export interface ImportImagesBody {
+  rootId: ID;
+  /** Relative destination folder; empty string means the root itself. */
+  dir: string;
+  files: { path: string; fileName?: string }[];
+}
+export interface ImportImagesResult extends MutationResult {
+  items: ({ path: string; status: 'imported' | 'existing'; imageId: ID; absPath: string }
+    | { path: string; status: 'failed'; error: string })[];
+}
+
 export interface ApiError {
   ok: false;
   error: string;

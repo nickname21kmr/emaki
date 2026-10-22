@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { openSharp } from '../services/image/pixels.ts';
 import type { FastifyInstance } from 'fastify';
-import type { AssistantCard, AssistantContext } from '@emaki/shared';
+import type { AssistantCard, AssistantContext, ImportImagesResult } from '@emaki/shared';
 import type { DataSource } from '../datasource/DataSource.ts';
 import { queryLibrary } from './query.ts';
 
@@ -19,7 +19,7 @@ export interface ToolHost {
 }
 const ids = z.array(z.string().min(1).max(100)).min(1).max(5000);
 const json = (data: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data) }] });
-const readablePath = /^\/api\/(images(?:\/[^/]+)?|characters(?:\/[^/]+)?|works(?:\/[^/]+)?|stats|jobs|unrecognized(?:\/summary)?)$/;
+const readablePath = /^\/api\/(images(?:\/[^/]+)?|characters(?:\/[^/]+)?|works(?:\/[^/]+)?|library-roots|stats|jobs|unrecognized(?:\/summary)?)$/;
 
 /** app.inject 按 WHATWG URL 解析：\ 当作 /，.. 和 %2e 会被消掉。所以按解析后的结果判断，且解析不能改写路径 */
 function libraryReadPath(path: string) {
@@ -52,7 +52,7 @@ export function createLibraryMcp(app: FastifyInstance, ds: DataSource, file: str
       host.assertEnabled(); return json(await queryLibrary(db, sql, params, limit));
     });
   }
-  server.registerTool('read_library', { description: '按应用现有口径读取图库信息。path 为 /api/images、/api/images/:id、/api/characters、/api/characters/:id、/api/works、/api/works/:id、/api/stats、/api/jobs、/api/unrecognized 或 /api/unrecognized/summary，可附查询参数。',
+  server.registerTool('read_library', { description: '按应用现有口径读取图库信息。path 为 /api/images、/api/images/:id、/api/characters、/api/characters/:id、/api/works、/api/works/:id、/api/library-roots（可用的入库目标）、/api/stats、/api/jobs、/api/unrecognized 或 /api/unrecognized/summary，可附查询参数。',
     inputSchema: { path: z.string().max(4000) }, annotations: read }, async ({ path }) => json(await invoke('GET', libraryReadPath(path))));
   server.registerTool('read_media', { description: '实际查看图库图片。按需使用，可指定原图的像素裁剪区域检查局部。输出缩放到最多 1600px。',
     inputSchema: { imageId: z.string().min(1), crop: z.object({ left: z.number().int().nonnegative(), top: z.number().int().nonnegative(), width: z.number().int().positive(), height: z.number().int().positive() }).optional() }, annotations: read }, async ({ imageId, crop }) => {
@@ -86,6 +86,17 @@ export function createLibraryMcp(app: FastifyInstance, ds: DataSource, file: str
     ]) }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true } }, async ({ operationId, ...body }) => {
     host.assertEnabled(); const result = await host.operation(scope, operationId, JSON.stringify(['update_images', body]), () => invoke('POST', '/api/images/bulk', body));
     host.recordMutation(sessionId, result); return json(result);
+  });
+  server.registerTool('import_images', {
+    description: '将服务器上已下载的本地图片复制入库，保留下载文件，不替换旧图。先用 read_library /api/library-roots 确定 rootId，dir 为该图库内的相对目录；files[].path 使用绝对路径，fileName 可选。完全相同且仍在磁盘上的已入库图片会复用 ID，同名不同内容自动另起文件名。逐项返回 imported/existing/failed 和图片 ID，可继续 edit_source、update_images 并 present_result。返回后已可查询，无需再全库扫描；缩略图、识别和查重接入现有任务链。撤销仅将本次新建副本移到系统回收站。重试复用 operationId。',
+    inputSchema: { operationId:z.string().min(1).max(100), rootId:z.string().min(1).max(100), dir:z.string().max(200).default(''),
+      files:z.array(z.object({path:z.string().min(1).max(4000),fileName:z.string().min(1).max(200).optional()})).min(1).max(20) },
+    annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true},
+  }, async ({operationId,...body}) => {
+    host.assertEnabled();
+    const result = await host.operation(scope,operationId,JSON.stringify(['import_images',body]),()=>invoke('POST','/api/images/import',body)) as ImportImagesResult;
+    if (result.items.some(i=>i.status==='imported')) host.recordMutation(sessionId,result);
+    return {...json(result),...(result.items.every(i=>i.status==='failed') ? {isError:true} : {})};
   });
   server.registerTool('edit_source', { description: '确认或修改一张图片的原作来源。source={url,artist?} 自动解析站点和作品号；人工确认优先于扫描。source=null 清除并锁定为空；source="auto" 解除人工锁定并按文件名重算。artist 是来源显示文字，不代替图片画师关联。返回撤销 token，重试复用 operationId。',
     inputSchema: { operationId: z.string().min(1).max(100), imageId: z.string().min(1).max(100), source: sourceEditSchema }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true } }, async ({ operationId, imageId, source }) => {

@@ -27,6 +27,8 @@ import type {
   GetSettingsResponse,
   GetStatsResponse,
   ID,
+  ImportImagesBody,
+  ImportImagesResult,
   Job,
   JobKind,
   StartJobBody,
@@ -129,6 +131,7 @@ export const imageUrl = {
 };
 
 export const api = {
+  importImages: (body: ImportImagesBody) => post<ImportImagesResult>('/images/import',body),
   stats: () => get<GetStatsResponse>('/stats'),
   contentKinds: () => get<ListContentKindsResponse>('/content-kinds'),
 
