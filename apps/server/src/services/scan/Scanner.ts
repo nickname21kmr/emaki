@@ -12,7 +12,7 @@ import type { EventBus } from '../../core/events.ts';
 import type { JobContext } from '../../core/jobs.ts';
 import type { Db } from '../../db/connection.ts';
 import { diskCaseRel } from '../../datasource/sqlite/roots.ts';
-import { normalizeRootPath } from '../../datasource/sqlite/settings.ts';
+import { normalizeRootPath, readSettings } from '../../datasource/sqlite/settings.ts';
 import { sha256Buffer, sha256File } from '../fs/hash.ts';
 import { baseName, isoFromMs, parentRel, pathKey, toAbs } from '../fs/paths.ts';
 import { walkImages, type WalkEntry } from '../fs/walk.ts';
@@ -460,7 +460,7 @@ export class Scanner {
           ops.push({ t: 'move', p: this.moveParams(cand.id, e) });
           summary.moved++;
         } else {
-          const src = parseSource(e.relPath);
+          const src = this.parseSource(e.relPath);
           const addedAt =
             root.last_scan_at === null ? isoFromMs(Math.min(e.birthtimeMs || e.mtimeMs, e.mtimeMs)) : nowIso;
           ops.push({
@@ -548,7 +548,7 @@ export class Scanner {
   }
 
   private moveParams(id: number, e: DiskEntry) {
-    const src = parseSource(e.relPath);
+    const src = this.parseSource(e.relPath);
     return {
       id,
       rootId: e.rootId,
@@ -564,6 +564,10 @@ export class Scanner {
 
   private errorParams(e: DiskEntry, error: string, at: string) {
     return { rootId: e.rootId, relPath: e.relPath, bytes: e.bytes, modifiedAt: isoFromMs(e.mtimeMs), error, at };
+  }
+
+  private parseSource(relPath: string) {
+    return parseSource(relPath, readSettings(this.d.db).tagger.pixivFilenameMode);
   }
 }
 

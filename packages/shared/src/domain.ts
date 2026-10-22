@@ -437,6 +437,8 @@ export interface Settings {
      * 只管识别后的自动补充；「未识别」页的按钮是用户手动点的，关着也能跑
      */
     pixiv: boolean;
+    /** Pixiv 文件名解析：严格识别固定格式；宽泛兼容投稿号_标题。默认严格。 */
+    pixivFilenameMode: 'strict' | 'broad';
   };
   danbooru: {
     /** 是否允许联网同步标签元数据 */

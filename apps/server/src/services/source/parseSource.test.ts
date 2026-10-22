@@ -62,7 +62,7 @@ describe('parseSource', () => {
       { site: 'fanbox', postId: '5123456', artist: 'creator123', url: 'https://creator123.fanbox.cc/posts/5123456' },
     ],
   ])('%s', (relPath, expected) => {
-    expect(parseSource(relPath)).toEqual(expected);
+    expect(parseSource(relPath, 'broad')).toEqual(expected);
   });
 
   it.each([
@@ -87,6 +87,24 @@ describe('parseSource', () => {
     `1234567890123-${MD5}_p0.jpg`,
     `147888074-${MD5}_p12345.jpg`,
   ])('%s → null', (relPath) => {
-    expect(parseSource(relPath)).toBeNull();
+    expect(parseSource(relPath, 'broad')).toBeNull();
+  });
+
+  it.each([
+    '104714967_３人で奉仕.jpg',
+    '108301050_ヘルモルト姉妹丼　その３.jpg',
+    '144506494_标题_3.jpg',
+    '104714967_标题里有98765432_p0.jpg',
+    '104714967_Abcde.jpg',
+    '102298332_master1200.jpg',
+  ])('strict mode skips downloader title %s by default', (name) => {
+    expect(parseSource(name)).toBeNull();
+    expect(parseSource(name, 'broad')?.postId).toBe(name.split('_')[0]);
+  });
+
+  it.each(['98765432_p0.jpg', '98765432_ugoira.jpg', '98765432_ugoira0.jpg',
+    `98765432-${MD5}_p0.png`, 'illust_98765432_20240101.jpg',
+  ])('strict mode retains distinctive Pixiv filename %s', (name) => {
+    expect(parseSource(name)).toEqual(pixiv('98765432'));
   });
 });

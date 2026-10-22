@@ -54,6 +54,32 @@ describe('设置：识别后自动查 Pixiv 标签', () => {
     expect((await ds.getSettings()).tagger.pixiv).toBe(false);
   });
 
+  it('默认严格；切换模式立即重算已有来源，保留人工来源和模型建议，恢复自动来源也使用当前模式', async () => {
+    const db = ds.ctx.db;
+    const rootId = db.prepare("INSERT INTO library_roots(path) VALUES('D:/Pics')").run().lastInsertRowid;
+    const name = '104714967_３人で奉仕.jpg';
+    const insert = db.prepare(`INSERT INTO images(root_id,rel_path,file_name,width,height,bytes,format,sha256,added_at,modified_at)
+      VALUES(?,?,?,10,10,10,'jpg',?,'2026-01-01','2026-01-01')`);
+    const id = String(insert.run(rootId,name,name,'auto').lastInsertRowid);
+    const manualId = String(insert.run(rootId,`copy/${name}`,name,'manual').lastInsertRowid);
+    await ds.updateImage(manualId, {source:{url:'https://example.com/manual'}});
+    expect((await ds.getSettings()).tagger.pixivFilenameMode).toBe('strict');
+    expect((await ds.getImage(id))?.source).toBeNull();
+    await ds.updateSettings({tagger:{pixivFilenameMode:'broad'}});
+    expect((await ds.getImage(id))?.source).toMatchObject({site:'pixiv',postId:'104714967'});
+    db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (?,'pixiv_role',0,'pixiv'),(?,'model_role',0.7,'tagger')").run(id,id);
+    await ds.updateSettings({tagger:{pixivFilenameMode:'strict'}});
+    expect((await ds.getImage(id))?.source).toBeNull();
+    expect(db.prepare('SELECT danbooru_tag FROM character_suggestions WHERE image_id=?').pluck().all(id)).toEqual(['model_role']);
+    expect((await ds.getImage(manualId))?.source?.url).toBe('https://example.com/manual');
+    await ds.updateImage(manualId,{source:'auto'});
+    expect(await ds.getImage(manualId)).toMatchObject({source:null,sourceManual:false});
+    await ds.updateSettings({tagger:{pixivFilenameMode:'broad'}});
+    expect((await ds.getImage(manualId))?.source?.postId).toBe('104714967');
+    expect(JSON.parse(db.prepare("SELECT value FROM settings WHERE key='tagger'").pluck().get() as string).pixivFilenameMode).toBe('broad');
+    expect(await ds.listJobs()).toEqual([]);
+  });
+
   it('关着时手动点按钮照常跑；跑的时候关掉设置也不取消它', async () => {
     fake.pending = 3;
     await ds.startJob('pixiv-tags');

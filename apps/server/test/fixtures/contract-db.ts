@@ -228,6 +228,7 @@ export function buildContractDb(now: number): MockDb {
       keepAwake: true,
       artists: false,
       pixiv: false,
+      pixivFilenameMode: 'strict',
     },
     danbooru: { enabled: false, username: '', hasApiKey: false, lastSyncAt: null },
     dedupe: { hammingThreshold: 8, lastRunAt: null },

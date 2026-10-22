@@ -656,7 +656,8 @@ export class SqliteDataSource implements DataSource {
     if (body.kind !== undefined) assertKindValue(body.kind);
     const charIds = body.characterIds ? [...new Set(body.characterIds)].map((c) => this.requireCharacterId(c)) : null;
     const now = iso(this.ctx.clock());
-    const sourceEdit = body.source === undefined ? undefined : editedSource(body.source, this.ctx.stmt('SELECT rel_path FROM images WHERE id = ?').pluck().get(iid) as string);
+    const sourceEdit = body.source === undefined ? undefined : editedSource(body.source, this.ctx.stmt('SELECT rel_path FROM images WHERE id = ?').pluck().get(iid) as string,
+      readSettings(this.ctx.db).tagger.pixivFilenameMode);
     // 类型、收藏、分级、角色放进同一次 mutate：一起传时一个 token 撤销全部
     return this.ctx.mutate((u) => {
       // 提示文案和 mock 一致：收藏 > 分级 > 角色 > 类型，只报一条
@@ -972,6 +973,7 @@ export class SqliteDataSource implements DataSource {
     const beforeArtists = readSettings(this.ctx.db).tagger.artists;
     const beforePixiv = readSettings(this.ctx.db).tagger.pixiv;
     applySettingsPatch(this.ctx.db, body as Parameters<typeof applySettingsPatch>[1]);
+    if (body.tagger?.pixivFilenameMode !== undefined) backfillSources(this.ctx.db);
     const settings = await this.getSettings();
     // 调低自动采纳阈值：已达标的建议当场归到角色（和识别任务开头的「阶段 0」同一段逻辑）
     if (settings.tagger.autoAcceptThreshold < before) {

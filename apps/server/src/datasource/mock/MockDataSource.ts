@@ -1008,7 +1008,7 @@ export class MockDataSource implements DataSource {
 
   async updateImage(id: ID, body: UpdateImageBody): Promise<MutationResult> {
     const row = this.requireImage(id);
-    const sourceEdit = body.source === undefined ? undefined : editedSource(body.source, row.relPath);
+    const sourceEdit = body.source === undefined ? undefined : editedSource(body.source, row.relPath, this.db.settings.tagger.pixivFilenameMode);
     if (body.kind !== undefined) assertKindValue(body.kind);
     if (body.characterIds) for (const cid of body.characterIds) this.requireCharacter(cid);
     const before = {
@@ -1627,7 +1627,15 @@ export class MockDataSource implements DataSource {
     const s = this.db.settings;
     const { danbooruApiKey, ...rest } = body;
     const before = s.tagger.autoAcceptThreshold;
+    const beforeSourceMode = s.tagger.pixivFilenameMode;
     if (rest.tagger) Object.assign(s.tagger, rest.tagger);
+    if (s.tagger.pixivFilenameMode !== beforeSourceMode) {
+      for (const img of this.db.images.values()) {
+        if (img.sourceManual) continue;
+        const next = editedSource('auto', img.relPath, s.tagger.pixivFilenameMode).source;
+        img.source = next;
+      }
+    }
     // 调低自动采纳阈值：插画和漫画上已达标、库里已有这个角色的建议当场归入（与 sqlite 同口径）
     if (s.tagger.autoAcceptThreshold < before) {
       for (const img of this.db.images.values()) {

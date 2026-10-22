@@ -2,9 +2,9 @@
  * 从文件名（必要时参考父目录名）推断图片来源。纯函数，扫描器插入 / 移动图片时调用。
  * 改了规则就把 SOURCE_PARSER_VERSION 加 1，启动时 backfillSources 会重算未人工确认的行。
  */
-import type { ImageSource } from '@emaki/shared';
+import type { ImageSource, Settings } from '@emaki/shared';
 
-export const SOURCE_PARSER_VERSION = 4;
+export const SOURCE_PARSER_VERSION = 5;
 
 const EXT = /\.[^.]+$/; // 包括 .jpg_large
 const COPY_SUFFIX = /(\s*\(\d+\)|\s*-\s*(副本|复制|copy)(\s*\(\d+\))?)$/i;
@@ -24,7 +24,7 @@ const PIXIV_HASHED = /^(\d{4,10})-[0-9a-f]{32}_(?:p\d{1,4}|ugoira\d*)(?!\d)/i;
 // Downloader templates: artwork ID_title and artwork ID_title_page. Only the
 // leading ID is needed. Require a readable title, excluding resolution-based
 // export names, bare hashes and malformed original-image page markers.
-const PIXIV_TITLED = /^(?!\d{3,5}_\d{3,5}(?:_|$))(\d{4,10})_((?![0-9a-f]{32}(?:_\d+)?$)(?!p\d|ugoira\d)(?=[^/]*\p{L}).+)$/iu;
+const PIXIV_TITLED = /^(?!\d{3,5}_\d{3,5}(?:_|$))(\d{4,10})_((?![0-9a-f]{32}(?:_\d+)?$)(?!p\d|ugoira(?:\d|$))(?=[^/]*\p{L}).+)$/iu;
 const PIXIV_APP = /^illust_(\d{4,10})(?:_|$)/i;
 const PIXIVUTIL_DIR = /^(.+) \((\d+)\)$/;
 const GDL_PIXIV_DIR = /^(\d+) (.+)$/;
@@ -41,7 +41,7 @@ const BOORU_URL: Record<string, string> = {
 const withArtist = (artist: string | undefined) => (artist ? { artist } : {});
 
 /** relPath 用正斜杠，包含目录（目录名是作者名的线索） */
-export function parseSource(relPath: string): ImageSource | null {
+export function parseSource(relPath: string, pixivFilenameMode: Settings['tagger']['pixivFilenameMode'] = 'strict'): ImageSource | null {
   const parts = relPath.split('/');
   const base = parts.at(-1)!;
   const dirs = parts.slice(0, -1);
@@ -96,7 +96,12 @@ export function parseSource(relPath: string): ImageSource | null {
   }
 
   // 7 / 8. pixiv 原图名、下载器标题名、手机 App 保存名
-  m = PIXIV_HASHED.exec(stem) ?? PIXIV_TITLED.exec(stem) ?? PIXIV.exec(stem) ?? PIXIV_APP.exec(stem);
+  m = PIXIV_HASHED.exec(stem) ?? PIXIV_APP.exec(stem);
+  const titled = m ? null : PIXIV_TITLED.exec(stem);
+  // Do not fall through to an ID embedded inside a rejected title (or to the
+  // low-confidence Twitter-media heuristic).
+  if (titled && pixivFilenameMode === 'strict') return null;
+  m ??= titled ?? PIXIV.exec(stem);
   if (m) {
     const postId = m[1]!;
     const artist =

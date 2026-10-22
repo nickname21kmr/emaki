@@ -115,6 +115,17 @@ export function TaggerSection({
         </Field>
 
         <Field
+          label="Pixiv 投稿号识别"
+          hint="严格：识别「投稿号_p0」、带哈希的原图名和 App 保存名。宽泛：额外接受「投稿号_标题」「投稿号_标题_页码」等下载器命名。切换后立即更新已有图片的自动来源，手工填写的来源保留。"
+        >
+          <Segmented
+            value={tagger.pixivFilenameMode}
+            onChange={(pixivFilenameMode) => save({ tagger: { pixivFilenameMode } })}
+            options={[{ value: 'strict', label: '严格' }, { value: 'broad', label: '宽泛' }]}
+          />
+        </Field>
+
+        <Field
           label="识别后自动查 Pixiv 标签补充没认出的角色"
           hint="会联网：识别完还没认出角色的插画和漫画，文件名里带 Pixiv 作品号的，把作品号发给 pixiv.net，读这个作品公开的标签来补角色。只发作品号，不登录，不上传图片。打开了下面「Danbooru」里的「允许联网同步」时，还会拿不认识的 Pixiv 标签去 Danbooru 查角色名。关着时也可以在「未识别」页点「补充 Pixiv 角色」手动查。"
         >

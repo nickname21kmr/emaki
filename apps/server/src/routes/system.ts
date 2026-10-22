@@ -66,6 +66,7 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
             keepAwake: z.boolean(),
             artists: z.boolean(),
             pixiv: z.boolean(),
+            pixivFilenameMode: z.enum(['strict', 'broad']),
           })
           .partial()
           .optional(),

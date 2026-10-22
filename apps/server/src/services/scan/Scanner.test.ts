@@ -74,6 +74,25 @@ describe('Scanner', () => {
     expect((await scan()).added).toBe(0);
   });
 
+  it('新增和改名都遵循 Pixiv 文件名识别模式', async () => {
+    const sourceOf = (name: string) => db.prepare('SELECT source_post_id FROM images WHERE file_name=?').pluck().get(name);
+    await put('104714967_３人で奉仕.png', 6);
+    await scan();
+    expect(sourceOf('104714967_３人で奉仕.png')).toBeNull();
+    db.prepare("INSERT INTO settings(key,value) VALUES('tagger',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .run(JSON.stringify({pixivFilenameMode:'broad'}));
+    await put('108301050_ヘルモルト姉妹丼　その３.png', 7);
+    await rename(path.join(root,'a/one.png'),path.join(root,'144506494_标题_3.png'));
+    await scan();
+    expect(sourceOf('104714967_３人で奉仕.png')).toBe('104714967');
+    expect(sourceOf('108301050_ヘルモルト姉妹丼　その３.png')).toBe('108301050');
+    expect(sourceOf('144506494_标题_3.png')).toBe('144506494');
+    db.prepare("UPDATE settings SET value=? WHERE key='tagger'").run(JSON.stringify({pixivFilenameMode:'strict'}));
+    await rename(path.join(root,'144506494_标题_3.png'),path.join(root,'144506494_另一标题.png'));
+    await scan();
+    expect(sourceOf('144506494_另一标题.png')).toBeNull();
+  });
+
   it('改名和内容更新保留人工来源及主动清空，自动来源仍能解析', async () => {
     await scan();
     const first = row('one.png')!.id;

@@ -1,4 +1,4 @@
-import type { ImageSource, UpdateImageBody } from '@emaki/shared';
+import type { ImageSource, Settings, UpdateImageBody } from '@emaki/shared';
 import { z } from 'zod';
 import { parse } from '../../http/validate.ts';
 import { parseSource } from './parseSource.ts';
@@ -14,9 +14,10 @@ export const sourceEditSchema = z.union([
 ]);
 
 /** Metadata only: saving a URL never makes a network request. */
-export function editedSource(value: NonNullable<UpdateImageBody['source']> | null, relPath: string): { source: ImageSource | null; manual: boolean } {
+export function editedSource(value: NonNullable<UpdateImageBody['source']> | null, relPath: string,
+  mode: Settings['tagger']['pixivFilenameMode'] = 'strict'): { source: ImageSource | null; manual: boolean } {
   const { source: edit } = parse(z.object({ source: sourceEditSchema }), { source: value });
-  if (edit === 'auto') return { source: parseSource(relPath), manual: false };
+  if (edit === 'auto') return { source: parseSource(relPath, mode), manual: false };
   if (edit === null) return { source: null, manual: true };
   const u = new URL(edit.url), host = u.hostname.toLowerCase();
   let site: ImageSource['site'] = 'other', postId: string | undefined;
