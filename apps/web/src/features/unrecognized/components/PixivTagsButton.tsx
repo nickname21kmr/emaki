@@ -1,5 +1,5 @@
-import { CloudDownload } from 'lucide-react';
-import { Button } from '@/components/ui';
+import { ChevronDown, CloudDownload, RefreshCw } from 'lucide-react';
+import { Button, Menu, MenuItem } from '@/components/ui';
 import { useLiveJobs } from '@/lib/events';
 import { useJobs, useStartJob } from '@/lib/queries';
 
@@ -11,10 +11,16 @@ export function PixivTagsButton() {
   const running = [...merged.values()].find((j) => j.kind === 'pixiv-tags' && ['running', 'queued'].includes(j.status));
   const start = useStartJob(() => '已开始按 Pixiv 标签补充角色');
   return (
-    <Button variant="secondary" icon={<CloudDownload className="size-4" />} disabled={!!running}
-      loading={start.isPending} onClick={() => start.mutate('pixiv-tags')}
-      title="会联网：把未识别插画和漫画文件名里的 Pixiv 作品号发给 pixiv.net，读公开标签来补角色，不上传图片。打开了 Danbooru 联网同步时，还会拿不认识的 Pixiv 标签去 Danbooru 查角色名。投稿里的作品标签能确认角色、并且是单图或单角色的直接关联，其余只给建议；Pixiv 标了原创的归为原创。设置里没打开自动查时也能手动点。">
-      {running ? `Pixiv ${running.total ? `${running.progress}/${running.total}` : '查询中'}` : '补充 Pixiv 角色'}
-    </Button>
+    <div className="inline-flex items-center gap-0.5">
+      <Button variant="secondary" icon={<CloudDownload className="size-4" />} disabled={!!running}
+        loading={start.isPending} onClick={() => start.mutate('pixiv-tags')}
+        title="优先用已缓存的 Pixiv 标签补充角色，新投稿和之前获取失败的投稿再联网查询。打开 Danbooru 联网同步时，也会查询尚未匹配的角色名。符合规则的直接关联，其余给出建议；Pixiv 标了原创的归为原创。">
+        {running ? `Pixiv ${running.total ? `${running.progress}/${running.total}` : '查询中'}` : '补充 Pixiv 角色'}
+      </Button>
+      <Menu trigger={<Button variant="secondary" className="px-2" aria-label="Pixiv 补充选项" title="Pixiv 补充选项" disabled={!!running || start.isPending}><ChevronDown className="size-4" /></Button>}>
+        <MenuItem icon={<RefreshCw />} onSelect={() => start.mutate({ kind: 'pixiv-tags', refreshPixiv: true })}>重新获取 Pixiv 标签</MenuItem>
+        <p className="max-w-60 px-2 py-1 text-xs leading-relaxed text-fg-muted">重新联网读取当前待补投稿的标签。</p>
+      </Menu>
+    </div>
   );
 }

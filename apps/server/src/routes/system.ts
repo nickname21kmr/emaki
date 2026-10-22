@@ -66,6 +66,7 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
             keepAwake: z.boolean(),
             artists: z.boolean(),
             pixiv: z.boolean(),
+            pixivFilenameMode: z.enum(['strict', 'broad']),
           })
           .partial()
           .optional(),
@@ -147,11 +148,12 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
   app.get('/api/jobs', () => ds.listJobs());
 
   app.post('/api/jobs', (req) => {
-    const { kind } = parse(
-      z.object({ kind: z.enum(['scan', 'thumbnail', 'tag', 'danbooru-sync', 'dedupe', 'artists', 'pixiv-tags']) }),
+    const { kind, refreshPixiv } = parse(
+      z.object({ kind: z.enum(['scan', 'thumbnail', 'tag', 'danbooru-sync', 'dedupe', 'artists', 'pixiv-tags']), refreshPixiv: z.boolean().optional() }),
       req.body,
     );
-    return ds.startJob(kind);
+    if (refreshPixiv && kind !== 'pixiv-tags') throw new BadRequestError('刷新 Pixiv 标签只用于补充 Pixiv 角色');
+    return ds.startJob(kind, { refreshPixiv });
   });
 
   app.delete('/api/jobs/:id', async (req) => {

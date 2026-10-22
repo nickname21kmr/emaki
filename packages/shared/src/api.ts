@@ -566,6 +566,8 @@ export type ListJobsResponse = Job[];
 /** POST /api/jobs */
 export interface StartJobBody {
   kind: JobKind;
+  /** 仅 pixiv-tags：重新获取待补投稿的标签；默认复用缓存。 */
+  refreshPixiv?: boolean;
 }
 
 /**
@@ -651,3 +653,14 @@ export type UndoResponse = MutationResult;
 export type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends object ? (T[K] extends unknown[] ? T[K] : DeepPartial<T[K]>) : T[K];
 };
+
+/** GET /api/characters/danbooru-matches：等待用户处理的自建角色匹配。 */
+export interface CustomCharacterMatch {
+  characterId: ID;
+  characterName: string;
+  danbooruTag: string;
+  matchName: string;
+  workName: string | null;
+  existingCharacterId: ID | null;
+  existingCharacterName: string | null;
+}

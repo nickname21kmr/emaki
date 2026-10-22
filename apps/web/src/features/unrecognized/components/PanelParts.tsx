@@ -37,6 +37,7 @@ export function SuggestionRow({
   valueLabel,
   valueUnit,
   isNew,
+  sourceLabel,
   title,
   onPick,
 }: {
@@ -50,6 +51,7 @@ export function SuggestionRow({
   valueUnit?: ReactNode;
   /** 库里还没有这个角色，采纳时会新建 */
   isNew?: boolean;
+  sourceLabel?: string;
   title?: string;
   onPick: () => void;
 }) {
@@ -73,16 +75,17 @@ export function SuggestionRow({
         </span>
         <span className="mt-0.5 block truncate text-[12px] text-fg-muted">{workName ?? '未知作品'}</span>
       </span>
-      <span className="shrink-0 text-right leading-none tabular">
+      {sourceLabel && <span className="shrink-0 text-[11px] text-fg-muted">{sourceLabel}</span>}
+      {valueLabel != null && <span className="shrink-0 text-right leading-none tabular">
         <span className="text-[17px] font-semibold tracking-tight">{valueLabel}</span>
         {valueUnit && <span className="ml-0.5 text-[11px] text-fg-muted">{valueUnit}</span>}
-      </span>
-      <span className="absolute inset-x-0 bottom-0 h-[3px] bg-line" aria-hidden>
+      </span>}
+      {valueLabel != null && <span className="absolute inset-x-0 bottom-0 h-[3px] bg-line" aria-hidden>
         <span
           className="block h-full rounded-r-full bg-shu transition-[width] duration-500 ease-[var(--ease-out-soft)]"
           style={{ width: `${Math.max(0, Math.min(1, value)) * 100}%` }}
         />
-      </span>
+      </span>}
     </button>
   );
 }

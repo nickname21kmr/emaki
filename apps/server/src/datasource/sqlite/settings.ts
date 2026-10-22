@@ -36,6 +36,7 @@ export const DEFAULT_SETTINGS = {
     artists: false,
     // 自动查 Pixiv 标签会联网，默认关
     pixiv: false,
+    pixivFilenameMode: 'strict',
   },
   // 不存 hasApiKey；默认不联网，T21 的引导里让用户选
   danbooru: { enabled: false, username: '', lastSyncAt: null as string | null },

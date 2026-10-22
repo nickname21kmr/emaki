@@ -15,6 +15,7 @@ import type {
   ContentKindSummary,
   CoverCandidatesResponse,
   CreateCharacterBody,
+  CustomCharacterMatch,
   CreateExclusionBody,
   DuplicateGroup,
   Exclusion,
@@ -24,6 +25,7 @@ import type {
   ImageItem,
   Job,
   JobKind,
+  StartJobBody,
   LibraryStats,
   ListCharactersQuery,
   ListCharactersResponse,
@@ -78,6 +80,7 @@ export interface DataSource {
   getWork(id: ID): Promise<Work | null>;
 
   // 角色
+  listCustomCharacterMatches(): Promise<CustomCharacterMatch[]>;
   listCharacters(query: ListCharactersQuery): Promise<ListCharactersResponse>;
   topCharacters(query: TopCharactersQuery): Promise<Character[]>;
   getCharacter(id: ID): Promise<GetCharacterResponse | null>;
@@ -143,7 +146,7 @@ export interface DataSource {
 
   // 后台任务
   listJobs(): Promise<Job[]>;
-  startJob(kind: JobKind): Promise<Job>;
+  startJob(kind: JobKind, options?: Pick<StartJobBody, 'refreshPixiv'>): Promise<Job>;
   cancelJob(id: ID): Promise<void>;
 
   // 撤销

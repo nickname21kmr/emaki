@@ -58,6 +58,7 @@ export const LIVE_IMAGES =
 /** 图片 i 属于作品 @workId —— 与 T13 的作品张数用同一个视图，数字才对得上 */
 export const IMAGE_IN_WORK = 'EXISTS (SELECT 1 FROM v_image_works vw WHERE vw.image_id = i.id AND vw.work_id = @workId)';
 export const MIME: Record<ImageFormat, string> = {
+  html: 'image/webp',
   jpeg: 'image/jpeg',
   png: 'image/png',
   webp: 'image/webp',

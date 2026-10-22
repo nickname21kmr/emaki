@@ -1,4 +1,4 @@
-import type { Rating } from '@emaki/shared';
+import type { Character, Rating } from '@emaki/shared';
 import { Archive, Ban, Feather, Shapes, ShieldHalf } from 'lucide-react';
 import type { RefObject } from 'react';
 import { KindMenu } from '@/components/media/KindMenu';
@@ -19,6 +19,7 @@ export function SheetBatchPanel({
   mode,
   searchRef,
   onCreate,
+  createdCharacter,
   kindOpen,
   onKindOpen,
   ratingOpen,
@@ -29,6 +30,7 @@ export function SheetBatchPanel({
   mode: 'unsure' | 'shelved' | 'annex';
   searchRef: RefObject<HTMLInputElement | null>;
   onCreate: (name: string) => void;
+  createdCharacter?: Character | null;
   kindOpen: boolean;
   onKindOpen: (v: boolean) => void;
   ratingOpen: boolean;
@@ -127,7 +129,7 @@ export function SheetBatchPanel({
       </div>
 
       <PanelSection title="归到角色" hint="/ 搜索 · ↵ 归入">
-        <CharacterSearch inputRef={searchRef} recent={sheet.recent} onPick={sheet.assign} onCreate={onCreate} placeholder="搜索角色，或新建自建角色…" />
+        <CharacterSearch inputRef={searchRef} recent={sheet.recent} onPick={sheet.assign} onCreate={onCreate} createdCharacter={createdCharacter} placeholder="搜索角色，或新建角色…" />
       </PanelSection>
     </PanelShell>
   );

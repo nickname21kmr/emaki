@@ -12,6 +12,7 @@ import type {
   ID,
   Job,
   JobKind,
+  StartJobBody,
   ListCharactersQuery,
   ListCollectionsQuery,
   UnrecognizedAnnexKind,
@@ -63,6 +64,10 @@ export const qk = {
 };
 
 // ------------------------------------------------------------------ 读取
+
+export const useCustomCharacterMatches = (enabled: boolean) => useQuery({
+  queryKey: ['custom-character-matches'], queryFn: api.customCharacterMatches, enabled,
+});
 
 export const useStats = () => useQuery({ queryKey: qk.stats, queryFn: api.stats });
 
@@ -266,8 +271,8 @@ export function forgetFailedUndo(token: string, err: unknown) {
  *   const start = useStartJob((job) => `已开始${job.kind}`);  start.mutate('scan');
  */
 export function useStartJob(message: (job: Job) => string) {
-  return useMutate((kind: JobKind) =>
-    api.startJob(kind).then((job): MutationResult => {
+  return useMutate((input: JobKind | StartJobBody) =>
+    (typeof input === 'string' ? api.startJob(input) : api.startJob(input.kind, input)).then((job): MutationResult => {
       const live = useLiveJobs.getState();
       if (!live.jobs[job.id]) live.upsert(job);
       return { ok: true, message: message(job), undoToken: null };

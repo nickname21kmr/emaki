@@ -13,6 +13,7 @@ import { cn } from '@/lib/cn';
 export function Dialog({
   open,
   onOpenChange,
+  onCloseAutoFocus,
   title,
   description,
   children,
@@ -21,6 +22,7 @@ export function Dialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onCloseAutoFocus?: (event: Event) => void;
   title: ReactNode;
   description?: ReactNode;
   children?: ReactNode;
@@ -34,6 +36,7 @@ export function Dialog({
         <D.Content
           style={{ width: `min(${width}px, calc(100vw - 32px))` }}
           tabIndex={-1}
+          onCloseAutoFocus={onCloseAutoFocus}
           // 打开时优先聚焦第一个输入框；没有输入框就聚焦弹窗本身，
           // 而不是 Radix 默认的第一个按钮（通常是右上角的关闭按钮，键盘打开时会挂一个焦点环）
           onOpenAutoFocus={(e) => {

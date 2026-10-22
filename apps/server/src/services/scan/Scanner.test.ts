@@ -11,6 +11,10 @@ import { walkImages } from '../fs/walk.ts';
 import { sharp } from '../image/sharpConfig.ts';
 import { Scanner, type ScanSummary } from './Scanner.ts';
 import { ScanRequests } from './ScanRequests.ts';
+import { animationHtml } from '../../../test/helpers/htmlAnimation.ts';
+import { htmlAnimationCache } from '../image/htmlAnimation.ts';
+import { readFile, readdir } from 'node:fs/promises';
+import { sha256Buffer } from '../fs/hash.ts';
 
 const ctx = (): JobContext => ({
   signal: new AbortController().signal,
@@ -72,6 +76,65 @@ describe('Scanner', () => {
     const s = await scan();
     expect(s).toMatchObject({ added: 3, missing: 0, errors: 0 });
     expect((await scan()).added).toBe(0);
+  });
+
+  it('HTML 动图保持原文件路径，缓存到数据目录；普通网页跳过，改名和更新保留同一图库条目', async () => {
+    const input=await animationHtml();
+    const name='104714967_动画.html';
+    await writeFile(path.join(root,name),input);
+    await writeFile(path.join(root,'ordinary.html'),'<html><body>普通网页</body></html>');
+    expect((await scan()).added).toBe(4);
+    const image=row(name)!;
+    expect(db.prepare('SELECT format,frame_count,content_kind FROM images WHERE id=?').get(image.id))
+      .toEqual({format:'html',frame_count:2,content_kind:'animated'});
+    expect(await readFile(path.join(root,name))).toEqual(input);
+    expect((await readdir(root)).sort()).toEqual(['104714967_动画.html','a','b','ordinary.html']);
+    expect(db.prepare('SELECT count(*) FROM scan_errors').pluck().get()).toBe(0);
+    expect((await scan()).added).toBe(0);
+    const cache=await htmlAnimationCache(input,data,sha256Buffer(input));
+    expect((await sharp(cache,{animated:true}).metadata()).delay).toEqual([30,60]);
+    await rename(path.join(root,name),path.join(root,'renamed.htm'));
+    expect((await scan()).moved).toBe(1);
+    expect(row('renamed.htm')!.id).toBe(image.id);
+    const updated=await animationHtml([40,50,70]);
+    await writeFile(path.join(root,'renamed.htm'),updated);
+    const result=await scan();
+    expect(result.updated).toBe(1);
+    expect(row('renamed.htm')!.id).toBe(image.id);
+    expect(db.prepare('SELECT frame_count FROM images WHERE id=?').pluck().get(image.id)).toBe(3);
+    const next=await htmlAnimationCache(updated,data,sha256Buffer(updated));
+    expect(next).not.toBe(cache);
+    expect((await sharp(next,{animated:true}).metadata()).delay).toEqual([40,50,70]);
+  });
+
+  it('导入动画 WebP 时按帧数分类，重新分类后仍是动图',async()=>{
+    const cache=await htmlAnimationCache(await animationHtml(),data);
+    await writeFile(path.join(root,'animated.webp'),await readFile(cache));
+    await scan();
+    expect(db.prepare("SELECT format,frame_count,content_kind FROM images WHERE file_name='animated.webp'").get())
+      .toEqual({format:'webp',frame_count:2,content_kind:'animated'});
+    await rename(path.join(root,'animated.webp'),path.join(root,'renamed.webp'));
+    await scan();
+    expect(db.prepare("SELECT content_kind FROM images WHERE file_name='renamed.webp'").pluck().get()).toBe('animated');
+  });
+
+  it('新增和改名都遵循 Pixiv 文件名识别模式', async () => {
+    const sourceOf = (name: string) => db.prepare('SELECT source_post_id FROM images WHERE file_name=?').pluck().get(name);
+    await put('104714967_３人で奉仕.png', 6);
+    await scan();
+    expect(sourceOf('104714967_３人で奉仕.png')).toBeNull();
+    db.prepare("INSERT INTO settings(key,value) VALUES('tagger',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .run(JSON.stringify({pixivFilenameMode:'broad'}));
+    await put('108301050_ヘルモルト姉妹丼　その３.png', 7);
+    await rename(path.join(root,'a/one.png'),path.join(root,'144506494_标题_3.png'));
+    await scan();
+    expect(sourceOf('104714967_３人で奉仕.png')).toBe('104714967');
+    expect(sourceOf('108301050_ヘルモルト姉妹丼　その３.png')).toBe('108301050');
+    expect(sourceOf('144506494_标题_3.png')).toBe('144506494');
+    db.prepare("UPDATE settings SET value=? WHERE key='tagger'").run(JSON.stringify({pixivFilenameMode:'strict'}));
+    await rename(path.join(root,'144506494_标题_3.png'),path.join(root,'144506494_另一标题.png'));
+    await scan();
+    expect(sourceOf('144506494_另一标题.png')).toBeNull();
   });
 
   it('改名和内容更新保留人工来源及主动清空，自动来源仍能解析', async () => {

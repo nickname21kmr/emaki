@@ -11,7 +11,8 @@ import { CopyrightResolver } from '../catalog/copyrights.ts';
 import { TagResultWriter } from '../tagger/writer.ts';
 import { PixivAccessError, PixivClient, type PixivArtwork } from './client.ts';
 import { createPixivMatcher } from './match.ts';
-import { pendingPixivCount, queuePixivImages, resetPixivBackoff, syncPixivCharacters } from './sync.ts';
+import { clearPendingPixivCache, pendingPixivCount, queuePixivImages, resetPixivBackoff, syncPixivCharacters } from './sync.ts';
+import { cacheArtwork } from './cache.ts';
 
 let db: Db;
 let ctx: ReturnType<typeof createContext>;
@@ -28,6 +29,7 @@ const art = (pageCount: number, names: string[], id = '123', works = ['ゲーム
 const links = () => db.prepare('SELECT image_id, character_id FROM image_characters ORDER BY image_id,character_id').all();
 function name(tag: string, value: string, category = 4) {
   db.prepare('INSERT OR IGNORE INTO tag_i18n(tag,category) VALUES (?,?)').run(tag, category);
+  db.prepare("UPDATE tag_i18n SET aliases=json_insert(COALESCE(aliases,'[]'),'$[#]',?) WHERE tag=?").run(value,tag);
   db.prepare("INSERT OR IGNORE INTO tag_name_keys(search_key,tag,kind,source) VALUES (?,?,'alias','dict')").run(searchKey(value), tag);
 }
 beforeEach(() => {
@@ -46,6 +48,48 @@ beforeEach(() => {
   queuePixivImages(ctx);
 });
 afterEach(() => db.close());
+
+it('同投稿后加入的图片和文件变化复用原始标签；未匹配也不重复联网', async () => {
+  const client={artwork:vi.fn().mockResolvedValue(art(1,['不认识的名字']))};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  addImage(3,'123');
+  db.exec("UPDATE images SET modified_at='new' WHERE id=1");
+  queuePixivImages(ctx);
+  const summary=await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).toHaveBeenCalledTimes(1);
+  expect(summary).toContain('复用缓存 1 个投稿 · 联网查询 0 个投稿');
+  expect(db.prepare('SELECT COUNT(*) FROM pixiv_artwork_cache').pluck().get()).toBe(1);
+});
+
+it('显式刷新只清除待补投稿的缓存；成功后重新填入并采用网页的新标签', async () => {
+  const client={artwork:vi.fn().mockResolvedValue(art(1,['不认识的名字']))};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  cacheArtwork(db,art(1,['アリス'],'456'),'before');
+  cacheArtwork(db,art(1,['アリス'],'789'),'before');
+  db.exec("INSERT INTO pixiv_unavailable_posts(post_id,checked_at) VALUES ('789','before')");
+  queuePixivImages(ctx);
+  clearPendingPixivCache(ctx);
+  expect(db.prepare('SELECT post_id FROM pixiv_artwork_cache ORDER BY post_id').pluck().all()).toEqual(['456','789']);
+  client.artwork.mockResolvedValue(art(1,['アリス']));
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).toHaveBeenCalledTimes(2);
+  expect(links()).toHaveLength(2);
+});
+
+it('获取失败不写缓存，重试成功后再保存；取消后的响应也不写入', async () => {
+  const client={artwork:vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(art(1,['アリス']))};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(db.prepare('SELECT COUNT(*) FROM pixiv_artwork_cache').pluck().get()).toBe(0);
+  resetPixivBackoff();
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).toHaveBeenCalledTimes(2);
+  expect(db.prepare('SELECT COUNT(*) FROM pixiv_artwork_cache').pluck().get()).toBe(1);
+  addImage(3,'456'); queuePixivImages(ctx,[3]);
+  await expect(syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>{
+    controller.abort(); return art(1,['アリス'],'456');
+  }},0)).rejects.toThrow();
+  expect(db.prepare("SELECT COUNT(*) FROM pixiv_artwork_cache WHERE post_id='456'").pluck().get()).toBe(0);
+});
 
 it('404 按投稿持久记忆，补跑和同投稿新图片不重复联网，换投稿仍可检查', async () => {
   const client={artwork:vi.fn().mockResolvedValue(null)};
@@ -93,8 +137,9 @@ it('首次模型低置信度候选自动登记，页面角色不同仍可关联�
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
   expect(client.artwork).toHaveBeenCalledTimes(1);
   // 没有匹配的投稿也只自动查询一次，手动补跑可重新登记。
+  db.exec("UPDATE images SET source_post_id='456' WHERE id=2");
   queuePixivImages(ctx,[2]);
-  client.artwork.mockResolvedValue(art(1,['不存在的标签']));
+  client.artwork.mockResolvedValue(art(1,['不存在的标签'],'456'));
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
   queuePixivImages(ctx,[2]);
   expect(pendingPixivCount(ctx)).toBe(0);
@@ -349,11 +394,12 @@ it('自定义原创角色可按名字关联，多角色投稿的建议显示真�
   // 自建角色的建议带真外键
   expect(db.prepare("SELECT danbooru_tag,character_id FROM character_suggestions WHERE image_id=1 ORDER BY character_id").all())
     .toEqual(ids.map((id)=>({danbooru_tag:`emaki:character:${id}`,character_id:id})));
-  // 给过建议的投稿，手动补跑不再重查；文件换了才重查
-  queuePixivImages(ctx);
+  // 自动识别不重复查；保留着的自建角色建议也可以显式补跑。
+  queuePixivImages(ctx,[1,2]);
   expect(pendingPixivCount(ctx)).toBe(0);
-  db.exec("UPDATE images SET modified_at='y'");
   queuePixivImages(ctx);
+  expect(pendingPixivCount(ctx)).toBe(2);
+  clearPendingPixivCache(ctx); // 显式重新获取：网页的角色标签已经改变。
   await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(3,['原创角色甲'])},0);
   expect(links()).toEqual([{image_id:1,character_id:ids[0]},{image_id:2,character_id:ids[0]}]);
   expect(db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(2);
@@ -449,7 +495,7 @@ it('补别名时有更急的任务就让出，没补的留到下一轮', async (
   expect(db.prepare('SELECT COUNT(*) FROM danbooru_tags WHERE wiki_fetched_at IS NULL').pluck().get()).toBe(50);
 });
 
-it('只有投稿里的作品标签能确认的角色才自动关联；自建角色不用确认', () => {
+it('短名仍由投稿里的作品标签确认；自建角色不用确认', () => {
   const custom=Number(db.prepare("INSERT INTO characters(name,source,created_at) VALUES ('ミドリ','custom','now')").run().lastInsertRowid);
   const {catalog,copyrights}=makeCatalog();const match=createPixivMatcher(db,catalog,copyrights);
   expect(match(art(1,['アリス'],'1',[]))).toEqual({tags:[A],automatic:false});
@@ -463,6 +509,163 @@ it('只有投稿里的作品标签能确认的角色才自动关联；自建角�
   expect(match({...art(1,['ミドリ'],'1',[]),isOriginal:true})).toEqual({tags:[`emaki:character:${custom}`],automatic:true});
 });
 
+function takina() {
+  const tag = 'inoue_takina';
+  name(tag, '井ノ上たきな'); name(tag, 'たきな'); name(tag, '井上泷奈');
+  db.prepare("UPDATE tag_i18n SET zh='井上泷奈',aliases=? WHERE tag=?").run(JSON.stringify(['井上泷奈','たきな']),tag);
+  db.prepare("INSERT INTO danbooru_tags(name,category,copyrights,other_names,fetched_at) VALUES (?,4,?,?, 'now')")
+    .run(tag, JSON.stringify(['game_a']), JSON.stringify(['井ノ上たきな','たきな']));
+  return tag;
+}
+
+it.each(['井ノ上たきな','井上泷奈','Inoue Takina','inoue_takina'])('完整原文姓名 %s 唯一命中时不要求重复写作品标签', raw => {
+  const tag=takina(); const {catalog,copyrights}=makeCatalog();
+  expect(createPixivMatcher(db,catalog,copyrights)(art(1,[raw],'123',[]))).toEqual({tags:[tag],automatic:true});
+});
+
+it('完整姓名仍保留短名、译名、限定词、作品冲突、原创和多图多角色的限制', () => {
+  const tag=takina(); const {catalog,copyrights}=makeCatalog(); const match=createPixivMatcher(db,catalog,copyrights);
+  expect(match(art(1,['たきな'],'123',[]))).toEqual({tags:[tag],automatic:false});
+  expect(match({id:'123',pageCount:1,tags:{tags:[{tag:'別の人物',translation:{en:'Inoue Takina'}}]}}).automatic).toBe(false);
+  expect(match(art(1,['井ノ上たきな(別作品)'],'123',[])).automatic).toBe(false);
+  expect(match(art(1,['井ノ上たきな'],'123',['ゲームB'])).automatic).toBe(false);
+  expect(match({...art(1,['井ノ上たきな'],'123',[]),isOriginal:true}).automatic).toBe(false);
+  expect(match(art(1,['井ノ上たきな','オリジナル'],'123',[])).automatic).toBe(false);
+  expect(match(art(6,['井ノ上たきな'],'123',[])).automatic).toBe(true);
+  expect(match(art(6,['井ノ上たきな','ボブ'],'123',['ゲームB'])).automatic).toBe(false);
+});
+
+it('完整姓名同名、普通词、缺少角色作品资料时仍不直接关联', () => {
+  const tag=takina();
+  name(B,'井ノ上たきな');
+  db.prepare("UPDATE tag_i18n SET aliases=? WHERE tag=?").run(JSON.stringify(['井ノ上たきな']),B);
+  let c=makeCatalog();
+  expect(createPixivMatcher(db,c.catalog,c.copyrights)(art(1,['井ノ上たきな'],'123',[])).automatic).toBe(false);
+  name('inoue_takina_(cosplay)','井ノ上たきな',0);
+  c=makeCatalog();
+  expect(createPixivMatcher(db,c.catalog,c.copyrights)(art(1,['井ノ上たきな(コスプレ)'],'123',[])).tags).toEqual([]);
+  db.prepare("UPDATE danbooru_tags SET copyrights='[]' WHERE name=?").run(tag);
+  db.prepare('DELETE FROM tag_name_keys WHERE tag=?').run(B);
+  db.prepare("UPDATE tag_i18n SET aliases='[]' WHERE tag=?").run(B);
+  c=makeCatalog();
+  expect(createPixivMatcher(db,c.catalog,c.copyrights)(art(1,['井ノ上たきな'],'123',[])).automatic).toBe(false);
+});
+
+it('新发现的完整姓名增量刷新后可以直接关联，精确索引不会只在启动时建立', () => {
+  const {catalog,copyrights}=makeCatalog(); const match=createPixivMatcher(db,catalog,copyrights);
+  expect(match(art(1,['井ノ上たきな'],'123',[])).tags).toEqual([]);
+  const tag=takina(); match.refresh([tag]);
+  expect(match(art(1,['井ノ上たきな'],'123',[]))).toEqual({tags:[tag],automatic:true});
+  db.prepare("UPDATE danbooru_tags SET other_names='[]' WHERE name=?").run(tag);
+  match.refresh([tag]);
+  expect(match(art(1,['井ノ上たきな'],'123',[])).automatic).toBe(false);
+});
+
+it('刷新被移除的别名后，有作品上下文也不再使用旧搜索索引', () => {
+  const tag=takina(); const {catalog,copyrights}=makeCatalog();
+  const match=createPixivMatcher(db,catalog,copyrights);
+  expect(match(art(1,['井ノ上たきな']))).toEqual({tags:[tag],automatic:true});
+  db.prepare('DELETE FROM tag_name_keys WHERE tag=? AND search_key=?').run(tag,searchKey('井ノ上たきな'));
+  db.prepare("UPDATE danbooru_tags SET other_names='[]' WHERE name=?").run(tag);
+  match.refresh([tag]);
+  expect(match(art(1,['井ノ上たきな']))).toEqual({tags:[],automatic:false});
+});
+
+it('刷新一个同名角色不会清掉另一个角色的名称', () => {
+  name(A,'共用名称'); name(B,'共用名称');
+  const {catalog,copyrights}=makeCatalog(); const match=createPixivMatcher(db,catalog,copyrights);
+  expect(match(art(1,['共用名称'],'123',[])).tags).toEqual([A,B]);
+  db.prepare('DELETE FROM tag_name_keys WHERE tag=? AND search_key=?').run(A,searchKey('共用名称'));
+  db.prepare("UPDATE tag_i18n SET aliases='[]' WHERE tag=?").run(A);
+  match.refresh([A]);
+  expect(match(art(1,['共用名称'],'123',['ゲームB']))).toEqual({tags:[B],automatic:true});
+});
+
+it('刷新服装变体保留同一身份的其他名称，移除变体的过期别名', () => {
+  const variant='alice_(costume)'; name(variant,'衣装アリス');
+  const {copyrights}=makeCatalog();
+  const catalog=new CharacterCatalog(db,{copyrights,normalizeTag:t=>t===variant?A:t});
+  const match=createPixivMatcher(db,catalog,copyrights);
+  expect(match(art(1,['衣装アリス']))).toEqual({tags:[A],automatic:true});
+  db.prepare('DELETE FROM tag_name_keys WHERE tag=? AND search_key=?').run(variant,searchKey('衣装アリス'));
+  db.prepare("UPDATE tag_i18n SET aliases='[]' WHERE tag=?").run(variant);
+  match.refresh([variant]);
+  expect(match(art(1,['衣装アリス']))).toEqual({tags:[],automatic:false});
+  expect(match(art(1,['アリス']))).toEqual({tags:[A],automatic:true});
+  expect(match(art(1,[variant]))).toEqual({tags:[A],automatic:true});
+});
+
+it('完整姓名与低分模型一致时直接写入角色并移除旧建议', async () => {
+  const tag=takina();
+  db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (1,?,0.7549,'tagger')").run(tag);
+  const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(1,['井ノ上たきな'],'123',[])},0);
+  expect(summary).toContain('关联 2 张');
+  expect(links()).toHaveLength(2);
+  expect(db.prepare("SELECT COUNT(*) FROM character_suggestions WHERE danbooru_tag=?").pluck().get(tag)).toBe(0);
+});
+
+it.each(['井上たきな','井の上たきな','井ノ上たきな'])('有作品标签时可匹配姓名中连接字的有无：%s', raw => {
+  const tag=takina(); const {catalog,copyrights}=makeCatalog();
+  expect(createPixivMatcher(db,catalog,copyrights)(art(5,[raw]))).toEqual({tags:[tag],automatic:true});
+});
+
+it('姓名变体不能绕过作品、原创、限定词和多图多角色规则，也不做任意错字匹配', () => {
+  const tag=takina(); const {catalog,copyrights}=makeCatalog(); const match=createPixivMatcher(db,catalog,copyrights);
+  expect(match(art(5,['井上たきな'],'123',[])).tags).toEqual([]);
+  expect(match(art(5,['井上たきな'],'123',['ゲームB'])).tags).toEqual([]);
+  expect(match({...art(5,['井上たきな']),isOriginal:true}).tags).toEqual([]);
+  expect(match(art(5,['井上たきな(別作品)'])).tags).toEqual([]);
+  expect(match(art(5,['井上たきな(コスプレ)'])).tags).toEqual([]);
+  expect(match(art(5,['井下たきな'])).tags).toEqual([]);
+  expect(match(art(5,['井上たきな誕生日'])).tags).toEqual([]);
+  expect(match(art(5,['井上'])).tags).toEqual([]);
+  expect(match(art(5,['井上たきな','ボブ']))).toEqual({tags:[tag,B],automatic:false});
+});
+
+it('不同角色的姓名变体撞名时保留歧义，作品可以排除其他作品的候选', () => {
+  const tag=takina(), other='inoue_takina_other';
+  name(other,'井の上たきな');
+  db.prepare("INSERT INTO danbooru_tags(name,category,copyrights,other_names,fetched_at) VALUES (?,4,?,?, 'now')")
+    .run(other,JSON.stringify(['game_a']),JSON.stringify(['井の上たきな']));
+  let c=makeCatalog(); let match=createPixivMatcher(db,c.catalog,c.copyrights);
+  const ambiguous=match(art(5,['井上たきな'],'123',['ゲームA']));
+  expect(ambiguous.automatic).toBe(false);
+  expect(ambiguous.tags.sort()).toEqual([tag,other].sort());
+  db.prepare('UPDATE danbooru_tags SET copyrights=? WHERE name=?').run(JSON.stringify(['game_b']),other);
+  c=makeCatalog(); match=createPixivMatcher(db,c.catalog,c.copyrights);
+  expect(match(art(5,['井上たきな'],'123',['ゲームA']))).toEqual({tags:[tag],automatic:true});
+});
+
+it('连接字变体支持反向匹配，刷新别名后移除过期变体', () => {
+  const tag=takina();
+  db.prepare('DELETE FROM tag_name_keys WHERE tag=? AND search_key=?').run(tag,searchKey('井ノ上たきな'));
+  db.prepare('UPDATE danbooru_tags SET other_names=? WHERE name=?').run(JSON.stringify(['井上たきな']),tag);
+  const {catalog,copyrights}=makeCatalog(); const match=createPixivMatcher(db,catalog,copyrights);
+  expect(match(art(5,['井の上たきな']))).toEqual({tags:[tag],automatic:true});
+  db.prepare('UPDATE danbooru_tags SET other_names=? WHERE name=?').run(JSON.stringify(['井ノ上たきな']),tag);
+  match.refresh([tag]);
+  expect(match(art(5,['井上たきな']))).toEqual({tags:[tag],automatic:true});
+  db.prepare("UPDATE danbooru_tags SET other_names='[]' WHERE name=?").run(tag);
+  match.refresh([tag]);
+  expect(match(art(5,['井上たきな'])).tags).toEqual([]);
+});
+
+it('历史未匹配的多页单角色投稿可按姓名变体补充，已有角色和高分模型结果保留', async () => {
+  const tag=takina();
+  addImage(3,'123'); addImage(4,'123');
+  const ch=makeCatalog().catalog.ensureCharacter(A,'now');
+  db.prepare("INSERT INTO image_characters(image_id,character_id,origin,added_at) VALUES (3,?,'manual','now')").run(ch.id);
+  db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (1,?,0.7971,'tagger'),(4,?,0.9,'tagger')").run(tag,B);
+  db.exec("UPDATE pixiv_character_checks SET result='unmatched',checked_at='before'");
+  queuePixivImages(ctx);
+  const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(5,['井上たきな'])},0);
+  expect(summary).toContain('关联 2 张');
+  expect(db.prepare('SELECT c.danbooru_tag FROM image_characters ic JOIN characters c ON c.id=ic.character_id WHERE image_id=1').pluck().get()).toBe(tag);
+  expect(db.prepare('SELECT character_id FROM image_characters WHERE image_id=3').pluck().get()).toBe(ch.id);
+  expect(db.prepare('SELECT COUNT(*) FROM image_characters WHERE image_id=4').pluck().get()).toBe(0);
+  expect(db.prepare("SELECT score FROM character_suggestions WHERE image_id=4 AND danbooru_tag=?").pluck().get(B)).toBe(0.9);
+});
+
 it('原创投稿撞上 Danbooru 角色名：归为原创、只给建议，不新建角色', async () => {
   const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>({...art(1,['アリス']),isOriginal:true})},0);
   expect(summary).toContain('原创 2 张');
@@ -472,7 +675,7 @@ it('原创投稿撞上 Danbooru 角色名：归为原创、只给建议，不新
     .toEqual([{danbooru_tag:A,character_id:null}]);
 });
 
-it('用户撤掉的 Pixiv 关联和原创，手动补跑不再写回；未匹配的投稿仍会重查', async () => {
+it('用户撤掉的 Pixiv 关联和原创不再写回；未匹配的投稿复用缓存重算', async () => {
   db.exec("UPDATE images SET source_post_id='456' WHERE id=2");
   addImage(3,'789');
   queuePixivImages(ctx);
@@ -486,9 +689,110 @@ it('用户撤掉的 Pixiv 关联和原创，手动补跑不再写回；未匹配
   db.exec('DELETE FROM image_characters; UPDATE images SET original_at=NULL WHERE id=2; DELETE FROM image_copyrights WHERE image_id=2');
   queuePixivImages(ctx);
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
-  expect(client.artwork.mock.calls.map(c=>c[0])).toEqual(['123','456','789','789']);
+  expect(client.artwork.mock.calls.map(c=>c[0])).toEqual(['123','456','789']);
   expect(links()).toHaveLength(0);
   expect(db.prepare('SELECT COUNT(*) FROM images WHERE original_at IS NOT NULL').pluck().get()).toBe(0);
+});
+
+it.each(['pixiv','tagger'])('手动补跑按新词库重算旧建议（来源 %s），不重复请求 Pixiv', async source => {
+  if(source==='tagger') for(const id of [1,2]) {
+    db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (?,?,0.75,'tagger')").run(id,A);
+  }
+  const client={artwork:vi.fn().mockResolvedValue(art(1,['アリス'],'123',['新ゲーム名']))};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(links()).toHaveLength(0);
+  expect(db.prepare('SELECT DISTINCT result FROM pixiv_character_checks').pluck().all()).toEqual(['suggested']);
+  expect(db.prepare('SELECT DISTINCT source FROM character_suggestions').pluck().all()).toEqual([source]);
+  queuePixivImages(ctx,[1,2]);
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).toHaveBeenCalledTimes(1);
+  queuePixivImages(ctx);
+  expect(pendingPixivCount(ctx)).toBe(2);
+  name('game_a','新ゲーム名',3); // 新词库能确认作品，直接复用首次获取的标签。
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).toHaveBeenCalledTimes(1);
+  expect(links()).toHaveLength(2);
+  expect(db.prepare('SELECT COUNT(*) FROM character_suggestions').pluck().get()).toBe(0);
+});
+
+it('旧建议已经清空、或实际移除过角色时不因手动补跑写回', async () => {
+  await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(1,['アリス'],'123',[])},0);
+  db.exec("DELETE FROM character_suggestions WHERE image_id=1; UPDATE pixiv_character_checks SET result='dismissed' WHERE image_id=2");
+  queuePixivImages(ctx);
+  expect(pendingPixivCount(ctx)).toBe(0);
+  const client={artwork:vi.fn().mockResolvedValue(art(1,['アリス']))};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).not.toHaveBeenCalled();
+});
+
+it('作品标题的译名与角色短名同名时，不会扩出另一个角色', () => {
+  name('game_a','咲-Saki-',3); name(A,'原村和'); name(B,'Saki');
+  const {catalog,copyrights}=makeCatalog();
+  const artwork:PixivArtwork={id:'123',pageCount:20,tags:{tags:[{tag:'原村和'},{tag:'咲-Saki-',translation:{en:'Saki'}}]}};
+  expect(createPixivMatcher(db,catalog,copyrights)(artwork)).toEqual({tags:[A],automatic:true});
+});
+
+it('歌曲括号里的已知父作品能消歧短名；普通动作的译名不变成同名角色', () => {
+  name(A,'Miku');name(B,'Miku');name(B,'ビンタ');name('slapping','slap',0);
+  name('song_(game_a)','ラビットホール',3);name('game_a','game_a',3);
+  const {catalog,copyrights}=makeCatalog();
+  const artwork:PixivArtwork={id:'123',pageCount:49,tags:{tags:[{tag:'Miku'},{tag:'ラビットホール'},{tag:'ビンタ',translation:{en:'slap'}}]}};
+  expect(createPixivMatcher(db,catalog,copyrights)(artwork)).toEqual({tags:[A],automatic:true});
+});
+
+it('子作品的 implication 能确认父系列角色，AI 同名候选不会跨作品混入', () => {
+  name('game_child','子作品',3);name('game_a','game_a',3);name(B,'AI');name('other_ai_(game_c)','AI');
+  const c=makeCatalog();const copyrights={copyrights:(tag:string)=>c.copyrights.copyrights(tag),impliesClosure:(tag:string)=>tag==='game_child'?['game_a']:[]};
+  expect(createPixivMatcher(db,c.catalog,copyrights)(art(1,['アリス','AI'],'123',['子作品']))).toEqual({tags:[A],automatic:true});
+});
+
+it('原文带作品限定时保留限定；尚未解析的角色标签不会被当成单角色投稿', () => {
+  name(A,'シエスタ(作品A)');name(B,'シエスタ(作品B)');
+  const {catalog,copyrights}=makeCatalog();const match=createPixivMatcher(db,catalog,copyrights);
+  expect(match(art(5,['シエスタ(作品A)'],'123',[]))).toEqual({tags:[A],automatic:true});
+  const artwork:PixivArtwork={id:'123',pageCount:5,tags:{tags:[{tag:'アリス'},{tag:'未確認(別作品)',translation:{en:'Bob (Another Work)'}},{tag:'ゲームA'}]}};
+  expect(match(artwork)).toEqual({tags:[A],automatic:false});
+});
+
+it('带括号的角色不能被同名频道当成作品跳过，缺少其正确别名时不自动关联整篇', () => {
+  name('other_channel','ユニ',3); name(B,'ユニ(作品B)'); name('game_a','作品A',3);
+  const {catalog,copyrights}=makeCatalog();
+  const artwork:PixivArtwork={id:'123',pageCount:2,tags:{tags:[{tag:'アリス'},{tag:'ユニ(作品A)',translation:{en:'Bob (Game A)'}},{tag:'ゲームA'}]}};
+  expect(createPixivMatcher(db,catalog,copyrights)(artwork)).toEqual({tags:[A],automatic:false});
+});
+
+it('分级标签及无身份依据的普通译名，不展开成同名角色列表', () => {
+  name(B,'R-18G');name(A,'little sister');name(B,'little sister');
+  const {catalog,copyrights}=makeCatalog();
+  expect(createPixivMatcher(db,catalog,copyrights)({id:'123',pageCount:10,tags:{tags:[{tag:'R-18G'},{tag:'妹',translation:{en:'little sister'}}]}}))
+    .toEqual({tags:[],automatic:false});
+});
+
+it('补跑成功后替换旧 Pixiv 建议，保留模型原分数；请求失败时保留原建议', async () => {
+  await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(2,['アリス','ボブ'])},0);
+  db.prepare("UPDATE character_suggestions SET source='tagger',score=0.75 WHERE image_id=1 AND danbooru_tag=?").run(A);
+  queuePixivImages(ctx);
+  clearPendingPixivCache(ctx);
+  await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>{throw new Error('offline');}},0);
+  expect(db.prepare("SELECT COUNT(*) FROM character_suggestions WHERE source='pixiv'").pluck().get()).toBe(3);
+  resetPixivBackoff();
+  const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(2,[])},0);
+  expect(summary).toContain('未匹配角色 1');
+  expect(db.prepare('SELECT image_id,danbooru_tag,score,source FROM character_suggestions').all()).toEqual([{image_id:1,danbooru_tag:A,score:0.75,source:'tagger'}]);
+});
+
+it('移除标记不阻止换投稿后首次补充，也不覆盖请求期间的人工移除', async () => {
+  db.exec("UPDATE pixiv_character_checks SET result='dismissed',checked_at='before'; UPDATE images SET source_post_id='456' WHERE id=1");
+  queuePixivImages(ctx,[1,2]);
+  expect(pendingPixivCount(ctx)).toBe(1);
+  const client={artwork:vi.fn().mockImplementation(async()=>{
+    db.exec("UPDATE pixiv_character_checks SET result='dismissed',checked_at='during-request' WHERE image_id=1");
+    return art(1,['アリス'],'456');
+  })};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).toHaveBeenCalledTimes(1);
+  expect(links()).toHaveLength(0);
+  expect(db.prepare('SELECT checked_at FROM pixiv_character_checks WHERE image_id=1').pluck().get()).toBe('during-request');
 });
 
 it('请求失败的投稿进退避：之后的自动补充不再请求，手动补跑清掉退避后重试', async () => {

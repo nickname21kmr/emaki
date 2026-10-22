@@ -1,4 +1,4 @@
-import { setTimeout as sleep } from 'node:timers/promises';
+import { setTimeout as sleep, setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import type { JobContext } from '../../core/jobs.ts';
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import { ART_KINDS_SQL, IN_COMIC_I, QUEUE } from '../../datasource/sqlite/sql.ts';
@@ -9,6 +9,7 @@ import { DanbooruError } from '../danbooru/client.ts';
 import { isOriginalArtwork, PixivAccessError, PixivClient, PixivPostError } from './client.ts';
 import { createPixivMatcher, type PixivMatcher } from './match.ts';
 import type { PixivDiscover } from './discovery.ts';
+import { cachedArtwork, cacheArtwork } from './cache.ts';
 
 const ELIGIBLE = `${ART_KINDS_SQL} AND i.shelved_at IS NULL AND i.original_at IS NULL
   AND i.collection_id IS NULL AND NOT ${IN_COMIC_I} AND i.source_site='pixiv' AND i.source_post_id IS NOT NULL
@@ -39,8 +40,8 @@ const backoffPosts = (): string => {
 const READY = `${PENDING} AND i.source_post_id NOT IN (SELECT value FROM json_each(?))`;
 
 /**
- * 模型每批写入后登记首次补充；显式补跑只选未识别队列，重试没写过东西的（未匹配、失败、跳过）和换了投稿/文件的。
- * 上次关联过、归过原创或给过建议、现在又回到未识别的，是用户撤掉的，补跑不再写回。
+ * 模型每批写入后登记首次补充；显式补跑还重查未匹配、失败、跳过，以及仍保留建议的图片。
+ * 关联/原创被撤掉、明确移除过角色、或建议已被清空的图片不重新写回；换投稿/文件时可重新检查。
  */
 export function queuePixivImages(ctx: SqliteContext, ids?: number[]): void {
   const automatic = ids !== undefined;
@@ -49,8 +50,16 @@ export function queuePixivImages(ctx: SqliteContext, ids?: number[]): void {
     AND ${automatic ? 'i.id IN (SELECT value FROM json_each(?))' : QUEUE}
     ON CONFLICT(image_id) DO UPDATE SET post_id=excluded.post_id,modified_at=excluded.modified_at,checked_at=NULL,result=NULL
     WHERE pixiv_character_checks.post_id<>excluded.post_id OR pixiv_character_checks.modified_at<>excluded.modified_at
-    ${automatic ? '' : "OR COALESCE(pixiv_character_checks.result,'') NOT IN ('linked','original','suggested')"}`)
+    ${automatic ? '' : `OR COALESCE(pixiv_character_checks.result,'') NOT IN ('linked','original','suggested','dismissed')
+      OR (pixiv_character_checks.result='suggested' AND EXISTS
+        (SELECT 1 FROM character_suggestions cs WHERE cs.image_id=excluded.image_id))`}`)
     .run(...(automatic ? [JSON.stringify(ids)] : []));
+}
+
+/** Explicit refresh only invalidates posts that this run can actually process. */
+export function clearPendingPixivCache(ctx: SqliteContext): void {
+  ctx.db.prepare(`DELETE FROM pixiv_artwork_cache WHERE post_id IN
+    (SELECT i.source_post_id FROM v_counted_images i WHERE ${PENDING})`).run();
 }
 
 /** 待补的图片数，不含退避中的投稿（Pipeline 据此决定要不要自动排任务） */
@@ -71,8 +80,9 @@ export async function syncPixivCharacters(
     WHERE ${READY} ORDER BY i.source_post_id`).all(backoffPosts()) as { id: string }[];
   job.setTotal(posts.length);
   let linked = 0, original = 0, suggested = 0, unavailable = 0, unmatched = 0, failed = 0;
+  let requested = 0, cached = 0;
   let danbooruDown = '';
-  const summary = () => `Pixiv 标签：关联 ${linked} 张 · 原创 ${original} 张 · 建议 ${suggested} 张 · 不可访问 ${unavailable} 个投稿 · 未匹配角色 ${unmatched} 个投稿 · 失败 ${failed} 个投稿${danbooruDown && `（Danbooru 连不上，这轮只用本地词库：${danbooruDown}）`}`;
+  const summary = () => `Pixiv 标签：关联 ${linked} 张 · 原创 ${original} 张 · 建议 ${suggested} 张 · 不可访问 ${unavailable} 个投稿 · 未匹配角色 ${unmatched} 个投稿 · 失败 ${failed} 个投稿 · 复用缓存 ${cached} 个投稿 · 联网查询 ${requested} 个投稿${danbooruDown && `（Danbooru 连不上，这轮只用本地词库：${danbooruDown}）`}`;
   if (!posts.length) return summary();
   // 匹配索引全量建一次要一两秒（卡主线程）：第一次用到时才建，之后只增量补
   let match: PixivMatcher | undefined;
@@ -81,7 +91,7 @@ export async function syncPixivCharacters(
     return match;
   };
   const current = db.prepare(`SELECT i.id FROM v_counted_images i WHERE ${PENDING} AND i.source_post_id=?`);
-  // result：linked / original / suggested / unmatched / unavailable / skipped，补跑据此决定重不重试
+  // result：linked / original / suggested / unmatched / unavailable / skipped / dismissed，补跑据此决定重不重试
   const complete = db.prepare(`UPDATE pixiv_character_checks SET checked_at=?,result=? WHERE image_id=?`);
   const completePost = (id: string, result: string) => db.transaction(() => {
     for (const row of current.all(id) as {id:number}[]) complete.run(new Date(ctx.clock()).toISOString(),result,row.id);
@@ -89,17 +99,29 @@ export async function syncPixivCharacters(
   const insert = db.prepare("INSERT OR IGNORE INTO image_characters (image_id,character_id,origin,score,added_at) VALUES (?,?,'tagger',NULL,?)");
   // 自建角色的建议：danbooru_tag 写伪标签占主键，character_id 写真外键（读的时候看 character_id）
   const suggest = db.prepare("INSERT OR IGNORE INTO character_suggestions (image_id,danbooru_tag,character_id,score,source) VALUES (?,?,?,0,'pixiv')");
+  const clearPixivSuggestions = db.prepare("DELETE FROM character_suggestions WHERE image_id=? AND source='pixiv'");
   const liveCustom = db.prepare('SELECT 1 FROM characters WHERE id=? AND danbooru_tag IS NULL');
   for (let n = 0; n < posts.length; n++) {
     job.signal.throwIfAborted();
-    if (n && intervalMs) await sleep(intervalMs, undefined, { signal: job.signal });
+    const post = posts[n]!;
+    let artwork = cachedArtwork(db, post.id);
+    if (artwork) await yieldToEventLoop(undefined, { signal: job.signal });
+    // Cached matching is local and needs no network pacing. Still yield between posts.
+    if (!artwork && requested && intervalMs) await sleep(intervalMs, undefined, { signal: job.signal });
     // 同道有更急的任务（扫描、缩略图、查重）：让出。放在间隔之后，续跑时第一个请求离上一个也隔够了；没查的行 checked_at 仍为空
     if (job.shouldYield()) { job.requeue(); return `${summary()}（已让出，稍后继续）`; }
-    const post = posts[n]!;
-    job.setMessage(`读取 Pixiv 标签 ${n + 1}/${posts.length} · ${summary()}`);
-    let artwork;
+    job.setMessage(`${artwork ? '匹配已缓存的' : '读取'} Pixiv 标签 ${n + 1}/${posts.length} · ${summary()}`);
     try {
-      artwork = await client.artwork(post.id, job.signal);
+      if (!artwork) {
+        requested++;
+        const fetched = await client.artwork(post.id, job.signal);
+        job.signal.throwIfAborted();
+        if (fetched) {
+          if (fetched.id !== post.id) throw new Error('Pixiv 返回的作品 ID 不匹配');
+          cacheArtwork(db, fetched, new Date(ctx.clock()).toISOString());
+        }
+        artwork = fetched ?? undefined;
+      } else cached++;
       if (artwork && discover && !isOriginalArtwork(artwork)) {
         try {
           // 写进目录的新角色马上补进索引；后面的请求失败了这部分也不丢
@@ -153,8 +175,8 @@ export async function syncPixivCharacters(
       result = match(artwork);
     }
     const isOriginal = isOriginalArtwork(artwork);
-    if (!result.tags.length && !isOriginal) { completePost(post.id, 'unmatched'); unmatched++; job.advance(1, summary()); continue; }
-    const outcome = isOriginal ? 'original' : result.automatic ? 'linked' : 'suggested';
+    const noMatch = !result.tags.length && !isOriginal;
+    const outcome = isOriginal ? 'original' : noMatch ? 'unmatched' : result.automatic ? 'linked' : 'suggested';
     const ids: number[] = [];
     db.transaction(() => {
       const rows = current.all(post.id) as { id: number }[];
@@ -166,6 +188,8 @@ export async function syncPixivCharacters(
           continue;
         }
         let linkChanges = 0, suggestionChanges = 0;
+        // 成功取回投稿后才刷新来源建议；失败时保留旧值，同名模型分数也不动。
+        if (clearPixivSuggestions.run(row.id).changes) ids.push(row.id);
         if (isOriginal) {
           const work = catalog.ensureWork('original', now);
           db.prepare('UPDATE images SET original_at=? WHERE id=?').run(now,row.id);
@@ -194,6 +218,7 @@ export async function syncPixivCharacters(
       if (ids.length) applyExclusionRules(ctx, { imageIds: ids });
     })();
     if (ids.length) ctx.touch();
+    if (noMatch) unmatched++;
     job.advance(1, summary());
   }
   return summary();

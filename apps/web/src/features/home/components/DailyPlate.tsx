@@ -1,7 +1,6 @@
-import type { ImageItem, ListImagesQuery } from '@emaki/shared';
+import { inferCoverFocus, type ImageItem, type ListImagesQuery } from '@emaki/shared';
 import { useQuery } from '@tanstack/react-query';
 import { Play, RotateCw } from 'lucide-react';
-import { useState } from 'react';
 import { Link } from 'react-router';
 import { collectImages, slideFilter, useSlideshow } from '@/components/media/lightbox/slideshow';
 import { Thumb } from '@/components/media/Thumb';
@@ -9,9 +8,10 @@ import { Button, SectionTitle, Skeleton, Spinner } from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatDimensions } from '@/lib/format';
 import { useHotkey } from '@/lib/hotkeys';
-import { useCharacter, useWorks } from '@/lib/queries';
+import { useCharacter, useImage, useWorks } from '@/lib/queries';
 import { dayKey, daySeed } from '@/lib/random';
 import { useLightbox, usePrefs } from '@/lib/stores';
+import { useDailyPlateState } from '../dailyPlateState';
 
 const SITE: Record<string, string> = { pixiv: 'pixiv', twitter: 'X', danbooru: 'Danbooru', fanbox: 'FANBOX', other: '' };
 
@@ -40,10 +40,13 @@ function useDailyPlate(seed: number) {
 }
 
 export function DailyPlate() {
-  const [shuffle, setShuffle] = useState(0);
-  const seed = daySeed(`${dayKey()}:${shuffle}`);
+  const day = dayKey();
+  const choice = useDailyPlateState();
+  const shuffle = choice.day === day ? choice.shuffle : 0;
+  const seed = daySeed(`${day}:${shuffle}`);
+  const next = () => choice.next(dayKey());
   const plate = useDailyPlate(seed);
-  useHotkey('r', () => setShuffle((n) => n + 1));
+  useHotkey('r', next);
 
   const img = plate.data;
   if (plate.isSuccess && !img) return null;
@@ -52,7 +55,7 @@ export function DailyPlate() {
       <SectionTitle
         hint="每天从你的收藏里抽一张"
         actions={
-          <Button variant="ghost" size="sm" icon={<RotateCw className="size-3.5" />} onClick={() => setShuffle((n) => n + 1)}>
+          <Button variant="ghost" size="sm" icon={<RotateCw className="size-3.5" />} onClick={next}>
             换一张
           </Button>
         }
@@ -77,8 +80,14 @@ function Plate({ img, seed }: { img: ImageItem; seed: number }) {
   const ar = Math.min(Math.max(img.width / Math.max(img.height, 1), 0.66), 2.4);
   const tall = ar < 1.2;
   const { data: charData } = useCharacter(img.characterIds[0]);
+  const { data: detail } = useImage(img.id);
   const works = useWorks();
   const c = charData?.character;
+  // A character's crop only belongs to its cover image; other artwork uses
+  // the same inference algorithm with its own composition tags.
+  const focus = c?.coverImageId === img.id && c.coverFocus
+    ? c.coverFocus
+    : inferCoverFocus(detail?.tags.map((t) => [t.tag, t.score] as const) ?? []);
   const workName = c?.workIds[0] ? works.data?.find((w) => w.id === c.workIds[0])?.name : undefined;
   const name = c ? [...c.name].slice(0, 8).join('') : '无题';
   const site = img.source ? [SITE[img.source.site], img.source.artist].filter(Boolean).join(' · ') : '';
@@ -98,7 +107,7 @@ function Plate({ img, seed }: { img: ImageItem; seed: number }) {
         style={tall ? { height: 440, aspectRatio: ar } : { aspectRatio: ar, maxHeight: 460, width: '100%' }}
         aria-label="看大图"
       >
-        <Thumb image={img} width={960} eager className="size-full rounded-[var(--radius-plate)]" />
+        <Thumb image={img} width={960} focus={focus} original eager className="size-full rounded-[var(--radius-plate)]" />
       </button>
       <div className="min-w-0 pb-1">
         <div className="kicker">图版 · 第 {img.id} 号</div>

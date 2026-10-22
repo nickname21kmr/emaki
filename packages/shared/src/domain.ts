@@ -25,7 +25,7 @@ export type ImageStatus =
   /** 被用户排除，不参与统计和浏览 */
   | 'excluded';
 
-export type ImageFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'avif' | 'bmp';
+export type ImageFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'avif' | 'bmp' | 'html';
 
 /**
  * 图片内容类型（T27）。插画是默认类型；其余统称「别册」：不计入角色张数、不进未识别队列（漫画除外，见 T27 补充）。
@@ -263,6 +263,8 @@ export interface ContentKindSummary {
 }
 
 export interface CharacterSuggestion {
+  /** 建议的依据；Pixiv 标签没有模型置信度。 */
+  source: 'tagger' | 'pixiv';
   /** 如果库里已有该角色则给出 id，否则为 null（采纳时会新建角色） */
   characterId: ID | null;
   danbooruTag: string;
@@ -435,6 +437,8 @@ export interface Settings {
      * 只管识别后的自动补充；「未识别」页的按钮是用户手动点的，关着也能跑
      */
     pixiv: boolean;
+    /** Pixiv 文件名解析：严格识别固定格式；宽泛兼容投稿号_标题。默认严格。 */
+    pixivFilenameMode: 'strict' | 'broad';
   };
   danbooru: {
     /** 是否允许联网同步标签元数据 */

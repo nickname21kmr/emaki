@@ -12,7 +12,7 @@ import type { EventBus } from '../../core/events.ts';
 import type { JobContext } from '../../core/jobs.ts';
 import type { Db } from '../../db/connection.ts';
 import { diskCaseRel } from '../../datasource/sqlite/roots.ts';
-import { normalizeRootPath } from '../../datasource/sqlite/settings.ts';
+import { normalizeRootPath, readSettings } from '../../datasource/sqlite/settings.ts';
 import { sha256Buffer, sha256File } from '../fs/hash.ts';
 import { baseName, isoFromMs, parentRel, pathKey, toAbs } from '../fs/paths.ts';
 import { walkImages, type WalkEntry } from '../fs/walk.ts';
@@ -22,6 +22,7 @@ import { ComicAreas } from '../classify/comicAreas.ts';
 import { classifyContent, CLASSIFIER_VERSION } from '../classify/rules.ts';
 import { backfillSources } from '../source/backfill.ts';
 import { parseSource } from '../source/parseSource.ts';
+import { htmlAnimationCache, readHtmlAnimation } from '../image/htmlAnimation.ts';
 import type { ScanRequests, ScanScope } from './ScanRequests.ts';
 
 export interface ScanSummary {
@@ -336,12 +337,12 @@ export class Scanner {
     const stmts = {
       insert: db.prepare(`INSERT INTO images (root_id, rel_path, file_name, width, height, bytes, format, sha256,
           source_site, source_post_id, source_artist, source_url, added_at, modified_at,
-          camera, content_kind, content_kind_source, content_kind_evidence, content_kind_version, rating)
+          camera, content_kind, content_kind_source, content_kind_evidence, content_kind_version, rating, frame_count)
         VALUES (@rootId, @relPath, @fileName, @width, @height, @bytes, @format, @sha256,
           @site, @postId, @artist, @url, @addedAt, @modifiedAt,
-          @camera, @kind, @kindSource, @kindEvidence, @kindVersion, @rating)`),
+          @camera, @kind, @kindSource, @kindEvidence, @kindVersion, @rating, @frameCount)`),
       // 内容变了要重新识别：标签、主题、质量分都清空；手动改过的类型保留（BI-14 ②：按没有标签重判）
-      content: db.prepare(`UPDATE images SET width=@width, height=@height, bytes=@bytes, format=@format, sha256=@sha256, modified_at=@modifiedAt,
+      content: db.prepare(`UPDATE images SET width=@width, height=@height, bytes=@bytes, format=@format, sha256=@sha256, modified_at=@modifiedAt, frame_count=@frameCount,
           dhash=NULL, dominant_color=NULL, thumb_at=NULL, decode_error=NULL, tagged_at=NULL, tagger_model=NULL,
           missing=0, trashed_at=NULL, camera=@camera, theme=NULL, art_score=NULL, content_kind_version=@kindVersion,
           content_kind=CASE WHEN content_kind_manual=1 THEN content_kind ELSE @kind END,
@@ -431,12 +432,16 @@ export class Scanner {
       try {
         // 优先传 Buffer：绕开 260 字符长路径问题，sharp 也不会占着文件句柄
         probe = await probeImage(buf ?? abs);
+        if (probe.format === 'html') {
+          ctx.setMessage(`正在导入 HTML 动图：${baseName(e.relPath)}`);
+          await htmlAnimationCache(buf ?? await readHtmlAnimation(abs), this.d.dataDir, sha);
+        }
       } catch (err) {
         ops.push({ t: 'error', p: this.errorParams(e, (err as Error).message, nowIso) });
         summary.errors++;
         return;
       }
-      const common = { width: probe.width, height: probe.height, bytes: e.bytes, format: probe.format, sha256: sha, modifiedAt: isoFromMs(e.mtimeMs) };
+      const common = { width: probe.width, height: probe.height, frameCount: probe.pages, bytes: e.bytes, format: probe.format, sha256: sha, modifiedAt: isoFromMs(e.mtimeMs) };
       // 入库 / 内容变化时按文件名、路径、尺寸、格式、相机判一次类型；打标签后 writer 会再按标签重判
       const cls = classifyContent({
         fileName: baseName(e.relPath),
@@ -444,6 +449,7 @@ export class Scanner {
         width: probe.width,
         height: probe.height,
         format: probe.format,
+        pages: probe.pages,
         camera: probe.camera,
         tags: null,
         comicRoot: !!comics.of(e.rootId, e.relPath),
@@ -460,7 +466,7 @@ export class Scanner {
           ops.push({ t: 'move', p: this.moveParams(cand.id, e) });
           summary.moved++;
         } else {
-          const src = parseSource(e.relPath);
+          const src = this.parseSource(e.relPath);
           const addedAt =
             root.last_scan_at === null ? isoFromMs(Math.min(e.birthtimeMs || e.mtimeMs, e.mtimeMs)) : nowIso;
           ops.push({
@@ -548,7 +554,7 @@ export class Scanner {
   }
 
   private moveParams(id: number, e: DiskEntry) {
-    const src = parseSource(e.relPath);
+    const src = this.parseSource(e.relPath);
     return {
       id,
       rootId: e.rootId,
@@ -564,6 +570,10 @@ export class Scanner {
 
   private errorParams(e: DiskEntry, error: string, at: string) {
     return { rootId: e.rootId, relPath: e.relPath, bytes: e.bytes, modifiedAt: isoFromMs(e.mtimeMs), error, at };
+  }
+
+  private parseSource(relPath: string) {
+    return parseSource(relPath, readSettings(this.d.db).tagger.pixivFilenameMode);
   }
 }
 

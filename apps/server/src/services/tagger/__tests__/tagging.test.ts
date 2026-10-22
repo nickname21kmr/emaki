@@ -83,6 +83,15 @@ describe('TagResultWriter', () => {
     return new TagResultWriter(db, new CharacterCatalog(db, { copyrights, localizer }), copyrights, { repo: REPO, ...TH });
   };
 
+  it('80% threshold accepts the exact boundary and keeps 79.89% as a suggestion', () => {
+    const copyrights = new CopyrightResolver(db, OFFLINE);
+    const catalog = new CharacterCatalog(db, { copyrights });
+    const w = new TagResultWriter(db, catalog, copyrights, { repo: REPO, ...TH, autoAcceptThreshold: 0.8 });
+    w.writeBatch([ok(1, [['mika_(blue_archive)', 0.7989]]), ok(2, [['mika_(blue_archive)', 0.8]])]);
+    expect(db.prepare('SELECT image_id, score FROM character_suggestions').all()).toEqual([{ image_id: 1, score: 0.7989 }]);
+    expect(db.prepare('SELECT image_id, score FROM image_characters').all()).toEqual([{ image_id: 2, score: 0.8 }]);
+  });
+
   it('按规则写：自动采纳、建议、作品、分级', () => {
     writer().writeBatch([ok(1, [['mika_(blue_archive)', 0.95], ['hina_(blue_archive)', 0.5]], 'sensitive')]);
     expect(db.prepare("SELECT name, source FROM characters WHERE danbooru_tag = 'mika_(blue_archive)'").get()).toEqual({ name: 'Mika', source: 'danbooru' });
@@ -206,7 +215,7 @@ describe('tagJob', () => {
       db,
       bus,
       modelsDir: 'X:/models',
-      getTaggerSettings: () => ({ model, device: 'dml', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true, artists: false, pixiv: false }),
+      getTaggerSettings: () => ({ model, device: 'dml', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true, artists: false, pixiv: false, pixivFilenameMode: 'strict' as const }),
       makeCatalog: () => {
         const copyrights = new CopyrightResolver(db, OFFLINE);
         return { catalog: new CharacterCatalog(db, { copyrights }), copyrights };
@@ -403,7 +412,7 @@ describe('tagJob', () => {
       db,
       bus: new EventBus(),
       modelsDir: 'X:/models',
-      getTaggerSettings: () => ({ model: REPO, device: 'dml', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true, artists: false, pixiv: false }),
+      getTaggerSettings: () => ({ model: REPO, device: 'dml', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true, artists: false, pixiv: false, pixivFilenameMode: 'strict' as const }),
       makeCatalog: () => {
         const copyrights = new CopyrightResolver(db, OFFLINE);
         return { catalog: new CharacterCatalog(db, { copyrights }), copyrights };
@@ -508,7 +517,7 @@ describe('tagJob', () => {
       db,
       bus: new EventBus(),
       modelsDir: 'X:/models',
-      getTaggerSettings: () => ({ model: REPO, device: 'dml', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true, artists: false, pixiv: false }),
+      getTaggerSettings: () => ({ model: REPO, device: 'dml', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true, artists: false, pixiv: false, pixivFilenameMode: 'strict' as const }),
       clientFactory: factory,
     });
     expect(stage.pendingCount()).toBe(0); // 退避中，扫描后不会为它重新加载模型
@@ -522,7 +531,7 @@ describe('tagJob', () => {
       db,
       bus: new EventBus(),
       modelsDir: 'X:/models',
-      getTaggerSettings: () => ({ model: REPO, device: 'dml', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true, artists: false, pixiv: false }),
+      getTaggerSettings: () => ({ model: REPO, device: 'dml', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true, artists: false, pixiv: false, pixivFilenameMode: 'strict' as const }),
       clientFactory: vi.fn(),
     });
     expect(stage.pendingCount()).toBeGreaterThan(0);
@@ -603,7 +612,7 @@ describe('tagJob', () => {
         db,
         bus: new EventBus(),
         modelsDir: 'X:/models',
-        getTaggerSettings: () => ({ model: REPO, device: 'cpu', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true, artists: false, pixiv: false }),
+        getTaggerSettings: () => ({ model: REPO, device: 'cpu', batchSize: 2, ...TH, legacyModel: null, legacyBefore: null, skipCameraPhotos: true, retryOld: false, keepAwake: true, artists: false, pixiv: false, pixivFilenameMode: 'strict' as const }),
         makeCatalog: () => {
           const copyrights = new CopyrightResolver(db, OFFLINE);
           return { catalog: new CharacterCatalog(db, { copyrights }), copyrights };
@@ -701,7 +710,7 @@ describe('tagJob 分流（旧文件用旧模型、新文件用新模型、相机
     retryOld: false,
     keepAwake: true,
     artists: false,
-    pixiv: false,
+    pixiv: false, pixivFilenameMode: 'strict' as const,
   });
 
   beforeEach(() => {

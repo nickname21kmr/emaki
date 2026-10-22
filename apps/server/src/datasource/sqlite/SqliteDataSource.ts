@@ -13,6 +13,7 @@ import type {
   ContentKindSummary,
   CoverCandidatesResponse,
   CreateCharacterBody,
+  CustomCharacterMatch,
   CreateExclusionBody,
   DuplicateGroup,
   Exclusion,
@@ -23,6 +24,7 @@ import type {
   ImageItem,
   Job,
   JobKind,
+  StartJobBody,
   LibraryStats,
   ListCharactersQuery,
   ListCharactersResponse,
@@ -72,6 +74,8 @@ import { Pipeline } from '../../services/pipeline.ts';
 import { Scanner } from '../../services/scan/Scanner.ts';
 import { ScanRequests } from '../../services/scan/ScanRequests.ts';
 import { backfillSources } from '../../services/source/backfill.ts';
+import { htmlAnimationCache, readHtmlAnimation } from '../../services/image/htmlAnimation.ts';
+import { sha256Buffer } from '../../services/fs/hash.ts';
 import { backfillClassification } from '../../services/classify/backfill.ts';
 import { recordRootModeUndo, syncRootModes } from '../../services/classify/rootMode.ts';
 import type { UndoRecorder } from './undo.ts';
@@ -95,7 +99,8 @@ import { config } from '../../config.ts';
 import { hydrateImages, IMAGE_COLS, type ImageRow } from './hydrate.ts';
 import { listImages } from './queries/listImages.ts';
 import { loadSuggestions } from './suggestions.ts';
-import { pendingPixivCount, queuePixivImages, resetPixivBackoff, syncPixivCharacters } from '../../services/pixiv/sync.ts';
+import { dismissPixivCharacterChecks } from './pixivChecks.ts';
+import { clearPendingPixivCache, pendingPixivCount, queuePixivImages, resetPixivBackoff, syncPixivCharacters } from '../../services/pixiv/sync.ts';
 import { refreshPixivAliases } from '../../services/pixiv/aliases.ts';
 import { createPixivDiscovery } from '../../services/pixiv/discovery.ts';
 import { DanbooruClient } from '../../services/danbooru/client.ts';
@@ -198,6 +203,7 @@ export class SqliteDataSource implements DataSource {
     // 作品同理：Danbooru 改过名的版权标签，新旧两个名字各建了一部（用户 2026-09-29）
     const works = consolidateWorkTags(db, { canonicalize: (t) => danbooru.canonicalize(t), localizer });
     if (works.merged || works.renamed) console.log(`[作品] 收拢改过名的作品：合并 ${works.merged} 部，改标签 ${works.renamed} 部`);
+    ds.characters.associateAutomatic();
     ds.pipeline.register({
       tag: createTagStage({
         db,
@@ -230,7 +236,9 @@ export class SqliteDataSource implements DataSource {
           const discovery = settings.enabled ? createPixivDiscovery(db, danbooru, new DanbooruClient({
             login: settings.username || undefined, apiKey: getDanbooruApiKey(db) ?? undefined,
           })) : undefined;
-          return syncPixivCharacters(ds.ctx, job, makeCatalog, undefined, 1000, discovery);
+          const result = await syncPixivCharacters(ds.ctx, job, makeCatalog, undefined, 1000, discovery);
+          ds.characters.associateAutomatic();
+          return result;
         },
       },
       danbooru: {
@@ -242,6 +250,7 @@ export class SqliteDataSource implements DataSource {
           localizer,
           relocalizeAll,
           getDanbooru: () => ({ ...readSettings(db).danbooru, apiKey: getDanbooruApiKey(db) }),
+          associateCustomCharacters: () => ds.characters.associateAutomatic(),
           setLastSyncAt: (at) => patchSettingsInternal(db, 'danbooru', { lastSyncAt: at }),
         }),
       },
@@ -525,6 +534,19 @@ export class SqliteDataSource implements DataSource {
   async getWork(id: ID): Promise<Work | null> {
     return this.library.getWork(id);
   }
+  async listCustomCharacterMatches(): Promise<CustomCharacterMatch[]> {
+    const rows = this.ctx.db.prepare(`SELECT c.id, c.name, m.danbooru_tag AS tag
+      FROM custom_character_matches m JOIN characters c ON c.id = m.character_id
+      WHERE c.source = 'custom' AND c.danbooru_tag IS NULL AND m.dismissed = 0 ORDER BY c.name, c.id`).all() as { id: number; name: string; tag: string }[];
+    const catalog = this.makeCatalog().catalog;
+    return rows.map((r) => {
+      const tag = this.danbooru.normalizeTag(r.tag);
+      const described = catalog.describeTag(tag);
+      return { characterId: String(r.id), characterName: r.name, danbooruTag: tag, matchName: described.name,
+        workName: described.workName, existingCharacterId: described.characterId === null ? null : String(described.characterId),
+        existingCharacterName: described.characterId === null ? null : described.name };
+    });
+  }
   async listCharacters(query: ListCharactersQuery): Promise<ListCharactersResponse> {
     return this.library.listCharacters(query);
   }
@@ -636,7 +658,8 @@ export class SqliteDataSource implements DataSource {
     if (body.kind !== undefined) assertKindValue(body.kind);
     const charIds = body.characterIds ? [...new Set(body.characterIds)].map((c) => this.requireCharacterId(c)) : null;
     const now = iso(this.ctx.clock());
-    const sourceEdit = body.source === undefined ? undefined : editedSource(body.source, this.ctx.stmt('SELECT rel_path FROM images WHERE id = ?').pluck().get(iid) as string);
+    const sourceEdit = body.source === undefined ? undefined : editedSource(body.source, this.ctx.stmt('SELECT rel_path FROM images WHERE id = ?').pluck().get(iid) as string,
+      readSettings(this.ctx.db).tagger.pixivFilenameMode);
     // 类型、收藏、分级、角色放进同一次 mutate：一起传时一个 token 撤销全部
     return this.ctx.mutate((u) => {
       // 提示文案和 mock 一致：收藏 > 分级 > 角色 > 类型，只报一条
@@ -662,6 +685,8 @@ export class SqliteDataSource implements DataSource {
       if (charIds) {
         u.set('image_characters', 'image_id = ?', [iid]);
         const ids = JSON.stringify(charIds);
+        const removed = this.ctx.stmt('SELECT 1 FROM image_characters WHERE image_id = ? AND character_id NOT IN (SELECT value FROM json_each(?)) LIMIT 1').get(iid,ids);
+        if (removed) dismissPixivCharacterChecks(this.ctx.db,u,[iid],now);
         this.ctx.stmt('DELETE FROM image_characters WHERE image_id = @iid AND character_id NOT IN (SELECT value FROM json_each(@ids))').run({ iid, ids });
         this.ctx
           .stmt(
@@ -717,7 +742,10 @@ export class SqliteDataSource implements DataSource {
     } catch {
       return null;
     }
-    return { kind: 'path', contentType: MIME[row.format], filePath: abs, etag: `"${row.sha256.slice(0, 20)}"`, cacheControl: 'private, no-cache' };
+    const html = row.format === 'html' ? await readHtmlAnimation(abs) : null;
+    const sha = html ? sha256Buffer(html) : row.sha256;
+    const filePath = html ? await htmlAnimationCache(html,this.ctx.dataDir,sha) : abs;
+    return { kind: 'path', contentType: MIME[row.format], filePath, etag: `"${sha.slice(0, 20)}"`, cacheControl: 'private, no-cache' };
   }
 
   async revealImage(id: ID): Promise<void> {
@@ -950,6 +978,7 @@ export class SqliteDataSource implements DataSource {
     const beforeArtists = readSettings(this.ctx.db).tagger.artists;
     const beforePixiv = readSettings(this.ctx.db).tagger.pixiv;
     applySettingsPatch(this.ctx.db, body as Parameters<typeof applySettingsPatch>[1]);
+    if (body.tagger?.pixivFilenameMode !== undefined) backfillSources(this.ctx.db);
     const settings = await this.getSettings();
     // 调低自动采纳阈值：已达标的建议当场归到角色（和识别任务开头的「阶段 0」同一段逻辑）
     if (settings.tagger.autoAcceptThreshold < before) {
@@ -1308,8 +1337,16 @@ export class SqliteDataSource implements DataSource {
   async listJobs(): Promise<Job[]> {
     return this.ctx.jobs.list();
   }
-  async startJob(kind: JobKind): Promise<Job> {
-    if (kind === 'pixiv-tags') { queuePixivImages(this.ctx); resetPixivBackoff(); }
+  async startJob(kind: JobKind, options: Pick<StartJobBody, 'refreshPixiv'> = {}): Promise<Job> {
+    if (options.refreshPixiv && kind !== 'pixiv-tags') throw new BadRequestError('刷新 Pixiv 标签只用于补充 Pixiv 角色');
+    if (kind === 'pixiv-tags') {
+      // Repeated starts must not reset checks or invalidate cache during an active run.
+      const active = this.ctx.jobs.list().find(j => j.kind === kind && (j.status === 'running' || j.status === 'queued'));
+      if (active) return active;
+      queuePixivImages(this.ctx);
+      if (options.refreshPixiv) clearPendingPixivCache(this.ctx);
+      resetPixivBackoff();
+    }
     if (kind === 'scan') this.requests.requestFull();
     // 用户手动点的：之前读不到、正在退避的图也马上重试（比如刚把移动硬盘插回去）
     if (kind === 'tag' || kind === 'artists') resetIoBackoff();

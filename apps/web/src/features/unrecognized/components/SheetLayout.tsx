@@ -1,3 +1,4 @@
+import type { Character } from '@emaki/shared';
 import {
   UNRECOGNIZED_ANNEX_KINDS,
   UNRECOGNIZED_THEMES,
@@ -58,6 +59,7 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
   const [kindOpen, setKindOpen] = useState(false);
   const [ratingOpen, setRatingOpen] = useState(false);
   const [createName, setCreateName] = useState<string | null>(null);
+  const [createdCharacter, setCreatedCharacter] = useState<Character | null>(null);
   const keysOn = useTriageKeysEnabled() && !kindOpen && !ratingOpen && createName === null;
   const edit = keysOn && sheet.batch;
   const once = (fn: () => void) => (e: KeyboardEvent) => !e.repeat && fn();
@@ -178,6 +180,7 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
           mode={mode}
           searchRef={searchRef}
           onCreate={setCreateName}
+          createdCharacter={createdCharacter}
           kindOpen={kindOpen}
           onKindOpen={setKindOpen}
           ratingOpen={ratingOpen}
@@ -197,7 +200,8 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
         open={createName !== null}
         onOpenChange={(o) => !o && setCreateName(null)}
         initialName={createName ?? ''}
-        onCreated={(c) => sheet.assign({ id: c.id, name: c.name, workName: null, coverImageId: null })}
+        onCreated={setCreatedCharacter}
+        onReturn={() => searchRef.current?.focus()}
       />
     </>
   );

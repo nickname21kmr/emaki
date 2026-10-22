@@ -10,6 +10,8 @@
  */
 import type { ContentKind, ContentKindSource, ImageFormat } from '@emaki/shared';
 
+// Existing classifications can include stronger evidence from other classifiers.
+// Animation metadata backfill targets confirmed multi-frame files separately.
 export const CLASSIFIER_VERSION = 1;
 
 export interface ClassifyInput {
@@ -18,6 +20,7 @@ export interface ClassifyInput {
   width: number;
   height: number;
   format: ImageFormat;
+  pages?: number;
   /** 'HUAWEI EML-AL00' = 相机拍摄；'' = 读过但不是；null = 还没读 */
   camera: string | null;
   /** general 标签分数；null = 还没打标签 */
@@ -115,6 +118,7 @@ export function classifyContent(x: ClassifyInput): ClassifyResult {
     return { kind: 'photo', source, evidence };
   }
   if (x.format === 'gif') return { kind: 'animated', source: 'format', evidence: 'GIF 动图' };
+  if (x.format === 'html' || (x.pages ?? 1) > 1) return { kind: 'animated', source: 'format', evidence: x.format === 'html' ? 'HTML 逐帧动图' : `${x.format.toUpperCase()} 动图 · ${x.pages} 帧` };
   const comicDir = segs.find((s) => COMIC_DIR.test(s));
   if (comicDir) return { kind: 'comic', source: 'folder', evidence: `文件夹「${comicDir}」` };
 

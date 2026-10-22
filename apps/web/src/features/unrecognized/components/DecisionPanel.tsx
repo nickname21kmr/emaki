@@ -7,6 +7,7 @@ import type { ReactNode, RefObject } from 'react';
 import { Badge, Kbd } from '@/components/ui';
 import {
   formatBytes,
+  formatConfidence,
   formatCount,
   formatDimensions,
   formatRelative,
@@ -87,8 +88,9 @@ export function DecisionPanel({
                   name={s.name}
                   workName={s.workName}
                   value={s.score}
-                  valueLabel={s.score > 0 ? Math.round(s.score * 100) : null}
-                  valueUnit={s.score > 0 ? '%' : ''}
+                  valueLabel={s.source !== 'pixiv' && s.score > 0 ? formatConfidence(s.score).slice(0, -1) : null}
+                  valueUnit={s.source !== 'pixiv' && s.score > 0 ? '%' : undefined}
+                  sourceLabel={s.source === 'pixiv' ? 'Pixiv 标签' : undefined}
                   isNew={!s.characterId}
                   title={`${s.danbooruTag} · 按 ${i + 1} 采纳`}
                   onPick={() => triage.acceptSuggestion(s)}

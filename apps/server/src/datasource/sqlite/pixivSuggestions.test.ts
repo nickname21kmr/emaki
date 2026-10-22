@@ -7,6 +7,7 @@ import { dumpCore } from '../../../test/helpers/dump.ts';
 import { sqliteFactory, type ContractEnv } from '../../../test/contract/harness.ts';
 import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
 import type { SqliteDataSource } from './SqliteDataSource.ts';
+import { pendingPixivCount, queuePixivImages } from '../../services/pixiv/sync.ts';
 
 let env: ContractEnv;
 let ds: SqliteDataSource;
@@ -36,6 +37,7 @@ it('按 character_id 显示真名；没有 character_id 的占位行不显示', 
     ['Test Girl', null],
     ['小雪', x],
   ]);
+  expect((await ds.getImage(img('i27')))!.characterSuggestions.map(s => s.source)).toEqual(['tagger', 'pixiv']);
 });
 
 it('已经归到这个自建角色的图不再显示它的建议', async () => {
@@ -141,4 +143,37 @@ it('改类型提升建议只看识别器的：Pixiv 建议分数再高也不提�
   await ds.bulkImages({ ids: [img('i24')], action: { type: 'kind', value: 'screenshot' } });
   await ds.bulkImages({ ids: [img('i24')], action: { type: 'kind', value: 'illustration' } });
   expect((await ds.getImage(img('i24')))!.characterIds).not.toContain(x);
+});
+
+it.each(['bulk','image'])('人工移除角色后保留其他建议，%s 操作的移除标记也能撤销', async via => {
+  const id=Number(img('i27')), character=c('c3'), other=await custom('另一个建议');
+  db().prepare("UPDATE images SET source_site='pixiv',source_post_id='123',content_kind='illustration' WHERE id=?").run(id);
+  await ds.bulkImages({ids:[img('i27')],action:{type:'assign',characterId:character}});
+  pixiv('i27',other);
+  db().prepare("INSERT INTO pixiv_character_checks(image_id,post_id,modified_at,checked_at,result) SELECT id,source_post_id,modified_at,'before','suggested' FROM images WHERE id=?").run(id);
+  const before=db().prepare('SELECT * FROM pixiv_character_checks WHERE image_id=?').get(id);
+  const removed=via==='bulk'
+    ? await ds.bulkImages({ids:[img('i27')],action:{type:'unassign',characterId:character}})
+    : await ds.updateImage(img('i27'),{characterIds:[]});
+  expect(db().prepare('SELECT result FROM pixiv_character_checks WHERE image_id=?').pluck().get(id)).toBe('dismissed');
+  expect(db().prepare('SELECT COUNT(*) FROM character_suggestions WHERE image_id=?').pluck().get(id)).toBeGreaterThan(0);
+  queuePixivImages(ds.ctx);
+  expect(pendingPixivCount(ds.ctx)).toBe(0);
+  await ds.undo(removed.undoToken!);
+  expect(db().prepare('SELECT * FROM pixiv_character_checks WHERE image_id=?').get(id)).toEqual(before);
+  expect((await ds.getImage(img('i27')))!.characterIds).toContain(character);
+});
+
+it('第一次查询前移除角色也有记录，撤销后还原为没有记录；无实际移除不标记', async () => {
+  const id=Number(img('i27')), character=c('c3');
+  db().prepare("UPDATE images SET source_site='pixiv',source_post_id='123' WHERE id=?").run(id);
+  await ds.bulkImages({ids:[img('i27')],action:{type:'unassign',characterId:character}});
+  expect(db().prepare('SELECT * FROM pixiv_character_checks WHERE image_id=?').get(id)).toBeUndefined();
+  await ds.bulkImages({ids:[img('i27')],action:{type:'assign',characterId:character}});
+  await ds.updateImage(img('i27'),{characterIds:[character]});
+  expect(db().prepare('SELECT * FROM pixiv_character_checks WHERE image_id=?').get(id)).toBeUndefined();
+  const removed=await ds.updateImage(img('i27'),{characterIds:[]});
+  expect(db().prepare('SELECT result FROM pixiv_character_checks WHERE image_id=?').pluck().get(id)).toBe('dismissed');
+  await ds.undo(removed.undoToken!);
+  expect(db().prepare('SELECT * FROM pixiv_character_checks WHERE image_id=?').get(id)).toBeUndefined();
 });

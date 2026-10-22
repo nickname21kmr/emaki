@@ -3,7 +3,8 @@
  * 后者不能剪枝（会钻进 node_modules、$RECYCLE.BIN），子目录遇到 EPERM 还会整体失败。
  */
 import type { Dirent } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { open, readdir, stat } from 'node:fs/promises';
+import { isHtmlFile, looksLikeHtmlAnimation } from '../image/htmlAnimation.ts';
 import { isImageFile, isSkippedDirName, pathKey, toAbs } from './paths.ts';
 
 export interface WalkEntry {
@@ -71,6 +72,19 @@ export async function* walkImages(rootPath: string, o: WalkOptions = {}): AsyncG
         const s = stats[k]!;
         if (s.status === 'fulfilled') {
           if (s.value.isFile() && s.value.size > 0) {
+            if (isHtmlFile(chunk[k]!)) {
+              try {
+                const fh = await open(toAbs(rootPath,chunk[k]!), 'r');
+                try {
+                  const head = Buffer.alloc(65536);
+                  const {bytesRead} = await fh.read(head,0,head.length,0);
+                  if (!looksLikeHtmlAnimation(head.subarray(0,bytesRead))) continue;
+                } finally { await fh.close(); }
+              } catch (error) {
+                o.onDirError?.(rel,error as NodeJS.ErrnoException);
+                continue;
+              }
+            }
             yield { relPath: chunk[k]!, bytes: s.value.size, mtimeMs: s.value.mtimeMs, birthtimeMs: s.value.birthtimeMs };
           }
         } else if (!statFailed) {

@@ -8,6 +8,7 @@ import type { Db, Statement } from '../../db/connection.ts';
 
 export interface CopyrightSource {
   copyrights(tag: string): string[];
+  impliesClosure?(tag: string): string[];
 }
 
 export class CopyrightResolver implements CopyrightSource {

@@ -5,6 +5,7 @@ import type { ImageFormat } from '@emaki/shared';
 import { open } from 'node:fs/promises';
 import { readCameraFromExif } from './exif.ts';
 import { SHARP_INPUT, sharp } from './sharpConfig.ts';
+import { isHtmlFile, readHtmlAnimation, looksLikeHtmlAnimation, probeHtmlAnimation } from './htmlAnimation.ts';
 
 export class UnsupportedImageError extends Error {}
 
@@ -18,6 +19,8 @@ export interface Probe {
 }
 
 export async function probeImage(input: Buffer | string): Promise<Probe> {
+  if (typeof input === 'string' && isHtmlFile(input)) return probeHtmlAnimation(await readHtmlAnimation(input));
+  if (Buffer.isBuffer(input) && looksLikeHtmlAnimation(input)) return probeHtmlAnimation(input);
   try {
     const m = await sharp(input, SHARP_INPUT).metadata();
     const format: ImageFormat | null =

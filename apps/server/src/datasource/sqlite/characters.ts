@@ -6,7 +6,7 @@ import { searchKey, type Character, type CreateCharacterBody, type ID, type Muta
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
 import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
 import type { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
-import { recomputeCustomMatches } from '../../services/danbooru/matcher.ts';
+import { automaticCustomMatches, recomputeCustomMatches } from '../../services/danbooru/matcher.ts';
 import type { SqliteContext } from './context.ts';
 import type { Derived } from './derived.ts';
 import { toCharacter } from './library.ts';
@@ -107,6 +107,37 @@ export class CharacterMutations {
     return toCharacter(this.derived.get().characters.get(id)!);
   }
 
+  /** 明确匹配的绑定与当前操作共用事务、撤销记录；名称和已有图片关联保持原样。 */
+  private autoAssociateInTx(u: UndoRecorder, ids?: number[]): number {
+    const matches = automaticCustomMatches(this.db, this.danbooru()).filter((m) => !ids || ids.includes(m.id));
+    for (const { id, match } of matches) {
+      u.columns('characters', ['danbooru_tag', 'source'], [id]);
+      this.db.prepare("UPDATE characters SET danbooru_tag = ?, source = 'danbooru' WHERE id = ?").run(match.danbooruTag, id);
+      // 没有手动指定作品时补上所属作品；用户已有的作品选择保持。
+      if (this.db.prepare('SELECT works_locked FROM characters WHERE id = ?').pluck().get(id) === 0) {
+        u.set('character_works', 'character_id = ?', [id]);
+        for (const wid of this.catalog().linkWorks(id, match.danbooruTag, iso(this.ctx.clock()))) {
+          u.inserted('works', wid);
+          u.sql("DELETE FROM aliases WHERE owner_type = 'work' AND owner_id = ?", [wid]);
+        }
+      }
+    }
+    return matches.length;
+  }
+
+  associateAutomatic(): void {
+    if (!automaticCustomMatches(this.db, this.danbooru()).length) {
+      recomputeCustomMatches(this.db, this.danbooru());
+      return;
+    }
+    this.ctx.mutate((u) => {
+      const count = this.autoAssociateInTx(u);
+      u.onUndo(() => recomputeCustomMatches(this.db, this.danbooru()));
+      return { message: `已自动关联 ${count} 个角色的 Danbooru 标签` };
+    });
+    recomputeCustomMatches(this.db, this.danbooru());
+  }
+
   create(body: CreateCharacterBody): MutationResult & { character: Character } {
     const name = body.name.trim();
     if (!name) throw new BadRequestError('角色名不能为空');
@@ -130,6 +161,7 @@ export class CharacterMutations {
       u.guard('SELECT 1 FROM characters WHERE id = ? AND created_at <> ?', [id, now], `无法撤销：「${name}」已经合并掉了，原来的编号给了之后新建的角色`);
       this.writeCharacterWorks(id, workIds);
       this.writeUserAliases(id, normalizeAliases(body.aliases));
+      if (!tag) this.autoAssociateInTx(u, [id]);
       u.onUndo(() => recomputeCustomMatches(this.db, this.danbooru(), [id]));
       return { message: `已新建角色「${name}」` };
     });
@@ -174,6 +206,7 @@ export class CharacterMutations {
       if (cover !== undefined) set('cover_image_id = ?, cover_manual = ?', cover, cover === null ? 0 : 1);
       if (body.coverFocus !== undefined) set('cover_focus_x = ?, cover_focus_y = ?', body.coverFocus?.x ?? null, body.coverFocus?.y ?? null);
       if (body.pinned !== undefined) set('pinned = ?', body.pinned ? 1 : 0);
+      if (body.danbooruTag === undefined && (body.name !== undefined || body.aliases !== undefined || workIds)) this.autoAssociateInTx(u, [id]);
       u.onUndo(() => recomputeCustomMatches(this.db, this.danbooru(), [id]));
       return { message: `已更新「${newName}」` };
     });

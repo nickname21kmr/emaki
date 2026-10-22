@@ -13,7 +13,7 @@ export function loadSuggestions(ctx: SqliteContext, imageIds: number[], catalog:
   if (!imageIds.length) return out;
   const rows = ctx
     .stmt(
-      `SELECT s.image_id, s.danbooru_tag, s.score, COALESCE(s.character_id, c.id, r.character_id) AS character_id,
+      `SELECT s.image_id, s.danbooru_tag, s.score, s.source, COALESCE(s.character_id, c.id, r.character_id) AS character_id,
          ch.name AS character_name,
          (SELECT w.name FROM character_works cw JOIN works w ON w.id = cw.work_id
            WHERE cw.character_id = COALESCE(s.character_id, c.id, r.character_id) ORDER BY cw.position LIMIT 1) AS work_name
@@ -31,6 +31,7 @@ export function loadSuggestions(ctx: SqliteContext, imageIds: number[], catalog:
     image_id: number;
     danbooru_tag: string;
     score: number;
+    source: CharacterSuggestion['source'];
     character_id: number | null;
     character_name: string | null;
     work_name: string | null;
@@ -40,7 +41,7 @@ export function loadSuggestions(ctx: SqliteContext, imageIds: number[], catalog:
     if (r.character_id !== null) {
       // 同一张图上同一个角色只留分数最高的一条（例如自建角色后来补了 Danbooru 标签，新旧两种写法都在）
       if (list.some((x) => x.characterId === toId(r.character_id!))) continue;
-      list.push({ characterId: toId(r.character_id), danbooruTag: r.danbooru_tag, name: r.character_name!, workName: r.work_name, score: r.score });
+      list.push({ characterId: toId(r.character_id), danbooruTag: r.danbooru_tag, name: r.character_name!, workName: r.work_name, score: r.score, source: r.source });
     } else {
       const d = catalog.describeTag(r.danbooru_tag);
       list.push({
@@ -49,6 +50,7 @@ export function loadSuggestions(ctx: SqliteContext, imageIds: number[], catalog:
         name: d.name,
         workName: d.workName,
         score: r.score,
+        source: r.source,
       });
     }
     out.set(r.image_id, list);

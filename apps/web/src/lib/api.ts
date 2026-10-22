@@ -19,6 +19,7 @@ import type {
   CoverCandidatesQuery,
   CoverCandidatesResponse,
   CreateCharacterBody,
+  CustomCharacterMatch,
   CreateExclusionBody,
   GetCharacterResponse,
   GetImageResponse,
@@ -27,6 +28,7 @@ import type {
   ID,
   Job,
   JobKind,
+  StartJobBody,
   ListCharactersQuery,
   ListCharactersResponse,
   ListContentKindsResponse,
@@ -131,6 +133,7 @@ export const api = {
   works: (q: ListWorksQuery = {}) => get<ListWorksResponse>('/works', q),
   work: (id: ID) => get<Work>(`/works/${encodeURIComponent(id)}`),
 
+  customCharacterMatches: () => get<CustomCharacterMatch[]>('/characters/danbooru-matches'),
   characters: (q: ListCharactersQuery = {}) => get<ListCharactersResponse>('/characters', q),
   topCharacters: (q: TopCharactersQuery = {}) => get<TopCharactersResponse>('/characters/top', q),
   character: (id: ID) => get<GetCharacterResponse>(`/characters/${encodeURIComponent(id)}`),
@@ -188,7 +191,7 @@ export const api = {
   removeLibraryRoot: (id: ID) => del<MutationResult>(`/library-roots/${encodeURIComponent(id)}`),
 
   jobs: () => get<ListJobsResponse>('/jobs'),
-  startJob: (kind: JobKind) => post<Job>('/jobs', { kind }),
+  startJob: (kind: JobKind, options?: Pick<StartJobBody, 'refreshPixiv'>) => post<Job>('/jobs', { kind, ...options }),
   cancelJob: (id: ID) => del<{ ok: true }>(`/jobs/${encodeURIComponent(id)}`),
 
   undo: (token: string) => post<MutationResult>(`/undo/${encodeURIComponent(token)}`),

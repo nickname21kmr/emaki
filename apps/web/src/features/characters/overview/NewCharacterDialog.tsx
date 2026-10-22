@@ -19,9 +19,12 @@ export function NewCharacterDialog({
   initialName,
   initialWorkId,
   onCreated,
+  onReturn,
 }: {
-  /** 传了就不跳转到新角色页，交给调用方（未识别里「新建并归入」） */
+  /** 传了就不跳转到新角色页，创建后返回调用处 */
   onCreated?: (c: Character) => void;
+  /** 关闭表单后恢复调用处的焦点。 */
+  onReturn?: () => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** 从「没有找到『xxx』」进来时预填搜索词 */
@@ -33,9 +36,10 @@ export function NewCharacterDialog({
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
+      onCloseAutoFocus={onReturn ? (e) => { e.preventDefault(); onReturn(); } : undefined}
       width={520}
-      title="新建自建角色"
-      description="Danbooru 上没有的角色（原创、冷门、画师 OC）可以在这里手动建，之后把图归过去。"
+      title="新建角色"
+      description="填写角色名字，可补充所属作品、别名和 Danbooru 标签。"
     >
       <NewCharacterForm
         initialName={initialName}

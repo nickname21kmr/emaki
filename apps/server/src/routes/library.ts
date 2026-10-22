@@ -48,6 +48,8 @@ export function libraryRoutes(app: FastifyInstance, ds: DataSource): void {
     return ds.topCharacters(q);
   });
 
+  app.get('/api/characters/danbooru-matches', () => ds.listCustomCharacterMatches());
+
   app.get('/api/characters/:id', async (req) => {
     const { id } = parse(idParam, req.params);
     const res = await ds.getCharacter(id);

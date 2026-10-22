@@ -8,6 +8,9 @@ import { migrate } from '../../db/migrate.ts';
 import { processPixels, thumbPath } from './pixels.ts';
 import { sharp } from './sharpConfig.ts';
 import { ThumbnailService } from './ThumbnailService.ts';
+import { animationHtml } from '../../../test/helpers/htmlAnimation.ts';
+import { htmlAnimationCache } from './htmlAnimation.ts';
+import { readFile } from 'node:fs/promises';
 
 const SHA = 'ab'.repeat(32);
 const T = '2026-01-01T00:00:00.000Z';
@@ -76,6 +79,28 @@ describe('ThumbnailService.runBackfill', () => {
     expect(r.thumb_at).toBe(T);
     expect(r.dhash).toMatch(/^[0-9a-f]{16}$/);
     expect(svc.pendingCount()).toBe(0);
+  });
+
+  it('旧库已有缩略图的动画 WebP 也会补帧数和分类，保留手工类型',async()=>{
+    const animation=await htmlAnimationCache(await animationHtml(),dir);
+    const input=await readFile(animation);
+    writeFileSync(path.join(dir,'lib','animation.webp'),input);
+    db.prepare("UPDATE images SET rel_path='animation.webp',file_name='animation.webp',format='webp',width=4,height=3,frame_count=NULL,thumb_at=?,content_kind='illustration'").run(T);
+    await processPixels(input,'webp',SHA,thumbs);
+    expect(svc.pendingCount()).toBe(1);
+    await svc.runBackfill(ctx);
+    expect(db.prepare('SELECT frame_count,content_kind FROM images WHERE id=1').get()).toEqual({frame_count:2,content_kind:'animated'});
+    expect(svc.pendingCount()).toBe(0);
+    db.exec("UPDATE images SET frame_count=NULL,content_kind='illustration',content_kind_manual=1");
+    await svc.runBackfill(ctx);
+    expect(db.prepare('SELECT frame_count,content_kind FROM images WHERE id=1').get()).toEqual({frame_count:2,content_kind:'illustration'});
+  });
+
+  it('补静态图片帧数时保留已有分类及其判定依据',async()=>{
+    db.exec("UPDATE images SET content_kind='screenshot',content_kind_source='tags',content_kind_evidence='已有视觉分类结果'");
+    await svc.runBackfill(ctx);
+    expect(db.prepare('SELECT frame_count,content_kind,content_kind_evidence FROM images WHERE id=1').get())
+      .toEqual({frame_count:1,content_kind:'screenshot',content_kind_evidence:'已有视觉分类结果'});
   });
 
   it('只有 480 没有 240（写到一半被打断）：补出 240，写上 thumb_at 和 dHash', async () => {

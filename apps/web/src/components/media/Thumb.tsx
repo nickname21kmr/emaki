@@ -1,6 +1,6 @@
 import type { ContentKind, FocusPoint, ImageItem, ThumbWidth } from '@emaki/shared';
 import { EyeOff } from 'lucide-react';
-import { useCallback, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { imageUrl } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { blurLabel, blurReason } from '@/lib/blur';
@@ -47,6 +47,7 @@ export function Thumb({
   revealOnHover = false,
   imgStyle,
   forceBlur,
+  original = false,
 }: {
   image: ThumbSource;
   width?: ThumbWidth;
@@ -63,8 +64,26 @@ export function Thumb({
   imgStyle?: CSSProperties;
   /** 分级不可信时强制按敏感模糊（没识别过的本子页，RV-C-12）；总开关关着时不起作用 */
   forceBlur?: boolean;
+  /** 大幅展示时先用缩略图占位，原图解码完成后切换；失败时保留缩略图。 */
+  original?: boolean;
 }) {
-  const src = imageUrl.thumb(image.id, width);
+  const preview = imageUrl.thumb(image.id, width);
+  const full = original ? imageUrl.file(image.id) : null;
+  const [decoded, setDecoded] = useState<string | null>(null);
+  const src = full && decoded === full ? full : preview;
+  useEffect(() => {
+    if (!full) return;
+    let cancelled = false;
+    const loader = new Image();
+    loader.decoding = 'async';
+    loader.onload = () => {
+      void loader.decode().then(() => {
+        if (!cancelled) setDecoded(full);
+      }).catch(() => { /* The thumbnail remains visible if full-image decoding fails. */ });
+    };
+    loader.src = full;
+    return () => { cancelled = true; loader.onload = null; loader.removeAttribute('src'); };
+  }, [full]);
   const crop = useCoverPosition(focus, src);
   const [loaded, setLoaded] = useState(() => loadedUrls.has(src));
   const prefs = useBlurPrefs();
