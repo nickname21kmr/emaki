@@ -19,7 +19,8 @@ export interface BarAction {
  */
 export function SelectionBar({ count, actions }: { count: number; actions: BarAction[] }) {
   return (
-    <div className="pointer-events-none sticky bottom-6 z-30 h-0">
+    // assistant-cover-shift：助手附页覆盖在纸上时，在露出的那块里居中（index.css）
+    <div className="assistant-cover-shift pointer-events-none sticky bottom-6 z-30 h-0">
       <AnimatePresence>
         {count > 0 && (
           <motion.div

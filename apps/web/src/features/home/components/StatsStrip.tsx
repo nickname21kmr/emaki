@@ -117,7 +117,8 @@ function StatCell({
         <div className="flex min-w-0 items-baseline whitespace-nowrap">{children}</div>
         {aside}
       </div>
-      <div className="mt-3.5 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[13px]">
+      {/* 有柱状图时右边让出「近 7 天」那行字的位置，格子变窄（比如开着助手）时说明不会压上去 */}
+      <div className={cn('mt-3.5 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[13px]', aside != null && 'pr-12')}>
         <span className="shrink-0 font-medium text-fg">{label}</span>
         {hint && <span className="line-clamp-2 min-w-0 text-fg-subtle">{hint}</span>}
         {to && (

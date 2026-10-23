@@ -55,6 +55,7 @@ export const SHORTCUT_GROUPS: Record<ShortcutGroupId, ShortcutGroup> = {
       { label: '快捷键与帮助', keys: [GLOBAL_KEYS.help] },
       { label: '撤销上一步', keys: [GLOBAL_KEYS.undo] },
       { label: '模糊 / 显示敏感图片', keys: [GLOBAL_KEYS.blur] },
+      { label: '打开 / 收起 AI 助手（开启后）', keys: [[MOD, 'J']] },
     ],
   },
   gallery: {

@@ -98,6 +98,7 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - **放映**（`components/media/lightbox/slideshow.ts`，SEL-16）：`useSlideshow().start(() => collectImages(queries, max))` 分页拉图、去重，然后用 `useLightbox.show(ids, 0, …, { autoplay: SLIDE_MS })` 打开看图器。`slideFilter()` 只放插画，开着模糊时只放分级可信的全年龄图。看图器放映时每张停 6 秒、交叉淡化，底部朱色引信烧完换下一张（到最后绕回开头），Space 暂停，鼠标 2 秒不动时顶栏和面板淡出。入口：角色扉页「放映」、首页今日一枚「放映今天的 20 张」。
 - **焦点**（SEL-15）：控件平时有一圈透明的 5px 外框，聚焦时变朱色并收到 2px。图版用「印框焦点」：宿主加 `focus-frame`（宿主不能 `overflow-hidden`），或者在可聚焦的祖先（Link / button）里包一层 `focus-frame-target`；键盘聚焦时四角朱框从外往里收紧落下。
 - **印章 `Seal`**：朱文（描边，`variant="zhu"`）标类型、作品；白文（实底、微歪，`variant="bai"`）只用于「新」「自」和合集书名印；`animateIn` 像盖章一样落下。
+- **附页：助手**（`features/assistant`，开启后才懒加载 `AssistantRoot`）：装订在画册右边的一张纸，收起时是右下角的墨色胶囊（Ctrl/⌘ J）。宽屏（≥ 812 + 附页宽）时**并排**：AppShell 里 `<main>` 后面的 `AssistantSpacer` 占 W + 8，主纸一帧让位、不补间，保持滚动锚点；再窄是**覆盖**（可切浮页），手机上是**底页**。看图器开着时附页 portal 进 Lightbox 的暗房插槽 `AssistantDarkroomSlot`，排成「图 | 信息 | 助手」，窄于 1280 时信息面板和助手只放一个；焦点在附页里时 Esc 只收起附页。`AssistantRoot` 在 `:root` 上写两个变量：`--assistant-right`（并排或覆盖时附页占的宽，toast 按它在露出的区域居中）、`--assistant-cover`（只在覆盖时有值，多选栏外层加 `assistant-cover-shift` 让出这块）。全部状态可以在 `/dev/ui?a=complete&form=bound#assistant` 用夹具看。
 
 ## 可用积木（先用这些，不够再加）
 

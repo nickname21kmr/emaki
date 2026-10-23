@@ -27,8 +27,7 @@ export function useFloatingDrag(key: string) {
     place(next);
   };
   useLayoutEffect(() => {
-    // Restore the new mode before paint; fitting an expanded panel must not
-    // overwrite the compact panel's saved position.
+    // 换了 key 就在绘制前读回那个 key 的位置，再按当前视口夹一次
     const restored = readPosition(key);
     current.current = restored;
     setPosition(restored);

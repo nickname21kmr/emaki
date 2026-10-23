@@ -1,5 +1,5 @@
 import type { BulkImageAction, ID, ImageItem } from '@emaki/shared';
-import { Ban, ChevronDown, CircleMinus, FolderInput, Heart, Palette, Shapes, ShieldHalf, Trash2, UserRoundPlus, X } from 'lucide-react';
+import { Ban, ChevronDown, CircleMinus, Ellipsis, FolderInput, Heart, Palette, Shapes, ShieldHalf, Trash2, UserRoundPlus, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   forwardRef,
@@ -127,7 +127,8 @@ export function SelectionBar({
   const pendingType = bulk.isPending ? bulk.variables?.action.type : undefined;
 
   return (
-    <div className="pointer-events-none sticky bottom-6 z-30 flex h-0 justify-center @container/bar">
+    // assistant-cover-shift：助手附页覆盖在纸上时，在露出的那块里居中（index.css）
+    <div className="assistant-cover-shift pointer-events-none sticky bottom-6 z-30 flex h-0 justify-center @container/bar">
       <AnimatePresence>
         {count > 0 && (
           <motion.div
@@ -250,16 +251,17 @@ export function SelectionBar({
               }
             />
 
+            {/* 露出的纸窄于 600（助手覆盖在纸上、半屏窗口）时，最后三个收进「更多」，不在胶囊里藏着滚 */}
             <Tooltip content="移到图库里的某个文件夹，磁盘上的文件会真的移动" side="top">
-              <BarButton icon={<FolderInput />} onClick={() => setMoving(true)}>
+              <BarButton icon={<FolderInput />} onClick={() => setMoving(true)} className="@max-[600px]/bar:hidden">
                 移动…
               </BarButton>
             </Tooltip>
 
-            <span className="mx-1.5 h-5 w-px bg-fg-inverse/15" />
+            <span className="mx-1.5 h-5 w-px bg-fg-inverse/15 @max-[600px]/bar:hidden" />
 
             <Tooltip content="排除：不再出现在图库和统计里，文件不会被删除" shortcut="E" side="top">
-              <BarButton icon={<Ban />} pending={pendingType === 'exclude'} onClick={() => run({ type: 'exclude' })}>
+              <BarButton icon={<Ban />} pending={pendingType === 'exclude'} onClick={() => run({ type: 'exclude' })} className="@max-[600px]/bar:hidden">
                 排除
               </BarButton>
             </Tooltip>
@@ -269,11 +271,29 @@ export function SelectionBar({
                 icon={<Trash2 />}
                 pending={pendingType === 'trash'}
                 onClick={() => run({ type: 'trash' })}
-                className="hover:bg-danger hover:text-white"
+                className="hover:bg-danger hover:text-white @max-[600px]/bar:hidden"
               >
                 回收站
               </BarButton>
             </Tooltip>
+
+            <Menu
+              align="end"
+              width={168}
+              trigger={
+                <BarButton
+                  icon={<Ellipsis />}
+                  pending={pendingType === 'exclude' || pendingType === 'trash'}
+                  className="@min-[600px]/bar:hidden"
+                >
+                  更多
+                </BarButton>
+              }
+            >
+              <MenuItem icon={<FolderInput />} onSelect={() => setMoving(true)}>移动…</MenuItem>
+              <MenuItem icon={<Ban />} shortcut="E" onSelect={() => run({ type: 'exclude' })}>排除</MenuItem>
+              <MenuItem icon={<Trash2 />} danger onSelect={() => run({ type: 'trash' })}>回收站</MenuItem>
+            </Menu>
           </motion.div>
         )}
       </AnimatePresence>

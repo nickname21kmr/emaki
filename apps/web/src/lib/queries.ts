@@ -243,17 +243,20 @@ export function announce(result: MutationResult, client: QueryClient) {
   showResultToast(result.message, result.undoToken, client);
 }
 
-export async function undo(token: string, client: QueryClient) {
+/** 返回撤销成没成功（交给 toast 处理的算成功）；只管弹提示的调用方忽略返回值即可 */
+export async function undo(token: string, client: QueryClient): Promise<boolean> {
   // 这条的 toast 还在：交给它撤销，胶囊原地变成「已撤销」
-  if (undoViaToast(token)) return;
+  if (undoViaToast(token)) return true;
   try {
     const res = await api.undo(token);
     useUndoStore.getState().remove(token);
     toast(res.message);
     await invalidateAll(client);
+    return true;
   } catch (err) {
     forgetFailedUndo(token, err);
     toast.error(errorMessage(err));
+    return false;
   }
 }
 

@@ -18,13 +18,14 @@ import { InfoPanel } from './lightbox/InfoPanel';
 import { KindMenu } from './KindMenu';
 import { LbButton } from './lightbox/LbButton';
 import { cn } from '@/lib/cn';
-import { useLightboxPrefs } from './lightbox/prefs';
+import { PANEL_W, SIDE_BY_SIDE_MIN, useLightboxPrefs } from './lightbox/prefs';
 import { Stage } from './lightbox/Stage';
 import { useImageActions } from './lightbox/useImageActions';
 import { useZoomPan } from './lightbox/useZoomPan';
 import { EASE_OUT } from '@/lib/motion';
+import { AssistantDarkroomSlot, AssistantLightboxButton } from '@/features/assistant/AssistantLauncher';
+import { closeAssistant, useAssistantDock, useViewportWidth } from '@/features/assistant/dock';
 
-const PANEL_W = 332;
 const EASE = EASE_OUT;
 
 /**
@@ -34,6 +35,8 @@ const EASE = EASE_OUT;
  * 不论亮暗主题，看图器本身都是深色的 —— 让图片说话；信息面板仍跟随主题。
  *
  * 快捷键：← → 切换 · I 信息面板 · F 收藏 · E 排除 · + - 0 缩放 · Esc 先还原缩放再关闭
+ *
+ * 助手（开启后）：附页进暗房，排在信息面板右边；窄于 1280 时两者只放一个。焦点在附页里时 Esc 只收起附页。
  *
  * 放映（SEL-16）：show(..., { autoplay: 6000 }) 打开。每张停 6 秒，新旧图交叉淡化；
  * 底部朱色引信烧完就换下一张（放到最后绕回开头），Space 暂停 / 继续；鼠标 2 秒不动，顶栏和信息面板淡出。
@@ -47,6 +50,7 @@ export function Lightbox() {
   const returning = useLightbox((s) => !!s.returning);
   const contentRef = useRef<HTMLDivElement>(null);
   const escapeRef = useRef<() => boolean>(() => false);
+  const openerRef = useRef<Element | null>(null);
 
   // 列表被清空（比如最后一张也被排除了）就关掉
   useEffect(() => {
@@ -70,12 +74,36 @@ export function Lightbox() {
         <D.Content
           ref={contentRef}
           tabIndex={-1}
+          // 助手在暗房里收起时，焦点还给这里
+          data-lightbox-root
           onOpenAutoFocus={(e) => {
+            // 记下打开前的焦点（Radix 关闭时会还给它）
+            openerRef.current = document.activeElement;
             // 不把焦点放到第一个按钮上（会出现焦点环），直接聚焦整个看图器
             e.preventDefault();
             contentRef.current?.focus();
           }}
+          onCloseAutoFocus={(e) => {
+            // 打开前焦点在助手附页里：那张纸进暗房时已经换掉了，Radix 还不回去会落到 body。
+            // 助手还开着就交给它，等页面上的附页挂好后把焦点放进输入框
+            const opener = openerRef.current;
+            openerRef.current = null;
+            const lost = !(opener instanceof HTMLElement) || !opener.isConnected || opener === document.body;
+            const dock = useAssistantDock.getState();
+            if (dock.open && (lost || opener.closest('[data-assistant-sheet]'))) {
+              e.preventDefault();
+              // 页面上的附页可能已经挂好了（看图器淡出比附页换纸慢），那就直接放进去；否则等它挂上时接走
+              const composer = dock.composer;
+              if (composer?.isConnected && !composer.closest('[data-lightbox-root]')) composer.focus({ preventScroll: true });
+              else useAssistantDock.setState({ wantsFocus: true });
+            }
+          }}
           onEscapeKeyDown={(e) => {
+            // 焦点在助手附页里：Esc 交给附页自己收起，不关看图器
+            if ((e.target as Element | null)?.closest?.('[data-assistant-sheet]')) {
+              e.preventDefault();
+              return;
+            }
             // 焦点在看图器里的输入框（来源表单）时，Esc 交给输入框自己处理，不关看图器，免得填了一半的内容没了。
             // Radix 在 document 捕获阶段就处理 Esc，输入框的 onKeyDown 拦不住，只能在这里拦
             if (isTypingTarget(e.target)) {
@@ -183,6 +211,16 @@ function LightboxView({
   const returning = useLightbox((s) => s.returning);
   const panelOpen = useLightboxPrefs((s) => s.panelOpen);
   const togglePanel = useLightboxPrefs((s) => s.togglePanel);
+  // 窄窗里助手开着时信息面板暂时让开（偏好不改）；这时按 I 或点「显示信息」换回信息面板、收起助手
+  const assistantOpen = useAssistantDock((s) => s.open);
+  const viewportWidth = useViewportWidth();
+  const crowded = assistantOpen && viewportWidth < SIDE_BY_SIDE_MIN;
+  const infoShown = panelOpen && !crowded;
+  const toggleInfo = () => {
+    if (!crowded) return togglePanel();
+    closeAssistant();
+    if (!panelOpen) togglePanel();
+  };
   const blurPrefs = useBlurPrefs();
   const open = useLightbox((s) => s.open);
   const autoplay = useLightbox((s) => s.autoplay);
@@ -222,15 +260,15 @@ function LightboxView({
     return true;
   };
 
-  // 焦点在菜单 / 弹出框里时，方向键和字母键留给它们；淡出过程中也不再响应
+  // 焦点在菜单 / 弹出框或助手附页里时，方向键和字母键留给它们；淡出过程中也不再响应
   const guard = (fn: () => void) => (e: KeyboardEvent) => {
     if (!useLightbox.getState().open) return;
-    if (e.target instanceof Element && e.target.closest('[data-radix-popper-content-wrapper]')) return;
+    if (e.target instanceof Element && e.target.closest('[data-radix-popper-content-wrapper], [data-assistant-sheet]')) return;
     fn();
   };
   useHotkey('arrowleft', guard(() => go(-1)), { repeat: true });
   useHotkey('arrowright', guard(() => go(1)), { repeat: true });
-  useHotkey('i', guard(togglePanel));
+  useHotkey('i', guard(toggleInfo));
   useHotkey('f', guard(actions.toggleFavorite));
   useHotkey('e', guard(actions.exclude));
   useHotkey('o', guard(actions.toggleOriginal));
@@ -287,8 +325,8 @@ function LightboxView({
           index={index}
           total={total ?? ids.length}
           fileName={base?.fileName}
-          panelOpen={panelOpen}
-          onTogglePanel={togglePanel}
+          panelOpen={infoShown}
+          onTogglePanel={toggleInfo}
           onClose={leave}
           idle={idle}
           playing={slideshow ? !paused : undefined}
@@ -360,7 +398,7 @@ function LightboxView({
       </div>
 
       <AnimatePresence initial={false}>
-        {panelOpen && (
+        {infoShown && (
           <motion.aside
             key="panel"
             initial={{ width: 0, opacity: 0 }}
@@ -387,6 +425,11 @@ function LightboxView({
           </motion.aside>
         )}
       </AnimatePresence>
+
+      {/* 助手附页的插槽：「图 | 信息 | 助手」，助手始终在最右。指针停在附页上时放映的顶栏不淡出 */}
+      <div data-lb-chrome className="contents">
+        <AssistantDarkroomSlot />
+      </div>
     </div>
   );
 }
@@ -459,6 +502,7 @@ function TopBar({
             }
           />
         )}
+        <AssistantLightboxButton />
         <LbButton label={panelOpen ? '收起信息' : '显示信息'} shortcut="I" active={panelOpen} onClick={onTogglePanel}>
           <PanelRight />
         </LbButton>

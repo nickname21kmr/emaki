@@ -17,6 +17,7 @@ export function Menu({
   children,
   align = 'end',
   width = 220,
+  maxWidth,
   open,
   onOpenChange,
   onKeyDown,
@@ -24,7 +25,10 @@ export function Menu({
   trigger: ReactNode;
   children: ReactNode;
   align?: 'start' | 'center' | 'end';
+  /** 最小宽度；内容更宽时菜单跟着变宽 */
   width?: number;
+  /** 最大宽度（例如长标题要截断的会话列表） */
+  maxWidth?: number;
   /** 受控打开（例如用快捷键打开）；不传就由触发按钮控制 */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -35,7 +39,7 @@ export function Menu({
     <M.Root open={open} onOpenChange={onOpenChange}>
       <M.Trigger asChild>{trigger}</M.Trigger>
       <M.Portal>
-        <M.Content align={align} sideOffset={6} style={{ minWidth: width }} className={contentClass} onKeyDown={onKeyDown}>
+        <M.Content align={align} sideOffset={6} style={{ minWidth: width, maxWidth }} className={contentClass} onKeyDown={onKeyDown}>
           {children}
         </M.Content>
       </M.Portal>
@@ -125,7 +129,8 @@ export function MenuRadioItem({ value, children, icon }: { value: string; childr
   return (
     <M.RadioItem value={value} className={cn(itemClass, 'pr-8')}>
       {icon}
-      <span className="flex-1">{children}</span>
+      {/* min-w-0：菜单限了 maxWidth 时，里面的 truncate 才截得住 */}
+      <span className="min-w-0 flex-1">{children}</span>
       <M.ItemIndicator className="absolute right-2.5">
         <Check className="!text-shu" />
       </M.ItemIndicator>

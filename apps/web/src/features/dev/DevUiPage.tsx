@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import type { ContentKind, Rating } from '@emaki/shared';
 import { AvatarTile } from '@/components/media/AvatarTile';
 import { CharacterCover } from '@/components/media/CharacterCover';
@@ -8,9 +9,13 @@ import { blurReason } from '@/lib/blur';
 import { useImagesInfinite, useTopCharacters, useWorks } from '@/lib/queries';
 import { useBlurPrefs } from '@/lib/stores';
 
+// 助手那一节连着整套对话视图和夹具，单独一包
+const AssistantDevSection = lazy(() => import('./AssistantDevSection').then((m) => ({ default: m.AssistantDevSection })));
+
 /**
  * 开发用：M5 共用件并排展示（只在 import.meta.env.DEV 时注册路由 /dev/ui）。
  * 验收截图、调参数都在这里看，不影响正式页面。
+ * 最后一节是 AI 助手的全部状态：/dev/ui?a=complete&form=bound#assistant
  */
 export function DevUiPage() {
   const works = useWorks({ sort: 'imageCount' }).data ?? [];
@@ -113,6 +118,10 @@ export function DevUiPage() {
         </div>
         <RecentStrip characters={top} workNameOf={() => '作品名'} />
       </section>
+
+      <Suspense fallback={null}>
+        <AssistantDevSection images={images} />
+      </Suspense>
     </div>
   );
 }
