@@ -11,7 +11,7 @@ import { cn } from '@/lib/cn';
 import { COLLECTION_META, displayTitle, readProgress, unitWord } from '@/lib/collections';
 import { useHotkey } from '@/lib/hotkeys';
 import { useCollection } from '@/lib/queries';
-import { useBlurPrefs, useLightbox, usePrefs } from '@/lib/stores';
+import { useBlurPrefs, useLightbox, useOverlays, usePrefs } from '@/lib/stores';
 import { previousPath } from './previousPath';
 import { buildSpreads, spreadIndexOf } from './spreads';
 
@@ -20,12 +20,20 @@ import { buildSpreads, spreadIndexOf } from './spreads';
  * 键盘：← → / 空格 / PageUp PageDown 翻页，Home End 首末页，D 单双页，R 方向，I 看图器，B 模糊，Esc 回扉页。
  * 读到最后一开再往后，出现结尾卡；同系列有下一话时可以直接接着读。
  */
+/** 助手附页并排或覆盖时，阅读器右边让出它的宽度（和 toast 一样） */
+const YIELD = { right: 'var(--assistant-right, 0px)' } as const;
+
 export function BookReader() {
   const { id = '' } = useParams();
   const q = useCollection(id);
+  const setReaderOpen = useOverlays((s) => s.setReaderOpen);
+  useEffect(() => {
+    setReaderOpen(true);
+    return () => setReaderOpen(false);
+  }, [setReaderOpen]);
   if (!q.data) {
     return (
-      <div className="fixed inset-0 z-40 flex items-center justify-center bg-stage text-white/70">
+      <div style={YIELD} className="fixed inset-0 z-40 flex items-center justify-center bg-stage text-white/70">
         {q.isError ? '读不到这本合集' : <Spinner className="size-5" />}
       </div>
     );
@@ -160,7 +168,7 @@ function Reader({ data }: { data: GetCollectionResponse }) {
   const m = COLLECTION_META[c.kind];
 
   return (
-    <div className="fixed inset-0 z-40 flex flex-col bg-stage text-white/85 select-none" onMouseMove={poke} onWheel={onWheel}>
+    <div style={YIELD} className="fixed inset-0 z-40 flex flex-col bg-stage text-white/85 select-none" onMouseMove={poke} onWheel={onWheel}>
       <header className={cn('flex h-12 shrink-0 items-center gap-3 px-4 transition-opacity duration-300', !chrome && 'opacity-0 hover:opacity-100')}>
         <ReaderButton label="回到扉页" onClick={back}>
           <ArrowLeft className="size-4" />
@@ -211,8 +219,9 @@ function Reader({ data }: { data: GetCollectionResponse }) {
               {group.map((no) => {
                 const pg = pages[no - 1];
                 if (!pg) return null;
-                // 高度扣掉顶栏 48 和底部进度条 + 胶片条 98，不盖住它们
-                const size = cn('object-contain', group.length > 1 ? 'max-w-[calc(50vw-24px)]' : 'max-w-[92vw]', 'max-h-[calc(100vh-146px)]');
+                // 高度扣掉顶栏 48 和底部进度条 + 胶片条 98，不盖住它们；宽度扣掉助手附页让出的那块
+                const size = 'object-contain max-h-[calc(100vh-146px)]';
+                const maxWidth = group.length > 1 ? 'calc(50vw - 24px - var(--assistant-right, 0px) / 2)' : 'calc(92vw - var(--assistant-right, 0px))';
                 return blurred(pg) ? (
                   <button
                     key={pg.imageId}
@@ -220,7 +229,7 @@ function Reader({ data }: { data: GetCollectionResponse }) {
                     aria-label="显示这一页"
                     onClick={() => setRevealed((s) => new Set(s).add(pg.imageId))}
                     className="overflow-hidden"
-                    style={{ aspectRatio: `${pg.width} / ${pg.height}`, height: 'calc(100vh - 146px)', maxWidth: group.length > 1 ? 'calc(50vw - 24px)' : '92vw' }}
+                    style={{ aspectRatio: `${pg.width} / ${pg.height}`, height: 'calc(100vh - 146px)', maxWidth }}
                   >
                     <Thumb image={{ id: pg.imageId, rating: pg.rating, dominantColor: pg.dominantColor }} width={960} forceBlur blurBadge="center" className="size-full" />
                   </button>
@@ -232,7 +241,7 @@ function Reader({ data }: { data: GetCollectionResponse }) {
                     draggable={false}
                     decoding="async"
                     className={size}
-                    style={{ backgroundColor: pg.dominantColor }}
+                    style={{ backgroundColor: pg.dominantColor, maxWidth }}
                   />
                 );
               })}

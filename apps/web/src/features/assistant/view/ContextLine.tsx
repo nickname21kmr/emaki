@@ -1,6 +1,7 @@
 import { EyeOff } from 'lucide-react';
 import { Dotted } from '@/components/overlays/palette/items';
 import { Thumb } from '@/components/media/Thumb';
+import { focusComposer } from '../dock';
 import { contextPageLabel, selectionLabel } from '../presentation';
 import type { ConversationView } from '../useConversation';
 import { useAssistantImage } from './parts';
@@ -22,6 +23,7 @@ export function ContextLine({ conv, onSwitchModel }: ContextLineProps) {
   const parts = viewedId ? ['看图器', '当前这张'] : resultSelection ? [resultSelection.title, `已选 ${n} 张`] : [contextPageLabel(context.page), selectionLabel(n)];
   const current = conv.models.data?.find(m => m.id === conv.model);
   const visionWarn = current?.vision === false && n > 0;
+  const running = conv.session?.status === 'running' || conv.session?.status === 'waiting';
   return (
     <>
       {/* 写的是会一起发给模型的东西，用 fg-muted，凹面上也读得清 */}
@@ -37,14 +39,16 @@ export function ContextLine({ conv, onSwitchModel }: ContextLineProps) {
         )}
         <span className="min-w-0 flex-1 truncate" title={parts.join(' · ')}><Dotted parts={parts} /></span>
         {resultSelection && !viewedId && (
-          <button type="button" className="shrink-0 text-fg-muted underline-offset-2 hover:text-fg hover:underline" onClick={conv.actions.clearResultSelection}>改用页面选择</button>
+          // 按钮点完就没了：焦点放回输入框，不掉到 body
+          <button type="button" className="shrink-0 text-fg-muted underline-offset-2 hover:text-fg hover:underline" onClick={() => { conv.actions.clearResultSelection(); focusComposer(); }}>改用页面选择</button>
         )}
       </div>
       {visionWarn && (
         <p className="flex items-center gap-1.5 pb-0.5 text-[11.5px] text-warn">
           <EyeOff strokeWidth={1.8} className="size-3.5 shrink-0" />
           <span className="truncate">这个模型看不到图片</span>
-          <button type="button" className="shrink-0 font-medium text-fg-muted underline-offset-4 hover:text-fg hover:underline" onClick={onSwitchModel}>换一个</button>
+          {/* 运行中模型菜单是禁用的，「换一个」也先不给 */}
+          {!running && <button type="button" className="shrink-0 font-medium text-fg-muted underline-offset-4 hover:text-fg hover:underline" onClick={onSwitchModel}>换一个</button>}
         </p>
       )}
     </>

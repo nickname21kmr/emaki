@@ -6,11 +6,22 @@ import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { DURATION, EASE_OUT } from '@/lib/motion';
 import { qk } from '@/lib/queries';
+import { useLightbox } from '@/lib/stores';
 import { claimEntrance } from '../viewState';
 
 /** 助手里读单张图（结果图版、勘误缩略图、输入面缩略图）。不存在的图不重试，直接显示「已移除」 */
 export const useAssistantImage = (id: string) =>
   useQuery({ queryKey: qk.image(id), queryFn: () => api.image(id), staleTime: 60000, retry: false });
+
+/**
+ * 点助手里的缩略图看大图。看图器已经开着、这张就在当前序列里时只跳过去，不把正在翻的列表换掉
+ */
+export function showInLightbox(ids: readonly string[], i: number) {
+  const s = useLightbox.getState();
+  const at = s.open ? s.ids.indexOf(ids[i]!) : -1;
+  if (at >= 0) useLightbox.setState({ index: at, originRect: null });
+  else s.show([...ids], i);
+}
 
 /** 高度 0 ↔ auto 加淡入淡出：旁注、条目、详情、状态行、便笺退场共用（§15） */
 export const COLLAPSE = {

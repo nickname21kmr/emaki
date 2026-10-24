@@ -630,8 +630,9 @@
   transition: translate 0.35s var(--ease-out-soft);
 }
 /* 多选栏的 sticky 外层：右边让出被附页盖住的宽度，里面的胶囊照常居中，过宽时也只在露出的部分里排开 */
+/* 露出的纸不足 360 时少让一点，胶囊至少有 360 可排，不被挤成一截 */
 .assistant-cover-shift {
-  margin-right: var(--assistant-cover, 0px);
+  margin-right: min(var(--assistant-cover, 0px), max(0px, 100% - 360px));
   transition: margin-right 0.35s var(--ease-out-soft);
 }
 

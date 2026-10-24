@@ -416,11 +416,23 @@ function RenameForm({
   onDone: () => void;
 }) {
   const [v, setV] = useState(current ?? '');
+  // 包成表单：回车就保存，和别的弹窗一样（输入法选字时浏览器不会提交）
+  const save = () => {
+    if (!v.trim()) return;
+    onSave(v.trim());
+    onDone();
+  };
   return (
-    <>
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        save();
+      }}
+    >
       <Input value={v} onChange={(e) => setV(e.target.value)} placeholder="书名" autoFocus />
       <DialogFooter>
         <Button
+          type="button"
           variant="ghost"
           onClick={() => {
             onSave(null);
@@ -429,18 +441,11 @@ function RenameForm({
         >
           恢复自动名称
         </Button>
-        <Button
-          variant="primary"
-          disabled={!v.trim()}
-          onClick={() => {
-            onSave(v.trim());
-            onDone();
-          }}
-        >
+        <Button type="submit" variant="primary" disabled={!v.trim()}>
           保存
         </Button>
       </DialogFooter>
-    </>
+    </form>
   );
 }
 

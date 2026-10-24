@@ -23,8 +23,10 @@ export function ImportPanel({ stats, phase }: { stats: LibraryStats; phase: Excl
   const tagJob = useRunningJob('tag');
   const dedupeJob = useRunningJob('dedupe');
   const eta = parseEta(tagJob?.message);
-  // 识别进度用统计算：任务让出或重启后 job.total 会从剩余数重新计
-  const tagged = Math.max(0, imp.count - stats.pendingTagCount);
+  // 识别进度用统计算：任务让出或重启后 job.total 会从剩余数重新计；只数这次导入的文件夹
+  const tagged = Math.max(0, imp.count - imp.pending);
+  // 库里原来就有图：这次是新加的文件夹，不是首次导入
+  const added = stats.imageCount > imp.count;
   const tagV = Math.min(1, tagged / Math.max(1, imp.count));
   const frac = (j: Job | null) => (j?.total ? j.progress / j.total : null);
 
@@ -35,7 +37,7 @@ export function ImportPanel({ stats, phase }: { stats: LibraryStats; phase: Excl
       `正在认出 ${N} 张图里的角色`,
       `识别在这台电脑上进行${eta ? `，这一轮大约还要 ${eta}` : ''}。可以先去图库逛逛，认出来的角色会陆续出现在下面。`,
     ],
-    paused: [`还有 ${formatCount(stats.pendingTagCount)} 张没识别`, '识别没有在运行（服务重启过，或者模型还没下载）。点继续，会从上次停下的地方接着来。'],
+    paused: [`还有 ${formatCount(imp.pending)} 张没识别`, '识别没有在运行（服务重启过，或者模型还没下载）。点继续，会从上次停下的地方接着来。'],
     deduping: ['最后一步：查找重复', '识别已完成，正在比对相似的图。'],
   };
 
@@ -55,7 +57,7 @@ export function ImportPanel({ stats, phase }: { stats: LibraryStats; phase: Excl
       note: phase === 'paused' ? `已暂停 · ${formatPercent(tagV)}` : `${formatCount(tagged)} / ${N} · ${formatPercent(tagV)}${eta ? ` · 约 ${eta}` : ''}`,
       v: tagV,
       now: !!tagJob || phase === 'paused',
-      done: stats.pendingTagCount === 0,
+      done: imp.pending === 0,
     },
     { title: '查找重复', note: dedupeJob ? '进行中' : '识别完成后自动开始', v: dedupeJob ? frac(dedupeJob) : 0, now: !!dedupeJob, done: false },
   ];
@@ -63,7 +65,7 @@ export function ImportPanel({ stats, phase }: { stats: LibraryStats; phase: Excl
   return (
     <section className="group/fan relative grid animate-rise grid-cols-[minmax(0,1fr)_340px] gap-x-8 overflow-hidden rounded-[20px] bg-raised p-7 shadow-card ring-1 ring-line max-lg:grid-cols-1">
       <div key={phase} className="animate-fade-in">
-        <div className="text-[12px] font-medium text-fg-subtle">首次导入 · {formatRelative(imp.at)}</div>
+        <div className="text-[12px] font-medium text-fg-subtle">{added ? '新加的文件夹' : '首次导入'} · {formatRelative(imp.at)}</div>
         <h2 className="mt-2 text-[24px] leading-tight font-semibold tracking-tight">{copy[phase][0]}</h2>
         <p className="mt-2 max-w-[46ch] text-[13.5px] leading-relaxed text-fg-muted">{copy[phase][1]}</p>
         {phase === 'paused' && <RunTaggerButton className="mt-5" variant="primary" label="继续识别" />}

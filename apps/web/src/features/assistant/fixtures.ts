@@ -271,7 +271,7 @@ export function useFixtureConversation(key: FixtureKey, flags: readonly FixtureF
 
   return {
     backend: has('noBackend') ? null : 'codex',
-    sessions: { data: fx.sessionList, isLoading: false, error: null },
+    sessions: { data: fx.sessionList, isLoading: false, error: null, refetch: () => {} },
     sessionId: state.session?.id ?? fx.sessions[key].id,
     session: state.session,
     models,
@@ -320,8 +320,8 @@ export function useFixtureConversation(key: FixtureKey, flags: readonly FixtureF
       dismissError: () => patch({ error: '' }),
       selectResult: (card, id, checked) => setState(s => ({ ...s, resultSelection: toggleResultImage(s.resultSelection ?? { cardId: card.id, title: card.title, ids: context.imageIds }, card, id, checked) })),
       clearResultSelection: () => patch({ resultSelection: null }),
-      // 600ms 后成功；token 里有 fail 的算失败
-      undo: token => new Promise(resolve => setTimeout(() => resolve(!token.includes('fail')), 600)),
+      // 600ms 后成功；token 里有 fail 的算连不上，有 gone 的算已失效
+      undo: token => new Promise(resolve => setTimeout(() => resolve(token.includes('fail') ? 'failed' : token.includes('gone') ? 'gone' : 'ok'), 600)),
     },
   };
 }

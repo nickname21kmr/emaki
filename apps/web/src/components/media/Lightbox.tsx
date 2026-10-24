@@ -51,6 +51,15 @@ export function Lightbox() {
   const contentRef = useRef<HTMLDivElement>(null);
   const escapeRef = useRef<() => boolean>(() => false);
   const openerRef = useRef<Element | null>(null);
+  // 关掉的那一刻焦点在不在助手附页里（附页随后就卸了，到 onCloseAutoFocus 时已经看不出来）
+  const closedFromSheet = useRef(false);
+  useEffect(
+    () =>
+      useLightbox.subscribe((s, p) => {
+        if (p.open && !s.open) closedFromSheet.current = !!document.activeElement?.closest('[data-assistant-sheet]');
+      }),
+    [],
+  );
 
   // 列表被清空（比如最后一张也被排除了）就关掉
   useEffect(() => {
@@ -89,14 +98,20 @@ export function Lightbox() {
             const opener = openerRef.current;
             openerRef.current = null;
             const lost = !(opener instanceof HTMLElement) || !opener.isConnected || opener === document.body;
+            const fromSheet = closedFromSheet.current;
+            closedFromSheet.current = false;
             const dock = useAssistantDock.getState();
-            if (dock.open && (lost || opener.closest('[data-assistant-sheet]'))) {
+            if (dock.open && (lost || fromSheet || opener.closest('[data-assistant-sheet]'))) {
               e.preventDefault();
               // 页面上的附页可能已经挂好了（看图器淡出比附页换纸慢），那就直接放进去；否则等它挂上时接走
               const composer = dock.composer;
               if (composer?.isConnected && !composer.closest('[data-lightbox-root]')) composer.focus({ preventScroll: true });
               else useAssistantDock.setState({ wantsFocus: true });
+              return;
             }
+            // 没有 D.Trigger，Radix 默认会还给空的 trigger，焦点落到 body：自己还给打开它的那个元素
+            e.preventDefault();
+            if (!lost) opener.focus({ preventScroll: true });
           }}
           onEscapeKeyDown={(e) => {
             // 焦点在助手附页里：Esc 交给附页自己收起，不关看图器
@@ -287,8 +302,8 @@ function LightboxView({
       if (t.open && !t.returning && t.ids === s.ids && t.index === s.index) useLightbox.setState({ index: next, originRect: null });
     });
   };
-  // 放大看细节、切到后台、正在关闭时，引信也停住
-  const halted = paused || zoomApi.zoomed || pageHidden || !open || !!returning;
+  // 放大看细节、切到后台、正在关闭时，引信也停住；助手开着时也停，免得正在问的那张被换走
+  const halted = paused || assistantOpen || zoomApi.zoomed || pageHidden || !open || !!returning;
 
   const rating = actions.rating ?? base?.rating;
   const reason = rating && !revealed.has(id) ? blurReason({ rating, kind: base?.kind }, blurPrefs) : null;

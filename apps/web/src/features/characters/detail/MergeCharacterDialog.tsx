@@ -11,6 +11,7 @@ import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import { useCharactersInfinite, useMutate, useSearch, useWorks } from '@/lib/queries';
 import { EASE_OUT } from '@/lib/motion';
+import { useRecentCharacters } from '@/features/gallery/recentCharacters';
 
 interface Candidate {
   character: Character;
@@ -49,6 +50,7 @@ function MergeBody({ character, onDone }: { character: Character; onDone: () => 
 
   const merge = useMutate((targetId: ID) => api.mergeCharacter(character.id, targetId), {
     onSuccess: (_, targetId) => {
+      useRecentCharacters.getState().remove(character.id);
       onDone();
       navigate(`/characters/${targetId}`, { replace: true });
     },

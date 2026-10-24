@@ -1,7 +1,7 @@
-import { useId, type ReactNode } from 'react';
+import { memo, useId, type ReactNode } from 'react';
 import { Dotted } from '@/components/overlays/palette/items';
 import { cn } from '@/lib/cn';
-import { contextPageLabel, modelLabel, parseAnswerText, quote, turnItemKey, turnTime, type Turn as TurnData, type TurnItem } from '../presentation';
+import { contextPageLabel, messageSignature, modelLabel, parseAnswerText, quote, turnItemKey, turnTime, type Turn as TurnData, type TurnItem } from '../presentation';
 import type { ConversationView } from '../useConversation';
 import { useAssistantView } from '../viewState';
 import { Erratum } from './Erratum';
@@ -22,7 +22,22 @@ export interface TurnProps {
  * 一轮（§6.2）：加粗的问句和一行小字（页面、选图、时间），下面是条目，本轮结束且有正文时落款。
  * 不用气泡、不写「你」、不加底色。
  */
-export function Turn({ turn, conv, tail }: TurnProps) {
+export const Turn = memo(TurnView, (a, b) =>
+  // 长会话里每份快照只重排变了的那一轮。conv 每次都是新对象，只比这里用到的几项；
+  // actions 由 Transcript 换成转发到最新 conv 的稳定版本，不会拿到旧闭包
+  a.tail === b.tail
+  && a.conv.sessionId === b.conv.sessionId
+  && a.conv.connected === b.conv.connected
+  && waitingApproval(a.conv) === waitingApproval(b.conv)
+  && a.conv.resultSelection === b.conv.resultSelection
+  && a.conv.models.data === b.conv.models.data
+  && a.conv.actions === b.conv.actions
+  && (a.turn === b.turn || turnSignature(a.turn) === turnSignature(b.turn)));
+
+/** 会话停在批准提问上（旁注里运行中的那一步其实在等你） */
+const waitingApproval = (conv: ConversationView) => conv.session?.status === 'waiting' && conv.session.questions.some(q => q.kind === 'approval');
+
+function TurnView({ turn, conv, tail }: TurnProps) {
   const hid = useId();
   const { request, variant } = turn;
   const enter = useEntrance(conv.sessionId, turn.id);
@@ -60,7 +75,7 @@ function Request({ turn, hid }: { turn: TurnData; hid: string }) {
   const meta = [
     resume && turn.resumeText ? `接着${quote(turn.resumeText, 24)}` : null,
     ctx ? contextPageLabel(ctx.page) : null,
-    n ? `已选 ${n} 张` : null,
+    ...requestSelection(ctx?.selectionScope, n),
     request.createdAt ? turnTime(request.createdAt) : null,
   ];
   return (
@@ -84,13 +99,30 @@ function Request({ turn, hid }: { turn: TurnData; hid: string }) {
   );
 }
 
+/** 问句下那行小字里的选图：看图器里问的是当前这张，勾了结果图的写「助手结果」，没选过就不写 */
+export function requestSelection(scope: string | undefined, n: number): string[] {
+  if (scope === 'lightbox') return ['看图器', '当前这张'];
+  if (!n) return [];
+  if (scope?.startsWith('assistant-result:')) return ['助手结果', `${n} 张`];
+  return [`已选 ${n} 张`];
+}
+
+/** 一轮里会影响显示的内容。SSE 快照每次都是新对象，按这个判断要不要重排 */
+export function turnSignature(turn: TurnData) {
+  const items = turn.items.map(item => {
+    const body = item.kind === 'note' ? item.messages.map(messageSignature).join(',') : messageSignature(item.message);
+    return `${turnItemKey(item)}:${body}${item.kind === 'figure' ? `#${item.figureNo ?? ''}/${item.tableNo ?? ''}` : ''}`;
+  });
+  return [turn.id, turn.variant, turn.answerTo, turn.resumeText, turn.colophon?.model, turn.request ? messageSignature(turn.request) : '', ...items].join('\n');
+}
+
 function Item({ item, conv }: { item: TurnItem; conv: ConversationView }) {
   // 首个快照里已有的条目不播；之后新来的第一次挂上时淡入
   const enter = useEntrance(conv.sessionId, turnItemKey(item));
   const className = enter ? 'animate-fade-in' : undefined;
   switch (item.kind) {
     case 'prose': return <Prose message={item.message} className={className} />;
-    case 'note': return <SideNote id={item.id} messages={item.messages} className={className} />;
+    case 'note': return <SideNote id={item.id} messages={item.messages} paused={!conv.connected} waiting={waitingApproval(conv)} className={className} />;
     case 'figure': return <Figure message={item.message} card={item.card} figureNo={item.figureNo} tableNo={item.tableNo} conv={conv} className={className} />;
     case 'erratum': return <Erratum message={item.message} erratum={item.erratum} conv={conv} className={className} />;
     case 'system': return <SystemNote message={item.message} className={className} />;

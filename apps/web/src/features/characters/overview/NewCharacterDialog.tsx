@@ -201,8 +201,11 @@ function FormRow({
   );
 }
 
-/** 名字停下来 300ms 后查一下有没有同名 / 同别名的角色，避免重复建 */
-function useDuplicateHint(name: string) {
+/**
+ * 名字停下来 300ms 后查一下有没有同名 / 同别名的角色，避免重复建。
+ * 编辑时传 except（自己）；sameWork 给了就只算同作品（都没作品也算）的。
+ */
+export function useDuplicateHint(name: string, opts: { except?: ID; sameWork?: readonly ID[] } = {}) {
   const [debounced, setDebounced] = useState(name);
   useEffect(() => {
     const t = window.setTimeout(() => setDebounced(name), 300);
@@ -215,6 +218,9 @@ function useDuplicateHint(name: string) {
   for (const hit of data) {
     if (hit.type !== 'character') continue;
     const c = hit.character;
+    if (c.id === opts.except) continue;
+    const works = opts.sameWork;
+    if (works && !(works.length === 0 ? c.workIds.length === 0 : c.workIds.some((w) => works.includes(w)))) continue;
     if (c.name.toLowerCase() === key || c.aliases.some((a) => a.toLowerCase() === key)) {
       return { id: c.id, name: c.name, workName: hit.workName };
     }

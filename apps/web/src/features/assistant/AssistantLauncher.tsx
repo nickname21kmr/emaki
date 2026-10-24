@@ -1,20 +1,34 @@
-import { lazy, Suspense, useContext, useLayoutEffect, useRef } from 'react';
+import { Component, lazy, Suspense, useContext, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
+import { toast } from 'sonner';
 import { Emblem } from '@/components/ui/Emblem';
 import { LbButton } from '@/components/media/lightbox/LbButton';
 import { ScrollContainerContext } from '@/components/layout/ScrollContainer';
 import { modKeyLabel } from '@/lib/hotkeys';
 import { DURATION, EASE_OUT } from '@/lib/motion';
 import { useAssistantSettings } from './client';
-import { LEAF_WIDTH, sheetForm, useAssistantDock, useViewportWidth } from './dock';
+import { DARKROOM_MIN, LEAF_WIDTH, sheetForm, useAssistantDock, useViewportWidth } from './dock';
 
-const Root = lazy(() => import('./AssistantRoot').then(module => ({ default: module.AssistantRoot })));
+// 下载失败（断网、部署后旧 chunk 没了）先再试一次
+const loadRoot = () => import('./AssistantRoot').then(module => ({ default: module.AssistantRoot }));
+const Root = lazy(() => loadRoot().catch(loadRoot));
 
 const useEnabled = () => useAssistantSettings().data?.enabled ?? false;
 
+/** 助手那一包没加载出来或者渲染出错：只丢掉助手，不让整页换成路由的错误页 */
+class AssistantBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  override state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  override componentDidCatch(error: unknown) {
+    console.error(error);
+    toast.error('助手没加载出来，刷新页面再试');
+  }
+  override render() { return this.state.failed ? null : this.props.children; }
+}
+
 /** 没开启的安装不下载对话和 Markdown 那一包 */
 export function AssistantLauncher() {
-  return useEnabled() ? <Suspense fallback={null}><Root /></Suspense> : null;
+  return useEnabled() ? <AssistantBoundary><Suspense fallback={null}><Root /></Suspense></AssistantBoundary> : null;
 }
 
 // ------------------------------------------------------------------ 主包里的小件（不懒加载）
@@ -63,48 +77,93 @@ export function AssistantSpacer() {
     const a = anchor.current, el = scrollRef?.current;
     anchor.current = null;
     if (!a || !el) return;
-    // 虚拟网格要一两帧才按新宽度排好
-    let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => restoreAnchor(el, a)); });
+    // 网格要等 ResizeObserver 回调、重渲染后才按新宽度排好，帧数不固定：连着几帧按当前偏差校正，排好后偏差为 0
+    let n = 0, frame = 0;
+    const step = () => { restoreAnchor(el, a); if (++n < 8) frame = requestAnimationFrame(step); };
+    frame = requestAnimationFrame(step);
     return () => cancelAnimationFrame(frame);
   }, [w, scrollRef]);
   return <div aria-hidden className="shrink-0" style={{ width: w }} />;
 }
 
-/** 看图器里的插槽（§3.6）：排在 InfoPanel 后面，助手开着时展开，附页 portal 进来 */
+/** 插槽的 ref：卸下时只清自己（宽窄切换时旧插槽还在退场，别把新插槽清掉） */
+function slotRef() {
+  let mine: HTMLElement | null = null;
+  return (el: HTMLElement | null) => {
+    const dock = useAssistantDock.getState();
+    if (el) { mine = el; dock.setSlotEl(el); }
+    else if (dock.slotEl === mine) dock.setSlotEl(null);
+  };
+}
+const wideSlot = slotRef(), narrowSlot = slotRef();
+const liveRef = (el: HTMLElement | null) => useAssistantDock.setState({ liveEl: el });
+
+/**
+ * 看图器里的插槽（§3.6）：排在 InfoPanel 后面，助手开着时展开，附页 portal 进来。
+ * 窄窗（< 900）不并排，只放一个不占位、常驻的宿主，附页在看图器里做底页（还在 Dialog 里，焦点陷阱和 aria-hidden 照常）。
+ * 另有一个常驻的宿主给读屏播报区：看图器开着时 Dialog 外的节点都被 aria-hidden
+ */
 export function AssistantDarkroomSlot() {
   const open = useAssistantDock(s => s.open);
   const enabled = useEnabled();
   const width = useAssistantDock(s => s.width);
+  const narrow = useViewportWidth() < DARKROOM_MIN;
   const on = open && enabled;
   const w = Math.min(400, Math.max(LEAF_WIDTH.min, width));
   return (
-    <AnimatePresence initial={false}>
-      {on && (
-        <motion.aside
-          key="assistant"
-          aria-label="助手"
-          initial={{ width: 0, opacity: 0 }}
-          animate={{ width: w + 12, opacity: 1 }}
-          exit={{ width: 0, opacity: 0 }}
-          transition={{ duration: DURATION.base, ease: EASE_OUT }}
-          className="relative shrink-0 overflow-hidden"
-        >
-          {/* 看图器飞回原位时和 InfoPanel 一起淡出；放映的 idle 淡出不管它 */}
-          <div ref={useAssistantDock.getState().setSlotEl} className="absolute inset-y-3 right-3 transition-opacity duration-200 group-data-returning/lb:opacity-0" style={{ width: w }} />
-        </motion.aside>
-      )}
-    </AnimatePresence>
+    <>
+      {enabled && <div ref={liveRef} />}
+      {/* 窄窗的宿主不跟着 open 卸：附页退场时它还得在，退场动画才走得完 */}
+      {enabled && narrow && <div ref={narrowSlot} />}
+      <AnimatePresence initial={false}>
+        {on && !narrow && (
+          <motion.aside
+            key="assistant"
+            aria-label="助手"
+            initial={{ width: 0, opacity: 0 }}
+            animate={{ width: w + 12, opacity: 1 }}
+            exit={{ width: 0, opacity: 0 }}
+            transition={{ duration: DURATION.base, ease: EASE_OUT }}
+            className="relative shrink-0 overflow-hidden"
+          >
+            {/* 看图器飞回原位时和 InfoPanel 一起淡出；放映的 idle 淡出不管它 */}
+            <div ref={wideSlot} className="absolute inset-y-3 right-3 transition-opacity duration-200 group-data-returning/lb:opacity-0" style={{ width: w }} />
+          </motion.aside>
+        )}
+      </AnimatePresence>
+    </>
   );
 }
 
-/** 看图器顶栏「显示信息」左边的助手按钮 */
+const STATUS_TEXT = { running: '处理中', waiting: '等你回应', reply: '有新回复', incomplete: '没有完成' } as const;
+
+/** 看图器顶栏「显示信息」左边的助手按钮；收起时带一个小点，和胶囊同样的状态 */
 export function AssistantLightboxButton() {
   const enabled = useEnabled();
   const open = useAssistantDock(s => s.open);
+  const status = useAssistantDock(s => (s.lastStatus === 'running' || s.lastStatus === 'waiting' ? s.lastStatus : s.unseen));
   if (!enabled) return null;
+  const shown = open ? null : status;
   return (
-    <LbButton label={open ? '收起助手' : '助手'} shortcut={`${modKeyLabel} J`} active={open} onClick={() => useAssistantDock.getState().toggle()}>
+    <LbButton
+      label={open ? '收起助手' : shown ? `助手，${STATUS_TEXT[shown]}` : '助手'}
+      shortcut={`${modKeyLabel} J`}
+      active={open}
+      className="relative"
+      onClick={() => useAssistantDock.getState().toggle()}
+    >
       <Emblem size={16} className="!text-current" />
+      {shown && (
+        <span
+          aria-hidden
+          className={
+            shown === 'running' ? 'absolute top-1.5 right-1.5 size-1.5 rounded-full bg-white motion-safe:animate-pulse'
+            : shown === 'waiting' ? 'absolute top-1.5 right-1.5 size-1.5 rounded-full bg-shu'
+            : shown === 'incomplete' ? 'absolute top-1.5 right-1.5 size-1.5 rounded-full bg-warn'
+            : 'absolute top-1.5 right-1.5 size-1.5 rounded-full bg-white/80'
+          }
+        />
+      )}
     </LbButton>
   );
 }

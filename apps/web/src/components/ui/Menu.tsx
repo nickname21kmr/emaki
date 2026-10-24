@@ -21,6 +21,7 @@ export function Menu({
   open,
   onOpenChange,
   onKeyDown,
+  onCloseAutoFocus,
 }: {
   trigger: ReactNode;
   children: ReactNode;
@@ -34,12 +35,14 @@ export function Menu({
   onOpenChange?: (open: boolean) => void;
   /** 菜单打开时的按键（例如数字键直接选）；调用 e.stopPropagation() 可以挡住全局快捷键 */
   onKeyDown?: (e: KeyboardEvent<HTMLDivElement>) => void;
+  /** 菜单关闭、焦点还给触发按钮之前；e.preventDefault() 可以不还焦点（例如接着打开弹窗） */
+  onCloseAutoFocus?: (e: Event) => void;
 }) {
   return (
     <M.Root open={open} onOpenChange={onOpenChange}>
       <M.Trigger asChild>{trigger}</M.Trigger>
       <M.Portal>
-        <M.Content align={align} sideOffset={6} style={{ minWidth: width, maxWidth }} className={contentClass} onKeyDown={onKeyDown}>
+        <M.Content align={align} sideOffset={6} style={{ minWidth: width, maxWidth }} className={contentClass} onKeyDown={onKeyDown} onCloseAutoFocus={onCloseAutoFocus}>
           {children}
         </M.Content>
       </M.Portal>

@@ -3,7 +3,7 @@ import type { AssistantMessage, AssistantSession } from '@emaki/shared';
 import {
   capsuleStatus, clampPosition, composerContext, currentActivity, erratumOf, formatClock, formatDuration, groupMessages, layoutTranscript,
   leafWidth, messageSignature, modelLabel, noteSummary, parseAnswerText, prettyInput, quote, reconcileModelSelection, rowPreview, runningLabel,
-  selectionLabel, sheetForm, sheetWidthRange, splitQuestionTitle, suggestions, toggleResultImage, toolLabel, turnTime,
+  selectionLabel, sheetForm, sheetWidthRange, splitQuestionTitle, suggestions, toggleResultImage, toolLabel, turnTime, unionMs, EFFORT_LABEL,
 } from './presentation';
 
 describe('assistant presentation', () => {
@@ -112,7 +112,7 @@ describe('layoutTranscript', () => {
     expect(turns[2]!.answerTo).toBe('要不要上传这 3 张图去搜图？');
     expect(turns[3]!.resumeText).toBeUndefined();
   });
-  it('numbers figures and tables separately across the whole session, image before table on the same card', () => {
+  it('numbers figures and tables separately within each turn, image before table on the same card', () => {
     const card = (id: string, imageIds: string[], columns?: string[]) => ({ id, title: id, imageIds, ...(columns ? { columns, rows: [] } : {}) });
     const turns = layoutTranscript([
       { id: 'u1', role: 'user', text: 'a' },
@@ -121,7 +121,7 @@ describe('layoutTranscript', () => {
       { id: 'c2', role: 'tool', text: 'y', cards: [card('images', ['2', '3']), card('empty', [])] },
     ], 'idle');
     const numbers = turns.flatMap(t => t.items).map(i => (i.kind === 'figure' ? [i.card.id, i.figureNo, i.tableNo] : null));
-    expect(numbers).toEqual([['both', 1, 1], ['table', undefined, 2], ['images', 2, undefined], ['empty', undefined, undefined]]);
+    expect(numbers).toEqual([['both', 1, 1], ['table', undefined, 2], ['images', 1, undefined], ['empty', undefined, undefined]]);
   });
   it('shows tool messages without metadata as plain lines and skips empty replies', () => {
     const [turn] = layoutTranscript([
@@ -223,6 +223,10 @@ describe('formatting', () => {
     expect(selectionLabel(0)).toBe('未选图片');
     expect(modelLabel('gpt-5.5-codex', [{ id: 'gpt-5.5-codex', name: 'GPT-5.5 Codex', efforts: [], vision: true }])).toBe('GPT-5.5 Codex');
     expect(modelLabel('gone')).toBe('gone');
+    // DSH 的 JSON 数组 id：模型列表还没读到时取最后一段
+    expect(modelLabel('["fake","sonnet"]')).toBe('sonnet');
+    expect(modelLabel('[1,2]')).toBe('[1,2]');
+    expect([EFFORT_LABEL.max, EFFORT_LABEL.ultra]).toEqual(['最高', '极高']);
   });
 });
 
@@ -230,6 +234,10 @@ describe('sheet form', () => {
   it('picks darkroom, bottom sheet, float, bound or overlay', () => {
     expect(sheetForm(1440, 'leaf', 400, true, true)).toBe('darkroom');
     expect(sheetForm(1440, 'leaf', 400, true, false)).toBe('bound');
+    // 窄窗里看图器开着也用底页，图不被挤没
+    expect(sheetForm(600, 'leaf', 400, true, true)).toBe('sheet');
+    expect(sheetForm(899, 'leaf', 400, true, true)).toBe('sheet');
+    expect(sheetForm(900, 'leaf', 400, true, true)).toBe('darkroom');
     expect(sheetForm(600, 'float', 400, false, false)).toBe('sheet');
     expect(sheetForm(900, 'float', 400, false, false)).toBe('float');
     expect(sheetForm(899, 'float', 400, false, false)).toBe('overlay');
@@ -275,6 +283,15 @@ describe('side notes and status', () => {
       .toEqual({ label: '正在执行命令等 2 项', parts: [], totalMs: 42000, running: true });
     expect(noteSummary([tool('a', 'emaki · query_database', 'succeeded'), thought('r', 'running')], 5000)).toMatchObject({ label: '正在思考', running: true, totalMs: 5000 });
   });
+  it('labels a step that waits for approval', () => {
+    expect(noteSummary([thought('r'), tool('a', 'bash', 'running')], 9000, true).label).toBe('等你批准：执行命令');
+  });
+  it('counts overlapping thinking once', () => {
+    expect(unionMs([[0, 4000], [1000, 3000], [5000, 6000]])).toBe(5000);
+    expect(unionMs([])).toBe(0);
+    const think = (id: string, startedAt: number, finishedAt: number): AssistantMessage => ({ id, role: 'assistant', text: '', reasoning: { text: 'x', status: 'completed', startedAt, finishedAt } });
+    expect(noteSummary([think('a', 0, 3000), think('b', 1000, 3000), think('c', 2000, 3000)], 0)).toMatchObject({ label: '思考 3.0 秒', totalMs: 3000 });
+  });
   it('uses only the current turn for activity and tells waiting apart', () => {
     const running = tool('tool', 'bash', 'running', { input: 'python search.py', output: 'uploading' });
     const user: AssistantMessage = { id: 'user', role: 'user', text: 'Search', createdAt: 2000 };
@@ -283,6 +300,9 @@ describe('side notes and status', () => {
     session.messages.push({ ...running, id: 'new-tool' });
     // 计时从这一步开始算，和旁注里那一行一致
     expect(currentActivity(session)).toMatchObject({ label: '正在执行命令', detail: 'python search.py', startedAt: 1000 });
+    // JSON 参数取第一个字符串值，不显示原始 JSON
+    session.messages.at(-1)!.tool = { ...running.tool!, input: '{"sql":"SELECT count(*) FROM images","limit":5}' };
+    expect(currentActivity(session).detail).toBe('SELECT count(*) FROM images');
     session.messages.at(-1)!.tool = { ...running.tool!, progress: '已读取 3 张图片' };
     expect(currentActivity(session).detail).toBe('已读取 3 张图片');
     session.messages = [user, thought('think', 'running')];

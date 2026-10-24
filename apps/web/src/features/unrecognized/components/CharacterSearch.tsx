@@ -112,6 +112,14 @@ export function CharacterSearch({
   };
   const showList = focused && (typing || recent.length > 0);
 
+  // 列表在面板的滚动区里往下展开：出现、变长时滚进视野，↑↓ 选到的那条也跟着露出来
+  useEffect(() => {
+    if (showList) listRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [showList, count, searching]);
+  useEffect(() => {
+    if (showList) listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' });
+  }, [showList, activeIndex, count]);
+
   return (
     <div>
       <SearchInput

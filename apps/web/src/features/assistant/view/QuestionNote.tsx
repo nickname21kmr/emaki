@@ -9,6 +9,7 @@ import { DURATION, EASE_OUT } from '@/lib/motion';
 import { contextPageLabel, splitQuestionTitle } from '../presentation';
 import type { ConversationView } from '../useConversation';
 import { useAssistantView } from '../viewState';
+import { TextToggle } from './parts';
 
 export interface QuestionNoteProps {
   question: AssistantQuestion;
@@ -18,6 +19,17 @@ export interface QuestionNoteProps {
   /** 这张便笺带朱色书签线；同时有几张可回答的便笺时只给第一张（默认带） */
   bookmark?: boolean;
   className?: string;
+}
+
+/** 许可正文是带 command 的 JSON 时取出命令；不是就返回 null，照原样显示 */
+export function approvalCommand(body: string): string | null {
+  if (!body.trim().startsWith('{')) return null;
+  try {
+    const value: unknown = JSON.parse(body);
+    const command = value && typeof value === 'object' ? (value as { command?: unknown }).command : undefined;
+    if (Array.isArray(command)) return command.map(String).join(' ').trim() || null;
+    return typeof command === 'string' && command.trim() ? command.trim() : null;
+  } catch { return null; }
 }
 
 /**
@@ -38,6 +50,10 @@ export function QuestionNote({ question: q, conv, isNew = false, bookmark = true
   const locked = Boolean(blockedReason);
   const answerable = !blockedByRun && bookmark;
   const { lead, body } = splitQuestionTitle(q.title);
+  // 许可里带的是一条命令（DSH 的 pwsh 这类）：先说要做什么，原始参数收进「详情」
+  const command = q.kind === 'approval' ? approvalCommand(body) : null;
+  const [details, setDetails] = useState(false);
+  const detailsId = useId();
   const options = q.kind === 'input' ? q.options ?? [] : [];
   const answer = (value: string) => {
     if (dis || !value.trim()) return;
@@ -67,8 +83,21 @@ export function QuestionNote({ question: q, conv, isNew = false, bookmark = true
         />
       )}
       <h4 className="text-[11px] font-semibold tracking-[0.08em] text-fg-subtle">{q.kind === 'approval' ? '需要你的许可' : '助手在问'}</h4>
-      <p id={qid} className="mt-1.5 text-[13.5px] leading-relaxed font-medium break-words whitespace-pre-wrap">{lead}</p>
-      {body && (
+      {command !== null ? (
+        <>
+          <p id={qid} className="mt-1.5 text-[13.5px] leading-relaxed font-medium">要运行一条命令</p>
+          <p className="mt-1 truncate font-mono text-[12px] text-fg-muted" title={command}>{command.split('\n')[0]}</p>
+          <TextToggle open={details} controls={detailsId} className="mt-1" onClick={() => setDetails(v => !v)}>{details ? '收起详情' : '详情'}</TextToggle>
+          {details && (
+            <pre id={detailsId} className="mt-2 max-h-48 overflow-auto rounded-[10px] bg-raised p-3 font-mono text-[11.5px] leading-relaxed break-all whitespace-pre-wrap text-fg-muted scrollbar-thin [@media(max-height:599px)]:max-h-32">
+              {[lead, body].join('\n')}
+            </pre>
+          )}
+        </>
+      ) : (
+        <p id={qid} className="mt-1.5 text-[13.5px] leading-relaxed font-medium break-words whitespace-pre-wrap">{lead}</p>
+      )}
+      {body && command === null && (
         <pre className="mt-2 max-h-48 overflow-auto rounded-[10px] bg-raised p-3 font-mono text-[11.5px] leading-relaxed break-all whitespace-pre-wrap text-fg-muted scrollbar-thin [@media(max-height:599px)]:max-h-32">
           {body}
         </pre>

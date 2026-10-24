@@ -137,7 +137,8 @@ export function Footer({ conv, floating = false, register = false, safeBottom = 
       {errorText && (
         <div role="alert" className="mb-2 flex items-start gap-2 px-1.5 text-[12.5px] leading-snug text-danger">
           <CircleAlert strokeWidth={1.8} className="mt-[7px] size-3.5 shrink-0" />
-          <p className="line-clamp-3 min-w-0 flex-1 py-1 break-words" title={errorText}>{errorText}</p>
+          {/* 不截行：Agent 退出时 stderr 的尾巴最有用，长了就在框里滚，能选中复制 */}
+          <p className="max-h-32 min-w-0 flex-1 overflow-y-auto py-1 break-words whitespace-pre-wrap select-text scrollbar-thin">{errorText}</p>
           {models.error && !error && <Button size="sm" variant="outline" loading={models.isFetching} onClick={models.refetch}>重新读取</Button>}
           {error && <IconButton size="sm" label="知道了" onClick={conv.actions.dismissError}><X strokeWidth={1.8} /></IconButton>}
         </div>
@@ -167,7 +168,7 @@ export function Footer({ conv, floating = false, register = false, safeBottom = 
             <AnimatePresence initial={false} mode="popLayout">
               {running ? (
                 <motion.span key="stop" {...SWAP} className="flex">
-                  <Button type="button" size="sm" variant="outline" className="!rounded-full" onClick={conv.actions.stop}>
+                  <Button type="button" size="sm" variant="outline" className="!rounded-full" onClick={() => { conv.actions.stop(); input.current?.focus({ preventScroll: true }); }}>
                     <span aria-hidden className="size-2 rounded-[2px] bg-current" />停止
                   </Button>
                 </motion.span>

@@ -194,7 +194,8 @@ function JobMeta({ job, now }: { job: Job; now: number }) {
     case 'done':
       return (
         <>
-          {job.total ? `处理了 ${formatCount(job.total)} 项` : '已完成'}
+          {/* 任务自己写了结果（比如 Pixiv 补充的原创 / 不可访问数）就用它 */}
+          {job.message || (job.total ? `处理了 ${formatCount(job.total)} 项` : '已完成')}
           {job.startedAt && job.finishedAt && ` · 用时 ${formatDuration(Date.parse(job.finishedAt) - Date.parse(job.startedAt))}`}
           {job.finishedAt && ` · ${formatRelative(job.finishedAt)}`}
         </>

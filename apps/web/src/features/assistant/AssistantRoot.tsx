@@ -4,7 +4,7 @@ import { AnimatePresence } from 'motion/react';
 import type { AssistantBackend } from '@emaki/shared';
 import { PANEL_W, SIDE_BY_SIDE_MIN, useLightboxPrefs } from '@/components/media/lightbox/prefs';
 import { useHotkey } from '@/lib/hotkeys';
-import { useOverlays } from '@/lib/stores';
+import { useLightbox, useOverlays } from '@/lib/stores';
 import { useAssistantSettings } from './client';
 import { closeAssistant, focusAssistant, leafWidth, LIVE_SHEET, openAssistant, useAssistantDock, useSheetForm, useViewportWidth, type SheetForm } from './dock';
 import { erratumOf, splitQuestionTitle } from './presentation';
@@ -45,6 +45,8 @@ function Assistant({ backend }: { backend: AssistantBackend | null }) {
   const shown = useAssistantDock(s => s.shown);
   const width = useAssistantDock(s => s.width);
   const slotEl = useAssistantDock(s => s.slotEl);
+  const liveEl = useAssistantDock(s => s.liveEl);
+  const lightboxOpen = useLightbox(s => s.open);
   const form = useSheetForm();
   const vw = useViewportWidth();
   const announcement = useAnnouncement(conv);
@@ -75,27 +77,34 @@ function Assistant({ backend }: { backend: AssistantBackend | null }) {
     root.setProperty('--assistant-cover', form === 'overlay' ? `${right}px` : '0px');
   }, [form, width, vw, shown, infoPanel]);
 
-  const target = form === 'darkroom' ? slotEl : document.body;
-  // bound / overlay / sheet 之间只是换样式；进出暗房、浮起和贴边互换才先退后进
-  const frame = form === 'darkroom' ? 'darkroom' : form === 'float' ? 'float' : 'page';
+  // 看图器开着时附页留在 Dialog 里（暗房并排，窄窗时是看图器里的底页）
+  const inLightbox = lightboxOpen && slotEl ? slotEl : null;
+  const target = inLightbox ?? document.body;
+  // bound / overlay / sheet 之间只是换样式；进出看图器、浮起和贴边互换才先退后进
+  const frame = inLightbox ? (form === 'darkroom' ? 'darkroom' : 'lightbox') : form === 'float' ? 'float' : 'page';
   return (
     <>
+      {/* 胶囊和附页同时进出：附页和输入框跟 open 同一次提交挂上，刚打开时的按键不会漏到页面快捷键 */}
+      <AnimatePresence>{!open && <CapsulePortal key="capsule" />}</AnimatePresence>
       <AnimatePresence
         mode="wait"
         onExitComplete={() => {
           const dock = useAssistantDock.getState();
-          if (!dock.open) dock.setShown(false);
+          if (!dock.open && !dock.sheets) dock.setShown(false);
         }}
       >
-        {open ? (target && <SheetPortal key={`sheet:${frame}`} target={target} conv={conv} form={form} />) : <CapsulePortal key="capsule" />}
+        {/* 看图器开着时等插槽挂好再放：先放到 body 会被 Dialog 的焦点陷阱抢走焦点，换进插槽后输入框接不到焦点 */}
+        {open && (!lightboxOpen || inLightbox) && <SheetPortal key={`sheet:${frame}`} target={target} conv={conv} form={form} />}
       </AnimatePresence>
-      {/* 看图器开着时 Radix 给 Dialog 以外的节点加 aria-hidden，播报区要跟着附页进暗房才读得到 */}
-      {createPortal(<div className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</div>, form === 'darkroom' && slotEl ? slotEl : document.body)}
+      {/* 看图器开着时 Radix 给 Dialog 以外的节点加 aria-hidden，播报区放进看图器里的宿主才读得到 */}
+      {createPortal(<div className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</div>, (lightboxOpen && liveEl) || document.body)}
     </>
   );
 }
 
 function SheetPortal({ target, conv, form }: { target: HTMLElement; conv: ConversationView; form: SheetForm }) {
+  // 挂着的附页计数：收起后等它真正卸下（退场结束）才清 shown，不靠 onExitComplete
+  useEffect(() => useAssistantDock.getState().mountSheet(), []);
   return createPortal(<Sheet conv={conv} form={form} />, target);
 }
 

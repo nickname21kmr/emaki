@@ -1,5 +1,5 @@
 import { useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { Check, CircleAlert, Copy, RotateCw } from 'lucide-react';
 import type { AssistantBackend, AssistantDetection, AssistantSettings } from '@emaki/shared';
 import { toast } from 'sonner';
@@ -54,7 +54,10 @@ export interface BackendListProps {
   onChange: (backend: AssistantBackend) => void;
 }
 
-/** Agent 应用单选：墨色圆点（不用朱），每行写检测结果。↑↓ 移动并选中，点击立即保存 */
+/**
+ * Agent 应用单选：墨色圆点（不用朱），每行写检测结果。
+ * ↑↓ 只移动焦点，空格 / Enter 或点击才保存：每换一次都会重启助手进程，不能按一下存一次
+ */
 export function BackendList({ value, detections, detecting, busyBackend, onChange }: BackendListProps) {
   const rows = useRef<(HTMLButtonElement | null)[]>([]);
   const current = value ? BACKENDS.indexOf(value) : 0;
@@ -62,9 +65,7 @@ export function BackendList({ value, detections, detecting, busyBackend, onChang
     const step = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1 : 0;
     if (!step) return;
     e.preventDefault();
-    const next = (i + step + BACKENDS.length) % BACKENDS.length;
-    rows.current[next]?.focus();
-    onChange(BACKENDS[next]!);
+    rows.current[(i + step + BACKENDS.length) % BACKENDS.length]?.focus();
   };
   return (
     <div role="radiogroup" aria-label="Agent 应用" aria-busy={detecting || undefined} className="-mx-2 space-y-0.5">
@@ -97,7 +98,8 @@ export function BackendList({ value, detections, detecting, busyBackend, onChang
             {busyBackend === b ? (
               <Spinner className="size-3.5 text-fg-subtle" />
             ) : !d ? (
-              <span className="shrink-0 text-[12px] text-fg-subtle">未检测</span>
+              // 正在用的那个没有检测结果时不写「未检测」，免得像没装好
+              <span className="shrink-0 text-[12px] text-fg-subtle">{checked ? '已选用' : '未检测'}</span>
             ) : d.available ? (
               <Badge tone="ok" dot>{d.models.length} 个模型</Badge>
             ) : (
@@ -119,6 +121,16 @@ function storedDetections(): AssistantDetection[] | undefined {
     return Array.isArray(parsed) ? (parsed as AssistantDetection[]) : undefined;
   } catch {
     return undefined;
+  }
+}
+
+/** 去掉某个 backend 的检测结果（缓存和 sessionStorage 一起），那一行回到没检测过的样子 */
+export function dropDetection(client: QueryClient, backend: AssistantBackend) {
+  const next = client.setQueryData<AssistantDetection[]>(['assistant-detect'], (d) => d?.filter((x) => x.backend !== backend));
+  try {
+    if (next) sessionStorage.setItem(DETECT_KEY, JSON.stringify(next));
+  } catch {
+    /* 存不了就只在这次生效 */
   }
 }
 
@@ -209,6 +221,7 @@ export function AssistantSettingsSection() {
   const detections = useDetections();
   const [busy, setBusy] = useState(false), [confirming, setConfirming] = useState(false);
   const [pendingBackend, setPendingBackend] = useState<AssistantBackend | null>(null);
+  const switchBox = useRef<HTMLSpanElement>(null);
   const settings = query.data;
   // 出错时 toast 报原因，返回 false
   const perform: Perform = async (fn) => {
@@ -236,7 +249,8 @@ export function AssistantSettingsSection() {
     });
   };
   const chooseBackend = (backend: AssistantBackend) => {
-    if (backend === settings?.backend) return;
+    // 上一次切换还没存完时不再发：并发的 PATCH 可能让界面和服务端对不上
+    if (backend === settings?.backend || pendingBackend) return;
     setPendingBackend(backend);
     void perform(() => save({ backend })).finally(() => setPendingBackend((p) => (p === backend ? null : p)));
   };
@@ -257,15 +271,17 @@ export function AssistantSettingsSection() {
       <SettingsCard>
         <Field label="开启助手" hint="关闭会结束助手进程，设置和对话都保留。">
           {/* 开启先确认，关闭直接生效 */}
-          <Switch
-            label="开启 AI 助手"
-            checked={settings?.enabled ?? false}
-            disabled={busy || !settings}
-            onCheckedChange={(enabled) => {
-              if (enabled) setConfirming(true);
-              else void perform(() => save({ enabled: false }));
-            }}
-          />
+          <span ref={switchBox} className="contents">
+            <Switch
+              label="开启 AI 助手"
+              checked={settings?.enabled ?? false}
+              disabled={busy || !settings}
+              onCheckedChange={(enabled) => {
+                if (enabled) setConfirming(true);
+                else void perform(() => save({ enabled: false }));
+              }}
+            />
+          </span>
         </Field>
         {query.isError && (
           <div role="alert" className="flex items-center gap-3 py-3 text-[12.5px] text-danger">
@@ -302,7 +318,18 @@ export function AssistantSettingsSection() {
           </>
         )}
       </SettingsCard>
-      <Dialog open={confirming} onOpenChange={setConfirming} title="开启 AI 助手？" description="实验功能。开启前请看一下这四点。" width={520}>
+      <Dialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        // 对话框不是从 Radix 的触发器打开的，关上后自己把焦点还给开关
+        onCloseAutoFocus={(e) => {
+          e.preventDefault();
+          switchBox.current?.querySelector<HTMLElement>('[role="switch"]')?.focus({ preventScroll: true });
+        }}
+        title="开启 AI 助手？"
+        description="实验功能。开启前请看一下这四点。"
+        width={520}
+      >
         <AssistantDisclosure />
         <DialogFooter>
           <Button variant="ghost" onClick={() => setConfirming(false)}>
@@ -321,6 +348,7 @@ type Save = (body: unknown) => Promise<unknown>;
 
 /** Codex / DSH 的可执行文件位置：留空自动查找，检测到了就把找到的路径写进 placeholder */
 function PathRow({ backend, settings, detection, busy, perform, save }: { backend: 'codex' | 'dsh'; settings: AssistantSettings; detection?: AssistantDetection; busy: boolean; perform: Perform; save: Save }) {
+  const client = useQueryClient();
   const saved = backend === 'dsh' ? settings.dshPath ?? '' : settings.codexPath;
   const [path, setPath] = useState(saved);
   const dirty = path.trim() !== saved.trim();
@@ -328,7 +356,10 @@ function PathRow({ backend, settings, detection, busy, perform, save }: { backen
     e.preventDefault();
     if (!dirty) return;
     const body = backend === 'dsh' ? { dshPath: path.trim() } : { codexPath: path.trim() };
-    if (await perform(() => save(body))) toast('已保存');
+    if (!(await perform(() => save(body)))) return;
+    // 换了位置，上次的检测结果（比如「未找到」）就不作数了，等重新检测
+    dropDetection(client, backend);
+    toast('已保存', { description: '点「重新检测」确认能不能用' });
   };
   return (
     <BlockRow

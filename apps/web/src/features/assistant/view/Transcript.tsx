@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { ArrowDown } from 'lucide-react';
 import type { AssistantQuestion, AssistantSession } from '@emaki/shared';
-import { Skeleton } from '@/components/ui';
+import { Button, Skeleton } from '@/components/ui';
 import { DURATION, EASE_OUT } from '@/lib/motion';
 import { layoutTranscript, turnItemKey, type Turn as TurnData } from '../presentation';
 import type { ConversationView } from '../useConversation';
@@ -42,7 +42,16 @@ export function Transcript({ conv }: TranscriptProps) {
   // 点了「回到最新」后的平滑滚动期间，不把中途的位置当成用户滚开
   const smoothUntil = useRef(0);
 
-  const turns = session ? layoutTranscript(session.messages, session.status) : [];
+  const messages = session?.messages, status = session?.status;
+  const turns = useMemo(() => (messages && status ? layoutTranscript(messages, status) : []), [messages, status]);
+  // 给各轮的 actions 换成稳定的转发版本：Turn 按内容跳过重排时，点下去调的仍是最新的那份
+  const latest = useRef(conv);
+  latest.current = conv;
+  const [actions] = useState(() => new Proxy({} as ConversationView['actions'], {
+    get: (_, key) => typeof key !== 'string' ? undefined
+      : (...args: unknown[]) => (latest.current.actions[key as keyof ConversationView['actions']] as (...a: unknown[]) => unknown)(...args),
+  }));
+  const turnConv = { ...conv, actions };
   const questions = [...(session?.questions ?? [])].sort((a, b) => Number(b.kind === 'approval') - Number(a.kind === 'approval'));
   const interrupted = Boolean(session?.interruption) && !live(session);
   // 切会话后的第一份快照：里面已有的条目都不播入场动画
@@ -129,6 +138,12 @@ export function Transcript({ conv }: TranscriptProps) {
       <div ref={content} key={sessionId} className="mx-auto w-full max-w-[600px] animate-fade-in px-5 pt-5 pb-6">
         {!backend || (session && session.messages.length === 0 && !questions.length && !session.interruption) ? (
           <BlankPage conv={conv} />
+        ) : !session && conv.sessions.error ? (
+          // 会话列表没读到：不一直转骨架，给个重试
+          <div role="alert" className="flex items-center gap-2 text-[12.5px] text-fg-muted">
+            <span className="min-w-0 flex-1">会话列表没读到：{conv.sessions.error instanceof Error ? conv.sessions.error.message : '请稍后再试'}</span>
+            <Button size="sm" variant="ghost" className="-mr-2.5" onClick={conv.sessions.refetch}>重试</Button>
+          </div>
         ) : !session ? (
           <div aria-hidden className="animate-fade-in space-y-2" style={{ animationDelay: '140ms' }}>
             <Skeleton className="h-4 w-3/5" />
@@ -140,7 +155,7 @@ export function Transcript({ conv }: TranscriptProps) {
             </div>
           </div>
         ) : turns.length ? (
-          turns.map((turn, i) => <Turn key={turn.id} turn={turn} conv={conv} tail={i === turns.length - 1 ? tail : undefined} />)
+          turns.map((turn, i) => <Turn key={turn.id} turn={turn} conv={turnConv} tail={i === turns.length - 1 ? tail : undefined} />)
         ) : (
           <div className="space-y-3">{tail}</div>
         )}

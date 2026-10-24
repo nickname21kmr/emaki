@@ -5,10 +5,9 @@ import { MountFrame, SelectCircle } from '@/components/media/ImageGrid';
 import { Thumb } from '@/components/media/Thumb';
 import { Skeleton } from '@/components/ui';
 import { cn } from '@/lib/cn';
-import { useLightbox } from '@/lib/stores';
 import type { ConversationView } from '../useConversation';
 import { useAssistantView } from '../viewState';
-import { useAssistantImage } from './parts';
+import { showInLightbox, useAssistantImage } from './parts';
 
 export interface FigureProps {
   /** present_result 那条消息（text 和卡片标题相同时不重复显示正文） */
@@ -51,7 +50,7 @@ function Plate({ card, n, conv }: { card: AssistantCard; n?: number; conv: Conve
   const sel = new Set(conv.resultSelection?.ids ?? []);
   const picked = ids.filter(id => sel.has(id));
   const k = picked.length;
-  const show = (i: number) => useLightbox.getState().show(ids, i);
+  const show = (i: number) => showInLightbox(ids, i);
   const { setRevealed } = useAssistantView.getState();
   return (
     <figure>
@@ -67,7 +66,8 @@ function Plate({ card, n, conv }: { card: AssistantCard; n?: number; conv: Conve
               <Tile id={id} />
             </button>
             <MountFrame selected={sel.has(id)} />
-            <SelectCircle selected={sel.has(id)} selecting={k > 0} onToggle={() => conv.actions.selectResult(card, id, !sel.has(id))} />
+            {/* 触屏没有悬停：圆圈一直露着，不然勾不了 */}
+            <SelectCircle selected={sel.has(id)} selecting={k > 0} onToggle={() => conv.actions.selectResult(card, id, !sel.has(id))} className="pointer-coarse:opacity-100" />
           </li>
         ))}
       </ul>

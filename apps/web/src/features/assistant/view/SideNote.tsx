@@ -13,6 +13,10 @@ export interface SideNoteProps {
   /** 组 id（layoutTranscript 给的 `note:${首条 id}`），展开状态按它存在 viewState.expanded */
   id: string;
   messages: AssistantMessage[];
+  /** 连接断了：运行中的步骤不再走表（不知道它还在不在跑） */
+  paused?: boolean;
+  /** 会话在等你批准：组头写「等你批准：…」，计时停住（等的时间不算在这一步里） */
+  waiting?: boolean;
   className?: string;
 }
 
@@ -32,21 +36,21 @@ const BODY = '-mx-2 -my-1 overflow-hidden px-2 py-1';
  * 只有一条记录时不加组头。
  */
 export const SideNote = memo(
-  function SideNote({ id, messages, className }: SideNoteProps) {
+  function SideNote({ id, messages, paused = false, waiting = false, className }: SideNoteProps) {
     const running = messages.some(live);
-    const now = useClock(running);
+    const now = useClock(running && !paused && !waiting);
     const expanded = useAssistantView(s => s.expanded[id]);
     const earlier = useAssistantView(s => s.expanded[`${id}:earlier`] ?? false);
     const bodyId = useId();
     if (messages.length === 1) {
       return (
         <div className={cn('border-l border-rule pl-3', className)}>
-          <ul><Row message={messages[0]!} now={now} /></ul>
+          <ul><Row message={messages[0]!} now={now} paused={paused} /></ul>
         </div>
       );
     }
     const open = expanded ?? running;
-    const summary = noteSummary(messages, now);
+    const summary = noteSummary(messages, now, waiting);
     const summaryText = [summary.label, ...summary.parts.map(p => p.text)].join(' · ');
     const hidden = running && !earlier ? Math.max(0, messages.length - 3) : 0;
     const rows = hidden ? messages.slice(-3) : messages;
@@ -62,23 +66,29 @@ export const SideNote = memo(
           className="group -mx-1.5 flex h-7 w-[calc(100%+12px)] items-center gap-2.5 rounded-[8px] px-1.5 text-left text-[12px] text-fg-muted hover:bg-hover hover:text-fg"
         >
           <span className="flex w-3.5 shrink-0 justify-center">
-            {summary.running ? (
+            {summary.running && paused ? (
+              <Pause strokeWidth={1.8} className="size-3.5 text-fg-subtle" />
+            ) : summary.running ? (
               <Spinner className="size-3 text-fg-subtle" />
             ) : (
               <ChevronRight strokeWidth={1.8} className={cn('size-3.5 text-fg-subtle transition-[rotate] duration-200', open && 'rotate-90')} />
             )}
           </span>
-          <span className="min-w-0 flex-1 truncate">
-            {summary.label}
-            {summary.parts.map(p => (
-              <span key={p.text}>
-                <span className="px-1 text-fg-subtle">·</span>
-                <span className={p.tone === 'danger' ? 'text-danger' : undefined}>{p.text}</span>
-              </span>
-            ))}
-          </span>
+          {/* 标签太长时只截它自己，「1 项失败」「已中断」总是完整露出 */}
+          <span className="min-w-0 truncate">{summary.label}</span>
+          {summary.parts.length > 0 && (
+            <span className="-ml-2.5 shrink-0">
+              {summary.parts.map(p => (
+                <span key={p.text}>
+                  <span className="px-1 text-fg-subtle">·</span>
+                  <span className={p.tone === 'danger' ? 'text-danger' : undefined}>{p.text}</span>
+                </span>
+              ))}
+            </span>
+          )}
+          <span className="-ml-2.5 flex-1" />
           <span aria-hidden={summary.running} className="shrink-0 text-[11px] text-fg-subtle tabular">
-            {summary.running ? formatClock(summary.totalMs) : formatDuration(summary.totalMs)}
+            {summary.running && paused ? '—' : summary.running ? formatClock(summary.totalMs) : formatDuration(summary.totalMs)}
           </span>
           <span aria-hidden className="w-3 shrink-0" />
         </button>
@@ -94,14 +104,14 @@ export const SideNote = memo(
                   前面还有 {hidden} 步
                 </button>
               )}
-              <ul>{rows.map(m => <Row key={m.id} message={m} now={now} />)}</ul>
+              <ul>{rows.map(m => <Row key={m.id} message={m} now={now} paused={paused} />)}</ul>
             </motion.div>
           )}
         </AnimatePresence>
       </div>
     );
   },
-  (a, b) => a.id === b.id && a.className === b.className && a.messages.length === b.messages.length && a.messages.every((m, i) => messageSignature(m) === messageSignature(b.messages[i]!)),
+  (a, b) => a.id === b.id && a.className === b.className && a.paused === b.paused && a.waiting === b.waiting && a.messages.length === b.messages.length && a.messages.every((m, i) => messageSignature(m) === messageSignature(b.messages[i]!)),
 );
 
 function Mark({ status, thought }: { status: RowStatus; thought: boolean }) {
@@ -113,14 +123,16 @@ function Mark({ status, thought }: { status: RowStatus; thought: boolean }) {
 }
 
 /** 条目行（§7.3）：记号、名称、预览、失败、用时；点开看参数和输出，或思考全文 */
-function Row({ message: m, now }: { message: AssistantMessage; now: number }) {
+function Row({ message: m, now, paused = false }: { message: AssistantMessage; now: number; paused?: boolean }) {
   const open = useAssistantView(s => s.expanded[m.id] ?? false);
   const detailId = useId();
   const thought = Boolean(m.reasoning);
   const status = rowStatus(m);
   const span = m.tool ?? m.reasoning;
   const end = span?.finishedAt ?? (status === 'running' ? now : undefined);
-  const duration = span && end != null ? formatDuration(end - span.startedAt) : '';
+  // 断线时运行中的步骤不再计时，写一道破折号
+  const stalled = paused && status === 'running';
+  const duration = stalled ? '—' : span && end != null ? formatDuration(end - span.startedAt) : '';
   const { label, known } = thought ? { label: '思考', known: true } : toolLabel(m.text);
   const preview = rowPreview(m);
   return (
@@ -133,7 +145,7 @@ function Row({ message: m, now }: { message: AssistantMessage; now: number }) {
         onClick={() => useAssistantView.getState().setExpanded(m.id, !open)}
         className="group/row -mx-1.5 flex min-h-7 w-[calc(100%+12px)] items-center gap-2.5 rounded-[8px] px-1.5 text-left text-[12px] hover:bg-hover pointer-coarse:min-h-10"
       >
-        <span className="flex w-3.5 shrink-0 justify-center"><Mark status={status} thought={thought} /></span>
+        <span className="flex w-3.5 shrink-0 justify-center"><Mark status={stalled ? 'interrupted' : status} thought={thought} /></span>
         <span className={cn('shrink-0 text-fg', !known && 'font-mono text-[11.5px]')}>{label}</span>
         <span className={cn('min-w-0 flex-1 truncate text-fg-subtle @max-[340px]:hidden', thought ? 'text-[11.5px]' : 'font-mono text-[11px]')}>{preview}</span>
         {status === 'failed' && <span className="shrink-0 text-danger">失败</span>}

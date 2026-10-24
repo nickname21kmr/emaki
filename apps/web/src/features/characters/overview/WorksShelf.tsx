@@ -60,13 +60,28 @@ export function WorksShelf({ onPick, onShowAll }: { onPick: (id: ID) => void; on
   }
   if (!works.length) {
     const hasOriginal = all.some((w) => w.danbooruTag === 'original' && w.imageCount > 0);
+    // 有角色但都还没归到作品（比如自建的、助手新建的）：书架上没有，指去列表
+    const looseCharacters = !hasOriginal && (stats?.characterCount ?? 0) > 0;
     return (
       <section>
         {title}
         <EmptyState
           glyph="人"
-          title={hasOriginal ? '原创分类不参与作品排行' : '还没有角色'}
-          description={hasOriginal ? '可从侧栏「原创」或「全部作品」查看。具体原创角色仍按各自的收藏张数排列。' : '识别完成后，角色会按作品出现在这里。'}
+          title={hasOriginal ? '原创分类不参与作品排行' : looseCharacters ? '这些角色还没归到作品' : '还没有角色'}
+          description={
+            hasOriginal
+              ? '可从侧栏「原创」或「全部作品」查看。具体原创角色仍按各自的收藏张数排列。'
+              : looseCharacters
+                ? `有 ${formatCount(stats!.characterCount)} 位角色，书架按作品排，没有作品的在列表里。`
+                : '识别完成后，角色会按作品出现在这里。'
+          }
+          action={
+            looseCharacters ? (
+              <Button variant="secondary" trailing={<ArrowRight className="size-3.5" />} onClick={onShowAll}>
+                按角色浏览
+              </Button>
+            ) : undefined
+          }
           className="py-16"
         />
       </section>

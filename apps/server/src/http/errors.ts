@@ -12,7 +12,8 @@ export class HttpError extends Error {
 
 export class NotFoundError extends HttpError {
   constructor(what: string) {
-    super(404, 'not_found', `找不到${what}`);
+    // 中文后面接拉丁字母时隔一个空格：「找不到 Emaki 会话」
+    super(404, 'not_found', `找不到${/^[A-Za-z0-9]/.test(what) ? ' ' : ''}${what}`);
   }
 }
 

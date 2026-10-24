@@ -29,6 +29,7 @@ function byProvider(models: readonly AssistantModel[]) {
 export function ModelMenu({ conv, open, onOpenChange }: ModelMenuProps) {
   const { models, model, effort, session, busy, sessionId } = conv;
   const running = session?.status === 'running' || session?.status === 'waiting';
+  const locked = running || busy || !sessionId;
   const list = models.data ?? [];
   const current = list.find(m => m.id === model);
   const groups = byProvider(list);
@@ -46,12 +47,13 @@ export function ModelMenu({ conv, open, onOpenChange }: ModelMenuProps) {
         <Menu
           align="start"
           width={264}
-          open={open}
+          // 受控打开不经过触发按钮的 disabled，这里一并挡住
+          open={open && !locked}
           onOpenChange={onOpenChange}
           trigger={
             <button
               type="button"
-              disabled={running || busy || !sessionId}
+              disabled={locked}
               className="inline-flex h-7 max-w-full min-w-0 items-center gap-1 rounded-full px-2.5 text-[12px] font-medium text-fg-muted transition-colors hover:bg-hover hover:text-fg disabled:pointer-events-none disabled:opacity-45 [&_svg]:size-3.5 [&_svg]:shrink-0"
             >
               <span className="flex min-w-0 items-center gap-1 truncate">{label}</span>
@@ -81,7 +83,7 @@ export function ModelMenu({ conv, open, onOpenChange }: ModelMenuProps) {
               <MenuSeparator />
               <MenuLabel>思考强度</MenuLabel>
               <MenuRadioGroup value={effort || 'default'} onValueChange={conv.actions.pickEffort}>
-                <MenuRadioItem value="default">默认</MenuRadioItem>
+                <MenuRadioItem value="default">{current.defaultEffort ? `默认（${EFFORT_LABEL[current.defaultEffort] ?? current.defaultEffort}）` : '默认'}</MenuRadioItem>
                 {current.efforts.map(e => <MenuRadioItem key={e} value={e}>{EFFORT_LABEL[e] ?? e}</MenuRadioItem>)}
               </MenuRadioGroup>
             </>

@@ -1,11 +1,11 @@
-import { forwardRef, useEffect, useRef } from 'react';
+import { forwardRef, useEffect, useRef, type HTMLAttributes } from 'react';
 import { motion } from 'motion/react';
 import { Kbd } from '@/components/ui';
 import { Emblem } from '@/components/ui/Emblem';
 import { cn } from '@/lib/cn';
 import { modKeyLabel } from '@/lib/hotkeys';
 import { DURATION } from '@/lib/motion';
-import { useSelection } from '@/lib/stores';
+import { useOverlays, useSelection } from '@/lib/stores';
 import { openAssistant, useAssistantDock } from '../dock';
 import { capsuleStatus, formatClock, type CapsuleStatus } from '../presentation';
 import { useFloatingDrag } from '../useFloatingDrag';
@@ -38,22 +38,33 @@ function LiveCapsule() {
     const dock = useAssistantDock.getState();
     if (dock.focusCapsule) { button.current?.focus({ preventScroll: true }); dock.setFocusCapsule(false); }
   }, []);
+  // 合集阅读器开着时不露胶囊（Ctrl+J 照常能开附页）
+  const readerOpen = useOverlays(s => s.readerOpen);
+  // 多选栏为 toast 再抬 64 时跟着抬
+  const barLifted = useOverlays(s => s.barLifted);
+  if (readerOpen) return null;
   return (
     <div
       ref={el => { drag.ref.current = el; }}
       style={drag.style}
-      {...drag.handle}
-      className={cn('fixed right-6 z-40 touch-none transition-[bottom] duration-[350ms] ease-[var(--ease-out-soft)]', lift ? 'bottom-[84px]' : 'bottom-6', 'max-sm:right-4 max-sm:bottom-4')}
+      // 多选栏顶边离窗口底 84（纸边 8 + sticky 24 + 栏高 52），再留 12 的空；窄屏也要抬
+      className={cn(
+        'fixed right-6 z-40 touch-none transition-[bottom] duration-[350ms] ease-[var(--ease-out-soft)] max-sm:right-4',
+        lift ? (barLifted ? 'bottom-[160px] max-sm:bottom-[160px]' : 'bottom-[96px] max-sm:bottom-[96px]') : 'bottom-6 max-sm:bottom-4',
+      )}
     >
-      <CapsuleButton ref={button} status={status} startedAt={startedAt} onClick={openAssistant} />
+      {/* 拖动挂在按钮上：useFloatingDrag 只放行手柄本身是按钮的情况，拖过之后吞掉那次点击 */}
+      <CapsuleButton ref={button} status={status} startedAt={startedAt} onClick={openAssistant} handle={drag.handle} />
     </div>
   );
 }
 
 const STATUS_TEXT: Record<CapsuleStatus, string> = { idle: '', running: '处理中', waiting: '等你回应', reply: '有新回复', incomplete: '没有完成' };
 
-const CapsuleButton = forwardRef<HTMLButtonElement, { status: CapsuleStatus; startedAt: number | null; onClick?: () => void }>(
-  function CapsuleButton({ status, startedAt, onClick }, ref) {
+type DragHandle = Pick<HTMLAttributes<HTMLElement>, 'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onPointerCancel' | 'onLostPointerCapture' | 'onClickCapture'>;
+
+const CapsuleButton = forwardRef<HTMLButtonElement, { status: CapsuleStatus; startedAt: number | null; onClick?: () => void; handle?: DragHandle }>(
+  function CapsuleButton({ status, startedAt, onClick, handle }, ref) {
     const running = status === 'running';
     const now = useClock(running);
     const text = STATUS_TEXT[status];
@@ -68,6 +79,7 @@ const CapsuleButton = forwardRef<HTMLButtonElement, { status: CapsuleStatus; sta
         exit={{ opacity: 0, scale: 0.96, transition: { duration: DURATION.fast } }}
         aria-label={`打开助手${text ? `，${text}` : ''}`}
         aria-keyshortcuts={modKeyLabel === '⌘' ? 'Meta+J' : 'Control+J'}
+        {...handle}
         onClick={onClick}
         className={cn(
           'group relative flex h-11 items-center gap-2 overflow-hidden rounded-full bg-ink pr-2 pl-3.5 text-[13px] font-medium text-fg-inverse shadow-pop transition-[background-color,scale] duration-150 select-none hover:bg-ink-hover active:scale-[0.97]',

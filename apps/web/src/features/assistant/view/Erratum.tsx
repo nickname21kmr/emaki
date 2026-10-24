@@ -1,15 +1,14 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Undo2 } from 'lucide-react';
 import type { AssistantMessage } from '@emaki/shared';
 import { Dotted } from '@/components/overlays/palette/items';
 import { Thumb } from '@/components/media/Thumb';
 import { Button, Skeleton, Spinner } from '@/components/ui';
 import { cn } from '@/lib/cn';
-import { useLightbox } from '@/lib/stores';
 import type { Erratum as ErratumData } from '../presentation';
 import type { ConversationView } from '../useConversation';
 import { runUndo, useAssistantView, type UndoState } from '../viewState';
-import { useAssistantImage } from './parts';
+import { showInLightbox, useAssistantImage } from './parts';
 
 export interface ErratumProps {
   /** 带 undoToken 的「图库已更新」消息 */
@@ -58,9 +57,14 @@ export function Erratum({ message, erratum, conv, state: forced, className }: Er
     return true;
   });
   const ids = erratum.imageIds;
-  const doUndo = () => void runUndo(token, conv.actions.undo);
+  // 撤销按钮按下后换成「撤销中」：焦点先放到这一条上，不掉到 body
+  const row = useRef<HTMLDivElement>(null);
+  const doUndo = () => {
+    row.current?.focus({ preventScroll: true });
+    void runUndo(token, conv.actions.undo);
+  };
   return (
-    <div className={cn('border-y border-line py-2 [&+&]:border-t-0', className)}>
+    <div ref={row} tabIndex={-1} className={cn('border-y border-line py-2 outline-none [&+&]:border-t-0', className)}>
       <div className="flex min-h-7 items-center gap-2.5 text-[12.5px]">
         {state === 'undone' ? <Undo2 strokeWidth={1.8} className="size-3.5 shrink-0 text-fg-subtle" /> : <DrawnCheck draw={draw} />}
         <p className={cn('min-w-0 flex-1 break-words', state === 'undone' && 'text-fg-subtle line-through decoration-fg-subtle')}>{erratum.sentence}</p>
@@ -69,6 +73,8 @@ export function Erratum({ message, erratum, conv, state: forced, className }: Er
           <Button size="sm" variant="ghost" icon={<Undo2 strokeWidth={1.8} />} className="-mr-2.5" disabled={!token} onClick={doUndo}>撤销</Button>
         ) : state === 'undoing' ? (
           <span className="flex shrink-0 items-center gap-1.5 text-[12px] text-fg-subtle"><Spinner className="size-3" />撤销中</span>
+        ) : state === 'expired' ? (
+          <span className="shrink-0 text-[12px] text-fg-subtle">已失效，不能再撤销</span>
         ) : (
           <span className="shrink-0 text-[12px] text-fg-subtle">已撤销</span>
         )}
@@ -80,7 +86,7 @@ export function Erratum({ message, erratum, conv, state: forced, className }: Er
               key={id}
               type="button"
               aria-label="看大图"
-              onClick={() => useLightbox.getState().show(ids, i)}
+              onClick={() => showInLightbox(ids, i)}
               className="focus-frame size-7 shrink-0 cursor-zoom-in rounded-[var(--radius-xs)]"
             >
               <ErratumThumb id={id} />

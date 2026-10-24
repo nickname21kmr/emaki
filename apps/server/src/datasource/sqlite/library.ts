@@ -147,10 +147,16 @@ export class LibraryQueries {
       .prepare(
         `SELECT MAX(imported_at) AS at,
                 (SELECT COUNT(*) FROM v_counted_images i JOIN library_roots r2 ON r2.id = i.root_id
-                  WHERE r2.imported_at >= @since) AS count
+                  WHERE r2.imported_at >= @since) AS count,
+                -- 这些文件夹里还没识别的，条件同上面的 pending_tag_count：首页导入面板只说这次加的，不混进整个库
+                (SELECT COALESCE(SUM(CASE WHEN i.excluded_by IS NULL AND i.tagged_at IS NULL AND NOT ${IN_COMIC_I}
+                   THEN CASE WHEN @skipCamera = 1 AND i.content_kind = 'photo' THEN COALESCE(i.camera, '') = '' ELSE 1 END
+                   ELSE 0 END), 0)
+                  FROM images i JOIN library_roots r3 ON r3.id = i.root_id
+                  WHERE ${LIVE_IMAGES} AND r3.imported_at >= @since) AS pending
          FROM library_roots WHERE removed_at IS NULL AND imported_at >= @since`,
       )
-      .get({ since }) as { at: string | null; count: number };
+      .get({ since, skipCamera: readSettings(db).tagger.skipCameraPhotos === false ? 0 : 1 }) as { at: string | null; count: number; pending: number };
 
     // 有插画的角色 / 作品数，口径同 Derived 的 imageCount > 0。不用 derived.get()：每次用户操作都会让它整份重建（真实库 1.5 秒以上），
     // 侧栏统计一直在拉，等于每点一次收藏就重建一次。EXISTS 走索引，各几毫秒。
@@ -185,7 +191,7 @@ export class LibraryQueries {
       lastScanAt: row.last_scan_at,
       untaggedCount: row.untagged_count,
       shelvedCount: row.shelved_count,
-      recentImport: imp.at ? { at: imp.at, count: imp.count } : null,
+      recentImport: imp.at ? { at: imp.at, count: imp.count, pending: imp.pending } : null,
       lastAddedAt: row.last_added_at,
       kindCounts,
       pendingTagCount: row.pending_tag_count,

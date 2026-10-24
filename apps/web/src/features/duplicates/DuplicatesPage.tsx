@@ -171,9 +171,16 @@ export function DuplicatesPage() {
   const keysOn = view === 'pending' && groups.length > 0 && !confirmOpen && !lightboxOpen && !overlayOpen;
 
   const [lensGroup, setLensGroup] = useState<ID | null>(null);
-  useHotkey('z', () => setLensGroup((cur) => (cur && cur === groups[activeIndex]?.id ? null : (groups[activeIndex]?.id ?? null))), {
-    enabled: keysOn,
-  });
+  useHotkey(
+    'z',
+    () => {
+      const g = groups[activeIndex];
+      // 放大对比只给「相似」组用，完全一样的组按 Z 也说一声
+      if (g?.kind === 'exact') return void toast('完全一样的组不用放大对比');
+      setLensGroup((cur) => (cur && cur === g?.id ? null : (g?.id ?? null)));
+    },
+    { enabled: keysOn },
+  );
   useHotkey('j', () => moveTo(activeIndex + 1), { enabled: keysOn, repeat: true });
   useHotkey('k', () => moveTo(activeIndex - 1), { enabled: keysOn, repeat: true });
   useHotkey(
@@ -312,7 +319,8 @@ export function DuplicatesPage() {
                       }
                     />
                   ));
-                  return seg.setId ? (
+                  // 同一套只剩一组时不框（忽略掉一组后会短暂出现）
+                  return seg.setId && seg.items.length > 1 ? (
                     <DuplicateSetFrame key={`set-${seg.setId}`} count={seg.items.length}>
                       <AnimatePresence mode="popLayout" initial={false}>
                         {cards}

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'motion/react';
 import { ChevronDown, Minus, PanelRight, PanelRightClose, PictureInPicture2, Plus } from 'lucide-react';
@@ -6,7 +6,7 @@ import { IconButton } from '@/components/ui';
 import { Emblem } from '@/components/ui/Emblem';
 import { cn } from '@/lib/cn';
 import { DURATION, EASE_OUT } from '@/lib/motion';
-import { useSelection } from '@/lib/stores';
+import { useLightbox, useSelection } from '@/lib/stores';
 import { closeAssistant, focusAssistant, focusComposer, LEAF_WIDTH,leafWidth, sheetWidthRange, useAssistantDock, useViewportWidth, type SheetForm } from '../dock';
 import { BACKEND_LABEL } from '../presentation';
 import type { ConversationView } from '../useConversation';
@@ -72,8 +72,12 @@ export function Sheet({ conv, form, frame = 'fixed' }: SheetProps) {
   const positioned = Boolean(drag.style);
   // 浮页没被拖过时，有多选栏就抬到它上面
   const lift = useSelection(s => s.ids.size > 0) && floating && !positioned;
-  const resize = useFloatingResize(drag.ref, drag.place, positioned ? 16 : lift ? 108 : 48);
+  // 多选栏顶边离窗口底 84（纸边 8 + sticky 24 + 栏高 52），再留 12 的空
+  const resize = useFloatingResize(drag.ref, drag.place, positioned ? 16 : lift ? 120 : 48);
   const flipButton = useRef<HTMLButtonElement>(null);
+  const asideRef = useRef<HTMLElement | null>(null);
+  // 覆盖时拖宽度手柄：拖动中只改这张纸自己的宽，松手才写进 dock（免得半路换成并排）
+  const [preview, setPreview] = useState<number | null>(null);
 
   useEffect(() => {
     if (!fixed) return;
@@ -88,10 +92,22 @@ export function Sheet({ conv, form, frame = 'fixed' }: SheetProps) {
     if (useAssistantDock.getState().wantsFocus) focusAssistant();
   }, [fixed]);
 
+  // 缩放窗口换了外壳（浮页 ↔ 页面）时这张纸会卸下：焦点在里面的话，新纸挂上后放回输入框。
+  // 卸下前（layout 清理时 DOM 还在）判断；收起（open 已经是 false）和进出看图器不管
+  useLayoutEffect(() => {
+    if (!fixed) return;
+    const inBox = useLightbox.getState().open;
+    return () => {
+      if (!useAssistantDock.getState().open || useLightbox.getState().open !== inBox) return;
+      if (asideRef.current?.contains(document.activeElement)) refocusFlip ??= 'pointer';
+    };
+  }, [fixed]);
+
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     // Menu 的按键在它自己的 portal 里，DOM 上不在附页里，不归这里管
     const inside = (e.target as Element).closest?.('[data-assistant-sheet]');
-    if (e.key === 'Escape' && inside && fixed && !e.nativeEvent.isComposing) { e.preventDefault(); closeAssistant(); return; }
+    // stopPropagation：页面上挂在 window 的 Esc（清空多选这类）不再跟着响
+    if (e.key === 'Escape' && inside && fixed && !e.nativeEvent.isComposing) { e.preventDefault(); e.stopPropagation(); closeAssistant(); return; }
     // 看图器和页面的单键快捷键不从助手里漏出去；Tab 放行给焦点陷阱
     if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key !== 'Escape' && e.key !== 'Tab') e.stopPropagation();
   };
@@ -106,15 +122,15 @@ export function Sheet({ conv, form, frame = 'fixed' }: SheetProps) {
   // 名字读作「助手 + 会话标题」
   const labelledBy = `${kickerId} ${titleId}`;
   const a11y = form === 'bound' ? { 'aria-labelledby': labelledBy } : { role: 'dialog', 'aria-modal': false, 'aria-labelledby': labelledBy };
-  const w = leafWidth(form, width, vw);
+  const w = form === 'overlay' && preview !== null ? preview : leafWidth(form, width, vw);
   const place = !fixed ? 'relative size-full'
-    : floating ? cn(FLOAT, lift ? 'bottom-[84px] h-[min(640px,calc(100vh_-_108px))]' : 'bottom-6 h-[min(640px,calc(100vh_-_48px))]')
+    : floating ? cn(FLOAT, lift ? 'bottom-[96px] h-[min(640px,calc(100vh_-_120px))]' : 'bottom-6 h-[min(640px,calc(100vh_-_48px))]')
     : PLACE[form as Exclude<SheetForm, 'float'>];
   const style = floating ? { transformOrigin: 'bottom right', ...drag.style, ...resize.style } : leaf ? { width: w } : undefined;
 
   return (
     <motion.aside
-      ref={floating ? (el: HTMLElement | null) => { drag.ref.current = el; } : undefined}
+      ref={(el: HTMLElement | null) => { asideRef.current = el; if (floating) drag.ref.current = el; }}
       // 静态的（/dev/ui）标成 static，focusAssistant 这类找附页的地方跳过它
       data-assistant-sheet={fixed ? '' : 'static'}
       {...a11y}
@@ -169,7 +185,7 @@ export function Sheet({ conv, form, frame = 'fixed' }: SheetProps) {
         {conv.backend && <Footer conv={conv} floating={form === 'overlay' || form === 'float' || form === 'sheet'} register={fixed} safeBottom={form === 'sheet'} />}
       </div>
       {/* 手柄放在 DOM 最后：Tab 顺序在页脚之后 */}
-      {leaf && <WidthHandle form={form} width={w} vw={vw} />}
+      {leaf && <WidthHandle form={form} width={w} vw={vw} onPreview={setPreview} />}
       {floating && resize.handles}
     </motion.aside>
   );
@@ -179,22 +195,23 @@ export function Sheet({ conv, form, frame = 'fixed' }: SheetProps) {
  * 附页左边缘的宽度手柄（§3.3）。并排时拖动只画一条参考线，松手才写入宽度（主纸只重排一次）；
  * 覆盖时实时改。← 加宽、→ 变窄（Shift 一次 64），Home 最窄、End 最宽，Enter 或双击还原 400。
  */
-function WidthHandle({ form, width, vw }: { form: 'bound' | 'overlay'; width: number; vw: number }) {
+function WidthHandle({ form, width, vw, onPreview }: { form: 'bound' | 'overlay'; width: number; vw: number; onPreview: (n: number | null) => void }) {
   const { min, max } = sheetWidthRange(form, vw);
   const [guide, setGuide] = useState<number | null>(null);
-  const gesture = useRef<{ id: number; x: number; width: number; next: number } | null>(null);
-  const fit = (n: number) => Math.min(max, Math.max(min, Math.round(n)));
-  const commit = (n: number) => useAssistantDock.getState().setWidth(fit(n));
+  // 形态和范围在按下时定住：拖动中不因为宽度跨过并排的门槛而换形态
+  const gesture = useRef<{ id: number; x: number; width: number; next: number; form: 'bound' | 'overlay'; min: number; max: number } | null>(null);
+  const fit = (n: number, lo = min, hi = max) => Math.min(hi, Math.max(lo, Math.round(n)));
+  const commit = (n: number, lo = min, hi = max) => useAssistantDock.getState().setWidth(fit(n, lo, hi));
   const release = () => {
     document.body.style.removeProperty('cursor');
     document.body.style.removeProperty('user-select');
   };
-  useEffect(() => release, []);
+  useEffect(() => () => { release(); onPreview(null); }, [onPreview]);
 
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     if (!e.isPrimary || e.button !== 0) return;
     e.preventDefault();
-    gesture.current = { id: e.pointerId, x: e.clientX, width, next: width };
+    gesture.current = { id: e.pointerId, x: e.clientX, width, next: width, form, min, max };
     e.currentTarget.setPointerCapture(e.pointerId);
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
@@ -204,9 +221,9 @@ function WidthHandle({ form, width, vw }: { form: 'bound' | 'overlay'; width: nu
     const g = gesture.current;
     if (!g || g.id !== e.pointerId) return;
     // 手柄在左边：往左拖是加宽
-    g.next = fit(g.width + g.x - e.clientX);
-    if (form === 'bound') setGuide(g.next);
-    else commit(g.next);
+    g.next = fit(g.width + g.x - e.clientX, g.min, g.max);
+    if (g.form === 'bound') setGuide(g.next);
+    else onPreview(g.next);
   };
   const finish = (e: PointerEvent<HTMLDivElement>) => {
     const g = gesture.current;
@@ -215,7 +232,8 @@ function WidthHandle({ form, width, vw }: { form: 'bound' | 'overlay'; width: nu
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     release();
     setGuide(null);
-    if (g.next !== g.width) commit(g.next);
+    onPreview(null);
+    if (g.next !== g.width) commit(g.next, g.min, g.max);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const step = e.shiftKey ? 64 : 16;

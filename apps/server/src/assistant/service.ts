@@ -247,7 +247,13 @@ export class AssistantService implements ToolHost {
       return;
     }
     const agent = this.agents.get(id); if (!agent) throw new ConflictError('Agent 连接已结束');
-    agent.answer(request, value); s.questions = s.questions.filter(q => q.id !== request); s.status = s.questions.length ? 'waiting' : 'running'; this.flush(s);
+    agent.answer(request, value);
+    // 许可答完便笺就没了：正文里留一行记下允许还是拒绝（不带 undoToken，归进处理过程）
+    if (question.kind === 'approval') {
+      const what = question.title.split('\n')[0]?.trim() || '这次操作';
+      s.messages.push({ id: randomUUID(), role: 'tool', text: `${value === 'approve' ? '已允许' : '已拒绝'}：${what}`, createdAt: Date.now() });
+    }
+    s.questions = s.questions.filter(q => q.id !== request); s.status = s.questions.length ? 'waiting' : 'running'; this.flush(s);
   }
   stop(id: string): Promise<void> {
     const existing = this.stopping.get(id); if (existing) return existing;

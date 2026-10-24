@@ -90,11 +90,21 @@ export function clampPosition(position: Position, width: number, height: number,
 
 // ------------------------------------------------------------------ 文案
 
-export const EFFORT_LABEL: Record<string, string> = { minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', off: '关闭' };
+export const EFFORT_LABEL: Record<string, string> = { minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '极高', off: '关闭' };
 export const BACKEND_LABEL: Record<AssistantBackend, string> = { codex: 'Codex', pi: 'Pi', dsh: 'DSH' };
 
-/** 按 id 查模型名，查不到原样返回 */
-export const modelLabel = (id: string, models?: readonly AssistantModel[]) => models?.find(m => m.id === id)?.name ?? id;
+/** 按 id 查模型名；查不到时 DSH 那种 JSON 数组 id（["fake","sonnet"]）取最后一段，其余原样返回 */
+export function modelLabel(id: string, models?: readonly AssistantModel[]) {
+  const name = models?.find(m => m.id === id)?.name;
+  if (name) return name;
+  if (id.startsWith('[')) {
+    try {
+      const parts: unknown = JSON.parse(id);
+      if (Array.isArray(parts) && parts.length && parts.every(p => typeof p === 'string')) return parts.at(-1) as string;
+    } catch { /* 不是 JSON */ }
+  }
+  return id;
+}
 
 /** 压成一行，截到 n 个字，超出加省略号 */
 export function clip(text: string, n: number) {
@@ -202,14 +212,30 @@ export function rowPreview(message: AssistantMessage) {
 
 export interface NoteSummary { label: string; parts: { text: string; tone?: 'danger' }[]; totalMs: number; running: boolean }
 
-/** 旁注组头：运行中写正在做什么；结束后写「思考 7.0 秒，查询图库 ×3、看图」，后面接失败和中断 */
-export function noteSummary(messages: readonly AssistantMessage[], now: number): NoteSummary {
+/** 几段时间的并集总长：重叠的部分只算一次 */
+export function unionMs(spans: readonly (readonly [number, number])[]) {
+  const sorted = spans.map(([a, b]) => [a, Math.max(a, b)] as const).sort((x, y) => x[0] - y[0]);
+  if (!sorted.length) return 0;
+  let total = 0, [start, end] = sorted[0]!;
+  for (const [a, b] of sorted.slice(1)) {
+    if (a > end) { total += end - start; start = a; end = b; }
+    else end = Math.max(end, b);
+  }
+  return total + end - start;
+}
+
+/**
+ * 旁注组头：运行中写正在做什么；结束后写「思考 7.0 秒，查询图库 ×3、看图」，后面接失败和中断。
+ * waiting：会话在等你批准，运行中的那一步写「等你批准：执行命令」
+ */
+export function noteSummary(messages: readonly AssistantMessage[], now: number, waiting = false): NoteSummary {
   const thoughts = messages.filter(m => m.reasoning);
   const tools = messages.filter(m => !m.reasoning && m.role === 'tool');
   const runningTools = tools.filter(m => m.tool?.status === 'running');
   const thinking = thoughts.some(m => m.reasoning!.status === 'running');
   let label: string;
-  if (runningTools.length) {
+  if (runningTools.length && waiting) label = `等你批准：${toolLabel(runningTools.at(-1)!.text).label}`;
+  else if (runningTools.length) {
     const doing = runningLabel(runningTools.at(-1)!.text);
     label = runningTools.length > 1 ? andMore(doing, `等 ${runningTools.length} 项`) : doing;
   }
@@ -217,7 +243,8 @@ export function noteSummary(messages: readonly AssistantMessage[], now: number):
   else {
     const segments: string[] = [];
     if (thoughts.length) {
-      const ms = thoughts.reduce((sum, m) => sum + Math.max(0, (m.reasoning!.finishedAt ?? m.reasoning!.startedAt) - m.reasoning!.startedAt), 0);
+      // 几段思考可能重叠（并行的子任务），按并集算，不会比整段还长
+      const ms = unionMs(thoughts.map(m => [m.reasoning!.startedAt, m.reasoning!.finishedAt ?? m.reasoning!.startedAt] as const));
       segments.push(`思考 ${formatDuration(ms)}`);
     }
     if (tools.length) {
@@ -254,7 +281,8 @@ export function currentActivity(session: Pick<AssistantSession, 'status' | 'mess
   const writing = last?.role === 'assistant' && !last.reasoning && Boolean(last.text);
   return {
     label: session.status === 'waiting' ? '等你回应' : tool ? runningLabel(tool.text) : thinking ? '正在思考' : writing ? '正在回复' : '等模型回应',
-    detail: session.status === 'waiting' ? '' : tool?.tool?.progress || tool?.tool?.input?.split('\n').filter(Boolean).slice(0, 3).join(' ') || thinking?.reasoning?.text.slice(-160) || '',
+    // 参数是 JSON（SQL、operationId）时取第一个字符串值，和旁注行的预览一样
+    detail: session.status === 'waiting' ? '' : tool?.tool?.progress || (tool ? rowPreview(tool) : '') || thinking?.reasoning?.text.slice(-160) || '',
     startedAt: tool?.tool?.startedAt ?? thinking?.reasoning?.startedAt ?? session.messages[index]?.createdAt,
   };
 }
@@ -330,13 +358,14 @@ export interface Turn {
 /**
  * 把消息排成一轮一轮（§6.1）。
  * 连续的思考和工具并成一条旁注；夹在里面的勘误条先缓存，等这段过程结束再按原顺序接在旁注后面。
- * 图 n 只数有图的卡、表 n 只数有列的卡，在整个会话里各自连续编号。
+ * 图 n 只数有图的卡、表 n 只数有列的卡，每轮各自从 1 编号（模型看不到编号，回答里的「表 1」指的是本轮的第一张）。
  */
 export function layoutTranscript(messages: readonly AssistantMessage[], status: AssistantSession['status']): Turn[] {
   const turns: Turn[] = [];
   let turn: Turn | null = null, note: Extract<TurnItem, { kind: 'note' }> | null = null, held: TurnItem[] = [];
   let figures = 0, tables = 0;
   const open = (request: AssistantMessage | null): Turn => {
+    figures = 0; tables = 0;
     const answer = request && !request.resumeOf ? parseAnswerText(request.text) : null;
     const t: Turn = { id: `turn:${request?.id ?? 'start'}`, request, variant: request?.resumeOf ? 'resume' : answer ? 'answer' : 'ask', items: [] };
     if (answer) t.answerTo = answer.title;

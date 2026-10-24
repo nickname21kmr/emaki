@@ -576,8 +576,8 @@ export class MockDataSource implements DataSource {
     });
   }
 
-  /** 7 天内有文件夹首次导入：at = 最晚的导入时间，count = 这些文件夹里计入张数的图 */
-  private recentImport(): { at: string; count: number } | null {
+  /** 7 天内有文件夹首次导入：at = 最晚的导入时间，count = 这些文件夹里计入张数的图，pending = 其中还没识别的 */
+  private recentImport(): { at: string; count: number; pending: number } | null {
     const since = new Date(this.now - 7 * DAY).toISOString();
     const roots = this.db.settings.libraryRoots.filter((r) => r.importedAt && r.importedAt >= since);
     if (!roots.length) return null;
@@ -585,6 +585,7 @@ export class MockDataSource implements DataSource {
     return {
       at: roots.reduce((m, r) => (r.importedAt! > m ? r.importedAt! : m), roots[0]!.importedAt!),
       count: this.idx.visible.filter((img) => ids.has(img.libraryRootId) && this.status(img) !== 'excluded').length,
+      pending: this.idx.visible.filter((img) => ids.has(img.libraryRootId) && this.status(img) !== 'excluded' && !img.tagged && !this.inComicRoot(img)).length,
     };
   }
 

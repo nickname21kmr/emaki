@@ -38,8 +38,8 @@ export function usePriorityKeys(
       if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
       if (!wanted.has(e.key)) return;
       if (isTypingTarget(e.target)) return;
-      // 弹窗 / 菜单里按键属于它们自己
-      if (e.target instanceof Element && e.target.closest('[role="dialog"],[role="menu"],[role="listbox"]')) return;
+      // 弹窗 / 菜单 / 助手附页里按键属于它们自己
+      if (e.target instanceof Element && e.target.closest('[role="dialog"],[role="menu"],[role="listbox"],[data-assistant-sheet]')) return;
       if (handlerRef.current(e.key, e) === false) return;
       e.preventDefault();
       e.stopPropagation();

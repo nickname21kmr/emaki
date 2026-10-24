@@ -1,10 +1,10 @@
 import { inferCoverFocus, type ImageItem, type ListImagesQuery } from '@emaki/shared';
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Play, RotateCw } from 'lucide-react';
 import { Link } from 'react-router';
 import { collectImages, slideFilter, useSlideshow } from '@/components/media/lightbox/slideshow';
 import { Thumb } from '@/components/media/Thumb';
-import { Button, SectionTitle, Skeleton, Spinner } from '@/components/ui';
+import { Button, SectionTitle, Spinner } from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatDimensions } from '@/lib/format';
 import { useHotkey } from '@/lib/hotkeys';
@@ -36,6 +36,8 @@ function useDailyPlate(seed: number) {
       return null;
     },
     staleTime: Infinity,
+    // 换一张时先留着上一张，不闪回占位
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -49,7 +51,8 @@ export function DailyPlate() {
   useHotkey('r', next);
 
   const img = plate.data;
-  if (plate.isSuccess && !img) return null;
+  // 抽到之前什么都不画：可能根本没有能抽的（模糊开着又没分级过），先放骨架再收掉会跳一下
+  if (!img) return null;
   return (
     <section aria-label="今日一枚">
       <SectionTitle
@@ -62,7 +65,7 @@ export function DailyPlate() {
       >
         今日一枚
       </SectionTitle>
-      {img ? <Plate key={img.id} img={img} seed={seed} /> : <Skeleton className="h-[440px] w-full rounded-[var(--radius-plate)]" />}
+      <Plate key={img.id} img={img} seed={seed} />
     </section>
   );
 }

@@ -44,9 +44,15 @@ interface DockState {
   /** 看图器里的插槽（AssistantDarkroomSlot 挂上） */
   slotEl: HTMLElement | null;
   setSlotEl: (el: HTMLElement | null) => void;
+  /** 看图器里给读屏播报区的常驻宿主（AssistantDarkroomSlot 挂上） */
+  liveEl: HTMLElement | null;
   /** 附页可见（含退场动画），给 Spacer 和 CSS 变量用 */
   shown: boolean;
   setShown: (v: boolean) => void;
+  /** 挂着的附页个数（含退场中的）。收起时没有附页就直接清 shown，不等退场回调 */
+  sheets: number;
+  /** 附页挂上时调，返回卸下时调的函数 */
+  mountSheet: () => () => void;
   /** 胶囊状态，由 useConversation 写 */
   lastStatus: AssistantSession['status'] | null;
   /** 这一轮从什么时候开始跑（最后一条提问的 createdAt），胶囊计时用 */
@@ -68,8 +74,9 @@ interface DockState {
 
 export const useAssistantDock = create<DockState>((set, get) => ({
   open: false,
-  // 打开时 Spacer 先到位（shown），清掉胶囊上的「有新回复」；收起后 shown 等退场动画结束再清
-  setOpen: (open) => set(open ? { open, unseen: null, shown: true } : { open, wantsFocus: false }),
+  // 打开时 Spacer 先到位（shown），清掉胶囊上的「有新回复」；收起后 shown 等附页退场卸下再清，
+  // 还没有附页挂上（刚点开就收起）就马上清
+  setOpen: (open) => set(open ? { open, unseen: null, shown: true } : { open, wantsFocus: false, shown: get().sheets > 0 }),
   toggle: () => (get().open ? closeAssistant() : openAssistant()),
   layout: read(LAYOUT_KEY) === 'float' ? 'float' : 'leaf',
   setLayout: (layout) => { write(LAYOUT_KEY, layout); set({ layout }); },
@@ -81,8 +88,17 @@ export const useAssistantDock = create<DockState>((set, get) => ({
   },
   slotEl: null,
   setSlotEl: (slotEl) => set({ slotEl }),
+  liveEl: null,
   shown: false,
   setShown: (shown) => set({ shown }),
+  sheets: 0,
+  mountSheet: () => {
+    set((s) => ({ sheets: s.sheets + 1 }));
+    return () => set((s) => {
+      const sheets = Math.max(0, s.sheets - 1);
+      return { sheets, shown: s.open || sheets > 0 ? s.shown : false };
+    });
+  },
   lastStatus: null,
   runStartedAt: null,
   setStatus: (lastStatus, runStartedAt) => set({ lastStatus, runStartedAt }),
@@ -93,7 +109,9 @@ export const useAssistantDock = create<DockState>((set, get) => ({
   setComposer: (composer) => {
     set({ composer });
     if (composer && get().wantsFocus) {
+      // 重新挂上时值已经带着草稿，光标放到末尾
       composer.focus({ preventScroll: true });
+      composer.setSelectionRange(composer.value.length, composer.value.length);
       set({ wantsFocus: false });
     }
   },
@@ -127,8 +145,9 @@ export function closeAssistant() {
   dock.setOpen(false);
   if (!inside) return;
   const opener = dock.opener;
-  if (opener?.isConnected && !opener.closest(LIVE_SHEET)) opener.focus({ preventScroll: true });
-  else if (useLightbox.getState().open) document.querySelector<HTMLElement>('[data-lightbox-root]')?.focus({ preventScroll: true });
+  // 看图器里还给看图器本身：还给顶栏「助手」按钮会弹出 tooltip，下一下 Esc 被它吃掉
+  if (useLightbox.getState().open) document.querySelector<HTMLElement>('[data-lightbox-root]')?.focus({ preventScroll: true });
+  else if (opener?.isConnected && !opener.closest(LIVE_SHEET)) opener.focus({ preventScroll: true });
   else useAssistantDock.setState({ focusCapsule: true });
 }
 
@@ -152,18 +171,24 @@ export function focusComposer(caretEnd = false) {
 
 /** 焦点移进附页：优先输入框；没有页脚时给标 data-autofocus 的控件（「去设置」或标题按钮），再不行给第一个按钮 */
 export function focusAssistant() {
-  useAssistantDock.setState({ wantsFocus: false });
-  if (focusComposer()) return;
+  if (focusComposer()) { useAssistantDock.setState({ wantsFocus: false }); return; }
   const sheet = document.querySelector(LIVE_SHEET);
-  (sheet?.querySelector<HTMLElement>('[data-autofocus]') ?? sheet?.querySelector<HTMLElement>('button'))?.focus({ preventScroll: true });
+  const target = sheet?.querySelector<HTMLElement>('[data-autofocus]') ?? sheet?.querySelector<HTMLElement>('button');
+  // 附页还没挂上（胶囊还在退场、连按两次）：留着 wantsFocus，输入框挂上时接走
+  if (!target) { useAssistantDock.setState({ wantsFocus: true }); return; }
+  useAssistantDock.setState({ wantsFocus: false });
+  target.focus({ preventScroll: true });
 }
 
 // ------------------------------------------------------------------ 形态
 
-/** 选形态（§2.2）：暗房 > 底页 > 浮页 > 并排（主纸留得下 720）> 覆盖 */
+/** 暗房里并排放附页的最小视口宽度；再窄图会被挤没，改成看图器里的底页 */
+export const DARKROOM_MIN = 900;
+
+/** 选形态（§2.2）：底页（窄屏）> 暗房 > 浮页 > 并排（主纸留得下 720）> 覆盖 */
 export function sheetForm(vw: number, layout: Layout, width: number, lightboxOpen: boolean, hasSlot: boolean): SheetForm {
-  if (lightboxOpen && hasSlot) return 'darkroom';
   if (vw < 640) return 'sheet';
+  if (lightboxOpen && hasSlot) return vw >= DARKROOM_MIN ? 'darkroom' : 'sheet';
   if (layout === 'float' && vw >= 900) return 'float';
   // 76 侧栏 + 8 + 720 主纸 + 8 缝 + W + 8 右距
   if (layout === 'leaf' && vw >= 812 + width) return 'bound';

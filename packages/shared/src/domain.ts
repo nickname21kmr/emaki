@@ -368,8 +368,11 @@ export interface LibraryStats {
   shelvedCount: number;
   /** 未识别里还没跑过识别的张数（unrecognizedCount 的子集） */
   untaggedCount: number;
-  /** 7 天内有文件夹首次导入：at = 最近一次首次导入时间，count = 这些文件夹里计入张数的图；否则 null */
-  recentImport: { at: ISODate; count: number } | null;
+  /**
+   * 7 天内有文件夹首次导入：at = 最近一次首次导入时间，count = 这些文件夹里计入张数的图，
+   * pending = 其中还没识别的（口径同 pendingTagCount）；否则 null
+   */
+  recentImport: { at: ISODate; count: number; pending: number } | null;
   /** 插画里最晚的入库时间 */
   lastAddedAt: ISODate | null;
   /** 计入张数的图按类型计数（各项之和 = imageCount） */
