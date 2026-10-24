@@ -113,7 +113,7 @@ function Reader({ data }: { data: GetCollectionResponse }) {
     for (const s of [spreads[cur + 1], spreads[cur - 1]]) {
       for (const no of s ?? []) {
         const pg = pages[no - 1];
-        if (pg) new Image().src = imageUrl.file(pg.imageId);
+        if (pg) new Image().src = imageUrl.file(pg.imageId, pg.modifiedAt);
       }
     }
   }, [cur, spreads, pages]);
@@ -231,12 +231,12 @@ function Reader({ data }: { data: GetCollectionResponse }) {
                     className="overflow-hidden"
                     style={{ aspectRatio: `${pg.width} / ${pg.height}`, height: 'calc(100vh - 146px)', maxWidth }}
                   >
-                    <Thumb image={{ id: pg.imageId, rating: pg.rating, dominantColor: pg.dominantColor }} width={960} forceBlur blurBadge="center" className="size-full" />
+                    <Thumb image={{ id: pg.imageId, rating: pg.rating, dominantColor: pg.dominantColor, modifiedAt: pg.modifiedAt }} width={960} forceBlur blurBadge="center" className="size-full" />
                   </button>
                 ) : (
                   <img
                     key={pg.imageId}
-                    src={imageUrl.file(pg.imageId)}
+                    src={imageUrl.file(pg.imageId, pg.modifiedAt)}
                     alt=""
                     draggable={false}
                     decoding="async"
@@ -304,7 +304,7 @@ function Filmstrip({
               aria-label={`第 ${pg.pageNo} 页`}
             >
               <Thumb
-                image={{ id: pg.imageId, rating: pg.rating, dominantColor: pg.dominantColor }}
+                image={{ id: pg.imageId, rating: pg.rating, dominantColor: pg.dominantColor, modifiedAt: pg.modifiedAt }}
                 width={240}
                 blurBadge="none"
                 forceBlur={blurred(pg)}

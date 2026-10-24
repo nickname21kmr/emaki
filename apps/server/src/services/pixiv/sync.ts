@@ -11,8 +11,9 @@ import { createPixivMatcher, type PixivMatcher } from './match.ts';
 import type { PixivDiscover } from './discovery.ts';
 import { cachedArtwork, cacheArtwork } from './cache.ts';
 
+// Pixiv 也能认出动图的角色：动图不进未识别，但这里一起查。
 // 漫画页在设置关掉「未识别里也列出漫画页」时不查（QUEUE_KINDS_SQL）
-const ELIGIBLE = `${QUEUE_KINDS_SQL} AND i.shelved_at IS NULL AND i.original_at IS NULL
+const ELIGIBLE = `(${QUEUE_KINDS_SQL} OR i.content_kind = 'animated') AND i.shelved_at IS NULL AND i.original_at IS NULL
   AND i.collection_id IS NULL AND NOT ${IN_COMIC_I} AND i.source_site='pixiv' AND i.source_post_id IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id=i.id)
   AND NOT EXISTS (SELECT 1 FROM character_suggestions cs WHERE cs.image_id=i.id AND cs.source='tagger' AND cs.score>=0.8)
@@ -48,13 +49,21 @@ export function queuePixivImages(ctx: SqliteContext, ids?: number[]): void {
   const automatic = ids !== undefined;
   ctx.db.prepare(`INSERT INTO pixiv_character_checks(image_id,post_id,modified_at)
     SELECT i.id,i.source_post_id,i.modified_at FROM v_counted_images i WHERE ${ELIGIBLE}
-    AND ${automatic ? 'i.id IN (SELECT value FROM json_each(?))' : QUEUE}
+    ${automatic ? 'AND i.id IN (SELECT value FROM json_each(?))' : ''}
     ON CONFLICT(image_id) DO UPDATE SET post_id=excluded.post_id,modified_at=excluded.modified_at,checked_at=NULL,result=NULL
     WHERE pixiv_character_checks.post_id<>excluded.post_id OR pixiv_character_checks.modified_at<>excluded.modified_at
     ${automatic ? '' : `OR COALESCE(pixiv_character_checks.result,'') NOT IN ('linked','original','suggested','dismissed')
       OR (pixiv_character_checks.result='suggested' AND EXISTS
         (SELECT 1 FROM character_suggestions cs WHERE cs.image_id=excluded.image_id))`}`)
     .run(...(automatic ? [JSON.stringify(ids)] : []));
+}
+
+/** Backfill only animations missed by the previous static-only eligibility rule. */
+export function queueUnseenPixivAnimations(ctx:SqliteContext):void {
+  const ids=ctx.db.prepare(`SELECT i.id FROM v_counted_images i WHERE ${ELIGIBLE}
+    AND i.content_kind='animated' AND i.tagged_at IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM pixiv_character_checks p WHERE p.image_id=i.id)`).pluck().all() as number[];
+  if(ids.length) queuePixivImages(ctx,ids);
 }
 
 /** Explicit refresh only invalidates posts that this run can actually process. */
@@ -75,10 +84,14 @@ export async function syncPixivCharacters(
   client: Pick<PixivClient, 'artwork'> = new PixivClient(),
   intervalMs = 1000,
   discover?: PixivDiscover,
+  options: { imageIds?: number[] } = {},
 ): Promise<string> {
   const { db } = ctx;
+  const scope=options.imageIds===undefined ? '' : ' AND i.id IN (SELECT value FROM json_each(@imageIds))';
+  const scopeParams=options.imageIds===undefined ? {} : {imageIds:JSON.stringify(options.imageIds)};
   const posts = db.prepare(`SELECT DISTINCT i.source_post_id AS id FROM v_counted_images i
-    WHERE ${READY} ORDER BY i.source_post_id`).all(backoffPosts()) as { id: string }[];
+    WHERE ${PENDING} AND i.source_post_id NOT IN (SELECT value FROM json_each(@backoff))${scope}
+    ORDER BY i.source_post_id`).all({...scopeParams,backoff:backoffPosts()}) as { id: string }[];
   job.setTotal(posts.length);
   let linked = 0, original = 0, suggested = 0, unavailable = 0, unmatched = 0, failed = 0;
   let requested = 0, cached = 0;
@@ -91,11 +104,11 @@ export async function syncPixivCharacters(
     if (!match) { const u = makeCatalog(); match = createPixivMatcher(db, u.catalog, u.copyrights); }
     return match;
   };
-  const current = db.prepare(`SELECT i.id FROM v_counted_images i WHERE ${PENDING} AND i.source_post_id=?`);
+  const current = db.prepare(`SELECT i.id FROM v_counted_images i WHERE ${PENDING} AND i.source_post_id=@postId${scope}`);
   // result：linked / original / suggested / unmatched / unavailable / skipped / dismissed，补跑据此决定重不重试
   const complete = db.prepare(`UPDATE pixiv_character_checks SET checked_at=?,result=? WHERE image_id=?`);
   const completePost = (id: string, result: string) => db.transaction(() => {
-    for (const row of current.all(id) as {id:number}[]) complete.run(new Date(ctx.clock()).toISOString(),result,row.id);
+    for (const row of current.all({...scopeParams,postId:id}) as {id:number}[]) complete.run(new Date(ctx.clock()).toISOString(),result,row.id);
   })();
   const insert = db.prepare("INSERT OR IGNORE INTO image_characters (image_id,character_id,origin,score,added_at) VALUES (?,?,'tagger',NULL,?)");
   // 自建角色的建议：danbooru_tag 写伪标签占主键，character_id 写真外键（读的时候看 character_id）
@@ -180,7 +193,7 @@ export async function syncPixivCharacters(
     const outcome = isOriginal ? 'original' : noMatch ? 'unmatched' : result.automatic ? 'linked' : 'suggested';
     const ids: number[] = [];
     db.transaction(() => {
-      const rows = current.all(post.id) as { id: number }[];
+      const rows = current.all({...scopeParams,postId:post.id}) as { id: number }[];
       const now = new Date(ctx.clock()).toISOString();
       for (const row of rows) {
         // 只处理未识别图片，网络请求期间完成的模型/手动关联也不能追加。

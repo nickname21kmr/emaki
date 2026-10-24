@@ -47,6 +47,7 @@ interface PageRow {
   dominant_color: string | null;
   tagged_at: string | null;
   added_at: string;
+  modified_at: string;
   has_char: number;
 }
 
@@ -96,7 +97,7 @@ export class CollectionQueries {
     const pagesBy = new Map<number, PageRow[]>();
     for (const p of db
       .prepare(
-        `SELECT i.id, i.collection_id, i.page_no, i.width, i.height, i.rating, i.content_kind, i.dominant_color, i.tagged_at, i.added_at,
+        `SELECT i.id, i.collection_id, i.page_no, i.width, i.height, i.rating, i.content_kind, i.dominant_color, i.tagged_at, i.added_at, i.modified_at,
                 EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id) AS has_char
          FROM v_counted_images i WHERE i.collection_id IS NOT NULL ORDER BY i.collection_id, i.page_no`,
       )
@@ -246,6 +247,7 @@ export class CollectionQueries {
     const data = this.derived.get();
     const pages: CollectionPage[] = l.pages.map((p, i) => ({
       imageId: toId(p.id),
+      modifiedAt: p.modified_at,
       pageNo: i + 1,
       width: p.width,
       height: p.height,

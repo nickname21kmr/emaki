@@ -8,7 +8,7 @@ import { useBlurPrefs, usePrefs } from '@/lib/stores';
 import { useCoverPosition } from './useCoverPosition';
 
 /** kind 只给逐张的图传（照片、文字按偏好模糊）；封面、头像不传，只按分级 */
-type ThumbSource = Pick<ImageItem, 'id' | 'dominantColor' | 'rating'> & { kind?: ContentKind | null };
+type ThumbSource = Pick<ImageItem, 'id' | 'dominantColor' | 'rating'> & Partial<Pick<ImageItem,'modifiedAt'>> & { kind?: ContentKind | null };
 
 /**
  * 模糊时的标记放哪（MG-4）：
@@ -67,8 +67,8 @@ export function Thumb({
   /** 大幅展示时先用缩略图占位，原图解码完成后切换；失败时保留缩略图。 */
   original?: boolean;
 }) {
-  const preview = imageUrl.thumb(image.id, width);
-  const full = original ? imageUrl.file(image.id) : null;
+  const preview = imageUrl.thumb(image.id, width, image.modifiedAt);
+  const full = original ? imageUrl.file(image.id, image.modifiedAt) : null;
   const [decoded, setDecoded] = useState<string | null>(null);
   const src = full && decoded === full ? full : preview;
   useEffect(() => {

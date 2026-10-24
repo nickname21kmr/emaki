@@ -19,7 +19,7 @@ import { walkImages, type WalkEntry } from '../fs/walk.ts';
 import { probeImage } from '../image/probe.ts';
 import { backfillClassification } from '../classify/backfill.ts';
 import { ComicAreas } from '../classify/comicAreas.ts';
-import { classifyContent, CLASSIFIER_VERSION } from '../classify/rules.ts';
+import { INSERT_IMAGE_SQL, imageClassification } from './imageRow.ts';
 import { backfillSources } from '../source/backfill.ts';
 import { parseSource } from '../source/parseSource.ts';
 import { htmlAnimationCache, readHtmlAnimation } from '../image/htmlAnimation.ts';
@@ -335,12 +335,7 @@ export class Scanner {
     const nowIso = isoFromMs(this.now());
 
     const stmts = {
-      insert: db.prepare(`INSERT INTO images (root_id, rel_path, file_name, width, height, bytes, format, sha256,
-          source_site, source_post_id, source_artist, source_url, added_at, modified_at,
-          camera, content_kind, content_kind_source, content_kind_evidence, content_kind_version, rating, frame_count)
-        VALUES (@rootId, @relPath, @fileName, @width, @height, @bytes, @format, @sha256,
-          @site, @postId, @artist, @url, @addedAt, @modifiedAt,
-          @camera, @kind, @kindSource, @kindEvidence, @kindVersion, @rating, @frameCount)`),
+      insert: db.prepare(INSERT_IMAGE_SQL),
       // 内容变了要重新识别：标签、主题、质量分都清空；手动改过的类型保留（BI-14 ②：按没有标签重判）
       content: db.prepare(`UPDATE images SET width=@width, height=@height, bytes=@bytes, format=@format, sha256=@sha256, modified_at=@modifiedAt, frame_count=@frameCount,
           dhash=NULL, dominant_color=NULL, thumb_at=NULL, decode_error=NULL, tagged_at=NULL, tagger_model=NULL,
@@ -443,18 +438,7 @@ export class Scanner {
       }
       const common = { width: probe.width, height: probe.height, frameCount: probe.pages, bytes: e.bytes, format: probe.format, sha256: sha, modifiedAt: isoFromMs(e.mtimeMs) };
       // 入库 / 内容变化时按文件名、路径、尺寸、格式、相机判一次类型；打标签后 writer 会再按标签重判
-      const cls = classifyContent({
-        fileName: baseName(e.relPath),
-        relPath: e.relPath,
-        width: probe.width,
-        height: probe.height,
-        format: probe.format,
-        pages: probe.pages,
-        camera: probe.camera,
-        tags: null,
-        comicRoot: !!comics.of(e.rootId, e.relPath),
-      });
-      const kindCols = { camera: probe.camera, kind: cls.kind, kindSource: cls.source, kindEvidence: cls.evidence, kindVersion: CLASSIFIER_VERSION };
+      const kindCols = imageClassification(probe, e.relPath, !!comics.of(e.rootId, e.relPath));
       if (item.kind === 'changed') {
         if (sha === item.row.sha256) ops.push({ t: 'meta', p: { id: item.row.id, bytes: e.bytes, modifiedAt: common.modifiedAt } });
         else ops.push({ t: 'content', p: { id: item.row.id, ...common, ...kindCols } });

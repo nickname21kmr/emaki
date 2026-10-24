@@ -11,7 +11,7 @@ import { CopyrightResolver } from '../catalog/copyrights.ts';
 import { TagResultWriter } from '../tagger/writer.ts';
 import { PixivAccessError, PixivClient, type PixivArtwork } from './client.ts';
 import { createPixivMatcher } from './match.ts';
-import { clearPendingPixivCache, pendingPixivCount, queuePixivImages, resetPixivBackoff, syncPixivCharacters } from './sync.ts';
+import { clearPendingPixivCache, pendingPixivCount, queuePixivImages, queueUnseenPixivAnimations, resetPixivBackoff, syncPixivCharacters } from './sync.ts';
 import { cacheArtwork } from './cache.ts';
 
 let db: Db;
@@ -48,6 +48,43 @@ beforeEach(() => {
   queuePixivImages(ctx);
 });
 afterEach(() => db.close());
+
+it.each(['html','gif','webp'])('动图也能自动登记与手动补跑 Pixiv，保持动图分类（%s）',async format=>{
+  db.exec('DELETE FROM pixiv_character_checks');
+  db.prepare("UPDATE images SET format=?,content_kind='animated' WHERE id=1").run(format);
+  db.exec("UPDATE images SET content_kind='photo' WHERE id=2");
+  queuePixivImages(ctx,[1,2]);
+  expect(pendingPixivCount(ctx)).toBe(1);
+  db.exec('DELETE FROM pixiv_character_checks');
+  queuePixivImages(ctx);
+  expect(pendingPixivCount(ctx)).toBe(1);
+  const client={artwork:vi.fn().mockResolvedValue(art(1,['アリス']))};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(links()).toHaveLength(1);
+  expect(db.prepare('SELECT content_kind FROM images WHERE id=1').pluck().get()).toBe('animated');
+  queuePixivImages(ctx,[1]);
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(client.artwork).toHaveBeenCalledTimes(1);
+});
+
+it('启动补登遗漏动图，不重置已完成、主动撤销或还没识别的记录',()=>{
+  db.exec("DELETE FROM pixiv_character_checks; UPDATE images SET content_kind='animated',tagged_at='before'");
+  queueUnseenPixivAnimations(ctx);
+  expect(pendingPixivCount(ctx)).toBe(2);
+  db.exec("UPDATE pixiv_character_checks SET checked_at='done',result='dismissed'; DELETE FROM pixiv_character_checks WHERE image_id=2; UPDATE images SET tagged_at=NULL WHERE id=2");
+  queueUnseenPixivAnimations(ctx);
+  expect(db.prepare('SELECT image_id,result,checked_at FROM pixiv_character_checks').all()).toEqual([{image_id:1,result:'dismissed',checked_at:'done'}]);
+});
+
+it('指定范围补标签只处理选定图片，同投稿其他待查图片保留',async()=>{
+  const client={artwork:vi.fn().mockResolvedValue(art(1,['アリス']))};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0,undefined,{imageIds:[1]});
+  expect(links()).toHaveLength(1);expect(links()[0]).toMatchObject({image_id:1});
+  expect(pendingPixivCount(ctx)).toBe(1);
+  expect(db.prepare('SELECT checked_at FROM pixiv_character_checks WHERE image_id=2').pluck().get()).toBeNull();
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0,undefined,{imageIds:[]});
+  expect(pendingPixivCount(ctx)).toBe(1);expect(client.artwork).toHaveBeenCalledTimes(1);
+});
 
 it('同投稿后加入的图片和文件变化复用原始标签；未匹配也不重复联网', async () => {
   const client={artwork:vi.fn().mockResolvedValue(art(1,['不认识的名字']))};

@@ -22,6 +22,10 @@ import type {
   ImageDetail,
   ImageFormat,
   ImageItem,
+  ImportImagesBody,
+  ImportImagesResult,
+  ReplaceImageBody,
+  ReplaceImageResult,
   Job,
   JobKind,
   StartJobBody,
@@ -102,7 +106,7 @@ import { hydrateImages, IMAGE_COLS, type ImageRow } from './hydrate.ts';
 import { listImages } from './queries/listImages.ts';
 import { loadSuggestions } from './suggestions.ts';
 import { dismissPixivCharacterChecks } from './pixivChecks.ts';
-import { clearPendingPixivCache, pendingPixivCount, queuePixivImages, resetPixivBackoff, syncPixivCharacters } from '../../services/pixiv/sync.ts';
+import { clearPendingPixivCache, pendingPixivCount, queuePixivImages, queueUnseenPixivAnimations, resetPixivBackoff, syncPixivCharacters } from '../../services/pixiv/sync.ts';
 import { refreshPixivAliases } from '../../services/pixiv/aliases.ts';
 import { createPixivDiscovery } from '../../services/pixiv/discovery.ts';
 import { DanbooruClient } from '../../services/danbooru/client.ts';
@@ -122,6 +126,8 @@ import { applyExclusionRules, applyExclusionRulesTracked, ExclusionQueries, reve
 import { LibraryQueries } from './library.ts';
 import { TagResultWriter } from '../../services/tagger/writer.ts';
 import { moveBack, moveImageFiles, normalizeSubdir, type MoveRow } from './move.ts';
+import { importImages } from './importImages.ts';
+import { replaceImage } from './replaceImage.ts';
 import { artistNames, imageArtists, linkGroups, listArtists as listArtistsQuery, tagNames } from './artists.ts';
 import { artistLinksMessage, linkTags, planArtistLinks } from '../artistEdits.ts';
 import { adoptFromRemovedParents, diskCaseRel, mergeChildRoots, relUnder, type ChildRoot } from './roots.ts';
@@ -155,6 +161,22 @@ export interface SqliteOpenOptions {
  * 文件监听用 Node 自带的 fs.watch（不装 chokidar），相似查重用 MIH（不用 BK-tree）。
  */
 export class SqliteDataSource implements DataSource {
+  async replaceImage(id: ID, body: ReplaceImageBody): Promise<ReplaceImageResult> {
+    return replaceImage(this.ctx,id,body,ids=>{
+      this.collectionsHook(null,ids);
+      this.pipeline.afterImport();
+    });
+  }
+  async importImages(body: ImportImagesBody): Promise<ImportImagesResult> {
+    return importImages(this.ctx, body, {
+      trashImpl: this.importTrashImpl,
+      afterImport: (ids) => {
+        this.collectionsHook(null, ids.length ? ids : 'all');
+        if (ids.length) this.pipeline.afterImport();
+      },
+    });
+  }
+  private readonly importTrashImpl?: TrashImpl;
   /**
    * T01：打开 / 创建 `${dataDir}/emaki.sqlite`，开启 WAL 和外键，跑迁移（db/migrate.ts），
    * 创建 UndoStack 和 JobQueue（runner 由 T07 接上 services/*）。
@@ -294,6 +316,9 @@ export class SqliteDataSource implements DataSource {
         if (synced || s.added + s.updated + s.moved + s.missing + s.restored > 0) ds.refreshCollections('scan');
       },
     });
+    // Register old animations locally as well; network scheduling still follows
+    // the user's Pixiv setting and the normal pipeline.
+    queueUnseenPixivAnimations(ds.ctx);
     const roots = db.prepare('SELECT COUNT(*) FROM library_roots WHERE enabled = 1 AND removed_at IS NULL').pluck().get() as number;
     if (opts.autoJobs !== false && !process.env.EMAKI_NO_AUTOSCAN && roots > 0) {
       ds.requests.requestFull();
@@ -343,6 +368,7 @@ export class SqliteDataSource implements DataSource {
   private readonly exclusions: ExclusionQueries;
 
   protected constructor(db: Db, bus: EventBus, dataDir: string, opts: SqliteOpenOptions) {
+    this.importTrashImpl = opts.trashImpl;
     const jobs = new JobQueue(bus, (kind) => this.pipeline.runner(kind));
     this.ctx = createContext({ db, bus, dataDir, clock: opts.clock ?? Date.now, undo: new UndoStack(), jobs });
     this.thumbs = new ThumbnailService({

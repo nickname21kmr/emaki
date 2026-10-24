@@ -122,6 +122,8 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
     return ds.addLibraryRoot(body);
   });
 
+  app.get('/api/library-roots', async () => (await ds.getSettings()).libraryRoots);
+
   app.patch('/api/library-roots/:id', (req) => {
     const { id } = parse(idParam, req.params);
     const body = parse(

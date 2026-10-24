@@ -23,6 +23,10 @@ import type {
   ID,
   ImageDetail,
   ImageItem,
+  ImportImagesBody,
+  ImportImagesResult,
+  ReplaceImageBody,
+  ReplaceImageResult,
   Job,
   JobKind,
   StartJobBody,
@@ -72,6 +76,8 @@ export type FileResponse =
  * - 修改后要 emit `library-changed`，让前端刷新。
  */
 export interface DataSource {
+  importImages(body: ImportImagesBody): Promise<ImportImagesResult>;
+  replaceImage(id: ID, body: ReplaceImageBody): Promise<ReplaceImageResult>;
   // 统计
   getStats(): Promise<LibraryStats>;
   /** 别册首页：每一类的张数、最近张数和预览（T27） */

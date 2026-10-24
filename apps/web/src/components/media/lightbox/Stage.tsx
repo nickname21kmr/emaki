@@ -10,7 +10,7 @@ import { clampPan, zoomAround, type ZoomApi, type ZoomBounds } from './useZoomPa
 import { EASE_OUT } from '@/lib/motion';
 import type { LightboxRect } from '@/lib/stores';
 
-export type StageMeta = Pick<ImageItem, 'width' | 'height' | 'rating' | 'dominantColor' | 'fileName'>;
+export type StageMeta = Pick<ImageItem, 'width' | 'height' | 'rating' | 'dominantColor' | 'fileName'> & Partial<Pick<ImageItem,'modifiedAt'>>;
 
 /** 图片四周留白：左右给切换箭头，上下给顶栏和缩放提示 */
 const PAD_X = 84;
@@ -18,6 +18,8 @@ const PAD_Y = 68;
 const EASE = EASE_OUT;
 /** 从格子里拿起到居中的时长（秒） */
 const LIFT_S = 0.46;
+const plateTransform = ({ x, y, scale }: { x: number; y: number; scale: number }) =>
+  `translate3d(${x}px, ${y}px, 0) scale(${scale})`;
 
 /**
  * 看图器的舞台：居中显示图片，先 960 缩略图再换原图；滚轮 / 双击缩放，放大后拖动平移。
@@ -194,13 +196,16 @@ export function Stage({
       ? { opacity: 0, x: 0, y: 0, scale: 1 }
       : { opacity: 0, x: direction * 28, y: 0, scale: direction ? 1 : 0.985 };
   const idle = !!slideshow?.idle;
+  const target = back ?? { x: 0, y: 0, scale: returnRect ? 0.96 : 1 };
 
   const plate =
     meta && fit > 0 ? (
       <motion.div
         key={id}
-        initial={initial}
-        animate={back ? { opacity: 1, ...back } : returnRect ? { opacity: 0, x: 0, y: 0, scale: 0.96 } : holding ? initial : { opacity: 1, x: 0, y: 0, scale: 1 }}
+        // A single transform lets Motion use the browser's compositor animation.
+        // Separate x/y/scale values require JS frames and stall when detail UI mounts.
+        initial={{ opacity: initial.opacity, transform: plateTransform(initial) }}
+        animate={{ opacity: holding ? initial.opacity : returnRect && !back ? 0 : 1, transform: plateTransform(holding ? initial : target) }}
         exit={{ opacity: 0 }}
         transition={{ duration: returnRect ? 0.3 : originRect ? LIFT_S : (slideshow?.crossfade ?? 0.42), ease: slideshow ? 'linear' : EASE }}
         className="absolute"
@@ -216,7 +221,7 @@ export function Stage({
           }}
         >
           <StageImage
-            key={id}
+            key={`${id}:${meta.modifiedAt??''}`}
             id={id}
             meta={meta}
             blurred={blurred}
@@ -350,9 +355,9 @@ function StageImage({
       )}
       style={{ backgroundColor: placeholder || thumbLoaded || fullShown ? undefined : meta.dominantColor }}
     >
-      {placeholder && !fullShown && <img src={imageUrl.thumb(id, placeholder)} alt="" draggable={false} className={imgClass} />}
+      {placeholder && !fullShown && <img src={imageUrl.thumb(id, placeholder, meta.modifiedAt)} alt="" draggable={false} className={imgClass} />}
       <img
-        src={imageUrl.thumb(id, 960)}
+        src={imageUrl.thumb(id, 960, meta.modifiedAt)}
         alt=""
         draggable={false}
         // 看图器里正在看的这张优先：网格里几十张缩略图同时在下载时，它不用排队
@@ -368,7 +373,7 @@ function StageImage({
       />
       {!fullFailed && (
         <img
-          src={imageUrl.file(id)}
+          src={imageUrl.file(id, meta.modifiedAt)}
           alt={meta.fileName}
           draggable={false}
           decoding="async"
