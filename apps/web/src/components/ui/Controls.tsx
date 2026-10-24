@@ -57,13 +57,13 @@ export function Slider({
       min={min}
       max={max}
       step={step}
-      aria-label={label}
       className={cn('relative flex h-5 w-full touch-none items-center select-none', className)}
     >
       <S.Track className="relative h-1 grow overflow-hidden rounded-full bg-line-strong">
         <S.Range className="absolute h-full rounded-full bg-ink" />
       </S.Track>
-      <S.Thumb className="block size-4 rounded-full bg-raised shadow-[0_0_0_1px_var(--c-line-strong),0_2px_6px_rgb(0_0_0/0.18)] transition-transform hover:scale-110 focus-visible:outline-2 focus-visible:outline-shu" />
+      {/* 名字放在 role=slider 的把手上，读屏才读得到 */}
+      <S.Thumb aria-label={label} className="block size-4 rounded-full bg-raised shadow-[0_0_0_1px_var(--c-line-strong),0_2px_6px_rgb(0_0_0/0.18)] transition-transform hover:scale-110 focus-visible:outline-2 focus-visible:outline-shu" />
     </S.Root>
   );
 }

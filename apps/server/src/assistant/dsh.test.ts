@@ -99,6 +99,18 @@ describe('DSH ACP adapter', () => {
     expect(sink.text.mock.calls[1]![0]).not.toBe(firstId);
     state.promptResolve({ stopReason: 'end_turn' });
   });
+  it('completes reasoning as soon as the answer starts streaming', async () => {
+    await backend.prompt('test', 'a', 'low');
+    const event = (update: any) => state.rpc.onEvent({ method: 'session/update', params: { sessionId: 'owned', update } });
+    event({ sessionUpdate: 'agent_thought_chunk', messageId: 'm', content: { type: 'text', text: 'thinking' } });
+    expect(sink.reasoning).toHaveBeenCalledTimes(1);
+    event({ sessionUpdate: 'agent_message_chunk', messageId: 'm', content: { type: 'text', text: 'answer' } });
+    expect(sink.reasoning).toHaveBeenLastCalledWith(sink.reasoning.mock.calls[0]![0], '', true);
+    expect(sink.reasoning.mock.invocationCallOrder[1]!).toBeLessThan(sink.text.mock.invocationCallOrder[0]!);
+    expect(sink.done).not.toHaveBeenCalled();
+    state.promptResolve({ stopReason: 'end_turn' }); await new Promise(resolve => setTimeout(resolve, 0));
+    expect(sink.reasoning).toHaveBeenCalledTimes(2);
+  });
   it('requests approval using tool input and returns one-shot selected or cancelled outcomes', () => {
     state.rpc.onEvent({ method: 'session/update', params: { sessionId: 'owned', update: { sessionUpdate: 'tool_call', toolCallId: 'call', title: 'pwsh', rawInput: { command: 'write outside workspace' } } } });
     const permission = { sessionId: 'owned', toolCall: { toolCallId: 'call' }, options: [{ optionId: 'yes', kind: 'allow_once' }, { optionId: 'no', kind: 'reject_once' }] };

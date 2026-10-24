@@ -10,9 +10,16 @@ interface RecentCharactersState {
   items: Character[];
   push: (c: Character) => void;
   remove: (id: string) => void;
+  /** 改名等之后更新快照，位置不变；不在列表里就不管 */
+  patch: (c: Partial<Character> & { id: string }) => void;
 }
 
 const MAX = 5;
+
+/** 最近使用的快照换成手上更新的数据（改过名、换过作品），没有就用快照 */
+export function freshRecents(items: Character[], fresh: (id: string) => Character | undefined): Character[] {
+  return items.map((c) => fresh(c.id) ?? c);
+}
 
 /**
  * 读回来的条目要是完整的 Character：0.1.4 以前这里和命令面板的「最近访问」共用一个 key，
@@ -34,6 +41,7 @@ export const useRecentCharacters = create<RecentCharactersState>()(
       items: [],
       push: (c) => set((s) => ({ items: [c, ...s.items.filter((x) => x.id !== c.id)].slice(0, MAX) })),
       remove: (id) => set((s) => ({ items: s.items.filter((x) => x.id !== id) })),
+      patch: (c) => set((s) => (s.items.some((x) => x.id === c.id) ? { items: s.items.map((x) => (x.id === c.id ? { ...x, ...c } : x)) } : s)),
     }),
     {
       // emaki.recent-characters 是命令面板的（palette/recent.ts），不能共用

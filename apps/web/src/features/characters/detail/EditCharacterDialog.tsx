@@ -1,8 +1,12 @@
 import type { Character, UpdateCharacterBody } from '@emaki/shared';
+import { TriangleAlert } from 'lucide-react';
 import { useId, useState, type ReactNode } from 'react';
+import { Link } from 'react-router';
 import { Button, Dialog, DialogFooter, Input } from '@/components/ui';
 import { api } from '@/lib/api';
 import { useMutate } from '@/lib/queries';
+import { useRecentCharacters } from '@/features/gallery/recentCharacters';
+import { useDuplicateHint } from '../overview/NewCharacterDialog';
 import { AliasInput } from './AliasInput';
 import { WorkPicker } from './WorkPicker';
 
@@ -38,7 +42,17 @@ function EditForm({ character, onDone }: { character: Character; onDone: () => v
   const [workIds, setWorkIds] = useState(character.workIds);
 
   const save = useMutate((body: UpdateCharacterBody) => api.updateCharacter(character.id, body), {
-    onSuccess: onDone,
+    onSuccess: (_, b) => {
+      // 选择器「最近使用」里的快照跟着改名
+      useRecentCharacters.getState().patch({
+        id: character.id,
+        name: b.name ?? character.name,
+        aliases: b.aliases ?? character.aliases,
+        workIds: b.workIds ?? character.workIds,
+        danbooruTag: b.danbooruTag === undefined ? character.danbooruTag : b.danbooruTag,
+      });
+      onDone();
+    },
   });
 
   const body: UpdateCharacterBody = {};
@@ -49,6 +63,8 @@ function EditForm({ character, onDone }: { character: Character; onDone: () => v
   if (workIds.join(',') !== character.workIds.join(',')) body.workIds = workIds;
   const dirty = Object.keys(body).length > 0;
   const valid = name.trim().length > 0;
+  // 改成了已有角色的名字：只提醒，不拦（不同作品同名是正常的）
+  const duplicate = useDuplicateHint(body.name ?? '', { except: character.id, sameWork: workIds });
 
   return (
     <form
@@ -67,6 +83,18 @@ function EditForm({ character, onDone }: { character: Character; onDone: () => v
           autoFocus
           maxLength={100}
         />
+        {duplicate && (
+          <p className="mt-2 flex items-center gap-1.5 text-xs text-warn animate-fade-in">
+            <TriangleAlert className="size-3.5 shrink-0" />
+            <span>
+              已经有一个「{duplicate.name}」{duplicate.workName ? `（${duplicate.workName}）` : ''}，
+              <Link to={`/characters/${duplicate.id}`} onClick={onDone} className="font-medium underline-offset-4 hover:underline">
+                去看看
+              </Link>
+              ；是同一个人的话，用「更多 → 合并到其他角色」
+            </span>
+          </p>
+        )}
       </FormField>
 
       <FormField label="别名" htmlFor={`${uid}-aliases`} hint="日文名、英文名、昵称都可以，搜索时会一起匹配">

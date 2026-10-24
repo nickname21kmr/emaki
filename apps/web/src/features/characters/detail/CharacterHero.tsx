@@ -1,7 +1,7 @@
 import type { Character, GetCharacterResponse, Work } from '@emaki/shared';
 import { Ban, Ellipsis, FolderInput, GitMerge, ImageUp, PenLine, Pin, Play, RotateCcw } from 'lucide-react';
 import { motion } from 'motion/react';
-import type { ReactNode, Ref } from 'react';
+import { useRef, type ReactNode, type Ref } from 'react';
 import { Link, useViewTransitionState } from 'react-router';
 import { collectImages, slideFilter, useSlideshow } from '@/components/media/lightbox/slideshow';
 import { Thumb } from '@/components/media/Thumb';
@@ -71,6 +71,11 @@ export function CharacterHero({
   const reading = character.aliases.find((a) => a !== name && CJK.test(a));
   const latin = character.aliases.filter((a) => !CJK.test(a));
   const partner = related[0];
+  // 菜单项要打开弹窗时先记下，等菜单关完、本该把焦点还给「更多」时再开，弹窗的焦点才不会被抢回去
+  const afterClose = useRef<(() => void) | null>(null);
+  const later = (fn: () => void) => () => {
+    afterClose.current = fn;
+  };
 
   const rows: { label: string; value: ReactNode }[] = [];
   if (works.length > 0) {
@@ -200,11 +205,21 @@ export function CharacterHero({
           <IconButton label="编辑角色" onClick={onEdit}>
             <PenLine />
           </IconButton>
-          <Menu width={200} trigger={<IconButton label="更多"><Ellipsis /></IconButton>}>
-            <MenuItem icon={<GitMerge />} onSelect={() => afterMenuClose(onMerge)}>
+          <Menu
+            width={200}
+            trigger={<IconButton label="更多"><Ellipsis /></IconButton>}
+            onCloseAutoFocus={(e) => {
+              const fn = afterClose.current;
+              if (!fn) return;
+              afterClose.current = null;
+              e.preventDefault();
+              fn();
+            }}
+          >
+            <MenuItem icon={<GitMerge />} onSelect={later(onMerge)}>
               合并到其他角色…
             </MenuItem>
-            <MenuItem icon={<FolderInput />} onSelect={() => afterMenuClose(onMove)}>
+            <MenuItem icon={<FolderInput />} onSelect={later(onMove)}>
               移动到文件夹…
             </MenuItem>
             {character.coverManual && (
@@ -218,7 +233,7 @@ export function CharacterHero({
                 恢复这个角色
               </MenuItem>
             ) : (
-              <MenuItem icon={<Ban />} danger onSelect={() => afterMenuClose(onExclude)}>
+              <MenuItem icon={<Ban />} danger onSelect={later(onExclude)}>
                 排除这个角色…
               </MenuItem>
             )}
@@ -310,12 +325,4 @@ export function CharacterHeroSkeleton() {
       </div>
     </div>
   );
-}
-
-/**
- * 菜单项里打开弹窗 / 滚动时推迟一帧：等下拉菜单先关掉并把焦点还给触发按钮，
- * 否则弹窗的焦点锁和菜单的焦点归还会互相抢。
- */
-function afterMenuClose(fn: () => void) {
-  window.setTimeout(fn, 0);
 }

@@ -243,17 +243,23 @@ export function announce(result: MutationResult, client: QueryClient) {
   showResultToast(result.message, result.undoToken, client);
 }
 
-export async function undo(token: string, client: QueryClient) {
+/**
+ * 返回撤销的结果：'ok' 成功（交给 toast 处理的也算）；'gone' 后端回了话但撤销不了（token 没了，再试也没用）；
+ * 'failed' 连不上，可以再试。只管弹提示的调用方忽略返回值即可。注意 'gone' 也是真值，别拿来当成功判断
+ */
+export async function undo(token: string, client: QueryClient): Promise<'ok' | 'gone' | 'failed'> {
   // 这条的 toast 还在：交给它撤销，胶囊原地变成「已撤销」
-  if (undoViaToast(token)) return;
+  if (undoViaToast(token)) return 'ok';
   try {
     const res = await api.undo(token);
     useUndoStore.getState().remove(token);
     toast(res.message);
     await invalidateAll(client);
+    return 'ok';
   } catch (err) {
     forgetFailedUndo(token, err);
     toast.error(errorMessage(err));
+    return err instanceof ApiRequestError && err.code !== 'network' ? 'gone' : 'failed';
   }
 }
 

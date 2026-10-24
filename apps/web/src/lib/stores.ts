@@ -302,6 +302,12 @@ interface OverlayState {
   helpOpen: boolean;
   setCommandOpen: (v: boolean) => void;
   setHelpOpen: (v: boolean) => void;
+  /** 多选栏为 toast 临时抬高了（助手胶囊跟着让） */
+  barLifted: boolean;
+  setBarLifted: (v: boolean) => void;
+  /** 合集阅读器开着（助手胶囊先收起，免得盖住胶片条） */
+  readerOpen: boolean;
+  setReaderOpen: (v: boolean) => void;
 }
 
 export const useOverlays = create<OverlayState>((set) => ({
@@ -309,6 +315,10 @@ export const useOverlays = create<OverlayState>((set) => ({
   helpOpen: false,
   setCommandOpen: (commandOpen) => set({ commandOpen }),
   setHelpOpen: (helpOpen) => set({ helpOpen }),
+  barLifted: false,
+  setBarLifted: (barLifted) => set({ barLifted }),
+  readerOpen: false,
+  setReaderOpen: (readerOpen) => set({ readerOpen }),
 }));
 
 /** 模糊判断用的四个偏好（配合 lib/blur.ts） */

@@ -54,7 +54,8 @@ export function importPhase(
   if (jobs.scan) return 'scanning';
   if (jobs.tag) return 'tagging';
   if (jobs.thumbnail) return 'thumbnails';
-  if (stats.pendingTagCount > 0 && stats.untaggedCount > 0) return 'paused';
+  // 只看这次导入的文件夹里还有没有没识别的，库里别处的不算
+  if (stats.recentImport.pending > 0 && stats.untaggedCount > 0) return 'paused';
   if (jobs.dedupe) return 'deduping';
   return null;
 }

@@ -220,7 +220,7 @@ export function useGridInteractions(images: ImageItem[], selectionScope?: string
 }
 
 /** 左上角的勾选圈（ImageGrid、CardGrid 共用） */
-export function SelectCircle({ selected, selecting, onToggle }: { selected: boolean; selecting: boolean; onToggle: () => void }) {
+export function SelectCircle({ selected, selecting, onToggle, className }: { selected: boolean; selecting: boolean; onToggle: () => void; className?: string }) {
   // 选中那一下放一圈涟漪（SEL-10）；动画结束就卸载
   const [ripple, setRipple] = useState(0);
   const was = useRef(selected);
@@ -249,8 +249,9 @@ export function SelectCircle({ selected, selecting, onToggle }: { selected: bool
         'absolute top-2 left-2 z-[2] flex size-6 items-center justify-center rounded-full transition-all duration-200',
         selected
           ? 'bg-shu text-white opacity-100 motion-safe:animate-[check-in_260ms_var(--ease-out-soft)]'
-          : 'bg-black/30 text-transparent opacity-0 ring-2 ring-white/90 group-hover/tile:opacity-100 hover:bg-black/40 hover:text-white/80',
+          : 'bg-black/30 text-transparent opacity-0 ring-2 ring-white/90 group-hover/tile:opacity-100 hover:bg-black/40 hover:text-white/80 focus-visible:opacity-100',
         selecting && !selected && 'opacity-100',
+        className,
       )}
     >
       <Check className="size-3.5" strokeWidth={3} />

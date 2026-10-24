@@ -97,10 +97,10 @@ export function PageHeader({
           className,
         )}
       >
-        {/* 很窄时右边那排按钮换到标题下一行，不被挤出纸外 */}
-        <div className="flex items-start justify-between gap-6 @max-[400px]/head:flex-wrap @max-[400px]/head:gap-y-3">
+        {/* 标题至少留 14rem；放不下时右边那排按钮换到下一行靠右，不压住标题也不被挤出纸外 */}
+        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
           {chapter ? (
-            <div className="min-w-0 animate-fade-in">
+            <div className="min-w-0 flex-[1_1_14rem] animate-fade-in">
               {showChapter && (
                 <div className="kicker flex items-center">
                   {kicker ?? (
@@ -118,7 +118,7 @@ export function PageHeader({
               </div>
             </div>
           ) : (
-            <div className="min-w-0 animate-fade-in">
+            <div className="min-w-0 flex-[1_1_14rem] animate-fade-in">
               <h1 className={cn('leading-tight font-semibold tracking-tight', stuck.value ? 'text-[18px]' : 'text-[22px]')}>{title}</h1>
               {subtitle && !stuck.value && <div className="mt-1 text-[13px] text-fg-muted tabular">{subtitle}</div>}
             </div>

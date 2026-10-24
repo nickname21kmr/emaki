@@ -1,22 +1,23 @@
-import type { BulkImageAction, ID, ImageItem } from '@emaki/shared';
-import { Ban, ChevronDown, CircleMinus, FolderInput, Heart, Palette, Shapes, ShieldHalf, Trash2, UserRoundPlus, X } from 'lucide-react';
+import { CONTENT_KINDS, type BulkImageAction, type ID, type ImageItem } from '@emaki/shared';
+import { Ban, ChevronDown, CircleMinus, Ellipsis, FolderInput, Heart, Palette, Shapes, ShieldHalf, Trash2, UserRoundPlus, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
+import { useSonner } from 'sonner';
 import {
   forwardRef,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ButtonHTMLAttributes,
   type ReactNode,
 } from 'react';
-import { Menu, MenuItem, MenuLabel, RollingNumber, Spinner, Tooltip } from '@/components/ui';
+import { Menu, MenuItem, MenuLabel, MenuSeparator, MenuSub, RollingNumber, Spinner, Tooltip } from '@/components/ui';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { formatCount, RATING_LABEL } from '@/lib/format';
+import { KIND_ICON, KIND_LABEL } from '@/lib/kinds';
 import { modKeyLabel, useHotkey } from '@/lib/hotkeys';
 import { useMutate, useTrashHint } from '@/lib/queries';
-import { useLightbox, useSelection } from '@/lib/stores';
+import { useLightbox, useOverlays, useSelection } from '@/lib/stores';
 import { KindMenu } from '@/components/media/KindMenu';
 import { MoveImagesDialog } from '@/components/media/MoveImagesDialog';
 import { ArtistPicker } from '../ArtistPicker';
@@ -28,9 +29,6 @@ const EMPTY: ReadonlySet<ID> = new Set();
 
 /** 这些操作之后图片会离开当前视图（或已经整理完），顺手清空选择 */
 const CLEARS_SELECTION: BulkImageAction['type'][] = ['assign', 'exclude', 'trash', 'kind', 'artist', 'artist-auto'];
-
-/** sonner 默认 4 秒，多留一点余量等它退场 */
-const TOAST_MS = 4400;
 
 /**
  * 多选后底部浮起的墨色胶囊工具栏。
@@ -62,20 +60,18 @@ export function SelectionBar({
   const count = ids.size;
   const active = count > 0 && !lightboxOpen && !moving;
 
-  // 收藏 / 分级之后选择还在，而结果 toast 也弹在底部居中 —— 工具栏临时抬高，给 toast 让位
-  const [lifted, setLifted] = useState(false);
-  const liftTimer = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(liftTimer.current), []);
-  const liftForToast = () => {
-    setLifted(true);
-    window.clearTimeout(liftTimer.current);
-    liftTimer.current = window.setTimeout(() => setLifted(false), TOAST_MS);
-  };
+  // toast 也弹在底部居中 —— 不管是谁弹的（这里的收藏、助手的撤销…），有 toast 时工具栏就抬高给它让位
+  const lifted = useSonner().toasts.length > 0;
+  // 助手胶囊在工具栏右端上方，抬高时告诉它一起让
+  const barUp = lifted && count > 0;
+  useEffect(() => {
+    useOverlays.getState().setBarLifted(barUp);
+    return () => useOverlays.getState().setBarLifted(false);
+  }, [barUp]);
 
   const bulk = useMutate((v: { ids: ID[]; action: BulkImageAction }) => api.bulkImages(v), {
     onSuccess: (_, v) => {
       if (CLEARS_SELECTION.includes(v.action.type)) clear();
-      else liftForToast();
     },
   });
   const run = (action: BulkImageAction) => {
@@ -109,7 +105,7 @@ export function SelectionBar({
     { enabled: active, preventDefault: false },
   );
   // 页面上别的对话框、菜单开着时（比如画师的拆开 / 合并）不响应，免得按 E 把选中的图排除了
-  const fromOverlay = (e: KeyboardEvent) => e.target instanceof Element && !!e.target.closest('[role="dialog"],[role="menu"]');
+  const fromOverlay = (e: KeyboardEvent) => e.target instanceof Element && !!e.target.closest('[role="dialog"],[role="menu"],[data-assistant-sheet]');
   useHotkey(
     'mod+a',
     (e) => {
@@ -127,7 +123,8 @@ export function SelectionBar({
   const pendingType = bulk.isPending ? bulk.variables?.action.type : undefined;
 
   return (
-    <div className="pointer-events-none sticky bottom-6 z-30 flex h-0 justify-center @container/bar">
+    // assistant-cover-shift：助手附页覆盖在纸上时，在露出的那块里居中（index.css）
+    <div className="assistant-cover-shift pointer-events-none sticky bottom-6 z-30 flex h-0 justify-center @container/bar">
       <AnimatePresence>
         {count > 0 && (
           <motion.div
@@ -152,9 +149,9 @@ export function SelectionBar({
             </Tooltip>
 
             <div className="flex items-baseline gap-1.5 pr-2 pl-1 whitespace-nowrap">
-              <span className="text-[13px] text-fg-inverse/70">已选</span>
+              <span className="text-[13px] text-fg-inverse/70 @max-[480px]/bar:hidden">已选</span>
               <RollingNumber value={count} appear={false} className="numeral text-[24px] leading-none tabular" />
-              <span className="text-[13px] text-fg-inverse/70">张</span>
+              <span className="text-[13px] text-fg-inverse/70 @max-[480px]/bar:hidden">张</span>
             </div>
 
             {!allLoadedSelected && (
@@ -225,7 +222,7 @@ export function SelectionBar({
               align="center"
               width={168}
               trigger={
-                <BarButton icon={<ShieldHalf />} pending={pendingType === 'rating'} trailing={<ChevronDown />}>
+                <BarButton icon={<ShieldHalf />} pending={pendingType === 'rating'} trailing={<ChevronDown />} className="@max-[600px]/bar:hidden">
                   分级
                 </BarButton>
               }
@@ -244,22 +241,24 @@ export function SelectionBar({
               onOpenChange={setKindOpen}
               onSelect={(value) => run({ type: 'kind', value })}
               trigger={
-                <BarButton icon={<Shapes />} pending={pendingType === 'kind'} trailing={<ChevronDown />}>
+                // 窄时收进「更多」；用 sr-only 而不是 hidden，按 C 打开时菜单还能贴着胶囊弹出
+                <BarButton icon={<Shapes />} pending={pendingType === 'kind'} trailing={<ChevronDown />} className="@max-[600px]/bar:sr-only">
                   归入
                 </BarButton>
               }
             />
 
+            {/* 露出的纸窄于 600（助手覆盖在纸上、半屏窗口）时，分级、归入和最后三个收进「更多」，不在胶囊里藏着滚 */}
             <Tooltip content="移到图库里的某个文件夹，磁盘上的文件会真的移动" side="top">
-              <BarButton icon={<FolderInput />} onClick={() => setMoving(true)}>
+              <BarButton icon={<FolderInput />} onClick={() => setMoving(true)} className="@max-[600px]/bar:hidden">
                 移动…
               </BarButton>
             </Tooltip>
 
-            <span className="mx-1.5 h-5 w-px bg-fg-inverse/15" />
+            <span className="mx-1.5 h-5 w-px bg-fg-inverse/15 @max-[600px]/bar:hidden" />
 
             <Tooltip content="排除：不再出现在图库和统计里，文件不会被删除" shortcut="E" side="top">
-              <BarButton icon={<Ban />} pending={pendingType === 'exclude'} onClick={() => run({ type: 'exclude' })}>
+              <BarButton icon={<Ban />} pending={pendingType === 'exclude'} onClick={() => run({ type: 'exclude' })} className="@max-[600px]/bar:hidden">
                 排除
               </BarButton>
             </Tooltip>
@@ -269,11 +268,51 @@ export function SelectionBar({
                 icon={<Trash2 />}
                 pending={pendingType === 'trash'}
                 onClick={() => run({ type: 'trash' })}
-                className="hover:bg-danger hover:text-white"
+                className="hover:bg-danger hover:text-white @max-[600px]/bar:hidden"
               >
                 回收站
               </BarButton>
             </Tooltip>
+
+            <Menu
+              align="end"
+              width={168}
+              trigger={
+                <BarButton
+                  icon={<Ellipsis />}
+                  pending={pendingType === 'exclude' || pendingType === 'trash' || pendingType === 'rating' || pendingType === 'kind'}
+                  className="@min-[600px]/bar:hidden"
+                >
+                  更多
+                </BarButton>
+              }
+            >
+              <MenuSub icon={<ShieldHalf />} label="分级">
+                <MenuLabel>把 {formatCount(count)} 张设为</MenuLabel>
+                {RATINGS.map((r, i) => (
+                  <MenuItem key={r} icon={<RatingPips level={i} />} onSelect={() => run({ type: 'rating', value: r })}>
+                    {RATING_LABEL[r]}
+                  </MenuItem>
+                ))}
+              </MenuSub>
+              <MenuSub icon={<Shapes />} label="归入">
+                <MenuLabel>把 {formatCount(count)} 张归入</MenuLabel>
+                {CONTENT_KINDS.map((k) => {
+                  const Icon = KIND_ICON[k];
+                  return (
+                    <MenuItem key={k} icon={<Icon />} onSelect={() => run({ type: 'kind', value: k })}>
+                      {KIND_LABEL[k]}
+                    </MenuItem>
+                  );
+                })}
+                <MenuSeparator />
+                <MenuItem onSelect={() => run({ type: 'kind', value: 'auto' })}>恢复自动判断</MenuItem>
+              </MenuSub>
+              <MenuSeparator />
+              <MenuItem icon={<FolderInput />} onSelect={() => setMoving(true)}>移动…</MenuItem>
+              <MenuItem icon={<Ban />} shortcut="E" onSelect={() => run({ type: 'exclude' })}>排除</MenuItem>
+              <MenuItem icon={<Trash2 />} danger onSelect={() => run({ type: 'trash' })}>回收站</MenuItem>
+            </Menu>
           </motion.div>
         )}
       </AnimatePresence>
@@ -321,8 +360,8 @@ const BarButton = forwardRef<HTMLButtonElement, BarButtonProps>(function BarButt
       {...rest}
     >
       {pending ? <Spinner className="size-4" /> : icon}
-      {/* 纸窄于 900px 时文字只给读屏 */}
-      <span className="@max-[900px]/bar:sr-only">{children}</span>
+      {/* 纸窄于 960px 时文字只给读屏（带文字的整条要 930 上下） */}
+      <span className="@max-[960px]/bar:sr-only">{children}</span>
       {trailing && <span className="-mr-1 opacity-50 [&_svg]:size-3.5">{trailing}</span>}
     </button>
   );

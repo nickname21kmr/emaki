@@ -1,4 +1,5 @@
-import type { Character, ID } from '@emaki/shared';
+import type { Character, GetCharacterResponse, ID } from '@emaki/shared';
+import { useQueryClient } from '@tanstack/react-query';
 import { Command } from 'cmdk';
 import { Check, CornerDownLeft, Plus, Search } from 'lucide-react';
 import { Popover } from 'radix-ui';
@@ -7,9 +8,9 @@ import { Thumb } from '@/components/media/Thumb';
 import { Kbd, Skeleton, Spinner } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
-import { useSearch, useTopCharacters, useWorks } from '@/lib/queries';
+import { qk, useSearch, useTopCharacters, useWorks } from '@/lib/queries';
 import { NewCharacterDialog } from '@/features/characters/overview/NewCharacterDialog';
-import { useRecentCharacters } from './recentCharacters';
+import { freshRecents, useRecentCharacters } from './recentCharacters';
 import { useDebounced } from './useDebounced';
 
 /**
@@ -130,7 +131,13 @@ export function CharacterPickerPanel({
   const search = useSearch(q);
   const top = useTopCharacters({ limit: 8 });
   const works = useWorks();
-  const recents = useRecentCharacters((s) => s.items);
+  const qc = useQueryClient();
+  const snapshots = useRecentCharacters((s) => s.items);
+  // 快照可能过时（改名后还是旧名字）：有常用角色或角色页的缓存就用新的
+  const recents = useMemo(() => {
+    const top_ = new Map((top.data ?? []).map((c) => [c.id, c]));
+    return freshRecents(snapshots, (id) => top_.get(id) ?? qc.getQueryData<GetCharacterResponse>(qk.character(id))?.character);
+  }, [snapshots, top.data, qc]);
   const pushRecent = useRecentCharacters((s) => s.push);
 
   const workName = useMemo(() => {

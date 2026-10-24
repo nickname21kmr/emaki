@@ -57,7 +57,9 @@
   --font-display: 'Instrument Serif', 'Songti SC', 'Noto Serif CJK SC', serif;
   /* 系统自带的 Noto Serif SC（Win11）排第一，命中就不下载 woff2 */
   --font-serif-cjk: 'Noto Serif SC', 'Noto Serif SC Variable', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
-  --font-mono: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+  /* 等宽里的中文（路径、命令参数）落到黑体，不回退成宋体 */
+  --font-mono: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei',
+    monospace;
 
   --radius-xs: 6px;
   --radius-sm: 8px;
@@ -614,6 +616,24 @@
     transform 420ms var(--ease-out-soft),
     opacity 320ms var(--ease-out-soft),
     height 320ms var(--ease-out-soft);
+}
+
+/*
+ * 助手附页贴右时，toast 和多选栏在看得见的那块里居中（final-spec §3.7）。
+ * 两个变量由 AssistantRoot 写在 :root 上：--assistant-right 是并排或覆盖时附页占的宽（W + 8），
+ * --assistant-cover 只在覆盖时有值（并排时主纸已经让位，多选栏本来就居中）。
+ * 暗房里 --assistant-right 是插槽加信息面板的宽，toast 落在图的那块。
+ * sonner 用 transform 居中，这里用独立的 translate 叠上去；窗口窄时最多挪到 toast（356）左边还留 16px。
+ */
+[data-sonner-toaster] {
+  translate: calc(-1 * min(var(--assistant-right, 0px) / 2, max(0px, 50vw - 194px))) 0;
+  transition: translate 0.35s var(--ease-out-soft);
+}
+/* 多选栏的 sticky 外层：右边让出被附页盖住的宽度，里面的胶囊照常居中，过宽时也只在露出的部分里排开 */
+/* 露出的纸不足 360 时少让一点，胶囊至少有 360 可排，不被挤成一截 */
+.assistant-cover-shift {
+  margin-right: min(var(--assistant-cover, 0px), max(0px, 100% - 360px));
+  transition: margin-right 0.35s var(--ease-out-soft);
 }
 
 /* 引信末端的火星：一颗 3px 的朱点，不加光晕 */

@@ -1,6 +1,7 @@
 import { X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import type { ReactNode } from 'react';
+import { useSonner } from 'sonner';
 import { Kbd, RollingNumber, Spinner } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { EASE_OUT } from '@/lib/motion';
@@ -31,26 +32,30 @@ export function SelectionBar({
   actions: SelectionAction[];
   onClear: () => void;
 }) {
+  // 有 toast 时（底部居中）抬高一截给它让位，和图库的工具栏一样
+  const lifted = useSonner().toasts.length > 0;
   return (
-    <div className="pointer-events-none sticky bottom-6 z-30 h-0">
+    // assistant-cover-shift：助手附页覆盖在纸上时，在露出的那块里居中（index.css）
+    <div className="assistant-cover-shift pointer-events-none sticky bottom-6 z-30 h-0 @container/bar">
       <AnimatePresence>
         {count > 0 && (
           <motion.div
             initial={{ opacity: 0, y: 18, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
+            animate={{ opacity: 1, y: lifted ? -64 : 0, scale: 1 }}
             exit={{ opacity: 0, y: 12, scale: 0.98 }}
             transition={{ duration: 0.32, ease: EASE_OUT }}
-            className="absolute inset-x-0 bottom-0 flex justify-center px-8"
+            className="absolute inset-x-0 bottom-0 flex justify-center px-8 @max-[640px]/bar:px-3"
           >
             <div
               role="toolbar"
               aria-label="已选插画的操作"
-              className="pointer-events-auto flex h-12 items-center gap-0.5 rounded-full bg-ink pr-1.5 pl-5 text-fg-inverse shadow-pop"
+              // 露出的纸窄时（助手盖在纸上、半屏窗口）文字只留图标；再窄才在胶囊里横向滚，永远不伸出纸外
+              className="pointer-events-auto flex h-12 max-w-full items-center gap-0.5 overflow-x-auto rounded-full bg-ink pr-1.5 pl-5 text-fg-inverse shadow-pop scrollbar-none *:shrink-0 @max-[640px]/bar:pl-3"
             >
               <div className="mr-2 flex items-baseline gap-1.5 text-[13px] whitespace-nowrap">
-                <span className="text-fg-inverse/60">已选</span>
+                <span className="text-fg-inverse/60 @max-[480px]/bar:hidden">已选</span>
                 <RollingNumber value={count} appear={false} className="numeral text-[22px] leading-none" />
-                <span className="text-fg-inverse/60">张</span>
+                <span className="text-fg-inverse/60 @max-[480px]/bar:hidden">张</span>
               </div>
               <span className="mx-1.5 h-5 w-px bg-fg-inverse/15" aria-hidden />
               {actions.map((a) => (
@@ -58,6 +63,7 @@ export function SelectionBar({
                   key={a.key}
                   type="button"
                   onClick={a.onClick}
+                  title={a.label}
                   disabled={a.disabled || a.loading}
                   className={cn(
                     'inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium whitespace-nowrap',
@@ -66,9 +72,9 @@ export function SelectionBar({
                   )}
                 >
                   {a.loading ? <Spinner className="size-4" /> : a.icon}
-                  {a.label}
+                  <span className="@max-[640px]/bar:sr-only">{a.label}</span>
                   {a.shortcut && (
-                    <Kbd tone="inverse" className="ml-0.5">
+                    <Kbd tone="inverse" className="ml-0.5 @max-[640px]/bar:hidden">
                       {a.shortcut}
                     </Kbd>
                   )}
@@ -81,7 +87,7 @@ export function SelectionBar({
                 aria-label="取消选择"
                 className="inline-flex h-9 items-center gap-1.5 rounded-full pr-2 pl-2.5 text-[13px] text-fg-inverse/70 transition-colors hover:bg-fg-inverse/10 hover:text-fg-inverse"
               >
-                <Kbd tone="inverse">Esc</Kbd>
+                <Kbd tone="inverse" className="@max-[640px]/bar:hidden">Esc</Kbd>
                 <X className="size-4" />
               </button>
             </div>

@@ -8,10 +8,11 @@ import { useSettings } from '@/lib/queries';
 import { useGlobalHotkeys } from './useGlobalHotkeys';
 import { ScrollContainerContext } from './ScrollContainer';
 import { Sidebar } from './Sidebar';
-import { AssistantLauncher } from '@/features/assistant/AssistantLauncher';
+import { AssistantLauncher, AssistantSpacer } from '@/features/assistant/AssistantLauncher';
 
 /**
  * 整体布局：暖灰「桌面」上左边一条窄导航，右边一张圆角「纸」（主内容，独立滚动）。
+ * 助手附页并排时贴在纸的右边，纸让出位置（AssistantSpacer）。
  */
 export function AppShell() {
   useServerEvents();
@@ -65,6 +66,8 @@ export function AppShell() {
             <Outlet />
           </div>
         </main>
+        {/* 并排时占 W + 8：纸的右边缘到附页左边缘正好 8px 桌面；宽度一帧到位不补间 */}
+        <AssistantSpacer />
       </div>
       <Lightbox />
       <CommandPalette />

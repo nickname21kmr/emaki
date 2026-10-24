@@ -219,7 +219,8 @@ export function apply(ctx) { ctx.on('agent/created', async ({agent}) => {
     const u = p.update ?? {};
     if (u.sessionUpdate === 'config_option_update') this.config = u.configOptions ?? this.config;
     const id = `dsh-${this.instance}-${this.turn}-${u.sessionUpdate === 'agent_thought_chunk' ? 'thought' : 'message'}-${u.messageId ?? this.sequence}`;
-    if (u.sessionUpdate === 'agent_message_chunk' && u.content?.type === 'text') this.sink.text(id, u.content.text);
+    // 开始写回答就算想完了，不然「正在思考」会一直挂到整轮结束
+    if (u.sessionUpdate === 'agent_message_chunk' && u.content?.type === 'text') { this.finishReasoning(); this.sink.text(id, u.content.text); }
     if (u.sessionUpdate === 'agent_thought_chunk' && u.content?.type === 'text') { this.reasoning.add(id); this.sink.reasoning?.(id, u.content.text); }
     if (u.sessionUpdate === 'tool_call' || u.sessionUpdate === 'tool_call_update') {
       this.finishReasoning(); this.sequence++;

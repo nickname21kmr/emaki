@@ -282,3 +282,24 @@ describe('agent process lifecycle', () => {
     await s.close();
   });
 });
+describe('agent approvals', () => {
+  it('answering an approval leaves a line in the transcript', async () => {
+    const s = setup(); s.store.settings.backend = 'codex'; s.store.settings.enabled = true;
+    const session = s.store.create();
+    let sink!: AgentSink;
+    const prompt = vi.fn(async () => {}), answer = vi.fn();
+    vi.spyOn(CodexBackend, 'open').mockImplementation(async (_a, _b, _c, _d, _e, next) => {
+      sink = next;
+      return { models: async () => [{ id: 'fixture', efforts: [], vision: true }], prompt, answer, stop: async () => {}, close: async () => {} } as unknown as CodexBackend;
+    });
+    await s.send(session.id, { requestId: 'first', text: '数一下文件', model: 'fixture', effort: '', context: { page: '/', imageIds: [] } });
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    sink.question({ id: 'perm', title: 'pwsh\n{"command":"ls"}', kind: 'approval' });
+    await s.answer(session.id, 'perm', 'deny');
+    expect(answer).toHaveBeenCalledWith('perm', 'deny');
+    const last = session.messages.at(-1)!;
+    expect(last).toMatchObject({ role: 'tool', text: '已拒绝：pwsh' });
+    expect(last.undoToken).toBeUndefined();
+    await s.close();
+  });
+});
