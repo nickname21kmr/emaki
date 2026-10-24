@@ -6,6 +6,7 @@ import {
   forwardRef,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ButtonHTMLAttributes,
   type ReactNode,
@@ -56,6 +57,13 @@ export function SelectionBar({
   const pickerOpen = charOpen || artistOpen;
   const [kindOpen, setKindOpen] = useState(false);
   const [moving, setMoving] = useState(false);
+  // 露出的纸窄于 400（助手覆盖在纸上）时，全选、画师、移出画师、收藏也收进「更多」；窄于 190 时连归到角色也收进去
+  // 菜单在 portal 里用不了容器查询：打开「更多」时量一下外层，和 @max-[400px]/bar、@max-[190px]/bar 对上
+  const shell = useRef<HTMLDivElement>(null);
+  const [shellWidth, setShellWidth] = useState(Infinity);
+  const narrow = shellWidth < 400, tiny = shellWidth < 190;
+  // 「更多」里点了画师：等菜单关掉、不还焦点，再打开选择器，免得选择器一开就因为焦点跑走而关掉
+  const afterMenu = useRef<(() => void) | null>(null);
 
   const count = ids.size;
   const active = count > 0 && !lightboxOpen && !moving;
@@ -124,7 +132,7 @@ export function SelectionBar({
 
   return (
     // assistant-cover-shift：助手附页覆盖在纸上时，在露出的那块里居中（index.css）
-    <div className="assistant-cover-shift pointer-events-none sticky bottom-6 z-30 flex h-0 justify-center @container/bar">
+    <div ref={shell} className="assistant-cover-shift pointer-events-none sticky bottom-6 z-30 flex h-0 justify-center @container/bar">
       <AnimatePresence>
         {count > 0 && (
           <motion.div
@@ -135,7 +143,7 @@ export function SelectionBar({
             exit={{ opacity: 0, y: 12, scale: 0.97, transition: { duration: 0.18 } }}
             transition={{ duration: 0.42, ease: EASE_OUT }}
             // 纸窄（半屏窗口）时按钮只留图标；再窄就在胶囊里横向滚动，两头的按钮都够得着
-            className="pointer-events-auto absolute bottom-0 left-1/2 flex h-[52px] w-max max-w-[calc(100%-24px)] -translate-x-1/2 items-center gap-0.5 overflow-x-auto rounded-full bg-ink pr-2 pl-1.5 text-fg-inverse shadow-pop scrollbar-none *:shrink-0"
+            className="pointer-events-auto absolute bottom-0 left-1/2 flex h-[52px] w-max max-w-[calc(100%-24px)] @max-[190px]/bar:max-w-[calc(100%-8px)] -translate-x-1/2 items-center gap-0.5 overflow-x-auto rounded-full bg-ink pr-2 pl-1.5 text-fg-inverse shadow-pop scrollbar-none *:shrink-0"
           >
             <Tooltip content="取消选择" shortcut="Esc" side="top">
               <button
@@ -159,14 +167,14 @@ export function SelectionBar({
                 <button
                   type="button"
                   onClick={selectAll}
-                  className="mr-1 h-7 rounded-full px-2.5 text-xs text-fg-inverse/70 ring-1 ring-fg-inverse/20 transition-colors hover:bg-fg-inverse/10 hover:text-fg-inverse"
+                  className="mr-1 h-7 rounded-full px-2.5 text-xs text-fg-inverse/70 ring-1 ring-fg-inverse/20 transition-colors hover:bg-fg-inverse/10 hover:text-fg-inverse @max-[400px]/bar:hidden"
                 >
                   全选
                 </button>
               </Tooltip>
             )}
 
-            <span className="mx-1.5 h-5 w-px bg-fg-inverse/15" />
+            <span className="mx-1.5 h-5 w-px bg-fg-inverse/15 @max-[400px]/bar:mx-0.5 @max-[190px]/bar:hidden" />
 
             <CharacterPicker
               side="top"
@@ -177,7 +185,8 @@ export function SelectionBar({
               onOpenChange={setCharOpen}
               onPick={(c) => run({ type: 'assign', characterId: c.id })}
             >
-              <BarButton icon={<UserRoundPlus />} pending={pendingType === 'assign'} aria-haspopup="dialog">
+              {/* 露出的纸窄于 190 时也收进「更多」，sr-only 留着当锚点 */}
+              <BarButton icon={<UserRoundPlus />} pending={pendingType === 'assign'} aria-haspopup="dialog" className="@max-[190px]/bar:sr-only">
                 归到角色…
               </BarButton>
             </CharacterPicker>
@@ -195,14 +204,15 @@ export function SelectionBar({
                 { key: 'auto', label: '改回自动识别', hint: '清掉手动改的，交给「识别画师」重新认', onSelect: () => run({ type: 'artist-auto' }) },
               ]}
             >
-              <BarButton icon={<Palette />} pending={pendingType === 'artist' || pendingType === 'artist-auto'} aria-haspopup="dialog">
+              {/* 很窄时收进「更多」；sr-only 留着当选择器的锚点 */}
+              <BarButton icon={<Palette />} pending={pendingType === 'artist' || pendingType === 'artist-auto'} aria-haspopup="dialog" className="@max-[400px]/bar:sr-only">
                 画师…
               </BarButton>
             </ArtistPicker>
 
             {artist && (
               <Tooltip content={`这几张不是「${artist.name}」画的：去掉这位画师，以后识别也不再动它们`} side="top">
-                <BarButton icon={<CircleMinus />} onClick={() => run({ type: 'artist', mode: 'remove', artists: artist.tags })}>
+                <BarButton icon={<CircleMinus />} onClick={() => run({ type: 'artist', mode: 'remove', artists: artist.tags })} className="@max-[400px]/bar:hidden">
                   移出画师
                 </BarButton>
               </Tooltip>
@@ -213,6 +223,7 @@ export function SelectionBar({
                 icon={<Heart className={cn(allFavorite && 'fill-current')} />}
                 pending={pendingType === 'favorite'}
                 onClick={() => run({ type: 'favorite', value: !allFavorite })}
+                className="@max-[400px]/bar:hidden"
               >
                 {allFavorite ? '取消收藏' : '收藏'}
               </BarButton>
@@ -277,6 +288,14 @@ export function SelectionBar({
             <Menu
               align="end"
               width={168}
+              onOpenChange={(open) => open && setShellWidth(shell.current?.getBoundingClientRect().width ?? Infinity)}
+              onCloseAutoFocus={(e) => {
+                const next = afterMenu.current;
+                if (!next) return;
+                afterMenu.current = null;
+                e.preventDefault();
+                next();
+              }}
               trigger={
                 <BarButton
                   icon={<Ellipsis />}
@@ -287,6 +306,18 @@ export function SelectionBar({
                 </BarButton>
               }
             >
+              {narrow && (
+                <>
+                  {!allLoadedSelected && <MenuItem shortcut={`${modKeyLabel} A`} onSelect={selectAll}>全选已加载的 {formatCount(images.length)} 张</MenuItem>}
+                  {tiny && <MenuItem icon={<UserRoundPlus />} onSelect={() => { afterMenu.current = () => setCharOpen(true); }}>归到角色…</MenuItem>}
+                  <MenuItem icon={<Palette />} onSelect={() => { afterMenu.current = () => setArtistOpen(true); }}>画师…</MenuItem>
+                  {artist && <MenuItem icon={<CircleMinus />} onSelect={() => run({ type: 'artist', mode: 'remove', artists: artist.tags })}>移出画师</MenuItem>}
+                  <MenuItem icon={<Heart className={cn(allFavorite && 'fill-current')} />} shortcut="F" onSelect={() => run({ type: 'favorite', value: !allFavorite })}>
+                    {allFavorite ? '取消收藏' : '收藏'}
+                  </MenuItem>
+                  <MenuSeparator />
+                </>
+              )}
               <MenuSub icon={<ShieldHalf />} label="分级">
                 <MenuLabel>把 {formatCount(count)} 张设为</MenuLabel>
                 {RATINGS.map((r, i) => (

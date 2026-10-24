@@ -6,6 +6,7 @@
  */
 import { showResultToast, undoViaToast } from '@/components/ui/Toast';
 import type {
+  UndoTokenStatus,
   Character,
   CustomTheme,
   GetCharacterResponse,
@@ -261,6 +262,33 @@ export async function undo(token: string, client: QueryClient): Promise<'ok' | '
     toast.error(errorMessage(err));
     return err instanceof ApiRequestError && err.code !== 'network' ? 'gone' : 'failed';
   }
+}
+
+// 同一轮渲染里各条勘误要问的 token 攒成一次请求
+let undoBatch: Map<string, ((s: UndoTokenStatus) => void)[]> | null = null;
+function flushUndoBatch() {
+  const batch = undoBatch;
+  undoBatch = null;
+  if (!batch) return;
+  // 问不到（连不上、旧后端）按 live 算，按钮照常可点
+  const settle = (status: Record<string, UndoTokenStatus>) => {
+    for (const [t, waiters] of batch) for (const w of waiters) w(status[t] ?? 'live');
+  };
+  api.undoStatus([...batch.keys()]).then((r) => settle(r.status), () => settle({}));
+}
+function fetchUndoStatus(token: string) {
+  return new Promise<UndoTokenStatus>((resolve) => {
+    if (!undoBatch) {
+      undoBatch = new Map();
+      setTimeout(flushUndoBatch, 0);
+    }
+    undoBatch.set(token, [...(undoBatch.get(token) ?? []), resolve]);
+  });
+}
+
+/** 撤销 token 在后端还在不在（重启过、被挤出撤销栈、在别处撤销过）。library-changed 和重连都会让它重拉 */
+export function useUndoStatus(token: string, enabled: boolean) {
+  return useQuery({ queryKey: ['undo-status', token], queryFn: () => fetchUndoStatus(token), enabled: enabled && !!token, retry: false });
 }
 
 /**

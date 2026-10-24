@@ -216,6 +216,10 @@ export function useConversation(backend: AssistantBackend | null): ConversationV
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 只看状态切换
   }, [status, capsule, runStartedAt]);
   useEffect(() => () => useAssistantDock.getState().setStatus(null, null), []);
+  useEffect(() => {
+    useAssistantDock.getState().setConnected(connected);
+    return () => useAssistantDock.getState().setConnected(true);
+  }, [connected]);
 
   const send = () => {
     if (busy) return;

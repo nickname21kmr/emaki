@@ -648,6 +648,17 @@ export interface NetworkCheckResponse {
 /** POST /api/undo/:token */
 export type UndoResponse = MutationResult;
 
+/** live 还能撤销；undone 已经撤销过；expired 不在撤销栈里了（被挤掉、后端重启过，或者不认识） */
+export type UndoTokenStatus = 'live' | 'undone' | 'expired';
+
+/** POST /api/undo/status：问一批 token 现在还能不能撤销（助手勘误条用） */
+export interface UndoStatusBody {
+  tokens: string[];
+}
+export interface UndoStatusResponse {
+  status: Record<string, UndoTokenStatus>;
+}
+
 // ---------------------------------------------------------------- 工具类型
 
 export type DeepPartial<T> = {

@@ -4,6 +4,7 @@ import {
   type NetworkCheckResponse,
   type PickFolderResponse,
   type ServerEvent,
+  type UndoStatusResponse,
 } from '@emaki/shared';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -17,6 +18,8 @@ import { isModelReady } from '../services/tagger/download.ts';
 import { DEFAULT_TAGGER_MODEL, findModel, MODEL_NOTES, modelDownloadSize, TAGGER_MODELS } from '../services/tagger/models.ts';
 import { pickFolder } from '../system/pickFolder.ts';
 
+// 一次最多问 500 个，一个会话的勘误条够用了
+const undoStatusBody = z.object({ tokens: z.array(z.string().min(1).max(100)).max(500) });
 const rootMode = z.enum(['auto', 'comic']);
 const themeTags = z.array(z.string().trim().min(1).max(100)).max(CUSTOM_THEME_LIMITS.tags);
 
@@ -185,6 +188,12 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
   });
 
   // ---------------------------------------------------------- 撤销
+
+  // 静态路由优先于 /api/undo/:id，不会被当成 token
+  app.post('/api/undo/status', async (req): Promise<UndoStatusResponse> => {
+    const { tokens } = parse(undoStatusBody, req.body);
+    return { status: await ds.undoStatus(tokens) };
+  });
 
   app.post('/api/undo/:id', (req) => {
     const { id } = parse(idParam, req.params);

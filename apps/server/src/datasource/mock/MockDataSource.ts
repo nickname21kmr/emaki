@@ -49,6 +49,7 @@ import {
   type ListUnrecognizedResponse,
   type ListWorksQuery,
   type MutationResult,
+  type UndoTokenStatus,
   type RetagResult,
   type Page,
   type Rating,
@@ -1886,6 +1887,10 @@ export class MockDataSource implements DataSource {
 
   async undo(token: string): Promise<MutationResult> {
     return this.undoStack.run(token);
+  }
+
+  async undoStatus(tokens: string[]): Promise<Record<string, UndoTokenStatus>> {
+    return Object.fromEntries(tokens.map((t) => [t, this.undoStack.status(t)]));
   }
 }
 

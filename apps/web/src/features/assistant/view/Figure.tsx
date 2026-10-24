@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import type { AssistantCard, AssistantMessage } from '@emaki/shared';
 import { Dotted } from '@/components/overlays/palette/items';
 import { MountFrame, SelectCircle } from '@/components/media/ImageGrid';
@@ -25,8 +25,30 @@ const PLATE_STEP = 12;
 const ROW_STEP = 8;
 const LINKS = 'flex items-center gap-4 text-xs font-medium text-fg-muted [&_button]:underline-offset-4 [&_button:hover]:text-fg [&_button:hover]:underline';
 
+/** 这张卡里被勾选的图（跨卡勾选时选择里也有别的卡的图） */
+const pickedKey = (card: AssistantCard, conv: ConversationView) => {
+  const sel = new Set(conv.resultSelection?.ids ?? []);
+  return card.imageIds.filter(id => sel.has(id)).join(',');
+};
+const cardSignature = (c: AssistantCard) => [c.id, c.title, c.imageIds.length, c.imageIds.at(-1), c.columns?.length, c.rows?.length].join('|');
+
+/**
+ * 每份 SSE 快照都是新对象：卡片内容、编号、本卡的勾选都没变就不重排，长会话里几十张图版不用跟着刷新。
+ * conv 只看 actions（Transcript 给的稳定转发版本）和本卡的勾选
+ */
+export const Figure = memo(FigureView, (a, b) =>
+  a.className === b.className
+  && a.figureNo === b.figureNo
+  && a.tableNo === b.tableNo
+  && a.message.id === b.message.id
+  && a.message.text === b.message.text
+  && a.message.cards?.[0]?.id === b.message.cards?.[0]?.id
+  && a.conv.actions === b.conv.actions
+  && (a.card === b.card || cardSignature(a.card) === cardSignature(b.card))
+  && (a.conv.resultSelection === b.conv.resultSelection || pickedKey(a.card, a.conv) === pickedKey(b.card, b.conv)));
+
 /** 图版和表（§8）：没有卡片边框，也没有内部滚动区；一张卡同时有图和表时先图后表 */
-export function Figure({ message, card, figureNo, tableNo, conv, className }: FigureProps) {
+function FigureView({ message, card, figureNo, tableNo, conv, className }: FigureProps) {
   // 一条消息带几张卡时，正文只在第一张前面写一次
   const lead = message.cards?.[0]?.id === card.id && message.text.trim() && !message.cards.some(c => c.title === message.text);
   return (
@@ -89,14 +111,15 @@ function Plate({ card, n, conv }: { card: AssistantCard; n?: number; conv: Conve
   );
 }
 
-function Tile({ id }: { id: string }) {
+// 勾选、展开时图版重排，缩略图本身不用跟着重画
+const Tile = memo(function Tile({ id }: { id: string }) {
   const image = useAssistantImage(id);
   if (image.data) return <Thumb image={image.data} width={240} className="size-full rounded-[var(--radius-plate-sm)]" />;
   if (image.isError) {
     return <span className="flex size-full items-center justify-center rounded-[var(--radius-plate-sm)] bg-sunken text-[11px] text-fg-subtle">已移除</span>;
   }
   return <Skeleton className="size-full animate-fade-in !rounded-[var(--radius-plate-sm)]" style={{ animationDelay: '140ms' }} />;
-}
+});
 
 // ------------------------------------------------------------------ 表
 

@@ -30,6 +30,7 @@ function LiveCapsule() {
   const drag = useFloatingDrag('emaki.assistant.bubble-position');
   const status = useAssistantDock(s => capsuleStatus(s.lastStatus, s.unseen));
   const startedAt = useAssistantDock(s => s.runStartedAt);
+  const paused = useAssistantDock(s => !s.connected);
   // 有选图、胶囊没被拖过时抬到多选栏上面
   const lift = useSelection(s => s.ids.size > 0) && !drag.style;
   const button = useRef<HTMLButtonElement>(null);
@@ -54,7 +55,7 @@ function LiveCapsule() {
       )}
     >
       {/* 拖动挂在按钮上：useFloatingDrag 只放行手柄本身是按钮的情况，拖过之后吞掉那次点击 */}
-      <CapsuleButton ref={button} status={status} startedAt={startedAt} onClick={openAssistant} handle={drag.handle} />
+      <CapsuleButton ref={button} status={status} startedAt={startedAt} paused={paused} onClick={openAssistant} handle={drag.handle} />
     </div>
   );
 }
@@ -63,10 +64,11 @@ const STATUS_TEXT: Record<CapsuleStatus, string> = { idle: '', running: '处理�
 
 type DragHandle = Pick<HTMLAttributes<HTMLElement>, 'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onPointerCancel' | 'onLostPointerCapture' | 'onClickCapture'>;
 
-const CapsuleButton = forwardRef<HTMLButtonElement, { status: CapsuleStatus; startedAt: number | null; onClick?: () => void; handle?: DragHandle }>(
-  function CapsuleButton({ status, startedAt, onClick, handle }, ref) {
+const CapsuleButton = forwardRef<HTMLButtonElement, { status: CapsuleStatus; startedAt: number | null; paused?: boolean; onClick?: () => void; handle?: DragHandle }>(
+  function CapsuleButton({ status, startedAt, paused = false, onClick, handle }, ref) {
     const running = status === 'running';
-    const now = useClock(running);
+    // 连接断了：不知道还在不在跑，计时停住，显示 —
+    const now = useClock(running && !paused);
     const text = STATUS_TEXT[status];
     return (
       <motion.button
@@ -96,13 +98,13 @@ const CapsuleButton = forwardRef<HTMLButtonElement, { status: CapsuleStatus; sta
               {status === 'waiting' && <span aria-hidden className="size-1.5 rounded-full bg-shu" />}
               {status === 'incomplete' && <span aria-hidden className="size-1.5 rounded-full bg-warn" />}
               {text}
-              {running && startedAt != null && <span aria-hidden className="tabular text-fg-inverse/60">{formatClock(now - startedAt)}</span>}
+              {running && startedAt != null && <span aria-hidden className="tabular text-fg-inverse/60">{paused ? '—' : formatClock(now - startedAt)}</span>}
             </span>
           </>
         ) : (
           <Kbd tone="inverse" className="max-sm:hidden">{modKeyLabel} J</Kbd>
         )}
-        {running && (
+        {running && !paused && (
           <span aria-hidden className="pointer-events-none absolute inset-x-4 bottom-[3px] h-px animate-shimmer motion-reduce:animate-none motion-reduce:[background-position:50%_0]" style={SHU_GLINT} />
         )}
       </motion.button>

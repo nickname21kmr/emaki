@@ -35,6 +35,7 @@ import type {
   ListUnrecognizedResponse,
   ListWorksQuery,
   MutationResult,
+  UndoTokenStatus,
   Page,
   RetagResult,
   SearchHit,
@@ -151,6 +152,8 @@ export interface DataSource {
 
   // 撤销
   undo(token: string): Promise<MutationResult>;
+  /** 一批撤销 token 现在的状态（只读） */
+  undoStatus(tokens: string[]): Promise<Record<string, UndoTokenStatus>>;
 
   /** 关闭数据库等资源（进程退出时调用） */
   close?(): Promise<void>;

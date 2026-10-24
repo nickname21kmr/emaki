@@ -35,6 +35,7 @@ import type {
   ListWorksQuery,
   MoveImagesBody,
   MutationResult,
+  UndoTokenStatus,
   Page,
   RetagResult,
   SearchHit,
@@ -1366,5 +1367,9 @@ export class SqliteDataSource implements DataSource {
   // 撤销：执行 UndoStack 里记下的反向操作（T19 会加 ctx.mutate，自动记录反向操作）
   async undo(token: string): Promise<MutationResult> {
     return this.ctx.undo.run(token);
+  }
+
+  async undoStatus(tokens: string[]): Promise<Record<string, UndoTokenStatus>> {
+    return Object.fromEntries(tokens.map((t) => [t, this.ctx.undo.status(t)]));
   }
 }

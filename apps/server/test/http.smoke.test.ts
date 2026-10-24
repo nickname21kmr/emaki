@@ -495,6 +495,15 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     expect([again.status, again.json]).toEqual([404, apiError('not_found')]);
   });
 
+  route('POST /api/undo/status', async () => {
+    const token = (await call('POST', '/api/images/bulk', { ids: ['i4'], action: { type: 'favorite', value: true } })).json.undoToken as string;
+    const live = await call('POST', '/api/undo/status', { tokens: [token, 'nope'] });
+    expect([live.status, live.json]).toEqual([200, { status: { [token]: 'live', nope: 'expired' } }]);
+    await call('POST', `/api/undo/${token}`);
+    expect((await call('POST', '/api/undo/status', { tokens: [token] })).json).toEqual({ status: { [token]: 'undone' } });
+    expect((await call('POST', '/api/undo/status', { tokens: 'x' })).status).toBe(400);
+  });
+
   // SSE 会 hijack 响应、一直不结束，inject 等不到结果：真的监听一个随机端口（只在 127.0.0.1），读到第一个事件就断开
   route('GET /api/events', async () => {
     const address = await app.listen({ host: '127.0.0.1', port: 0 });

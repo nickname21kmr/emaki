@@ -1099,6 +1099,24 @@ export function undoContract(make: ContractFactory, name: Name) {
     it('不存在的 token → not_found', async () => {
       await expect(env().ds.undo('no-such-token')).rejects.toMatchObject({ code: 'not_found' });
     });
+
+    it('undoStatus：没撤销 live，撤销后 undone，不认识的 expired', async () => {
+      const e = env();
+      const res = await e.ds.updateImage(e.id('image', 'i1'), { favorite: false });
+      const token = res.undoToken!;
+      expect(await e.ds.undoStatus([token, 'no-such-token'])).toEqual({ [token]: 'live', 'no-such-token': 'expired' });
+      await e.ds.undo(token);
+      expect(await e.ds.undoStatus([token])).toEqual({ [token]: 'undone' });
+    });
+
+    it('undoStatus：撤销栈满了挤掉的算 expired', async () => {
+      const e = env();
+      const id = e.id('image', 'i1');
+      const first = (await e.ds.updateImage(id, { favorite: true })).undoToken!;
+      for (let i = 0; i < 50; i++) await e.ds.updateImage(id, { favorite: i % 2 === 0 });
+      expect(await e.ds.undoStatus([first])).toEqual({ [first]: 'expired' });
+      await expect(e.ds.undo(first)).rejects.toMatchObject({ code: 'not_found' });
+    });
   });
 }
 

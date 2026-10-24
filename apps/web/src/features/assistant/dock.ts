@@ -58,6 +58,9 @@ interface DockState {
   /** 这一轮从什么时候开始跑（最后一条提问的 createdAt），胶囊计时用 */
   runStartedAt: number | null;
   setStatus: (status: AssistantSession['status'] | null, runStartedAt: number | null) => void;
+  /** 会话的事件流连着没有；断开时胶囊计时停住（由 useConversation 写） */
+  connected: boolean;
+  setConnected: (v: boolean) => void;
   unseen: Unseen;
   setUnseen: (v: Unseen) => void;
   /** 打开前的焦点，收起时还回去 */
@@ -102,6 +105,8 @@ export const useAssistantDock = create<DockState>((set, get) => ({
   lastStatus: null,
   runStartedAt: null,
   setStatus: (lastStatus, runStartedAt) => set({ lastStatus, runStartedAt }),
+  connected: true,
+  setConnected: (connected) => set({ connected }),
   unseen: null,
   setUnseen: (unseen) => set({ unseen }),
   opener: null,

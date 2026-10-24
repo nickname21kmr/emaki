@@ -4,6 +4,7 @@
  */
 import type {
   AcceptSuggestionBody,
+  UndoStatusResponse,
   AddLibraryRootBody,
   ApiError,
   BulkCollectionsBody,
@@ -195,6 +196,7 @@ export const api = {
   cancelJob: (id: ID) => del<{ ok: true }>(`/jobs/${encodeURIComponent(id)}`),
 
   undo: (token: string) => post<MutationResult>(`/undo/${encodeURIComponent(token)}`),
+  undoStatus: (tokens: string[]) => post<UndoStatusResponse>('/undo/status', { tokens }),
 
   health: () => get<HealthResponse>('/health'),
   /** 由后端弹出系统「选择文件夹」对话框；用户取消时 path 为 null */

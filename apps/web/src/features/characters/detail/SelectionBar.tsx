@@ -1,8 +1,8 @@
-import { X } from 'lucide-react';
+import { Ellipsis, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { useSonner } from 'sonner';
-import { Kbd, RollingNumber, Spinner } from '@/components/ui';
+import { Kbd, Menu, MenuItem, RollingNumber, Spinner } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { EASE_OUT } from '@/lib/motion';
 
@@ -34,6 +34,8 @@ export function SelectionBar({
 }) {
   // 有 toast 时（底部居中）抬高一截给它让位，和图库的工具栏一样
   const lifted = useSonner().toasts.length > 0;
+  // 菜单关掉、不还焦点以后再执行，接着打开的对话框不会被焦点抢走
+  const afterMenu = useRef<(() => void) | null>(null);
   return (
     // assistant-cover-shift：助手附页覆盖在纸上时，在露出的那块里居中（index.css）
     <div className="assistant-cover-shift pointer-events-none sticky bottom-6 z-30 h-0 @container/bar">
@@ -44,7 +46,7 @@ export function SelectionBar({
             animate={{ opacity: 1, y: lifted ? -64 : 0, scale: 1 }}
             exit={{ opacity: 0, y: 12, scale: 0.98 }}
             transition={{ duration: 0.32, ease: EASE_OUT }}
-            className="absolute inset-x-0 bottom-0 flex justify-center px-8 @max-[640px]/bar:px-3"
+            className="absolute inset-x-0 bottom-0 flex justify-center px-8 @max-[640px]/bar:px-3 @max-[360px]/bar:px-2"
           >
             <div
               role="toolbar"
@@ -69,6 +71,7 @@ export function SelectionBar({
                     'inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium whitespace-nowrap',
                     'transition-[background-color,opacity] duration-150 hover:bg-fg-inverse/10 active:scale-[0.97]',
                     'disabled:pointer-events-none disabled:opacity-35 [&_svg]:size-4',
+                    '@max-[360px]/bar:hidden',
                   )}
                 >
                   {a.loading ? <Spinner className="size-4" /> : a.icon}
@@ -80,6 +83,36 @@ export function SelectionBar({
                   )}
                 </button>
               ))}
+              {/* 露出的纸窄于 360（助手覆盖在纸上）：操作都收进「更多」，平时藏着 */}
+              {actions.length > 0 && (
+                <Menu
+                  align="end"
+                  width={168}
+                  onCloseAutoFocus={(e) => {
+                    const next = afterMenu.current;
+                    if (!next) return;
+                    afterMenu.current = null;
+                    e.preventDefault();
+                    next();
+                  }}
+                  trigger={
+                    <button
+                      type="button"
+                      aria-label="更多"
+                      title="更多"
+                      className="inline-flex h-9 items-center rounded-full px-3 transition-colors hover:bg-fg-inverse/10 data-[state=open]:bg-fg-inverse/10 @min-[360px]/bar:hidden [&_svg]:size-4"
+                    >
+                      {actions.some((a) => a.loading) ? <Spinner className="size-4" /> : <Ellipsis />}
+                    </button>
+                  }
+                >
+                  {actions.map((a) => (
+                    <MenuItem key={a.key} icon={a.icon} shortcut={a.shortcut} disabled={a.disabled || a.loading} onSelect={() => { afterMenu.current = a.onClick; }}>
+                      {a.label}
+                    </MenuItem>
+                  ))}
+                </Menu>
+              )}
               <span className="mx-1 h-5 w-px bg-fg-inverse/15" aria-hidden />
               <button
                 type="button"

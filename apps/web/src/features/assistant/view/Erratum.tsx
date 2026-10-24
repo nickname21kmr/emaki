@@ -5,6 +5,7 @@ import { Dotted } from '@/components/overlays/palette/items';
 import { Thumb } from '@/components/media/Thumb';
 import { Button, Skeleton, Spinner } from '@/components/ui';
 import { cn } from '@/lib/cn';
+import { useUndoStatus } from '@/lib/queries';
 import type { Erratum as ErratumData } from '../presentation';
 import type { ConversationView } from '../useConversation';
 import { runUndo, useAssistantView, type UndoState } from '../viewState';
@@ -49,7 +50,10 @@ function DrawnCheck({ draw }: { draw: boolean }) {
 export function Erratum({ message, erratum, conv, state: forced, className }: ErratumProps) {
   const token = message.undoToken ?? '';
   const stored = useAssistantView(s => s.undo[token]);
-  const state = forced ?? stored ?? 'idle';
+  const local = forced ?? stored;
+  // 本页没有定论时问后端：重启过、被挤出撤销栈、在别处撤销过的，不用先点一次失败
+  const remote = useUndoStatus(token, forced === undefined && (local === undefined || typeof local === 'object')).data;
+  const state = typeof local === 'string' ? local : remote === 'undone' || remote === 'expired' ? remote : local ?? 'idle';
   const failed = typeof state === 'object' ? state.failed : null;
   const [draw] = useState(() => {
     if (drawn.has(message.id)) return false;

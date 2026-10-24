@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { Check, CircleAlert, Copy, RotateCw } from 'lucide-react';
 import type { AssistantBackend, AssistantDetection, AssistantSettings } from '@emaki/shared';
@@ -222,6 +222,14 @@ export function AssistantSettingsSection() {
   const [busy, setBusy] = useState(false), [confirming, setConfirming] = useState(false);
   const [pendingBackend, setPendingBackend] = useState<AssistantBackend | null>(null);
   const switchBox = useRef<HTMLSpanElement>(null);
+  const refocusSwitch = useRef(false);
+  useEffect(() => {
+    if (busy || !refocusSwitch.current) return;
+    refocusSwitch.current = false;
+    // 这期间用户已经点到别处就不抢
+    if (document.activeElement && document.activeElement !== document.body) return;
+    switchBox.current?.querySelector<HTMLElement>('[role="switch"]')?.focus({ preventScroll: true });
+  }, [busy]);
   const settings = query.data;
   // 出错时 toast 报原因，返回 false
   const perform: Perform = async (fn) => {
@@ -324,7 +332,10 @@ export function AssistantSettingsSection() {
         // 对话框不是从 Radix 的触发器打开的，关上后自己把焦点还给开关
         onCloseAutoFocus={(e) => {
           e.preventDefault();
-          switchBox.current?.querySelector<HTMLElement>('[role="switch"]')?.focus({ preventScroll: true });
+          const sw = switchBox.current?.querySelector<HTMLButtonElement>('[role="switch"]');
+          // 点了「开启」时开关正在保存、是 disabled 的，focus 不上：等保存完再还
+          if (sw?.disabled) refocusSwitch.current = true;
+          else sw?.focus({ preventScroll: true });
         }}
         title="开启 AI 助手？"
         description="实验功能。开启前请看一下这四点。"
