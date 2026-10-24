@@ -1,4 +1,4 @@
-import type { BulkImageAction, CharacterSuggestion, ContentKind, ID, UnrecognizedArtKind, UnrecognizedItem } from '@emaki/shared';
+import type { AcceptSuggestionBody, BulkImageAction, CharacterSuggestion, ContentKind, ID, UnrecognizedArtKind, UnrecognizedItem } from '@emaki/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { api, imageUrl } from '@/lib/api';
@@ -11,6 +11,7 @@ import type { AggregatedSuggestion, AssignTarget, Direction, StampEvent } from '
 
 const SCOPE = 'unrecognized';
 const EMPTY: ReadonlySet<ID> = new Set();
+const EMPTY_TAGS: ReadonlySet<string> = new Set();
 
 /** 点击队列项时关心的修饰键 */
 export interface ClickModifiers {
@@ -194,7 +195,7 @@ export function useTriage(bucket: 'suggested' | 'untagged', artKind?: Unrecogniz
   }, []);
 
   const acceptMut = useMutate(
-    (v: { ids: ID[]; imageId: ID; danbooruTag: string }) => api.acceptSuggestion(v.imageId, { danbooruTag: v.danbooruTag }),
+    (v: { ids: ID[]; imageId: ID; body: AcceptSuggestionBody }) => api.acceptSuggestion(v.imageId, v.body),
     { onSuccess: (_r, v) => settle(v.ids) },
   );
   const bulkMut = useMutate((v: { ids: ID[]; action: BulkImageAction }) => api.bulkImages({ ids: v.ids, action: v.action }), {
@@ -224,13 +225,27 @@ export function useTriage(bucket: 'suggested' | 'untagged', artKind?: Unrecogniz
   const stampIt = (glyph: string, label: string, tone: StampEvent['tone'] = 'shu') =>
     setStamp({ key: Date.now(), glyph, label, tone });
 
-  /** 单张：采纳 tagger 的第 N 个建议（可能会新建角色） */
-  const acceptSuggestion = (s: CharacterSuggestion) => {
+  // ---------------------------------------------------------------- 勾选多个建议（issue #5）
+  // 记着是哪张图的勾选：换图后自然就是空的，不用另外清
+  const [checks, setChecks] = useState<{ imageId: ID | null; tags: ReadonlySet<string> }>({ imageId: null, tags: EMPTY_TAGS });
+  const checked = current && checks.imageId === current.image.id ? checks.tags : EMPTY_TAGS;
+  const toggleCheck = (s: CharacterSuggestion) => {
     if (!current) return;
+    const next = new Set(checked);
+    if (next.has(s.danbooruTag)) next.delete(s.danbooruTag);
+    else next.add(s.danbooruTag);
+    setChecks({ imageId: current.image.id, tags: next });
+  };
+
+  /** 单张：采纳一条或几条建议（可能会新建角色），然后前进到下一张 */
+  const acceptMany = (list: CharacterSuggestion[]) => {
+    if (!current || !list.length) return;
     const img = current.image;
     hide([img.id]);
-    stampIt('归', s.name);
-    if (s.characterId) {
+    stampIt('归', list.length === 1 ? list[0]!.name : `${list.length} 位 · ${list.map((s) => s.name).join('、')}`);
+    // 倒着记，第一条排在「最近」最前面
+    for (const s of [...list].reverse()) {
+      if (!s.characterId) continue;
       remember({
         id: s.characterId,
         name: s.name,
@@ -239,7 +254,15 @@ export function useTriage(bucket: 'suggested' | 'untagged', artKind?: Unrecogniz
         coverImageId: isSensitive(img.rating) ? null : img.id,
       });
     }
-    acceptMut.mutateAsync({ ids: [img.id], imageId: img.id, danbooruTag: s.danbooruTag }).catch(() => unhide([img.id]));
+    const body: AcceptSuggestionBody =
+      list.length === 1 ? { danbooruTag: list[0]!.danbooruTag } : { danbooruTags: list.map((s) => s.danbooruTag) };
+    acceptMut.mutateAsync({ ids: [img.id], imageId: img.id, body }).catch(() => unhide([img.id]));
+  };
+  /** 单张：采纳 tagger 的第 N 个建议 */
+  const acceptSuggestion = (s: CharacterSuggestion) => acceptMany([s]);
+  /** 采纳勾选的那几条（按建议的顺序），一条撤销 */
+  const acceptChecked = () => {
+    if (current) acceptMany(current.suggestions.filter((s) => checked.has(s.danbooruTag)));
   };
 
   /** 归到指定角色：单张或多选 */
@@ -389,6 +412,9 @@ export function useTriage(bucket: 'suggested' | 'untagged', artKind?: Unrecogniz
       if (canLoadMore) void fetchNextPage();
     },
     acceptSuggestion,
+    checked,
+    toggleCheck,
+    acceptChecked,
     acceptAggregated,
     sameTop,
     selectSameTop,

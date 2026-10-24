@@ -123,6 +123,8 @@ export interface DataSource {
   /** 未识别里识别过、没认出角色、没放下的插画全部标记为重新识别，并启动识别任务 */
   retagUnrecognized(): Promise<RetagResult>;
   acceptSuggestion(imageId: ID, danbooruTag: string): Promise<MutationResult>;
+  /** 同一张图一次采纳多条建议，一条撤销 */
+  acceptSuggestions(imageId: ID, danbooruTags: string[]): Promise<MutationResult>;
 
   // 重复
   listDuplicates(query: ListDuplicatesQuery): Promise<DuplicateGroup[]>;

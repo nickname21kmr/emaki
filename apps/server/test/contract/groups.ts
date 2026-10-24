@@ -685,6 +685,33 @@ export function unrecognizedContract(make: ContractFactory, name: Name) {
       expect((await e.ds.getStats()).unrecognizedCount).toBe(7);
     });
 
+    it('一次采纳同一张图的多个建议；一条撤销全部回退', async () => {
+      const e = env();
+      const r = await e.ds.acceptSuggestions(e.id('image', 'i26'), ['mika_(blue_archive)', 'yuuka_(blue_archive)', 'mika_(blue_archive)']);
+      expect(r.message).toBe('已归到「圣园未花」「早濑优香」');
+      const chars = (await e.ds.getImage(e.id('image', 'i26')))!.characterIds.map((c) => e.back('character', c));
+      expect(chars.sort()).toEqual(['c1', 'c2']);
+      expect((await e.ds.getStats()).unrecognizedCount).toBe(6);
+      await e.ds.undo(r.undoToken!);
+      expect((await e.ds.getImage(e.id('image', 'i26')))!.characterIds).toEqual([]);
+      expect((await e.ds.getStats()).unrecognizedCount).toBe(7);
+    });
+
+    it('多个建议里有新角色：一并新建，撤销时删掉', async () => {
+      const e = env();
+      const r = await e.ds.acceptSuggestions(e.id('image', 'i26'), ['mika_(blue_archive)', 'test_girl_(emaki_test)']);
+      expect(r.message).toBe('已归到「圣园未花」「Test Girl」，新建了 1 个角色');
+      await e.ds.undo(r.undoToken!);
+      expect((await e.ds.listCharacters({ q: 'Test Girl' })).total).toBe(0);
+    });
+
+    it('多个建议里有失效的：409，一条都不采纳', async () => {
+      const e = env();
+      await expect(e.ds.acceptSuggestions(e.id('image', 'i26'), ['mika_(blue_archive)', 'emaki:character:999'])).rejects.toMatchObject({ statusCode: 409 });
+      expect((await e.ds.getImage(e.id('image', 'i26')))!.characterIds).toEqual([]);
+      await expect(e.ds.acceptSuggestions(e.id('image', 'i26'), [])).rejects.toMatchObject({ statusCode: 400 });
+    });
+
     it('采纳库里没有的标签会新建角色', async () => {
       const e = env();
       const r = await e.ds.acceptSuggestion(e.id('image', 'i27'), 'test_girl_(emaki_test)');

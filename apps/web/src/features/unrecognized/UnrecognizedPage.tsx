@@ -41,10 +41,11 @@ export function UnrecognizedPage() {
   return (
     <div className="flex h-full min-h-[620px] flex-col">
       <PageHeader title="未识别" subtitle={<Subtitle />} actions={
+          // 三个按钮一组：同样的描边样式，悬停有一句说明
           <div className="flex items-center gap-2">
             {p.area === 'art' && <PixivTagsButton />}
             <RetagButton />
-            <RunTaggerButton />
+            <RunTaggerButton variant="outline" tip="给还没识别过的图认角色：认得出的直接归入，拿不准的进「有建议」。" />
           </div>
         } className="shrink-0">
         <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">

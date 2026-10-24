@@ -1,10 +1,10 @@
 import { cn } from '@/lib/cn';
 import { Thumb } from '@/components/media/Thumb';
 import type { ImageItem, UnrecognizedItem } from '@emaki/shared';
-import { Ban, ChevronLeft, ChevronRight, ExternalLink, Feather, Shapes } from 'lucide-react';
+import { Ban, CheckCheck, ChevronLeft, ChevronRight, ExternalLink, Feather, Shapes } from 'lucide-react';
 import { KindMenu } from '@/components/media/KindMenu';
 import type { ReactNode, RefObject } from 'react';
-import { Badge, Kbd } from '@/components/ui';
+import { Badge, Button, Kbd } from '@/components/ui';
 import {
   formatBytes,
   formatConfidence,
@@ -42,6 +42,9 @@ export function DecisionPanel({
   searchRef: RefObject<HTMLInputElement | null>;
 }) {
   const { suggestions, tagged } = item;
+  // 两条以上才给勾选框：只有一条时点它就是采纳
+  const multi = suggestions.length > 1;
+  const nChecked = suggestions.filter((s) => triage.checked.has(s.danbooruTag)).length;
 
   return (
     <PanelShell
@@ -77,7 +80,7 @@ export function DecisionPanel({
       <div key={item.image.id} className="animate-fade-in">
         <ImageMeta image={item.image} position={triage.index + 1} total={triage.total} />
 
-        <PanelSection title="角色建议" hint={suggestions.length ? '按数字键直接采纳' : undefined}>
+        <PanelSection title="角色建议" hint={suggestions.length ? (multi ? '数字键采纳 · ⇧+数字 勾选' : '按数字键直接采纳') : undefined}>
           {suggestions.length ? (
             <div className="space-y-2">
               {/* 只给前 9 条编号，正好对应数字键 */}
@@ -94,8 +97,21 @@ export function DecisionPanel({
                   isNew={!s.characterId}
                   title={`${s.danbooruTag} · 按 ${i + 1} 采纳`}
                   onPick={() => triage.acceptSuggestion(s)}
+                  checked={multi ? triage.checked.has(s.danbooruTag) : undefined}
+                  onToggleCheck={multi ? () => triage.toggleCheck(s) : undefined}
                 />
               ))}
+              {nChecked > 0 && (
+                <Button
+                  variant="primary"
+                  className="w-full animate-fade-in"
+                  icon={<CheckCheck />}
+                  trailing={<Kbd tone="inverse">↵</Kbd>}
+                  onClick={triage.acceptChecked}
+                >
+                  采纳勾选的 {nChecked} 位
+                </Button>
+              )}
             </div>
           ) : (
             <NoSuggestion tagged={tagged} />

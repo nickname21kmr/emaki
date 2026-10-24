@@ -864,6 +864,9 @@ export class SqliteDataSource implements DataSource {
   async acceptSuggestion(imageId: ID, danbooruTag: string): Promise<MutationResult> {
     return this.unrecognized.accept(imageId, danbooruTag);
   }
+  async acceptSuggestions(imageId: ID, danbooruTags: string[]): Promise<MutationResult> {
+    return this.unrecognized.acceptMany(imageId, danbooruTags);
+  }
   async retagUnrecognized(): Promise<RetagResult> {
     this.unrecognized.markRetag();
     // 之前标过、还没跑完的也算：只要有等着重新识别的，就启动识别任务

@@ -321,6 +321,10 @@ describe('图片、未识别、重复、排除（routes/images.ts）', () => {
     const { status, json } = await call('POST', '/api/unrecognized/i26/accept', { danbooruTag: 'mika_(blue_archive)' });
     expect([status, json]).toEqual([200, withUndo]);
     expect((await call('POST', '/api/unrecognized/i26/accept', { danbooruTag: '' })).status).toBe(400);
+    // 一次采纳多条
+    const many = await call('POST', '/api/unrecognized/i24/accept', { danbooruTags: ['mika_(blue_archive)', 'yuuka_(blue_archive)'] });
+    expect([many.status, many.json]).toEqual([200, withUndo]);
+    expect((await call('POST', '/api/unrecognized/i24/accept', { danbooruTags: [] })).status).toBe(400);
   });
 
   route('GET /api/duplicates', async () => {

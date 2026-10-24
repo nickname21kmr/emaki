@@ -457,11 +457,10 @@ export type BrowseTheme = (typeof BROWSE_THEMES)[number];
 export type ListContentKindsResponse = ContentKindSummary[];
 
 /**
- * POST /api/unrecognized/:imageId/accept —— 采纳一个建议（可能会新建角色）
+ * POST /api/unrecognized/:imageId/accept —— 采纳一个建议（可能会新建角色）；
+ * 传 danbooruTags 时一次采纳这张图的多个建议，只有一条撤销
  */
-export interface AcceptSuggestionBody {
-  danbooruTag: string;
-}
+export type AcceptSuggestionBody = { danbooruTag: string } | { danbooruTags: string[] };
 
 // ---------------------------------------------------------------- 重复
 

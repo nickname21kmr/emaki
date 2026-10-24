@@ -7,11 +7,12 @@ import { useLiveJobs } from '@/lib/events';
 import { formatCount } from '@/lib/format';
 import { useMutate, useUnrecognizedSummary } from '@/lib/queries';
 import { useTagJob } from '../useTagJob';
+import { HeaderAction } from './HeaderAction';
 
 /**
- * 「重新识别」：未识别里已经识别过、但没认出角色的插画，用现在的主模型和阈值再认一遍。
+ * 「重认没认出的」：未识别里已经识别过、但没认出角色的插画，用现在的主模型和阈值再认一遍。
  * 用在换过模型、调低过阈值，或者以前的版本认得不好之后。已经归到角色的、放下的都不动。
- * 识别任务在跑时隐藏（旁边的「运行识别」会变成进度）。
+ * 识别任务在跑时隐藏（旁边的「识别新图」会变成进度）。
  */
 export function RetagButton() {
   const { data } = useUnrecognizedSummary();
@@ -37,9 +38,9 @@ export function RetagButton() {
   if (running || n === 0) return null;
   return (
     <>
-      <Button variant="ghost" icon={<RotateCcw className="size-4" />} onClick={() => setOpen(true)}>
-        重新识别
-      </Button>
+      <HeaderAction icon={<RotateCcw />} onClick={() => setOpen(true)} tip="识别过但没认出角色的插画，用现在的模型和阈值再认一遍。">
+        重认没认出的
+      </HeaderAction>
       <Dialog open={open} onOpenChange={setOpen} title="用现在的模型重新识别？" width={460}>
         <div className="rounded-lg bg-sunken p-4 text-[13px] leading-relaxed text-fg-muted">
           <p>
@@ -47,7 +48,7 @@ export function RetagButton() {
             张插画已经识别过、但没认出角色。会用设置里现在的主模型和阈值把它们再认一遍，不管当时用的是哪个模型。
           </p>
           <p className="mt-2">
-            已经归到角色的、放下的、漫画都不动。原来的识别建议会换成新的结果。图多的话要跑一阵，在后台进行，中途可以取消，下次运行识别会接着认。
+            已经归到角色的、放下的、漫画都不动。原来的识别建议会换成新的结果。图多的话要跑一阵，在后台进行，中途可以取消，下次识别会接着认。
           </p>
         </div>
         <DialogFooter>

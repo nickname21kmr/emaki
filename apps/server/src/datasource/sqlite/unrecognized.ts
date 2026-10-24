@@ -19,6 +19,7 @@ import {
 } from '@emaki/shared';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
 import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
+import { acceptMessage } from '../acceptMessage.ts';
 import { insertDanbooruCharacter } from './characters.ts';
 import type { SqliteContext } from './context.ts';
 import { applyExclusionRules } from './exclusions.ts';
@@ -242,38 +243,49 @@ export class UnrecognizedQueries {
   }
 
   accept(imageIdStr: ID, rawTag: string): MutationResult {
+    return this.acceptMany(imageIdStr, [rawTag]);
+  }
+
+  /** 同一张图采纳多条建议：一个事务、一条撤销 */
+  acceptMany(imageIdStr: ID, rawTags: string[]): MutationResult {
     const imageId = parseId(imageIdStr);
     if (imageId === null || !this.ctx.stmt('SELECT 1 FROM v_images WHERE id = ?').get(imageId)) throw new NotFoundError('图片');
-    const tag = rawTag.trim();
-    if (!tag) throw new BadRequestError('标签不能为空');
-    const row = this.ctx
-      .stmt('SELECT score, character_id FROM character_suggestions WHERE image_id = ? AND danbooru_tag = ?')
-      .get(imageId, tag) as { score: number; character_id: number | null } | undefined;
-    const score = row?.score ?? null;
-    // 自建角色的建议只认 character_id：角色合并 / 删除后这行已级联删掉，不能按编号再找（编号可能给了别的角色）
-    if (CharacterCatalog.isCustomTag(tag) && row?.character_id == null) throw new ConflictError('这条建议已失效，请刷新');
+    const tags = [...new Set(rawTags.map((t) => t.trim()))];
+    if (!tags.length || tags.some((t) => !t)) throw new BadRequestError('标签不能为空');
+    const rows = tags.map((tag) => {
+      const row = this.ctx
+        .stmt('SELECT score, character_id FROM character_suggestions WHERE image_id = ? AND danbooru_tag = ?')
+        .get(imageId, tag) as { score: number; character_id: number | null } | undefined;
+      // 自建角色的建议只认 character_id：角色合并 / 删除后这行已级联删掉，不能按编号再找（编号可能给了别的角色）
+      if (CharacterCatalog.isCustomTag(tag) && row?.character_id == null) throw new ConflictError('这条建议已失效，请刷新');
+      return { tag, score: row?.score ?? null, characterId: row?.character_id ?? null };
+    });
     const catalog = this.catalog();
     const db = this.ctx.db;
     const now = iso(this.ctx.clock());
     return this.ctx.mutate((u) => {
-      u.set('character_suggestions', 'image_id = ? AND danbooru_tag = ?', [imageId, tag]);
       u.columns('images', ['excluded_by'], [imageId]);
-      let characterId = row?.character_id ?? catalog.resolveCharacterId(tag);
-      let created = false;
-      if (characterId === null) {
-        // 新建角色（封面由 derived 自动选）；和自动采纳一样按作品挂好（必要时新建作品），撤销时一并删除
-        const r = insertDanbooruCharacter(u, catalog, tag, { now });
-        characterId = r.id;
-        created = r.created;
+      const names: string[] = [];
+      let created = 0;
+      for (const r of rows) {
+        u.set('character_suggestions', 'image_id = ? AND danbooru_tag = ?', [imageId, r.tag]);
+        let characterId = r.characterId ?? catalog.resolveCharacterId(r.tag);
+        if (characterId === null) {
+          // 新建角色（封面由 derived 自动选）；和自动采纳一样按作品挂好（必要时新建作品），撤销时一并删除
+          const c = insertDanbooruCharacter(u, catalog, r.tag, { now });
+          characterId = c.id;
+          if (c.created) created++;
+        }
+        const ins = db
+          .prepare("INSERT OR IGNORE INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, ?, 'manual', ?, ?)")
+          .run(imageId, characterId, r.score, now);
+        if (ins.changes === 1) u.sql('DELETE FROM image_characters WHERE image_id = ? AND character_id = ?', [imageId, characterId]);
+        db.prepare('DELETE FROM character_suggestions WHERE image_id = ? AND danbooru_tag = ?').run(imageId, r.tag);
+        names.push(db.prepare('SELECT name FROM characters WHERE id = ?').pluck().get(characterId) as string);
       }
-      const ins = db
-        .prepare("INSERT OR IGNORE INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, ?, 'manual', ?, ?)")
-        .run(imageId, characterId, score, now);
-      if (ins.changes === 1) u.sql('DELETE FROM image_characters WHERE image_id = ? AND character_id = ?', [imageId, characterId]);
-      db.prepare('DELETE FROM character_suggestions WHERE image_id = ? AND danbooru_tag = ?').run(imageId, tag);
       applyExclusionRules(this.ctx, { imageIds: [imageId] }); // 新角色可能命中「角色」排除规则
-      const name = db.prepare('SELECT name FROM characters WHERE id = ?').pluck().get(characterId) as string;
-      return { message: created ? `已新建角色「${name}」并归入` : `已归到「${name}」` };
+      return { message: acceptMessage(names, created) };
     });
   }
 }
+

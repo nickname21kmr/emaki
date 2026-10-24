@@ -223,7 +223,7 @@ export function TaggerSection({
                 ? '目前没有未识别的图片。'
                 : untaggedCount
                   ? `还有 ${formatCount(unrecognizedCount)} 张没有归到角色，其中 ${formatCount(untaggedCount)} 张还没识别过。识别在后台进行，可以继续做别的事。`
-                  : `还有 ${formatCount(unrecognizedCount)} 张没有归到角色，但都已经识别过：模型没认出来（原创、冷门或看不清的角色），点这里不会再认。可以到「未识别」里手动归类；换过模型、调低过阈值，或者想用现在的模型再认一遍，到「未识别」页右上角点「重新识别」。`
+                  : `还有 ${formatCount(unrecognizedCount)} 张没有归到角色，但都已经识别过：模型没认出来（原创、冷门或看不清的角色），点这里不会再认。可以到「未识别」里手动归类；换过模型、调低过阈值，或者想用现在的模型再认一遍，到「未识别」页右上角点「重认没认出的」。`
           }
         >
           <JobAction kind="tag" icon={<ScanFace />} disabled={unrecognizedCount === 0}>

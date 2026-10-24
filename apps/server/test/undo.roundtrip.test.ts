@@ -106,6 +106,7 @@ const OPS: Op[] = [
   // ---------------------------------------------------------------- 未识别（T15）
   { name: '采纳建议（已有角色）', run: () => ds.acceptSuggestion(id('image', 'i26'), 'yuuka_(blue_archive)') },
   { name: '采纳建议（新建角色）', run: () => ds.acceptSuggestion(id('image', 'i27'), 'test_girl_(emaki_test)') },
+  { name: '一次采纳多个建议（含新建角色）', run: () => ds.acceptSuggestions(id('image', 'i26'), ['mika_(blue_archive)', 'yuuka_(blue_archive)', 'test_girl_(emaki_test)']) },
   { name: '采纳建议（新建角色并新建作品）', run: () => ds.acceptSuggestion(id('image', 'i30'), 'power_(chainsaw_man)') },
 
   // ---------------------------------------------------------------- 重复（T16）

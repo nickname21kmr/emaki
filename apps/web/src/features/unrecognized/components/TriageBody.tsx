@@ -6,7 +6,7 @@ import { Button, EmptyState, ErrorState } from '@/components/ui';
 import { formatCount } from '@/lib/format';
 import { useHotkey } from '@/lib/hotkeys';
 import { useLightbox } from '@/lib/stores';
-import { usePriorityKeys, useTriageKeysEnabled } from '../hooks';
+import { digitIndex, usePriorityKeys, useTriageKeysEnabled } from '../hooks';
 import { useTriage } from '../useTriage';
 import type { UnrecognizedView } from '../useUnrecognizedParams';
 import { BatchPanel } from './BatchPanel';
@@ -18,10 +18,12 @@ import { TriageQueue } from './TriageQueue';
 import { TriageSkeleton } from './TriageSkeleton';
 
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
+// Shift+数字（勾选建议）只能按物理键认
+const DIGIT_CODES = DIGITS.map((d) => `Digit${d}`);
 
 /**
  * 「有建议」「待识别」两段：逐张三栏（队列 / 预览 / 决策），全程可以只用键盘：
- *   1–9 采纳建议 · / 搜索角色 · J/→ 跳过 · K/← 上一张 · E 排除 · X 多选 · 空格 看大图 · Esc 取消选择
+ *   1–9 采纳建议 · Shift+数字 勾选、↵ 采纳勾选的 · / 搜索角色 · J/→ 跳过 · K/← 上一张 · E 排除 · X 多选 · 空格 看大图 · Esc 取消选择
  * 快捷键只在这两段注册（T34b）。
  */
 export function TriageBody({
@@ -86,14 +88,30 @@ export function TriageBody({
 
   // 数字键和 / 要抢在全局快捷键（跳页 / 命令面板）前面
   usePriorityKeys(
-    [...DIGITS, '/'],
+    [...DIGITS, ...DIGIT_CODES, '/', 'Enter'],
     (key, e) => {
       if (key === '/') {
         searchRef.current?.focus();
         return;
       }
+      if (key === 'Enter') {
+        // 有勾选时 ↵ 采纳勾选的；焦点在别的按钮上时 ↵ 还是归那个按钮
+        if (batch || !triage.checked.size) return false;
+        const t = e.target instanceof Element ? e.target : null;
+        if (t?.closest('button,a') && !t.closest('[data-suggestion-check]')) return false;
+        if (!e.repeat) triage.acceptChecked();
+        return;
+      }
       if (e.repeat) return;
-      const i = Number(key) - 1;
+      const i = digitIndex(e);
+      if (i < 0) return false;
+      if (e.shiftKey) {
+        // Shift+数字：勾选 / 取消勾选，不前进（只有一条建议时没有勾选框）
+        const s = current?.suggestions[i];
+        if (batch || !s || current.suggestions.length < 2) return false;
+        triage.toggleCheck(s);
+        return;
+      }
       if (batch) {
         const s = triage.aggregated[i];
         if (s) triage.acceptAggregated(s);

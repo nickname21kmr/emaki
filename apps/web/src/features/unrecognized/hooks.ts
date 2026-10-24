@@ -21,6 +21,7 @@ export function useTriageKeysEnabled(): boolean {
  * 捕获阶段比全局（冒泡阶段）先执行，stopPropagation 后全局那边就收不到了。
  *
  * handler 返回 false 表示「这次不处理」，事件照常传给全局。
+ * keys 里也可以写 e.code（例如 Digit1）：Shift+数字时 e.key 会变成符号，只能按物理键认。
  */
 export function usePriorityKeys(
   keys: string[],
@@ -36,7 +37,7 @@ export function usePriorityKeys(
     const wanted = new Set(keySig.split('|'));
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
-      if (!wanted.has(e.key)) return;
+      if (!wanted.has(e.key) && !wanted.has(e.code)) return;
       if (isTypingTarget(e.target)) return;
       // 弹窗 / 菜单 / 助手附页里按键属于它们自己
       if (e.target instanceof Element && e.target.closest('[role="dialog"],[role="menu"],[role="listbox"],[data-assistant-sheet]')) return;
@@ -47,6 +48,13 @@ export function usePriorityKeys(
     window.addEventListener('keydown', onKey, { capture: true });
     return () => window.removeEventListener('keydown', onKey, { capture: true });
   }, [enabled, keySig]);
+}
+
+/** 按键对应第几条建议（0 起）；不是数字键时 -1。Shift+数字时 e.key 是符号，按 e.code 认 */
+export function digitIndex(e: Pick<KeyboardEvent, 'key' | 'code'>): number {
+  if (/^[1-9]$/.test(e.key)) return Number(e.key) - 1;
+  const m = /^Digit([1-9])$/.exec(e.code);
+  return m ? Number(m[1]) - 1 : -1;
 }
 
 /** 元素尺寸（ResizeObserver），用来把预览图按比例塞进可用区域。 */

@@ -91,6 +91,8 @@ export const SHORTCUT_GROUPS: Record<ShortcutGroupId, ShortcutGroup> = {
     hint: '逐张确认角色',
     items: [
       { label: '采纳第 1–3 条建议', keys: [['1'], ['2'], ['3']] },
+      { label: '勾选第 N 条建议（可勾多位）', keys: [['Shift', '1–9']] },
+      { label: '采纳勾选的建议', keys: [['↵']] },
       { label: '搜索其他角色', keys: [['/']] },
       { label: '跳过', keys: [['→'], ['J']] },
       { label: '上一张', keys: [['←'], ['K']] },

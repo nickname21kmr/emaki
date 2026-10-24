@@ -86,6 +86,7 @@ import { artScore, classifyTheme, matchesBrowseTheme, resolveTheme } from '../..
 import { describeKindReason } from '../sqlite/hydrate.ts';
 import { coverQuality, isUnfitCover } from '../../services/covers/quality.ts';
 import { assertKindValue, KIND_LABEL } from '../sqlite/kinds.ts';
+import { acceptMessage } from '../acceptMessage.ts';
 import { artistAutoMessage, artistEditMessage, artistLinksMessage, linkTags, normArtists, planArtistLinks } from '../artistEdits.ts';
 import { resolveArtist } from '../../services/danbooru/artistNames.ts';
 import { normalizeSubdir } from '../sqlite/move.ts';
@@ -1388,33 +1389,44 @@ export class MockDataSource implements DataSource {
   }
 
   async acceptSuggestion(imageId: ID, danbooruTag: string): Promise<MutationResult> {
+    return this.acceptSuggestions(imageId, [danbooruTag]);
+  }
+
+  async acceptSuggestions(imageId: ID, danbooruTags: string[]): Promise<MutationResult> {
     const img = this.requireImage(imageId);
+    const tags = [...new Set(danbooruTags.map((t) => t.trim()))];
+    if (!tags.length || tags.some((t) => !t)) throw new BadRequestError('标签不能为空');
     // 同 sqlite：emaki:character: 是自建角色建议的占位标签，没有对应建议行就是失效了，不能拿它新建角色（mock 没有 Pixiv 建议）
-    if (danbooruTag.trim().startsWith('emaki:character:')) throw new ConflictError('这条建议已失效，请刷新');
-    let ch = this.idx.charByTag.get(danbooruTag);
-    let created: CharacterRow | null = null;
-    if (!ch) {
-      created = {
-        id: `c_${hashString(danbooruTag).toString(36)}`,
-        name: humanizeTag(danbooruTag),
-        danbooruTag,
-        source: 'danbooru',
-        aliases: [],
-        workIds: [],
-        newCount: 0,
-        coverImageId: img.id,
-        coverFocus: null,
-        pinned: false,
-      };
-      this.db.characters.set(created.id, created);
-      ch = created;
-    }
+    // 先全部检查再改，失败时一条都不采纳
+    if (tags.some((t) => t.startsWith('emaki:character:'))) throw new ConflictError('这条建议已失效，请刷新');
     const before = [...img.characterIds];
-    img.characterIds = [...new Set([...img.characterIds, ch.id])];
-    const name = ch.name;
-    return this.withUndo(created ? `已新建角色「${name}」并归入` : `已归到「${name}」`, () => {
+    const created: CharacterRow[] = [];
+    const names: string[] = [];
+    for (const danbooruTag of tags) {
+      let ch = this.idx.charByTag.get(danbooruTag);
+      if (!ch) {
+        const row: CharacterRow = {
+          id: `c_${hashString(danbooruTag).toString(36)}`,
+          name: humanizeTag(danbooruTag),
+          danbooruTag,
+          source: 'danbooru',
+          aliases: [],
+          workIds: [],
+          newCount: 0,
+          coverImageId: img.id,
+          coverFocus: null,
+          pinned: false,
+        };
+        this.db.characters.set(row.id, row);
+        created.push(row);
+        ch = row;
+      }
+      img.characterIds = [...new Set([...img.characterIds, ch.id])];
+      names.push(ch.name);
+    }
+    return this.withUndo(acceptMessage(names, created.length), () => {
       img.characterIds = before;
-      if (created) this.db.characters.delete(created.id);
+      for (const c of created) this.db.characters.delete(c.id);
     });
   }
 

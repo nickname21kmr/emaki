@@ -1,20 +1,24 @@
 import { ScanSearch } from 'lucide-react';
-import { Button, Spinner } from '@/components/ui';
+import { Button, Spinner, Tooltip } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { useTagJob } from '../useTagJob';
 
 /**
- * 头部的「运行识别」。运行中按钮本身变成进度：转圈 + 百分比 + 底边一道朱色细线。
+ * 「识别新图」：给还没识别过的图跑一遍 tagger。运行中按钮本身变成进度：转圈 + 百分比 + 底边一道朱色细线。
+ * 页头用 outline + tip，和旁边两个按钮一组；面板里的「继续识别 N 张」等用 primary / secondary。
  */
 export function RunTaggerButton({
   size = 'md',
   variant = 'secondary',
-  label = '运行识别',
+  label = '识别新图',
+  tip,
   className,
 }: {
   size?: 'sm' | 'md';
-  variant?: 'primary' | 'secondary';
+  variant?: 'primary' | 'secondary' | 'outline';
   label?: string;
+  /** 悬停说明（页头用） */
+  tip?: string;
   className?: string;
 }) {
   const { running, progress, start } = useTagJob();
@@ -24,7 +28,8 @@ export function RunTaggerButton({
       <div
         role="status"
         className={cn(
-          'relative inline-flex shrink-0 items-center gap-2 overflow-hidden rounded-md bg-sunken font-medium text-fg-muted tabular',
+          'relative inline-flex shrink-0 items-center gap-2 overflow-hidden rounded-md font-medium text-fg-muted tabular',
+          variant === 'outline' ? 'border border-line-strong' : 'bg-sunken',
           size === 'md' ? 'h-9 px-3.5 text-sm' : 'h-7 px-2.5 text-xs',
           className,
         )}
@@ -44,9 +49,10 @@ export function RunTaggerButton({
     );
   }
 
-  return (
-    <Button variant={variant} size={size} icon={<ScanSearch className="size-4" />} onClick={start} className={className}>
+  const button = (
+    <Button variant={variant} size={size} icon={<ScanSearch />} onClick={start} className={className}>
       {label}
     </Button>
   );
+  return tip ? <Tooltip content={<span className="block max-w-64 leading-relaxed whitespace-normal">{tip}</span>}>{button}</Tooltip> : button;
 }

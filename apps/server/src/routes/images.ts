@@ -156,8 +156,12 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
 
   app.post('/api/unrecognized/:id/accept', (req) => {
     const { id } = parse(idParam, req.params);
-    const { danbooruTag } = parse(z.object({ danbooruTag: z.string().min(1) }), req.body);
-    return ds.acceptSuggestion(id, danbooruTag);
+    // danbooruTags：同一张图一次采纳多条，一条撤销
+    const body = parse(
+      z.union([z.object({ danbooruTag: z.string().min(1) }), z.object({ danbooruTags: z.array(z.string().min(1)).min(1).max(20) })]),
+      req.body,
+    );
+    return 'danbooruTags' in body ? ds.acceptSuggestions(id, body.danbooruTags) : ds.acceptSuggestion(id, body.danbooruTag);
   });
 
   // ---------------------------------------------------------- 重复

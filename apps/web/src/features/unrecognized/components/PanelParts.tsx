@@ -1,5 +1,6 @@
+import { Check } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { Badge, Kbd } from '@/components/ui';
+import { Badge, Kbd, Tooltip } from '@/components/ui';
 import { cn } from '@/lib/cn';
 
 /** 决策面板里的小节：一行小标题 + 右侧提示 */
@@ -28,6 +29,7 @@ export function PanelSection({
 /**
  * 一条建议 = 一行大按钮：左边斜体衬线编号（也就是快捷键），中间角色 / 作品，
  * 右边置信度；卡片底边是一道朱色的置信度条。
+ * 传了 onToggleCheck 时右端多一个勾选框：点行 = 直接采纳，点勾选框 = 先记下、稍后一起采纳（issue #5）。
  */
 export function SuggestionRow({
   n,
@@ -40,6 +42,8 @@ export function SuggestionRow({
   sourceLabel,
   title,
   onPick,
+  checked,
+  onToggleCheck,
 }: {
   n: number;
   name: string;
@@ -54,15 +58,20 @@ export function SuggestionRow({
   sourceLabel?: string;
   title?: string;
   onPick: () => void;
+  checked?: boolean;
+  onToggleCheck?: () => void;
 }) {
-  return (
+  const row = (
     <button
+      type="button"
       onClick={onPick}
       title={title}
       className={cn(
         'group relative flex w-full items-center gap-3.5 overflow-hidden rounded-[14px] bg-raised py-3 pr-4 pl-3.5 text-left',
         'shadow-[0_0_0_1px_var(--c-line)] transition-[box-shadow,transform] duration-200 ease-[var(--ease-out-soft)]',
         'hover:shadow-[0_0_0_1px_var(--c-line-strong),var(--shadow-card)] active:scale-[0.99]',
+        onToggleCheck && 'pr-12',
+        checked && 'shadow-[0_0_0_1.5px_var(--c-shu)] hover:shadow-[0_0_0_1.5px_var(--c-shu),var(--shadow-card)]',
       )}
     >
       <span className="numeral w-6 shrink-0 text-center text-[32px] text-fg-subtle transition-colors duration-200 group-hover:text-shu">
@@ -87,6 +96,31 @@ export function SuggestionRow({
         />
       </span>}
     </button>
+  );
+  if (!onToggleCheck) return row;
+  return (
+    <div className="relative">
+      {row}
+      {/* 勾选框是行旁边的独立按钮（不能套在行按钮里），压在卡片右端 */}
+      <Tooltip content="勾选，稍后一起采纳" shortcut={`⇧${n}`} side="left">
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={!!checked}
+          aria-label={`勾选：${name}`}
+          data-suggestion-check
+          onClick={onToggleCheck}
+          className={cn(
+            'absolute top-1/2 right-3 flex size-6 -translate-y-1/2 items-center justify-center rounded-[7px] transition-[background-color,box-shadow,color] duration-150',
+            checked
+              ? 'bg-shu text-white shadow-none'
+              : 'bg-raised text-transparent shadow-[0_0_0_1px_var(--c-line-strong)] hover:text-fg-subtle hover:shadow-[0_0_0_1px_var(--c-fg-subtle)]',
+          )}
+        >
+          <Check className="size-3.5" strokeWidth={3} />
+        </button>
+      </Tooltip>
+    </div>
   );
 }
 
