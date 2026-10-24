@@ -8,6 +8,7 @@ export { Kbd } from './Kbd';
 export {
   Menu,
   MenuCheckboxItem,
+  MenuIconItem,
   MenuItem,
   MenuLabel,
   MenuRadioGroup,

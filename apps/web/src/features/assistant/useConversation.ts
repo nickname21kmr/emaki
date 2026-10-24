@@ -38,6 +38,10 @@ export interface ConversationView {
     answer(questionId: string, value: string): void;
     chooseSession(id: string): void;
     newSession(): void;
+    /** 删掉一段对话；删的是当前这段就换到剩下最新的一段，没有了就是空白页。返回是否删成功 */
+    deleteSession(id: string): Promise<boolean>;
+    /** 删掉全部对话（所有 Agent 应用的） */
+    clearSessions(): Promise<boolean>;
     pickModel(id: string): void;
     /** 'default' 或 '' 表示默认强度 */
     pickEffort(e: string): void;
@@ -128,6 +132,43 @@ export function useConversation(backend: AssistantBackend | null): ConversationV
     seenUndo.current = null; pendingSend.current = false;
     void sessions.refetch();
   };
+  // 这个标签页正在删的会话：服务端推来的「已删除」不用再提示
+  const deleting = useRef(new Set<string>());
+  const latestSession = useRef(session);
+  latestSession.current = session;
+  /** 会话已经没了：从列表缓存里拿掉；是当前这段就交给下面的 effect 选剩下最新的一段或新建 */
+  const dropSessions = (ids: string[] | 'all') => {
+    client.setQueryData<SessionSummary[]>(['assistant-sessions'], old => (ids === 'all' ? [] : old?.filter(s => !ids.includes(s.id))));
+    if (ids === 'all' || ids.includes(currentId.current)) forgetSession();
+    else void sessions.refetch();
+  };
+  const removeSessions = async (ids: string[] | 'all') => {
+    let ok = false;
+    for (const id of ids === 'all' ? [] : ids) deleting.current.add(id);
+    if (ids === 'all' && currentId.current) deleting.current.add(currentId.current);
+    await perform(async () => {
+      if (ids === 'all') {
+        await assistantApi.removeAll();
+        useAssistantView.getState().forget('all');
+      } else {
+        for (const id of ids) {
+          // 提问草稿和撤销状态按提问 id、token 存，先拿到这段对话再删
+          const snapshot = id === currentId.current ? latestSession.current : await assistantApi.session(id).catch(() => null);
+          // 已经被别处删掉了也算删成功
+          await assistantApi.remove(id).catch(e => { if (!isMissing(e)) throw e; });
+          useAssistantView.getState().forget({
+            sessionIds: [id],
+            questionIds: snapshot?.questions.map(q => q.id) ?? [],
+            tokens: snapshot?.messages.flatMap(m => (m.undoToken ? [m.undoToken] : [])) ?? [],
+          });
+        }
+      }
+      ok = true;
+      dropSessions(ids);
+    });
+    setTimeout(() => deleting.current.clear(), 2000);
+    return ok;
+  };
   const create = () => perform(async () => {
     const s = await assistantApi.create();
     chooseSession(s.id);
@@ -161,6 +202,18 @@ export function useConversation(backend: AssistantBackend | null): ConversationV
         toast('助手已在别处关闭');
         void client.invalidateQueries({ queryKey: ['assistant-settings'] });
       },
+      deleted: () => {
+        // 自己删的由 removeSessions 收尾；别的标签页删的：清掉本地状态，换到剩下的对话
+        if (disposed || deleting.current.has(sessionId)) return;
+        const s = latestSession.current;
+        useAssistantView.getState().forget({
+          sessionIds: [sessionId],
+          questionIds: s?.id === sessionId ? s.questions.map(q => q.id) : [],
+          tokens: s?.id === sessionId ? s.messages.flatMap(m => (m.undoToken ? [m.undoToken] : [])) : [],
+        });
+        toast('这段对话已在别处删除');
+        dropSessions([sessionId]);
+      },
     });
     // A temporary HTTP failure must not stop the stream's reconnection loop.
     void assistantApi.session(sessionId).then(s => { if (!disposed) setSession(previous => previous ?? s); }).catch(e => {
@@ -168,7 +221,7 @@ export function useConversation(backend: AssistantBackend | null): ConversationV
       if (!disposed && isMissing(e)) forgetSession();
     });
     return () => { disposed = true; closeEvents(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- forgetSession 每次渲染都是新的
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- forgetSession / dropSessions 每次渲染都是新的
   }, [sessionId, client, connectionAttempt]);
 
   // 助手在这次会话里新改的图库也进顶栏撤销栈（Ctrl+Z / ↶）；第一份快照里的算历史，不记
@@ -305,6 +358,8 @@ export function useConversation(backend: AssistantBackend | null): ConversationV
         creating.current = true;
         void create().finally(() => { creating.current = false; });
       },
+      deleteSession: id => removeSessions([id]),
+      clearSessions: () => removeSessions('all'),
       pickModel: id => { setModel(id); setEffort(models.data?.find(m => m.id === id)?.defaultEffort ?? ''); },
       pickEffort: e => setEffort(e === 'default' ? '' : e),
       reconnect: () => setConnectionAttempt(n => n + 1),

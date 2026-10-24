@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
@@ -43,6 +43,7 @@ const provider = createServer(async (req, res) => {
   res.end('data: [DONE]\n\n');
 });
 const call = async (method: any, url: string, payload?: unknown) => app.inject({ method, url: '/api/assistant' + url, headers: { host: 'localhost', 'content-type': 'application/json' }, payload: payload as any });
+const del = (url: string) => app.inject({ method: 'DELETE', url: '/api/assistant' + url, headers: { host: 'localhost' } });
 beforeAll(async () => {
   state.dir = mkdtempSync(path.join(tmpdir(), 'emaki-route-test-'));
   const db = new Database(path.join(state.dir, 'emaki.sqlite')); db.exec('CREATE TABLE images(id INTEGER PRIMARY KEY); INSERT INTO images VALUES(1),(2);'); db.close();
@@ -317,8 +318,34 @@ describe('assistant HTTP and MCP', () => {
     expect((await call('PATCH', '/settings', { apiKey: '' })).statusCode).toBe(200);
     expect((await call('PATCH', '/settings', { pi: pi('https://other.example/v1') })).statusCode).toBe(200);
   });
+  it('deletes one conversation, tells its open streams, then clears the rest', async () => {
+    const gone = (await call('POST', '/sessions', {})).json(), kept = (await call('POST', '/sessions', {})).json();
+    const workspace = path.join(state.dir, 'assistant', 'workspaces', gone.id);
+    mkdirSync(path.join(workspace, 'search-1'), { recursive: true });
+    const abort = new AbortController();
+    const stream = await fetch(`${base}/api/assistant/sessions/${gone.id}/events`, { signal: abort.signal });
+    const reader = stream.body!.getReader(), decoder = new TextDecoder();
+    let text = '';
+    const ended = (async () => { for (;;) { const { value, done } = await reader.read(); if (done) return; text += decoder.decode(value); } })();
+    expect((await del('/sessions/not-a-uuid')).statusCode).toBe(400);
+    expect((await del('/sessions/00000000-0000-4000-8000-000000000001')).statusCode).toBe(404);
+    expect((await del(`/sessions/${gone.id}`)).json()).toEqual({ ok: true });
+    await ended; abort.abort();
+    expect(text).toContain('event: deleted');
+    expect(existsSync(workspace)).toBe(false);
+    expect(existsSync(path.join(state.dir, 'assistant', 'sessions', `${gone.id}.json`))).toBe(false);
+    const ids = (await call('GET', '/sessions')).json().map((s: { id: string }) => s.id);
+    expect(ids).toContain(kept.id); expect(ids).not.toContain(gone.id);
+    expect((await call('GET', `/sessions/${gone.id}/events`)).statusCode).toBe(404);
+    const cleared = (await del('/sessions')).json();
+    expect(cleared.deleted).toBe(ids.length);
+    expect((await call('GET', '/sessions')).json()).toEqual([]);
+    expect(JSON.parse(readFileSync(path.join(state.dir, 'assistant', 'index.json'), 'utf8'))).toEqual([]);
+  });
   it('disables the running backend and rejects old MCP credentials while off', async () => {
     await call('PATCH', '/settings', { enabled: false });
+    expect((await del('/sessions')).statusCode).toBe(403);
+    expect((await del('/sessions/00000000-0000-4000-8000-000000000001')).statusCode).toBe(403);
     expect((await call('GET', '/sessions')).statusCode).toBe(403);
     const res = await app.inject({ method: 'POST', url: '/api/assistant/mcp', headers: { host: 'localhost', authorization: `Bearer ${token}`, 'content-type': 'application/json' }, payload: {} });
     expect(res.statusCode).toBe(403);

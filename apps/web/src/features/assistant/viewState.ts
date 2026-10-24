@@ -69,6 +69,17 @@ interface ViewState {
   /** 勘误条的撤销状态；undone / expired 写进 localStorage，刷新和别的标签页都能看到 */
   undo: Record<string, UndoState>;
   setUndo: (token: string, v: UndoState | null) => void;
+  /** 对话删掉以后清掉它的草稿、滚动位置、提问草稿和撤销状态；'all' 是清空全部对话 */
+  forget: (what: { sessionIds: string[]; questionIds: string[]; tokens: string[] } | 'all') => void;
+}
+
+const without = <T,>(record: Record<string, T>, keys: string[]) => {
+  const next = { ...record };
+  for (const key of keys) delete next[key];
+  return next;
+};
+function saveDrafts(key: string, drafts: Record<string, string>) {
+  try { sessionStorage.setItem(key, JSON.stringify(drafts)); } catch { /* 存不了就只在这次生效 */ }
 }
 
 export const useAssistantView = create<ViewState>((set) => ({
@@ -100,6 +111,18 @@ export const useAssistantView = create<ViewState>((set) => ({
       else undo[token] = v;
       if (settled(v) || settled(s.undo[token])) writeUndone(undo);
       return { undo };
+    }),
+  forget: (what) =>
+    set((s) => {
+      const next = what === 'all'
+        ? { drafts: {}, questionDraft: {}, scroll: {}, undo: {} }
+        : { drafts: without(s.drafts, what.sessionIds), questionDraft: without(s.questionDraft, what.questionIds), scroll: without(s.scroll, what.sessionIds), undo: without(s.undo, what.tokens) };
+      saveDrafts(DRAFT_KEY, next.drafts);
+      saveDrafts(QUESTION_DRAFT_KEY, next.questionDraft);
+      writeUndone(next.undo);
+      // 旧格式可能还留在 sessionStorage 里，读的时候会并进来
+      if (what === 'all') try { sessionStorage.removeItem(UNDONE_KEY); } catch { /* 没有 sessionStorage */ }
+      return next;
     }),
 }));
 

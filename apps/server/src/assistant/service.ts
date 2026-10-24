@@ -1,7 +1,7 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, readFileSync, existsSync, writeFileSync, renameSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, existsSync, writeFileSync, renameSync } from 'node:fs';
 import path from 'node:path';
-import { rm } from 'node:fs/promises';
+import { lstat, rm, rmdir, unlink } from 'node:fs/promises';
 import type { AssistantCard, AssistantContext, AssistantDetection, AssistantModel } from '@emaki/shared';
 import { BadRequestError, ConflictError, HttpError } from '../http/errors.ts';
 import { AssistantStore, type StoredSession } from './store.ts';
@@ -29,6 +29,8 @@ export class AssistantService implements ToolHost {
   // 只看模型列表时不常驻进程：按后端缓存，用临时连接读取
   private modelCache = new Map<string, { at: number; list: Promise<AssistantModel[]> }>();
   modelTtl = 5 * 60_000;
+  // 读模型、检测用的临时工作目录，清空全部对话时不能删
+  private temporary = new Set<string>();
   constructor(readonly dir: string, readonly repoRoot: string, readonly endpoint: () => string) {
     this.store = new AssistantStore(dir);
     const ledger = path.join(dir, 'operations.json');
@@ -124,6 +126,7 @@ export class AssistantService implements ToolHost {
   private async agent(s: StoredSession) {
     clearTimeout(this.idleTimers.get(s.id)); this.idleTimers.delete(s.id);
     const stopping = this.stopping.get(s.id); if (stopping) await stopping;
+    if (this.store.sessions.get(s.id) !== s) throw new Error('这段对话已删除');
     this.assertEnabled(); const existing = this.agents.get(s.id); if (existing) return existing;
     let pending = this.starting.get(s.id);
     if (!pending) {
@@ -158,11 +161,13 @@ export class AssistantService implements ToolHost {
   private async withTemporaryAgent<T>(backend: StoredSession['backend'], run: (agent: AgentBackend) => Promise<T>): Promise<T> {
     const s: StoredSession = { id: randomUUID(), title: '检测', backend, model: '', effort: '', status: 'idle', messages: [], questions: [], updatedAt: '', token: '', requestIds: [] };
     let agent: AgentBackend | undefined;
+    this.temporary.add(s.id);
     try {
       agent = await this.open(s, { text() {}, tool() {}, question() {}, done() {} });
       return await run(agent);
     } finally {
       await agent?.close();
+      this.temporary.delete(s.id);
       const workspaceRoot = path.resolve(this.dir, 'workspaces');
       const temporary = path.resolve(workspaceRoot, s.id);
       if (path.dirname(temporary) === workspaceRoot) await rm(temporary, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
@@ -261,8 +266,7 @@ export class AssistantService implements ToolHost {
     this.stopping.set(id, stopping);
     return stopping;
   }
-  private async stopSession(id: string) {
-    const s = this.store.get(id);
+  private async stopSession(id: string, s = this.store.get(id)) {
     const pending = this.starting.get(id);
     if (!pending && !this.agents.has(id) && s.status !== 'running' && s.status !== 'waiting') return;
     const connected = this.agents.get(id);
@@ -275,6 +279,45 @@ export class AssistantService implements ToolHost {
     // A harness awaiting input may not acknowledge stop; closing it still completes cancellation.
     try { await agent?.stop(); } catch { /* Fall back to closing the process below. */ }
     finally { await agent?.close(); }
+  }
+  /**
+   * 删掉一段对话：先从索引里拿掉（之后的发送、回答、MCP 凭证都找不到它），再停进程、删记录和工作目录。
+   * 图库里做过的改动不动；harness 自己的历史（比如 ~/.codex）也不动。
+   */
+  async remove(id: string) {
+    const s = this.store.get(id);
+    this.store.remove(id);
+    clearTimeout(this.timers.get(id)); this.timers.delete(id);
+    clearTimeout(this.idleTimers.get(id)); this.idleTimers.delete(id);
+    await this.stopping.get(id)?.catch(() => {});
+    await this.stopSession(id, s).catch(() => {});
+    this.connections.delete(id); this.agents.delete(id);
+    const keys = Object.keys(this.operations).filter(key => key.startsWith(`${id}:`) && !this.inflight.has(key));
+    if (keys.length) { for (const key of keys) delete this.operations[key]; this.saveOperations(); }
+    await this.removeWorkspace(id);
+    for (const listener of this.listeners) listener(id);
+  }
+  /** 删掉全部对话，顺带清掉以前没删干净的工作目录 */
+  async removeAll() {
+    const ids = [...this.store.sessions.keys()];
+    await Promise.allSettled(ids.map(id => this.remove(id)));
+    const root = path.join(this.dir, 'workspaces');
+    const left = existsSync(root) ? readdirSync(root).filter(name => !this.store.sessions.has(name) && !this.temporary.has(name)) : [];
+    await Promise.allSettled(left.map(name => this.removeWorkspace(name)));
+    return ids.length;
+  }
+  /** 只删 <dir>/workspaces/<会话 id> 这一层；工作目录或 workspaces 本身是链接时不跟过去 */
+  private async removeWorkspace(id: string) {
+    if (!/^[a-f0-9-]{36}$/.test(id)) return;
+    const root = path.resolve(this.dir, 'workspaces'), target = path.resolve(root, id);
+    if (path.dirname(target) !== root) return;
+    try {
+      if ((await lstat(root)).isSymbolicLink()) return;
+      if ((await lstat(target)).isSymbolicLink()) { await unlink(target).catch(() => rmdir(target)); return; }
+    } catch { return; }
+    // 进程刚被结束时 Windows 可能还锁着目录，多试几次
+    await rm(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+      .catch(e => console.warn(`[assistant] 工作目录 ${id} 没删掉：${(e as Error).message}`));
   }
   async close() {
     this.generation++; this.modelCache.clear();

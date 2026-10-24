@@ -314,6 +314,9 @@ export function useFixtureConversation(key: FixtureKey, flags: readonly FixtureF
         if (found) patch({ session: structuredClone(found) });
       },
       newSession: () => patch({ session: structuredClone(fx.sessions.empty) }),
+      // 夹具的会话列表是固定的：删当前这段就回到空白页
+      deleteSession: async id => { if (id === state.session?.id) patch({ session: structuredClone(fx.sessions.empty) }); return true; },
+      clearSessions: async () => { patch({ session: structuredClone(fx.sessions.empty) }); return true; },
       pickModel: id => patch({ model: id, effort: fx.models.find(m => m.id === id)?.defaultEffort ?? '' }),
       pickEffort: e => patch({ effort: e === 'default' ? '' : e }),
       reconnect: () => patch({ connected: true }),

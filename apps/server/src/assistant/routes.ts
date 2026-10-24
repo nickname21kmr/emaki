@@ -43,6 +43,8 @@ export function assistantRoutes(app: FastifyInstance, ds: DataSource) {
   app.post('/api/assistant/sessions', () => { service.assertEnabled(); return service.store.publicSession(service.store.create()); });
   const id = (params: unknown) => parse(z.object({ id: z.uuid() }), params).id;
   app.get('/api/assistant/sessions/:id', (req) => { service.assertEnabled(); return service.store.publicSession(service.store.get(id(req.params))); });
+  app.delete('/api/assistant/sessions/:id', async (req) => { service.assertEnabled(); await service.remove(id(req.params)); return { ok: true }; });
+  app.delete('/api/assistant/sessions', async () => { service.assertEnabled(); return { deleted: await service.removeAll() }; });
   app.get('/api/assistant/sessions/:id/models', (req) => { service.assertEnabled(); return service.models(id(req.params)); });
   app.post('/api/assistant/sessions/:id/messages', (req) => service.send(id(req.params), parse(z.object({ requestId: z.uuid(), text: z.string().min(1).max(30000), model: z.string().min(1).max(500), effort: z.string().max(50).default(''),
     context: z.object({ page: z.string().max(5000), imageIds: z.array(z.string().max(100)).max(5000), selectionScope: z.string().max(300).optional() }) }), req.body)));
@@ -55,7 +57,10 @@ export function assistantRoutes(app: FastifyInstance, ds: DataSource) {
     streams.add(reply.raw);
     const send = () => {
       if (!service.store.settings.enabled) { reply.raw.write('event: disabled\ndata: {}\n\n'); reply.raw.end(); return; }
-      reply.raw.write(`data: ${JSON.stringify(service.store.publicSession(service.store.get(sessionId)))}\n\n`);
+      // 别处删掉了这段对话：告诉页面，然后断开，不再重连
+      const s = service.store.sessions.get(sessionId);
+      if (!s) { reply.raw.write('event: deleted\ndata: {}\n\n'); reply.raw.end(); return; }
+      reply.raw.write(`data: ${JSON.stringify(service.store.publicSession(s))}\n\n`);
     };
     send(); const unsubscribe = service.subscribe(changed => { if (changed === sessionId) send(); });
     const heartbeat = setInterval(() => reply.raw.write(': heartbeat\n\n'), 15000);

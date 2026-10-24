@@ -1,5 +1,5 @@
 import { randomUUID, randomBytes } from 'node:crypto';
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { AssistantSession, AssistantSettings } from '@emaki/shared';
 import { NotFoundError } from '../http/errors.ts';
@@ -93,5 +93,13 @@ export class AssistantStore {
   }
   get(id: string) { const s = this.sessions.get(id); if (!s) throw new NotFoundError('Emaki 会话'); return s; }
   publicSession(s: StoredSession): AssistantSession { const { nativeId: _id, token: _token, requestIds: _requests, ...view } = s; return view; }
-  save(s: StoredSession) { s.updatedAt = new Date().toISOString(); this.write(`sessions/${s.id}.json`, s); }
+  // 已删除的会话不再写回：晚到的进程事件不能把文件又建出来
+  save(s: StoredSession) { if (this.sessions.get(s.id) !== s) return; s.updatedAt = new Date().toISOString(); this.write(`sessions/${s.id}.json`, s); }
+  /** 从索引和内存里去掉，删掉 sessions/<id>.json；工作目录由 service 删 */
+  remove(id: string) {
+    if (!this.sessions.delete(id)) return false;
+    this.write('index.json', [...this.sessions.keys()]);
+    rmSync(path.join(this.dir, 'sessions', `${id}.json`), { force: true });
+    return true;
+  }
 }

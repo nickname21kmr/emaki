@@ -88,6 +88,36 @@ export function MenuItem({
   );
 }
 
+/** 只有图标的小菜单项，放在一行的右边（例如会话后面的删除）。方向键能走到，aria-label 必填 */
+export function MenuIconItem({
+  label,
+  children,
+  onSelect,
+  disabled,
+  className,
+}: {
+  label: string;
+  children: ReactNode;
+  onSelect?: () => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <M.Item
+      aria-label={label}
+      onSelect={onSelect}
+      disabled={disabled}
+      className={cn(
+        'flex size-8 shrink-0 cursor-default items-center justify-center rounded-sm text-fg-subtle outline-none select-none',
+        'data-[highlighted]:bg-hover data-[highlighted]:text-fg data-[disabled]:opacity-40 [&_svg]:size-3.5',
+        className,
+      )}
+    >
+      {children}
+    </M.Item>
+  );
+}
+
 export function MenuCheckboxItem({
   children,
   checked,

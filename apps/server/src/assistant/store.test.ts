@@ -68,3 +68,20 @@ describe('AssistantStore startup', () => {
     expect(JSON.parse(readFileSync(path.join(dir, 'sessions', `${id}.json`), 'utf8')).status).toBe('idle');
   });
 });
+
+describe('AssistantStore remove', () => {
+  it('drops the session from index, memory and disk, and never writes it back', () => {
+    const dir = temp(), store = new AssistantStore(dir);
+    store.settings.enabled = true; store.settings.backend = 'codex';
+    const gone = store.create(), kept = store.create();
+    expect(store.remove(gone.id)).toBe(true);
+    expect(store.remove(gone.id)).toBe(false);
+    expect(existsSync(path.join(dir, 'sessions', `${gone.id}.json`))).toBe(false);
+    expect(JSON.parse(readFileSync(path.join(dir, 'index.json'), 'utf8'))).toEqual([kept.id]);
+    expect(() => store.get(gone.id)).toThrow('找不到');
+    // 进程晚到的事件会再存一次：不能把文件建回来
+    store.save(gone);
+    expect(existsSync(path.join(dir, 'sessions', `${gone.id}.json`))).toBe(false);
+    expect([...new AssistantStore(dir).sessions.keys()]).toEqual([kept.id]);
+  });
+});

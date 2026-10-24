@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -300,6 +300,58 @@ describe('agent approvals', () => {
     const last = session.messages.at(-1)!;
     expect(last).toMatchObject({ role: 'tool', text: '已拒绝：pwsh' });
     expect(last.undoToken).toBeUndefined();
+    await s.close();
+  });
+});
+describe('deleting conversations', () => {
+  const input = { requestId: 'first', text: '慢慢来', model: 'fixture', effort: '', context: { page: '/', imageIds: [] } };
+  it('stops a running agent, removes its record and workspace, and ignores late events', async () => {
+    const s = setup(); s.store.settings.backend = 'codex'; s.store.settings.enabled = true;
+    const session = s.store.create(), kept = s.store.create();
+    let sink!: AgentSink;
+    const prompt = vi.fn(() => new Promise<void>(() => {})), stop = vi.fn(async () => {}), close = vi.fn(async () => {});
+    vi.spyOn(CodexBackend, 'open').mockImplementation(async (_a, _b, _c, _d, _e, next) => {
+      sink = next;
+      return { models: async () => [{ id: 'fixture', efforts: [], vision: true }], prompt, stop, close } as unknown as CodexBackend;
+    });
+    await s.operation(session.id, 'op', 'body', async () => ({ undoToken: 't' }));
+    await s.operation(kept.id, 'op', 'body', async () => ({ undoToken: 'k' }));
+    await s.send(session.id, input);
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    const workspace = path.join(s.dir, 'workspaces', session.id);
+    expect(existsSync(workspace)).toBe(true);
+    const heard: string[] = []; s.subscribe(id => heard.push(id));
+    await s.remove(session.id);
+    expect(stop).toHaveBeenCalledTimes(1); expect(close).toHaveBeenCalledTimes(1);
+    expect(existsSync(workspace)).toBe(false);
+    expect(existsSync(path.join(s.dir, 'sessions', `${session.id}.json`))).toBe(false);
+    expect(heard).toContain(session.id);
+    expect(() => s.store.get(session.id)).toThrow('找不到');
+    expect(() => s.authorize(session.token)).toThrow('凭证无效');
+    // 操作记录只清这段对话的
+    const ledger = JSON.parse(readFileSync(path.join(s.dir, 'operations.json'), 'utf8'));
+    expect(Object.keys(ledger)).toEqual([`${kept.id}:op`]);
+    sink.text('late', 'old reply'); sink.done('old process exit');
+    expect(existsSync(path.join(s.dir, 'sessions', `${session.id}.json`))).toBe(false);
+    await expect(s.send(session.id, { ...input, requestId: 'next' })).rejects.toThrow('找不到');
+    await expect(s.remove(session.id)).rejects.toThrow('找不到');
+    expect(s.store.get(kept.id).id).toBe(kept.id);
+    await s.close();
+  });
+  it('clears everything, including leftover workspaces, but only inside its own folder', async () => {
+    const s = setup(); s.store.settings.backend = 'codex'; s.store.settings.enabled = true;
+    const a = s.store.create(), b = s.store.create();
+    const root = path.join(s.dir, 'workspaces'), orphan = '00000000-0000-4000-8000-00000000abcd';
+    for (const name of [a.id, orphan, 'notes']) mkdirSync(path.join(root, name, 'search-1'), { recursive: true });
+    const outside = mkdtempSync(path.join(tmpdir(), 'emaki-outside-')); dirs.push(outside);
+    writeFileSync(path.join(outside, 'keep.txt'), 'x');
+    // 工作目录是指向外面的链接：只删链接，不进去
+    symlinkSync(outside, path.join(root, b.id), 'junction');
+    expect(await s.removeAll()).toBe(2);
+    expect(s.store.sessions.size).toBe(0);
+    expect(readdirSync(root)).toEqual(['notes']);
+    expect(existsSync(path.join(outside, 'keep.txt'))).toBe(true);
+    expect(JSON.parse(readFileSync(path.join(s.dir, 'index.json'), 'utf8'))).toEqual([]);
     await s.close();
   });
 });

@@ -7,7 +7,8 @@ class Source {
   onmessage: ((e: { data: string }) => void) | null = null;
   onerror: (() => void) | null = null;
   disabled: (() => void) | null = null;
-  addEventListener(_type: string, cb: () => void) { this.disabled = cb; }
+  deleted: (() => void) | null = null;
+  addEventListener(type: string, cb: () => void) { if (type === 'deleted') this.deleted = cb; else this.disabled = cb; }
   close() { this.readyState = 2; }
   fail() { this.close(); this.onerror?.(); }
 }
@@ -16,7 +17,7 @@ afterEach(() => vi.useRealTimers());
 function setup() {
   const sources: Source[] = [];
   const make = vi.fn((_url: string) => { const source = new Source(); sources.push(source); return source as unknown as EventSource; });
-  const on = { open: vi.fn(), message: vi.fn(), error: vi.fn(), disabled: vi.fn() };
+  const on = { open: vi.fn(), message: vi.fn(), error: vi.fn(), disabled: vi.fn(), deleted: vi.fn() };
   const close = openSessionEvents('same-session', on, make);
   return { sources, make, on, close };
 }
@@ -39,6 +40,15 @@ it('disabling the assistant closes the stream and cancels pending reconnects', (
   vi.advanceTimersByTime(30000);
   expect(make).toHaveBeenCalledOnce();
   expect(on.disabled).toHaveBeenCalledOnce();
+  expect(sources[0]!.readyState).toBe(2);
+});
+it('a session deleted elsewhere closes the stream for good', () => {
+  const { sources, make, on } = setup();
+  sources[0]!.deleted?.();
+  vi.advanceTimersByTime(30000);
+  expect(make).toHaveBeenCalledOnce();
+  expect(on.deleted).toHaveBeenCalledOnce();
+  expect(on.disabled).not.toHaveBeenCalled();
   expect(sources[0]!.readyState).toBe(2);
 });
 it('closing the panel cancels pending reconnects', () => {
