@@ -16,6 +16,8 @@ export type StageMeta = Pick<ImageItem, 'width' | 'height' | 'rating' | 'dominan
 const PAD_X = 84;
 const PAD_Y = 68;
 const EASE = EASE_OUT;
+const plateTransform = ({ x, y, scale }: { x: number; y: number; scale: number }) =>
+  `translate3d(${x}px, ${y}px, 0) scale(${scale})`;
 
 /**
  * 看图器的舞台：居中显示图片，先 960 缩略图再换原图；滚轮 / 双击缩放，放大后拖动平移。
@@ -173,13 +175,16 @@ export function Stage({
       ? { opacity: 0, x: 0, y: 0, scale: 1 }
       : { opacity: 0, x: direction * 28, y: 0, scale: direction ? 1 : 0.985 };
   const idle = !!slideshow?.idle;
+  const target = back ?? { x: 0, y: 0, scale: returnRect ? 0.96 : 1 };
 
   const plate =
     meta && fit > 0 ? (
       <motion.div
         key={id}
-        initial={initial}
-        animate={back ? { opacity: 1, ...back } : returnRect ? { opacity: 0, x: 0, y: 0, scale: 0.96 } : { opacity: 1, x: 0, y: 0, scale: 1 }}
+        // A single transform lets Motion use the browser's compositor animation.
+        // Separate x/y/scale values require JS frames and stall when detail UI mounts.
+        initial={{ opacity: initial.opacity, transform: plateTransform(initial) }}
+        animate={{ opacity: returnRect && !back ? 0 : 1, transform: plateTransform(target) }}
         exit={{ opacity: 0 }}
         transition={{ duration: returnRect ? 0.3 : originRect ? 0.46 : (slideshow?.crossfade ?? 0.42), ease: slideshow ? 'linear' : EASE }}
         className="absolute"

@@ -3,44 +3,55 @@ import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 import { api, imageUrl } from '@/lib/api';
 import { qk } from '@/lib/queries';
 
+// Query data is immutable. Reuse lookups until its array is replaced, including
+// misses, so animation renders and neighboring detail requests don't rescan it.
+const lookups = new WeakMap<object, Map<ID, ImageItem | undefined>>();
+function findIn<T>(items: readonly T[], id: ID, imageOf: (item: T) => ImageItem): ImageItem | undefined {
+  let found = lookups.get(items);
+  if (!found) { found = new Map(); lookups.set(items, found); }
+  if (!found.has(id)) {
+    const item = items.find(item => imageOf(item).id === id);
+    found.set(id, item === undefined ? undefined : imageOf(item));
+  }
+  return found.get(id);
+}
+const identity = (image: ImageItem) => image;
+const unwrapped = (item: UnrecognizedItem) => item.image;
+
 /**
  * 看图器只拿到 id 列表。打开时先从已缓存的列表里找到这张图的基本信息（尺寸 / 主色 / 分级），
  * 这样不用等详情接口就能立刻按正确比例摆好占位，避免跳动。
  */
 export function findCachedImage(client: QueryClient, id: ID): ImageItem | undefined {
   const kept = remembered.get(id);
-  let image = kept?.image;
-  let fetchedAt = kept?.at ?? -1;
-  const consider = (candidate: ImageItem | undefined, at: number) => {
-    if (candidate?.id === id && at >= fetchedAt) { image = candidate; fetchedAt = at; }
-  };
-  for (const query of client.getQueryCache().findAll({ queryKey: ['images'] })) {
-    const data = query.state.data as InfiniteData<Page<ImageItem>> | undefined;
-    for (const page of data?.pages ?? []) {
-      const hit = page.items.find((i) => i.id === id);
-      consider(hit, query.state.dataUpdatedAt);
-    }
-    // DailyPlate stores a single image rather than an infinite list.
-    consider(data as unknown as ImageItem | undefined, query.state.dataUpdatedAt);
-  }
-  for (const query of client.getQueryCache().findAll({ queryKey: qk.unrecognized })) {
-    const data = query.state.data as InfiniteData<Page<UnrecognizedItem>> | undefined;
-    for (const page of data?.pages ?? []) {
-      const hit = page.items.find((i) => i.image.id === id);
-      consider(hit?.image, query.state.dataUpdatedAt);
-    }
-  }
-  for (const query of client.getQueryCache().findAll({ queryKey: ['duplicates'] })) {
-    const data = query.state.data as DuplicateGroup[] | undefined;
-    for (const group of Array.isArray(data) ? data : []) {
-      const hit = group.images.find((i) => i.id === id);
-      consider(hit, query.state.dataUpdatedAt);
-    }
-  }
-  // Prefer detail on a tie. A restored original can have an older modifiedAt,
-  // so freshness follows when data was fetched, not the file timestamp itself.
   const detail = client.getQueryState<ImageItem>(qk.image(id));
-  consider(detail?.data, detail?.dataUpdatedAt ?? -1);
+  let image = detail?.data ?? kept?.image;
+  let fetchedAt = detail?.data ? detail.dataUpdatedAt : kept?.at ?? -1;
+  let detailWinsTie = !!detail?.data;
+  if (kept && kept.at > fetchedAt) { image = kept.image; fetchedAt = kept.at; detailWinsTie = false; }
+  const consider = (candidate: ImageItem | undefined, at: number) => {
+    if (candidate) { image = candidate; fetchedAt = at; detailWinsTie = false; }
+  };
+  for (const query of client.getQueryCache().getAll()) {
+    const family = query.queryKey[0];
+    if (family !== 'images' && family !== 'unrecognized' && family !== 'duplicates') continue;
+    const at = query.state.dataUpdatedAt;
+    // A restored original can have an older modifiedAt: use fetch time for
+    // freshness. Detail wins a tie without walking older list contents first.
+    if (at < fetchedAt || (at === fetchedAt && detailWinsTie)) continue;
+    if (family === 'images') {
+      const data = query.state.data as InfiniteData<Page<ImageItem>> | ImageItem | undefined;
+      if (data && 'pages' in data) {
+        for (const page of data.pages) consider(findIn(page.items, id, identity), at);
+      } else if (data?.id === id) consider(data, at); // DailyPlate
+    } else if (family === 'unrecognized') {
+      const data = query.state.data as InfiniteData<Page<UnrecognizedItem>> | undefined;
+      for (const page of data?.pages ?? []) consider(findIn(page.items, id, unwrapped), at);
+    } else {
+      const data = query.state.data as DuplicateGroup[] | undefined;
+      for (const group of Array.isArray(data) ? data : []) consider(findIn(group.images, id, identity), at);
+    }
+  }
   return image;
 }
 

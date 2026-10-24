@@ -5,6 +5,7 @@ import { findCachedImage } from './cache';
 
 /** Subscribe to metadata already in cache; no image/detail requests for every filmstrip tile. */
 export function createImageCacheStore(client: QueryClient, ids: readonly ID[]) {
+  const selected = new Set(ids);
   let snapshot: readonly (ImageItem | undefined)[] = [];
   const getSnapshot = () => {
     const next = ids.map(id => findCachedImage(client, id));
@@ -12,7 +13,12 @@ export function createImageCacheStore(client: QueryClient, ids: readonly ID[]) {
     return snapshot;
   };
   const subscribe = (notify: () => void) => ids.length ? client.getQueryCache().subscribe(event => {
-    if (!['image', 'images', 'unrecognized', 'duplicates'].includes(String(event.query.queryKey[0]))) return;
+    const [family, id] = event.query.queryKey;
+    if (family === 'image' ? !selected.has(id as ID) : !['images', 'unrecognized', 'duplicates'].includes(String(family))) return;
+    // Observer/fetch/invalidation events don't change the displayed metadata.
+    if (event.type === 'updated') {
+      if (event.action.type !== 'success' && event.action.type !== 'setState') return;
+    } else if (event.type !== 'removed' && !(event.type === 'added' && event.query.state.data)) return;
     const previous = snapshot;
     if (getSnapshot() !== previous) notify();
   }) : () => {};
