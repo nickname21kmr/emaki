@@ -298,12 +298,17 @@ describe('图片、未识别、重复、排除（routes/images.ts）', () => {
     expect(json).toMatchObject({ ...page, total: 7, suggestedCount: expect.any(Number), unsureCount: expect.any(Number) });
     expect(json.items[0]).toMatchObject({ image: { id: expect.any(String) }, suggestions: expect.any(Array), tagged: expect.any(Boolean) });
     expect((await call('GET', '/api/unrecognized?area=nowhere')).status).toBe(400);
+    expect((await call('GET', '/api/unrecognized?artKind=comic')).json).toMatchObject({ items: [], total: 0 });
+    expect((await call('GET', '/api/unrecognized?artKind=photo')).status).toBe(400);
   });
 
   route('GET /api/unrecognized/summary', async () => {
     const { status, json } = await call('GET', '/api/unrecognized/summary');
     expect(status).toBe(200);
     expect(json).toMatchObject({ art: { total: expect.any(Number), themes: expect.any(Object) }, annex: { total: expect.any(Number), kinds: expect.any(Object) } });
+    expect(json.art.kinds).toMatchObject({ illustration: { total: 7 }, comic: { total: 0 } });
+    expect((await call('GET', '/api/unrecognized/summary?artKind=illustration')).json.art.total).toBe(7);
+    expect((await call('GET', '/api/unrecognized/summary?artKind=x')).status).toBe(400);
   });
 
   route('POST /api/unrecognized/retag', async () => {

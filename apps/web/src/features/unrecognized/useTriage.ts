@@ -1,4 +1,4 @@
-import type { BulkImageAction, CharacterSuggestion, ContentKind, ID, UnrecognizedItem } from '@emaki/shared';
+import type { BulkImageAction, CharacterSuggestion, ContentKind, ID, UnrecognizedArtKind, UnrecognizedItem } from '@emaki/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { api, imageUrl } from '@/lib/api';
@@ -24,9 +24,10 @@ export interface ClickModifiers {
  *
  * 乐观移除：采纳 / 归入 / 排除后立刻把图从队列里藏起来并前进到下一张，
  * 不等接口返回——这一页讲究的就是手不停。失败时再放回来（useMutate 已经弹了错误 toast）。
+ * artKind：只看插画或只看漫画（队列、全选、批量都只在这一类里）。
  */
-export function useTriage(bucket: 'suggested' | 'untagged') {
-  const query = useUnrecognizedInfinite({ area: 'art', bucket });
+export function useTriage(bucket: 'suggested' | 'untagged', artKind?: UnrecognizedArtKind) {
+  const query = useUnrecognizedInfinite({ area: 'art', bucket, artKind });
   const { data, dataUpdatedAt, hasNextPage, isFetching, isFetchingNextPage, fetchNextPage } = query;
   // 修改成功后会整体刷新；这时再 fetchNextPage 会把那次刷新取消掉，拼回旧页面，
   // 刚处理掉的图就会闪回来。所以只在完全空闲时翻页。
@@ -263,7 +264,9 @@ export function useTriage(bucket: 'suggested' | 'untagged') {
   const markKind = (kind: ContentKind | 'auto') => {
     const ids = targetIds();
     if (!ids.length) return;
-    const leaves = kind !== 'comic' && kind !== 'illustration' && kind !== 'auto';
+    // 只看插画 / 只看漫画时，改成另一类也离开这一列
+    const leaves =
+      (kind !== 'comic' && kind !== 'illustration' && kind !== 'auto') || (!!artKind && (kind === 'comic' || kind === 'illustration') && kind !== artKind);
     if (leaves) {
       hide(ids);
       if (batch) useSelection.getState().clear();

@@ -619,6 +619,53 @@ export function unrecognizedContract(make: ContractFactory, name: Name) {
       expect(ids(e, (await e.ds.listUnrecognized({ bucket: 'suggested' })).items)).toEqual(['i24', 'i27', 'i28', 'i29', 'i26']);
     });
 
+    it('按类型筛插画 / 漫画：汇总分开计数，列表和分段计数只算那一类；不筛时不变', async () => {
+      const e = env();
+      const before = await e.ds.unrecognizedSummary();
+      expect(before.art.kinds).toEqual({
+        illustration: { total: 7, suggested: 5, unsure: 1, untagged: 1, shelved: 0 },
+        comic: { total: 0, suggested: 0, unsure: 0, untagged: 0, shelved: 0 },
+      });
+      await e.ds.bulkImages({ ids: [e.id('image', 'i25'), e.id('image', 'i26')], action: { type: 'kind', value: 'comic' } });
+      const sum = await e.ds.unrecognizedSummary();
+      expect(sum.art).toMatchObject({ total: 7, suggested: 5, unsure: 1, untagged: 1, shelved: 0 });
+      expect(sum.art.kinds).toEqual({
+        illustration: { total: 5, suggested: 4, unsure: 0, untagged: 1, shelved: 0 },
+        comic: { total: 2, suggested: 1, unsure: 1, untagged: 0, shelved: 0 },
+      });
+      const comic = await e.ds.unrecognizedSummary({ artKind: 'comic' });
+      expect(comic.art).toMatchObject({ total: 2, suggested: 1, unsure: 1, untagged: 0, shelved: 0, retaggable: sum.art.retaggable });
+      expect(Object.entries(comic.art.themes).filter(([, n]) => n > 0)).toEqual([['comic', 1]]);
+      expect(comic.art.kinds).toEqual(sum.art.kinds);
+      expect((await e.ds.unrecognizedSummary({ artKind: 'illustration' })).art).toMatchObject({ total: 5, suggested: 4, unsure: 0, untagged: 1 });
+
+      const list = await e.ds.listUnrecognized({ artKind: 'comic' });
+      expect(ids(e, list.items)).toEqual(['i26', 'i25']);
+      expect([list.total, list.suggestedCount, list.unsureCount, list.untaggedCount]).toEqual([2, 1, 1, 0]);
+      const illus = await e.ds.listUnrecognized({ artKind: 'illustration', bucket: 'suggested' });
+      expect(ids(e, illus.items)).toEqual(['i24', 'i27', 'i28', 'i29']);
+      expect(illus.total).toBe(4);
+      expect((await e.ds.listUnrecognized({ artKind: 'illustration', bucket: 'unsure', theme: 'comic' })).items).toEqual([]);
+      expect(ids(e, (await e.ds.listUnrecognized({ artKind: 'comic', bucket: 'unsure', theme: 'comic' })).items)).toEqual(['i25']);
+      // 翻页也只在这一类里走
+      const paged: string[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await e.ds.listUnrecognized({ artKind: 'illustration', limit: 2, cursor });
+        paged.push(...ids(e, page.items));
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+      expect(paged).toEqual(['i24', 'i27', 'i28', 'i29', 'i30']);
+
+      await e.ds.bulkImages({ ids: [e.id('image', 'i25')], action: { type: 'shelve', value: true } });
+      expect((await e.ds.unrecognizedSummary()).art.kinds.comic).toEqual({ total: 1, suggested: 1, unsure: 0, untagged: 0, shelved: 1 });
+      expect(ids(e, (await e.ds.listUnrecognized({ artKind: 'comic', bucket: 'shelved' })).items)).toEqual(['i25']);
+      expect((await e.ds.listUnrecognized({ artKind: 'illustration', bucket: 'shelved' })).total).toBe(0);
+      // 别册里 artKind 不起作用
+      await e.ds.bulkImages({ ids: [e.id('image', 'i30')], action: { type: 'kind', value: 'photo' } });
+      expect(ids(e, (await e.ds.listUnrecognized({ area: 'annex', artKind: 'comic' })).items)).toEqual(['i30']);
+    });
+
     it('theme、bucket 和大类不匹配时忽略，不报错（T34a）', async () => {
       const e = env();
       await e.ds.bulkImages({ ids: [e.id('image', 'i25')], action: { type: 'kind', value: 'photo' } });

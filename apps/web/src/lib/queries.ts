@@ -18,6 +18,7 @@ import type {
   ListCollectionsQuery,
   UnrecognizedAnnexKind,
   UnrecognizedArea,
+  UnrecognizedArtKind,
   UnrecognizedBucket,
   UnrecognizedTheme,
   ListImagesQuery,
@@ -166,25 +167,31 @@ export const useImageCount = (q: Omit<ListImagesQuery, 'cursor' | 'limit'>, enab
 export const useImage = (id: ID | null | undefined) =>
   useQuery({ queryKey: qk.image(id ?? ''), queryFn: () => api.image(id!), enabled: !!id });
 
-/** 未识别列表的参数（T34b）：大类、分段、主题、别册类型 */
+/** 未识别列表的参数（T34b）：大类、分段、主题、别册类型、插画 / 漫画 */
 export interface UnrecognizedParams {
   area: UnrecognizedArea;
   bucket?: UnrecognizedBucket;
   theme?: UnrecognizedTheme;
   kind?: UnrecognizedAnnexKind;
+  artKind?: UnrecognizedArtKind;
 }
 
 export const useUnrecognizedInfinite = (p: UnrecognizedParams = { area: 'art' }, limit = 60) =>
   useInfiniteQuery({
     // 前缀仍是 'unrecognized'：全局失效照常覆盖
-    queryKey: [...qk.unrecognized, p.area, p.bucket ?? 'all', p.theme ?? 'all', p.kind ?? 'all'],
+    queryKey: [...qk.unrecognized, p.area, p.bucket ?? 'all', p.theme ?? 'all', p.kind ?? 'all', p.artKind ?? 'all'],
     queryFn: ({ pageParam }) => api.unrecognized({ ...p, limit, cursor: pageParam }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor ?? undefined,
   });
 
-export const useUnrecognizedSummary = () =>
-  useQuery({ queryKey: [...qk.unrecognized, 'summary'], queryFn: api.unrecognizedSummary, staleTime: 5_000 });
+/** 不传 artKind 是整体的汇总（侧栏、副标题、识别按钮用这份）；传了只算插画或漫画 */
+export const useUnrecognizedSummary = (artKind?: UnrecognizedArtKind) =>
+  useQuery({
+    queryKey: artKind ? [...qk.unrecognized, 'summary', artKind] : [...qk.unrecognized, 'summary'],
+    queryFn: () => api.unrecognizedSummary(artKind ? { artKind } : {}),
+    staleTime: 5_000,
+  });
 
 export const useDuplicates = (resolved = false) =>
   useQuery({ queryKey: qk.duplicates(resolved), queryFn: () => api.duplicates({ resolved }) });

@@ -1,5 +1,5 @@
 import { sourceEditSchema } from '../services/source/editSource.ts';
-import { BROWSE_THEMES, CUSTOM_THEME_LIMITS, THUMB_WIDTHS, UNRECOGNIZED_ANNEX_KINDS, UNRECOGNIZED_AREAS, UNRECOGNIZED_BUCKETS, UNRECOGNIZED_THEMES, type ThumbWidth } from '@emaki/shared';
+import { BROWSE_THEMES, CUSTOM_THEME_LIMITS, THUMB_WIDTHS, UNRECOGNIZED_ANNEX_KINDS, UNRECOGNIZED_AREAS, UNRECOGNIZED_ART_KINDS, UNRECOGNIZED_BUCKETS, UNRECOGNIZED_THEMES, type ThumbWidth } from '@emaki/shared';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { z } from 'zod';
@@ -140,13 +140,17 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
         bucket: z.enum(UNRECOGNIZED_BUCKETS).optional(),
         theme: z.enum(UNRECOGNIZED_THEMES).optional(),
         kind: z.enum(UNRECOGNIZED_ANNEX_KINDS).optional(),
+        artKind: z.enum(UNRECOGNIZED_ART_KINDS).optional(),
       }),
       req.query,
     );
     return ds.listUnrecognized(q);
   });
 
-  app.get('/api/unrecognized/summary', () => ds.unrecognizedSummary());
+  app.get('/api/unrecognized/summary', (req) => {
+    const q = parse(z.object({ artKind: z.enum(UNRECOGNIZED_ART_KINDS).optional() }), req.query);
+    return ds.unrecognizedSummary(q);
+  });
 
   app.post('/api/unrecognized/retag', () => ds.retagUnrecognized());
 

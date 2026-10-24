@@ -67,7 +67,7 @@ export function useSheet(params: UnrecognizedParams, enabled: boolean) {
   const scope = useSelection((s) => s.scope);
   const raw = useSelection((s) => s.ids);
   const selected = scope === SCOPE ? raw : EMPTY;
-  const key = `${params.area}|${params.bucket}|${params.theme}|${params.kind}`;
+  const key = `${params.area}|${params.bucket}|${params.theme}|${params.kind}|${params.artKind}`;
   useEffect(() => {
     useSelection.getState().setScope(SCOPE);
     useSelection.getState().clear();
@@ -118,7 +118,9 @@ export function useSheet(params: UnrecognizedParams, enabled: boolean) {
       (art && ANNEX.includes(k)) ||
       (!art && (k === 'illustration' || k === 'comic')) ||
       (comicGroup && k === 'illustration') ||
-      (art && !comicGroup && k === 'comic');
+      (art && !comicGroup && k === 'comic' && params.artKind !== 'comic') ||
+      // 只看插画 / 只看漫画时，改成另一类也离开
+      (art && !!params.artKind && (k === 'illustration' || k === 'comic') && k !== params.artKind);
     run({ type: 'kind', value: k }, { hide: leaves, stamp: ['类', k === 'auto' ? '自动' : KIND_LABEL[k], 'muted'] });
   };
   const setRating = (r: Rating) => run({ type: 'rating', value: r }, { hide: false, stamp: ['级', '已改分级', 'muted'] });

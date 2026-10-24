@@ -47,6 +47,7 @@ import type {
   TopCharactersQuery,
   UnrecognizedItem,
   UnrecognizedSummary,
+  UnrecognizedSummaryQuery,
   UpdateCharacterBody,
   UpdateImageBody,
   UpdateSettingsBody,
@@ -857,8 +858,8 @@ export class SqliteDataSource implements DataSource {
     return this.unrecognized.list(query);
   }
 
-  async unrecognizedSummary(): Promise<UnrecognizedSummary> {
-    return this.unrecognized.summary();
+  async unrecognizedSummary(query: UnrecognizedSummaryQuery = {}): Promise<UnrecognizedSummary> {
+    return this.unrecognized.summary(query.artKind);
   }
   async acceptSuggestion(imageId: ID, danbooruTag: string): Promise<MutationResult> {
     return this.unrecognized.accept(imageId, danbooruTag);

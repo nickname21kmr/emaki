@@ -1,4 +1,4 @@
-import type { UnrecognizedSummary } from '@emaki/shared';
+import type { UnrecognizedArtKind, UnrecognizedSummary } from '@emaki/shared';
 import { ArrowRight } from 'lucide-react';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
@@ -26,15 +26,17 @@ const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
  */
 export function TriageBody({
   bucket,
+  artKind,
   summary,
   onBucket,
 }: {
   bucket: 'suggested' | 'untagged';
+  artKind?: UnrecognizedArtKind;
   summary?: UnrecognizedSummary;
   onBucket: (b: UnrecognizedView) => void;
 }) {
   const navigate = useNavigate();
-  const triage = useTriage(bucket);
+  const triage = useTriage(bucket, artKind);
   const { query, items, current, batch } = triage;
   const searchRef = useRef<HTMLInputElement>(null);
 

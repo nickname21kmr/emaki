@@ -374,6 +374,9 @@ export type UnrecognizedBucket = (typeof UNRECOGNIZED_BUCKETS)[number];
 /** 「照片 · 文字等」大类里的五类 */
 export const UNRECOGNIZED_ANNEX_KINDS = ['screenshot', 'text', 'photo', 'meme', 'animated'] as const;
 export type UnrecognizedAnnexKind = (typeof UNRECOGNIZED_ANNEX_KINDS)[number];
+/** 「插画 · 漫画」大类里再按类型分：插画 / 漫画（content_kind = 'comic' 的单页；按漫画导入的文件夹本来就不在未识别里） */
+export const UNRECOGNIZED_ART_KINDS = ['illustration', 'comic'] as const;
+export type UnrecognizedArtKind = (typeof UNRECOGNIZED_ART_KINDS)[number];
 
 /** GET /api/unrecognized —— 参数和大类不匹配时一律忽略，不报错 */
 export interface ListUnrecognizedQuery extends PageQuery {
@@ -385,6 +388,23 @@ export interface ListUnrecognizedQuery extends PageQuery {
   theme?: UnrecognizedTheme;
   /** 只对 annex 有效；不传 = 五类合起来 */
   kind?: UnrecognizedAnnexKind;
+  /** 只对 art 有效：只看插画或只看漫画，total 和三个分段计数也只算这一类。不传 = 两种都要 */
+  artKind?: UnrecognizedArtKind;
+}
+
+/** GET /api/unrecognized/summary 的参数 */
+export interface UnrecognizedSummaryQuery {
+  /** 传了以后 art 的 total / 分段 / themes 只算这一类；retaggable、art.kinds、annex 不变 */
+  artKind?: UnrecognizedArtKind;
+}
+
+/** 「插画 · 漫画」里一类图的分段张数（total 不含放下的） */
+export interface UnrecognizedArtCounts {
+  total: number;
+  suggested: number;
+  unsure: number;
+  untagged: number;
+  shelved: number;
 }
 
 /** GET /api/unrecognized/summary —— art.total = suggested + unsure + untagged（不含放下的）；themes 只统计 unsure */
@@ -396,8 +416,10 @@ export interface UnrecognizedSummary {
     untagged: number;
     shelved: number;
     themes: Record<UnrecognizedTheme, number>;
-    /** 识别过、没认出角色、没放下的插画：「用主模型重新识别」会把它们再认一遍 */
+    /** 识别过、没认出角色、没放下的插画：「用主模型重新识别」会把它们再认一遍（不受 artKind 影响） */
     retaggable: number;
+    /** 插画、漫画各自的分段张数（不受 artKind 影响），两项相加就是不筛选时的分段张数 */
+    kinds: Record<UnrecognizedArtKind, UnrecognizedArtCounts>;
   };
   annex: { total: number; kinds: Record<UnrecognizedAnnexKind, number> };
 }
@@ -407,6 +429,7 @@ export interface RetagResult {
   job: Job | null;
 }
 export type ListUnrecognizedResponse = Page<UnrecognizedItem> & {
+  // 下面三个分段计数在传了 artKind 时只算那一类
   /** 未识别图里 tagger 给出过建议的张数（整个队列，不只是这一页） */
   suggestedCount: number;
   /** 识别过、但没有任何建议的张数 */

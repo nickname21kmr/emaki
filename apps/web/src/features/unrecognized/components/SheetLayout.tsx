@@ -48,7 +48,11 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
   const pickEntry = (key: string) => (mode === 'unsure' ? p.setTheme(key as UnrecognizedTheme) : p.setKind(key as UnrecognizedAnnexKind));
 
   const params: UnrecognizedParams =
-    mode === 'unsure' ? { area: 'art', bucket: 'unsure', theme: p.theme } : mode === 'shelved' ? { area: 'art', bucket: 'shelved' } : { area: 'annex', kind: p.kind };
+    mode === 'unsure'
+      ? { area: 'art', bucket: 'unsure', theme: p.theme, artKind: p.artKind }
+      : mode === 'shelved'
+        ? { area: 'art', bucket: 'shelved', artKind: p.artKind }
+        : { area: 'annex', kind: p.kind };
   // 主题 / 类型还没补上默认值时先不拉
   const ready = mode === 'shelved' || !!active;
   const sheet = useSheet(params, ready);

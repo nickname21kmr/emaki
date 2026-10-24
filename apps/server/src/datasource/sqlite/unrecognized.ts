@@ -5,12 +5,15 @@ import { performance } from 'node:perf_hooks';
  */
 import {
   UNRECOGNIZED_ANNEX_KINDS,
+  UNRECOGNIZED_ART_KINDS,
   UNRECOGNIZED_THEMES,
   type ID,
   type ListUnrecognizedQuery,
   type ListUnrecognizedResponse,
   type MutationResult,
   type UnrecognizedAnnexKind,
+  type UnrecognizedArtCounts,
+  type UnrecognizedArtKind,
   type UnrecognizedSummary,
   type UnrecognizedTheme,
 } from '@emaki/shared';
@@ -90,8 +93,14 @@ interface Row {
 
 const zeros = <K extends string>(keys: readonly K[]) => Object.fromEntries(keys.map((k) => [k, 0])) as Record<K, number>;
 
+/** 汇总缓存：按「类型|分组」计的张数（分组见 summary 里的 CASE），加上重新识别的范围 */
+interface Counts {
+  got: Map<string, number>;
+  retaggable: number;
+}
+
 export class UnrecognizedQueries {
-  private cached: UnrecognizedSummary | null = null;
+  private cached: Counts | null = null;
 
   constructor(
     private readonly ctx: SqliteContext,
@@ -110,13 +119,13 @@ export class UnrecognizedQueries {
   }
   private softAt: number | null = null;
 
-  /** 两个大类、四个分段、十个主题、五类别册的张数，一条语句算完并缓存 */
-  summary(): UnrecognizedSummary {
+  /** 按类型和分组的张数，一条语句算完并缓存 */
+  private counts(): Counts {
     if (this.cached && (this.softAt === null || performance.now() - this.softAt < this.softMs)) return this.cached;
     this.softAt = null;
     const rows = this.ctx
       .stmt(
-        `SELECT CASE
+        `SELECT i.content_kind AS ck, CASE
             WHEN i.content_kind NOT IN ('illustration','comic') THEN i.content_kind
             WHEN i.shelved_at IS NOT NULL THEN 'shelved'
             WHEN EXISTS (SELECT 1 FROM character_suggestions s WHERE s.image_id = i.id) THEN 'suggested'
@@ -125,23 +134,33 @@ export class UnrecognizedQueries {
             ELSE ${THEME_EXPR} END AS k, COUNT(*) AS n
          FROM v_counted_images i
          WHERE ${UNRECOGNIZED} AND (${ANNEX_KINDS_SQL} OR (i.collection_id IS NULL AND NOT ${IN_COMIC_I}))
-         GROUP BY 1`,
+         GROUP BY 1, 2`,
       )
-      .all() as { k: string; n: number }[];
-    const got = new Map(rows.map((r) => [r.k, r.n]));
-    const n = (k: string) => got.get(k) ?? 0;
-    const themes = zeros(UNRECOGNIZED_THEMES);
-    for (const t of UNRECOGNIZED_THEMES) themes[t] = n(t);
-    const kinds = zeros(UNRECOGNIZED_ANNEX_KINDS);
-    for (const k of UNRECOGNIZED_ANNEX_KINDS) kinds[k] = n(k);
-    const unsure = UNRECOGNIZED_THEMES.reduce((sum, t) => sum + themes[t], 0);
+      .all() as { ck: string; k: string; n: number }[];
     const retaggable = (this.ctx.stmt(`SELECT COUNT(*) AS n ${RETAGGABLE}`).get() as { n: number }).n;
-    const art = { suggested: n('suggested'), unsure, untagged: n('untagged'), shelved: n('shelved'), themes, retaggable };
-    this.cached = {
-      art: { total: art.suggested + art.unsure + art.untagged, ...art },
+    this.cached = { got: new Map(rows.map((r) => [`${r.ck}|${r.k}`, r.n])), retaggable };
+    return this.cached;
+  }
+
+  /** 两个大类、四个分段、十个主题、五类别册的张数；artKind 只算插画或漫画（retaggable、art.kinds、annex 不变） */
+  summary(artKind?: UnrecognizedArtKind): UnrecognizedSummary {
+    const { got, retaggable } = this.counts();
+    const n = (cks: readonly string[], k: string) => cks.reduce((sum, ck) => sum + (got.get(`${ck}|${k}`) ?? 0), 0);
+    const artOf = (cks: readonly string[]) => {
+      const themes = zeros(UNRECOGNIZED_THEMES);
+      for (const t of UNRECOGNIZED_THEMES) themes[t] = n(cks, t);
+      const unsure = UNRECOGNIZED_THEMES.reduce((sum, t) => sum + themes[t], 0);
+      const c = { suggested: n(cks, 'suggested'), unsure, untagged: n(cks, 'untagged'), shelved: n(cks, 'shelved') };
+      return { counts: { total: c.suggested + c.unsure + c.untagged, ...c } satisfies UnrecognizedArtCounts, themes };
+    };
+    const kinds = zeros(UNRECOGNIZED_ANNEX_KINDS);
+    for (const k of UNRECOGNIZED_ANNEX_KINDS) kinds[k] = n([k], k);
+    const artKinds = Object.fromEntries(UNRECOGNIZED_ART_KINDS.map((k) => [k, artOf([k]).counts])) as Record<UnrecognizedArtKind, UnrecognizedArtCounts>;
+    const art = artOf(artKind ? [artKind] : UNRECOGNIZED_ART_KINDS);
+    return {
+      art: { ...art.counts, themes: art.themes, retaggable, kinds: artKinds },
       annex: { total: UNRECOGNIZED_ANNEX_KINDS.reduce((sum, k) => sum + kinds[k], 0), kinds },
     };
-    return this.cached;
   }
 
   /** 把「用主模型重新识别」范围里的图标记为 retag = 1，返回张数；识别任务写库时清零 */
@@ -151,9 +170,10 @@ export class UnrecognizedQueries {
 
   list(q: ListUnrecognizedQuery): ListUnrecognizedResponse {
     const limit = Math.min(Math.max(q.limit ?? 60, 1), 200);
-    const sum = this.summary();
     const annex = q.area === 'annex';
     // 参数和大类不匹配时一律忽略（theme 只在 art + unsure 时生效，RV-T-8）
+    const artKind = annex ? null : (q.artKind ?? null);
+    const sum = this.summary(artKind ?? undefined);
     const bucket = annex ? null : (q.bucket ?? null);
     const theme = !annex && bucket === 'unsure' ? (q.theme ?? null) : null;
     const kind: UnrecognizedAnnexKind | null = annex ? (q.kind ?? null) : null;
@@ -171,9 +191,10 @@ export class UnrecognizedQueries {
       : `${BUCKET_WHERE[bucket ?? 'all']}${theme ? ' AND th = @theme' : ''}`;
     const sql = annex
       ? `SELECT * FROM (${ROW_ANNEX} AND ${where}) WHERE ${m.after} ORDER BY ${m.order} LIMIT @take`
-      : `SELECT * FROM (${ROW_ART}) WHERE ${where} AND (${m.after}) ORDER BY ${m.order} LIMIT @take`;
+      : `SELECT * FROM (${ROW_ART}${artKind ? ' AND i.content_kind = @artKind' : ''}) WHERE ${where} AND (${m.after}) ORDER BY ${m.order} LIMIT @take`;
     const rows = this.ctx.stmt(sql).all({
       kind,
+      artKind,
       theme,
       c: c?.c ?? null,
       t: c?.t ?? null,

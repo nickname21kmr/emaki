@@ -3,9 +3,13 @@ import { inferCoverFocus } from '../../services/covers/focus.ts';
 import {
   CONTENT_KINDS,
   UNRECOGNIZED_ANNEX_KINDS,
+  UNRECOGNIZED_ART_KINDS,
   UNRECOGNIZED_THEMES,
   type UnrecognizedAnnexKind,
+  type UnrecognizedArtCounts,
+  type UnrecognizedArtKind,
   type UnrecognizedSummary,
+  type UnrecognizedSummaryQuery,
   type UnrecognizedTheme,
   matchesQuery,
   type ContentKind,
@@ -1312,19 +1316,26 @@ export class MockDataSource implements DataSource {
     };
   }
 
-  async unrecognizedSummary(): Promise<UnrecognizedSummary> {
+  async unrecognizedSummary(query: UnrecognizedSummaryQuery = {}): Promise<UnrecognizedSummary> {
     const { art, annex } = this.unrecRows();
-    const themes = Object.fromEntries(UNRECOGNIZED_THEMES.map((t) => [t, 0])) as Record<UnrecognizedTheme, number>;
     const kinds = Object.fromEntries(UNRECOGNIZED_ANNEX_KINDS.map((k) => [k, 0])) as Record<UnrecognizedAnnexKind, number>;
-    const n = { suggested: 0, unsure: 0, untagged: 0, shelved: 0 };
-    for (const r of art) {
-      n[r.bucket]++;
-      if (r.bucket === 'unsure') themes[r.th]++;
-    }
+    const tally = (rows: typeof art) => {
+      const themes = Object.fromEntries(UNRECOGNIZED_THEMES.map((t) => [t, 0])) as Record<UnrecognizedTheme, number>;
+      const n = { suggested: 0, unsure: 0, untagged: 0, shelved: 0 };
+      for (const r of rows) {
+        n[r.bucket]++;
+        if (r.bucket === 'unsure') themes[r.th]++;
+      }
+      return { counts: { total: n.suggested + n.unsure + n.untagged, ...n } satisfies UnrecognizedArtCounts, themes };
+    };
     for (const r of annex) kinds[kindOf(r.img) as UnrecognizedAnnexKind]++;
     const retaggable = art.filter((r) => !r.sh && r.img.tagged && kindOf(r.img) === 'illustration').length;
+    const artKinds = Object.fromEntries(
+      UNRECOGNIZED_ART_KINDS.map((k) => [k, tally(art.filter((r) => kindOf(r.img) === k)).counts]),
+    ) as Record<UnrecognizedArtKind, UnrecognizedArtCounts>;
+    const t = tally(query.artKind ? art.filter((r) => kindOf(r.img) === query.artKind) : art);
     return {
-      art: { total: n.suggested + n.unsure + n.untagged, ...n, themes, retaggable },
+      art: { ...t.counts, themes: t.themes, retaggable, kinds: artKinds },
       annex: { total: annex.length, kinds },
     };
   }
@@ -1336,9 +1347,12 @@ export class MockDataSource implements DataSource {
   }
 
   async listUnrecognized(query: ListUnrecognizedQuery): Promise<ListUnrecognizedResponse> {
-    const sum = await this.unrecognizedSummary();
-    const { art, annex } = this.unrecRows();
     const isAnnex = query.area === 'annex';
+    const artKind = isAnnex ? undefined : query.artKind;
+    const sum = await this.unrecognizedSummary({ artKind });
+    const rowsAll = this.unrecRows();
+    const annex = rowsAll.annex;
+    const art = artKind ? rowsAll.art.filter((r) => kindOf(r.img) === artKind) : rowsAll.art;
     // 参数和大类不匹配时一律忽略（theme 只在 art + unsure 时生效）
     const bucket = isAnnex ? null : (query.bucket ?? null);
     const theme = !isAnnex && bucket === 'unsure' ? (query.theme ?? null) : null;

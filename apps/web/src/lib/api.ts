@@ -44,6 +44,7 @@ import type {
   ListUnrecognizedResponse,
   RetagResult,
   UnrecognizedSummary,
+  UnrecognizedSummaryQuery,
   HealthResponse,
   MoveImagesBody,
   NetworkCheckResponse,
@@ -164,7 +165,7 @@ export const api = {
   bulkCollections: (body: BulkCollectionsBody) => post<MutationResult>('/collections/bulk', body),
 
   unrecognized: (q: ListUnrecognizedQuery = {}) => get<ListUnrecognizedResponse>('/unrecognized', q),
-  unrecognizedSummary: () => get<UnrecognizedSummary>('/unrecognized/summary'),
+  unrecognizedSummary: (q: UnrecognizedSummaryQuery = {}) => get<UnrecognizedSummary>('/unrecognized/summary', q),
   retagUnrecognized: () => post<RetagResult>('/unrecognized/retag'),
   acceptSuggestion: (imageId: ID, body: AcceptSuggestionBody) =>
     post<MutationResult>(`/unrecognized/${encodeURIComponent(imageId)}/accept`, body),

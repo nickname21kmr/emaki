@@ -47,6 +47,7 @@ import type {
   TopCharactersQuery,
   UnrecognizedItem,
   UnrecognizedSummary,
+  UnrecognizedSummaryQuery,
   UpdateCharacterBody,
   UpdateImageBody,
   UpdateSettingsBody,
@@ -117,8 +118,8 @@ export interface DataSource {
 
   // 未识别
   listUnrecognized(query: ListUnrecognizedQuery): Promise<ListUnrecognizedResponse>;
-  /** 未识别两个大类、四个分段、各主题 / 各类的张数（T34a） */
-  unrecognizedSummary(): Promise<UnrecognizedSummary>;
+  /** 未识别两个大类、四个分段、各主题 / 各类的张数（T34a）；artKind 只算插画或漫画 */
+  unrecognizedSummary(query?: UnrecognizedSummaryQuery): Promise<UnrecognizedSummary>;
   /** 未识别里识别过、没认出角色、没放下的插画全部标记为重新识别，并启动识别任务 */
   retagUnrecognized(): Promise<RetagResult>;
   acceptSuggestion(imageId: ID, danbooruTag: string): Promise<MutationResult>;
