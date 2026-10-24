@@ -229,6 +229,7 @@ export function buildContractDb(now: number): MockDb {
       artists: false,
       pixiv: false,
       pixivFilenameMode: 'strict',
+      comicInUnrecognized: true,
     },
     danbooru: { enabled: false, username: '', hasApiKey: false, lastSyncAt: null },
     dedupe: { hammingThreshold: 8, lastRunAt: null },

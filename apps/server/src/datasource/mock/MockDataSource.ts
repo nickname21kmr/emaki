@@ -195,11 +195,16 @@ export class MockDataSource implements DataSource {
     return w.id;
   }
 
+  /** 未识别「插画 · 漫画」要找角色的类型：插画，加上设置开着时的漫画页（同 sqlite 的 QUEUE_KINDS_SQL） */
+  private inQueueKind(img: ImageRow): boolean {
+    return kindOf(img) === 'illustration' || (kindOf(img) === 'comic' && this.db.settings.tagger.comicInUnrecognized !== false);
+  }
+
   /** 逐张未识别队列（sql.ts 的 QUEUE）：计入张数、插画或漫画、没放下、没角色；按漫画导入的文件夹不进 */
   private inQueue(img: ImageRow): boolean {
     return (
       !img.excludedBy &&
-      isArt(img) &&
+      this.inQueueKind(img) &&
       !img.shelvedAt &&
       !img.originalAt &&
       !img.characterIds.length &&
@@ -507,7 +512,7 @@ export class MockDataSource implements DataSource {
         excluded++;
         continue; // 体积和 7 天新增只算「计入张数」的图
       }
-      if (!img.excludedBy && isArt(img) && img.shelvedAt && !img.originalAt && !img.characterIds.length && !img.collectionId) shelved++;
+      if (!img.excludedBy && this.inQueueKind(img) && img.shelvedAt && !img.originalAt && !img.characterIds.length && !img.collectionId) shelved++;
       if (this.inQueue(img)) {
         unrecognized++;
         if (!img.tagged && kindOf(img) !== 'comic') untagged++;
@@ -1312,7 +1317,7 @@ export class MockDataSource implements DataSource {
   private unrecRows() {
     const base = this.idx.visible.filter((img) => !img.excludedBy && !img.characterIds.length && !img.originalAt);
     return {
-      art: base.filter((img) => isArt(img) && !img.collectionId && !this.inComicRoot(img)).map((img) => this.unrecRow(img)),
+      art: base.filter((img) => this.inQueueKind(img) && !img.collectionId && !this.inComicRoot(img)).map((img) => this.unrecRow(img)),
       annex: base.filter((img) => !isArt(img)).map((img) => this.unrecRow(img)),
     };
   }

@@ -442,6 +442,11 @@ export interface Settings {
     pixiv: boolean;
     /** Pixiv 文件名解析：严格识别固定格式；宽泛兼容投稿号_标题。默认严格。 */
     pixivFilenameMode: 'strict' | 'broad';
+    /**
+     * 「未识别」里也列出漫画页（content_kind = 'comic'，默认开）。关掉后漫画页不进未识别的列表、计数、侧栏和首页待处理，
+     * 也不自动查 Pixiv；识别照常跑，别册 · 漫画里照样能看
+     */
+    comicInUnrecognized: boolean;
   };
   danbooru: {
     /** 是否允许联网同步标签元数据 */

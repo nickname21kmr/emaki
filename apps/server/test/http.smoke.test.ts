@@ -430,6 +430,15 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     expect(json).toMatchObject({ ui: { theme: 'dark' }, dedupe: { hammingThreshold: 10 } });
     expect((await call('PUT', '/api/settings', { dedupe: { hammingThreshold: 100 } })).status).toBe(400);
     expect((await call('PUT', '/api/settings', { tagger: { legacyBefore: '2024/03/01' } })).status).toBe(400);
+    // 未识别里也列出漫画页：默认开；关掉后漫画页离开未识别的列表、汇总和统计
+    expect((await call('GET', '/api/settings')).json.tagger.comicInUnrecognized).toBe(true);
+    expect((await call('PUT', '/api/settings', { tagger: { comicInUnrecognized: 'no' } })).status).toBe(400);
+    await call('POST', '/api/images/bulk', { ids: ['i25'], action: { type: 'kind', value: 'comic' } });
+    expect((await call('GET', '/api/unrecognized/summary')).json.art.kinds.comic.total).toBe(1);
+    expect((await call('PUT', '/api/settings', { tagger: { comicInUnrecognized: false } })).json.tagger.comicInUnrecognized).toBe(false);
+    expect((await call('GET', '/api/unrecognized/summary')).json.art).toMatchObject({ total: 6, kinds: { comic: { total: 0 } } });
+    expect((await call('GET', '/api/unrecognized?artKind=comic')).json).toMatchObject({ items: [], total: 0 });
+    expect((await call('GET', '/api/stats')).json.unrecognizedCount).toBe(6);
     const theme = { id: 't1', name: '丝袜', tags: ['thighhighs'] };
     expect((await call('PUT', '/api/settings', { browse: { customThemes: [theme] } })).json.browse).toEqual({ customThemes: [theme] });
     expect((await call('PUT', '/api/settings', { browse: { customThemes: [{ ...theme, tags: [] }] } })).status).toBe(400);

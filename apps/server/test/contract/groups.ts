@@ -666,6 +666,46 @@ export function unrecognizedContract(make: ContractFactory, name: Name) {
       expect(ids(e, (await e.ds.listUnrecognized({ area: 'annex', artKind: 'comic' })).items)).toEqual(['i30']);
     });
 
+    it('设置「未识别里也列出漫画页」：默认开，漫画页照旧；关掉后离开列表、汇总和统计，打开后恢复', async () => {
+      const e = env();
+      expect((await e.ds.getSettings()).tagger.comicInUnrecognized).toBe(true);
+      await e.ds.bulkImages({ ids: [e.id('image', 'i25'), e.id('image', 'i26')], action: { type: 'kind', value: 'comic' } });
+      await e.ds.bulkImages({ ids: [e.id('image', 'i26')], action: { type: 'shelve', value: true } });
+      const on = async () => {
+        const st = await e.ds.getStats();
+        expect([st.unrecognizedCount, st.shelvedCount]).toEqual([6, 1]);
+        const sum = await e.ds.unrecognizedSummary();
+        expect(sum.art).toMatchObject({ total: 6, shelved: 1, unsure: 1 });
+        expect(sum.art.themes.comic).toBe(1);
+        expect(sum.art.kinds.comic).toEqual({ total: 1, suggested: 0, unsure: 1, untagged: 0, shelved: 1 });
+        expect(ids(e, (await e.ds.listUnrecognized({ artKind: 'comic', bucket: 'unsure' })).items)).toEqual(['i25']);
+        return st;
+      };
+      const before = await on();
+
+      await e.ds.updateSettings({ tagger: { comicInUnrecognized: false } });
+      expect((await e.ds.getSettings()).tagger.comicInUnrecognized).toBe(false);
+      const st = await e.ds.getStats();
+      expect([st.unrecognizedCount, st.shelvedCount]).toEqual([5, 0]);
+      // 识别照常：待识别、没识别过的数不变
+      expect([st.untaggedCount, st.pendingTagCount]).toEqual([before.untaggedCount, before.pendingTagCount]);
+      const sum = await e.ds.unrecognizedSummary();
+      expect(sum.art).toMatchObject({ total: 5, suggested: 4, unsure: 0, untagged: 1, shelved: 0 });
+      expect(sum.art.themes.comic).toBe(0);
+      expect(sum.art.kinds.comic).toEqual({ total: 0, suggested: 0, unsure: 0, untagged: 0, shelved: 0 });
+      expect((await e.ds.unrecognizedSummary({ artKind: 'comic' })).art.total).toBe(0);
+      const all = await e.ds.listUnrecognized({});
+      expect(ids(e, all.items).sort()).toEqual(['i24', 'i27', 'i28', 'i29', 'i30']);
+      expect(all.total).toBe(5);
+      expect((await e.ds.listUnrecognized({ bucket: 'shelved' })).total).toBe(0);
+      expect((await e.ds.listUnrecognized({ artKind: 'comic' })).items).toEqual([]);
+      // 漫画页本身还在，别册里照样能看
+      expect((await e.ds.listImages({ kind: ['comic'] })).total).toBe(2);
+
+      await e.ds.updateSettings({ tagger: { comicInUnrecognized: true } });
+      await on();
+    });
+
     it('theme、bucket 和大类不匹配时忽略，不报错（T34a）', async () => {
       const e = env();
       await e.ds.bulkImages({ ids: [e.id('image', 'i25')], action: { type: 'kind', value: 'photo' } });

@@ -24,7 +24,7 @@ import { insertDanbooruCharacter } from './characters.ts';
 import type { SqliteContext } from './context.ts';
 import { applyExclusionRules } from './exclusions.ts';
 import { loadImageItems } from './hydrate.ts';
-import { ANNEX_KINDS_SQL, ART_KINDS_SQL, IN_COMIC_I, decodeCursor, encodeCursor, iso, parseId, QUEUE, THEME_EXPR, UNRECOGNIZED } from './sql.ts';
+import { ANNEX_KINDS_SQL, QUEUE_KINDS_SQL, IN_COMIC_I, decodeCursor, encodeCursor, iso, parseId, QUEUE, THEME_EXPR, UNRECOGNIZED } from './sql.ts';
 import { loadSuggestions } from './suggestions.ts';
 
 /**
@@ -34,8 +34,8 @@ import { loadSuggestions } from './suggestions.ts';
 const COLS = `i.id, i.added_at AS a, i.tagged_at AS tg, i.shelved_at AS sh, (i.content_kind = 'comic') AS c,
     COALESCE((SELECT MAX(s.score) FROM character_suggestions s WHERE s.image_id = i.id), -1) AS t,
     COALESCE(i.art_score, -999) AS s, ${THEME_EXPR} AS th`;
-/** 插画和漫画：没有角色、不在合集里（合集整本处理）、不在按漫画导入的文件夹里，放下的也在这里（由分段区分） */
-const ROW_ART = `SELECT ${COLS} FROM v_counted_images i WHERE ${ART_KINDS_SQL} AND ${UNRECOGNIZED} AND i.collection_id IS NULL AND NOT ${IN_COMIC_I}`;
+/** 插画和漫画（漫画页看设置）：没有角色、不在合集里（合集整本处理）、不在按漫画导入的文件夹里，放下的也在这里（由分段区分） */
+const ROW_ART = `SELECT ${COLS} FROM v_counted_images i WHERE ${QUEUE_KINDS_SQL} AND ${UNRECOGNIZED} AND i.collection_id IS NULL AND NOT ${IN_COMIC_I}`;
 /** 照片、文字等：没有角色的别册图 */
 const ROW_ANNEX = `SELECT ${COLS} FROM v_counted_images i WHERE ${ANNEX_KINDS_SQL} AND ${UNRECOGNIZED}`;
 /** 「用主模型重新识别」的范围：队列里识别过、没认出角色的插画（漫画按本处理，放下的是用户自己的决定，都不动） */
@@ -134,7 +134,7 @@ export class UnrecognizedQueries {
             WHEN i.tagged_at IS NULL THEN 'untagged'
             ELSE ${THEME_EXPR} END AS k, COUNT(*) AS n
          FROM v_counted_images i
-         WHERE ${UNRECOGNIZED} AND (${ANNEX_KINDS_SQL} OR (i.collection_id IS NULL AND NOT ${IN_COMIC_I}))
+         WHERE ${UNRECOGNIZED} AND (${ANNEX_KINDS_SQL} OR (${QUEUE_KINDS_SQL} AND i.collection_id IS NULL AND NOT ${IN_COMIC_I}))
          GROUP BY 1, 2`,
       )
       .all() as { ck: string; k: string; n: number }[];

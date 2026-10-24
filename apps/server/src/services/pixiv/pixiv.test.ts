@@ -1035,3 +1035,16 @@ it('召回多个经别名验证的同名角色时仍保持歧义，不自动关�
   expect(links()).toHaveLength(0);
   expect(db.prepare('SELECT DISTINCT danbooru_tag FROM character_suggestions ORDER BY danbooru_tag').pluck().all()).toEqual(tags);
 });
+
+it('设置关掉「未识别里也列出漫画页」时漫画页不查 Pixiv，打开后照常', async () => {
+  db.exec("UPDATE images SET content_kind='comic' WHERE id=2");
+  expect(pendingPixivCount(ctx)).toBe(2);
+  db.exec(`INSERT INTO settings(key,value) VALUES ('tagger','{"comicInUnrecognized":false}')`);
+  expect(pendingPixivCount(ctx)).toBe(1);
+  const client = { artwork: async () => art(2, ['アリス']) };
+  await syncPixivCharacters(ctx, job, makeCatalog, client, 0);
+  expect(links().map((r) => (r as { image_id: number }).image_id)).toEqual([1]);
+  db.exec(`UPDATE settings SET value='{"comicInUnrecognized":true}' WHERE key='tagger'`);
+  // 打开后漫画页回到待查
+  expect(pendingPixivCount(ctx)).toBe(1);
+});

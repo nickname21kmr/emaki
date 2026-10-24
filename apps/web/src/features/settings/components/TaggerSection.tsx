@@ -136,6 +136,17 @@ export function TaggerSection({
           />
         </Field>
 
+        <Field
+          label="未识别里也列出漫画页"
+          hint="关掉后漫画页不用找角色：它们离开「未识别」和它的计数，也不查 Pixiv，在「别册 · 漫画」里照样能看。"
+        >
+          <Switch
+            checked={tagger.comicInUnrecognized !== false}
+            onCheckedChange={(v) => save({ tagger: { comicInUnrecognized: v } })}
+            label="未识别里也列出漫画页"
+          />
+        </Field>
+
         <Field label="运行设备" hint="有显卡就选 GPU，NVIDIA、AMD、Intel 都可以，走 DirectML。DirectML 用不了时会自动改用 WebGPU，再不行用 CPU。">
           <Segmented
             value={tagger.device}

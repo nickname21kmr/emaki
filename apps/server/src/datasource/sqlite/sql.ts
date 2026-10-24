@@ -81,7 +81,14 @@ export const IN_COMIC_I = IN_COMIC('i');
  * 逐张「未识别」队列：插画和漫画、没有放下、没有角色。getStats、分段、侧栏共用这一份（MG-9）。
  * 合集里的页不逐张进队列（T38c），在「成册待整理」里整本处理；按漫画导入的文件夹不找角色，不进队列。
  */
-export const QUEUE = `${ART_KINDS_SQL} AND i.shelved_at IS NULL AND ${UNRECOGNIZED} AND i.collection_id IS NULL AND NOT ${IN_COMIC_I}`;
+/**
+ * 设置「未识别里也列出漫画页」（tagger.comicInUnrecognized，缺省 = 开）。直接在 SQL 里读设置表：
+ * 不相关子查询每条语句只算一次，用到队列的地方不用各自传参数
+ */
+export const COMIC_IN_QUEUE = `COALESCE((SELECT json_extract(s.value, '$.comicInUnrecognized') FROM settings s WHERE s.key = 'tagger'), 1)`;
+/** 未识别「插画 · 漫画」要找角色的类型：插画，加上设置开着时的漫画页 */
+export const QUEUE_KINDS_SQL = `(i.content_kind = 'illustration' OR (i.content_kind = 'comic' AND ${COMIC_IN_QUEUE}))`;
+export const QUEUE = `${QUEUE_KINDS_SQL} AND i.shelved_at IS NULL AND ${UNRECOGNIZED} AND i.collection_id IS NULL AND NOT ${IN_COMIC_I}`;
 /** 「待识别」：队列里还没跑过识别的；漫画不算（它按本处理，RV-T-1 ③） */
 export const UNTAGGED_UNRECOGNIZED = `i.tagged_at IS NULL AND i.content_kind <> 'comic' AND ${QUEUE}`;
 /** 图片所在目录（带末尾的 /） */

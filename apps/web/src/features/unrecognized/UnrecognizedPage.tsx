@@ -2,7 +2,7 @@ import { Link } from 'react-router';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Skeleton } from '@/components/ui';
 import { formatCount } from '@/lib/format';
-import { useStats, useUnrecognizedSummary } from '@/lib/queries';
+import { useSettings, useStats, useUnrecognizedSummary } from '@/lib/queries';
 import { AreaTabs } from './components/AreaTabs';
 import { ArtKindFilter } from './components/ArtKindFilter';
 import { BucketTabs } from './components/BucketTabs';
@@ -67,11 +67,13 @@ export function UnrecognizedPage() {
 function Subtitle() {
   const { data } = useUnrecognizedSummary();
   const { running, progress } = useTagJob();
+  // 设置里关了「未识别里也列出漫画页」：这里只有插画
+  const what = useSettings().data?.tagger.comicInUnrecognized === false ? '插画' : '插画和漫画';
   if (!data) return <Skeleton className="h-3.5 w-56" />;
   const { art, annex } = data;
   return (
     <>
-      {art.total ? `${formatCount(art.total)} 张插画和漫画还没有角色` : '插画和漫画都有角色了'}
+      {art.total ? `${formatCount(art.total)} 张${what}还没有角色` : `${what}都有角色了`}
       {running
         ? ` · 识别中${progress !== null ? ` ${Math.round(progress * 100)}%` : ''}，新建议会自动加入`
         : art.untagged > 0 && ` · ${formatCount(art.untagged)} 张还没跑过识别`}

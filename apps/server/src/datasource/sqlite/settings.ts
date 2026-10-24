@@ -37,6 +37,8 @@ export const DEFAULT_SETTINGS = {
     // 自动查 Pixiv 标签会联网，默认关
     pixiv: false,
     pixivFilenameMode: 'strict',
+    // 默认照旧把漫画页列在未识别里；sql.ts 的 COMIC_IN_QUEUE 也按缺省 = 开
+    comicInUnrecognized: true,
   },
   // 不存 hasApiKey；默认不联网，T21 的引导里让用户选
   danbooru: { enabled: false, username: '', lastSyncAt: null as string | null },

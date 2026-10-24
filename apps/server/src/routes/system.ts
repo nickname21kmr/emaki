@@ -70,6 +70,7 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
             artists: z.boolean(),
             pixiv: z.boolean(),
             pixivFilenameMode: z.enum(['strict', 'broad']),
+            comicInUnrecognized: z.boolean(),
           })
           .partial()
           .optional(),
