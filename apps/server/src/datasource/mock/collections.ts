@@ -177,6 +177,7 @@ export class MockCollections {
       collection: l.summary,
       pages: l.pages.map((p, i) => ({
         imageId: p.id,
+        modifiedAt: p.modifiedAt,
         pageNo: i + 1,
         width: p.width,
         height: p.height,

@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Pause, PanelRight, Play, Shapes, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Dialog as D } from 'radix-ui';
-import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { imageUrl } from '@/lib/api';
 import { blurLabel, blurReason } from '@/lib/blur';
@@ -12,6 +12,7 @@ import { isTypingTarget, useHotkey } from '@/lib/hotkeys';
 import { useImage } from '@/lib/queries';
 import { useBlurPrefs, useLightbox } from '@/lib/stores';
 import { findCachedImage, preloadAhead, preloadNeighbors, whenDecoded } from './lightbox/cache';
+import { useCachedImage } from './lightbox/useCachedImages';
 import { Filmstrip } from './lightbox/Filmstrip';
 import { entryKey, isLightboxEntry, markLightboxEntry, popAction, setLightboxPopHandler } from './lightbox/history';
 import { InfoPanel } from './lightbox/InfoPanel';
@@ -247,8 +248,8 @@ function LightboxView({
 
   const detailQuery = useImage(id);
   const detail = detailQuery.data?.id === id ? detailQuery.data : undefined;
-  const cached = useMemo(() => findCachedImage(client, id), [client, id]);
-  const base = detail ?? cached;
+  const cached = useCachedImage(id);
+  const base = cached ?? detail;
 
   // 「显示」只对点过的那几张生效，关掉看图器就忘掉
   const [revealed, setRevealed] = useState<ReadonlySet<ID>>(() => new Set());
@@ -267,7 +268,7 @@ function LightboxView({
   useEffect(() => {
     preloadNeighbors(client, ids, index);
     if (slideshow) preloadAhead(client, ids, index);
-  }, [client, ids, index, slideshow]);
+  }, [client, ids, index, slideshow, base?.modifiedAt]);
 
   escapeRef.current = () => {
     if (!zoomApi.zoomed) return false;

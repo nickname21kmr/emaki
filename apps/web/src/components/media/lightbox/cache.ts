@@ -9,34 +9,48 @@ import { qk } from '@/lib/queries';
  */
 export function findCachedImage(client: QueryClient, id: ID): ImageItem | undefined {
   const kept = remembered.get(id);
-  if (kept) return kept;
-  for (const [, data] of client.getQueriesData<InfiniteData<Page<ImageItem>>>({ queryKey: ['images'] })) {
+  let image = kept?.image;
+  let fetchedAt = kept?.at ?? -1;
+  const consider = (candidate: ImageItem | undefined, at: number) => {
+    if (candidate?.id === id && at >= fetchedAt) { image = candidate; fetchedAt = at; }
+  };
+  for (const query of client.getQueryCache().findAll({ queryKey: ['images'] })) {
+    const data = query.state.data as InfiniteData<Page<ImageItem>> | undefined;
     for (const page of data?.pages ?? []) {
       const hit = page.items.find((i) => i.id === id);
-      if (hit) return hit;
+      consider(hit, query.state.dataUpdatedAt);
     }
+    // DailyPlate stores a single image rather than an infinite list.
+    consider(data as unknown as ImageItem | undefined, query.state.dataUpdatedAt);
   }
-  for (const [, data] of client.getQueriesData<InfiniteData<Page<UnrecognizedItem>>>({ queryKey: qk.unrecognized })) {
+  for (const query of client.getQueryCache().findAll({ queryKey: qk.unrecognized })) {
+    const data = query.state.data as InfiniteData<Page<UnrecognizedItem>> | undefined;
     for (const page of data?.pages ?? []) {
       const hit = page.items.find((i) => i.image.id === id);
-      if (hit) return hit.image;
+      consider(hit?.image, query.state.dataUpdatedAt);
     }
   }
-  for (const [, data] of client.getQueriesData<DuplicateGroup[]>({ queryKey: ['duplicates'] })) {
+  for (const query of client.getQueryCache().findAll({ queryKey: ['duplicates'] })) {
+    const data = query.state.data as DuplicateGroup[] | undefined;
     for (const group of Array.isArray(data) ? data : []) {
       const hit = group.images.find((i) => i.id === id);
-      if (hit) return hit;
+      consider(hit, query.state.dataUpdatedAt);
     }
   }
-  return undefined;
+  // Prefer detail on a tie. A restored original can have an older modifiedAt,
+  // so freshness follows when data was fetched, not the file timestamp itself.
+  const detail = client.getQueryState<ImageItem>(qk.image(id));
+  consider(detail?.data, detail?.dataUpdatedAt ?? -1);
+  return image;
 }
 
 // 放映拉来的图不在任何网格的缓存里：单独记住，每次开始放映时替换
-const remembered = new Map<ID, ImageItem>();
+const remembered = new Map<ID, {image: ImageItem; at: number}>();
 
 export function rememberImages(items: ImageItem[]) {
   remembered.clear();
-  for (const it of items) remembered.set(it.id, it);
+  const at = Date.now();
+  for (const it of items) remembered.set(it.id, {image: it, at});
 }
 
 // 已经预加载过的地址，避免来回切换时重复创建 Image 对象

@@ -1,9 +1,8 @@
 import type { ID } from '@emaki/shared';
-import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/cn';
 import { Thumb } from '../Thumb';
-import { findCachedImage } from './cache';
+import { useCachedImages } from './useCachedImages';
 
 /** 只画当前这张前后各这么多张：列表可能有几千张 */
 const SPAN = 40;
@@ -13,15 +12,13 @@ const SPAN = 40;
  * 缩略图的尺寸、分级从列表缓存里取；取不到的（比如从别处打开的）按敏感处理，先模糊。
  */
 export function Filmstrip({ ids, index, onPick, hidden }: { ids: ID[]; index: number; onPick: (index: number) => void; hidden?: boolean }) {
-  const client = useQueryClient();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const from = Math.max(0, index - SPAN);
   const to = Math.min(ids.length, index + SPAN + 1);
-  const items = useMemo(
-    () => (open ? ids.slice(from, to).map((id, k) => ({ id, i: from + k, meta: findCachedImage(client, id) })) : []),
-    [open, ids, from, to, client],
-  );
+  const shown = useMemo(() => open ? ids.slice(from, to) : [], [open, ids, from, to]);
+  const images = useCachedImages(shown);
+  const items = shown.map((id, k) => ({ id, i: from + k, meta: images[k] }));
   useEffect(() => {
     if (open) ref.current?.querySelector('[data-current="true"]')?.scrollIntoView({ inline: 'center', block: 'nearest' });
   }, [open, index]);

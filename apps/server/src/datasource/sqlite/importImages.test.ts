@@ -172,6 +172,26 @@ it('updates extensions for a new format, retains ID, and restores the original f
   expect(await ds.getImage(original.imageId)).toMatchObject({fileName:'image.png',format:'png',width:12,height:14});
 });
 
+it('collection pages expose the current file revision and dimensions after replacement and undo',async()=>{
+  const original=item(await run([{path:await source()}])),id=original.imageId;
+  const {collection}=await ds.createCollection({fromImageId:id,kind:'artbook'});
+  const before=(await ds.getCollection(collection.id))!.pages[0]!;
+  expect(before).toMatchObject({imageId:id,width:12,height:14,modifiedAt:expect.any(String)});
+  const hd=await source('hd.png',await sharp(image).resize(36,42).png().toBuffer());
+  // Distinct mtime even on filesystems with coarse timestamp precision.
+  const {utimes}=await import('node:fs/promises');
+  await utimes(original.absPath,new Date('2026-01-01T00:00:00Z'),new Date('2026-01-01T00:00:00Z'));
+  ds.ctx.db.prepare('UPDATE images SET modified_at=? WHERE id=?').run((await stat(original.absPath)).mtime.toISOString(),id);
+  ds.ctx.touch();
+  const oldVersion=(await ds.getCollection(collection.id))!.pages[0]!.modifiedAt;
+  const result=await ds.replaceImage(id,{path:hd});
+  const replaced=(await ds.getCollection(collection.id))!.pages[0]!;
+  expect(replaced).toMatchObject({imageId:id,width:36,height:42});
+  expect(replaced.modifiedAt).not.toBe(oldVersion);
+  await ds.undo(result.undoToken!);
+  expect((await ds.getCollection(collection.id))!.pages[0]).toMatchObject({imageId:id,width:12,height:14,modifiedAt:oldVersion});
+});
+
 it('same bytes are a no-op; new-format name collisions require a choice',async()=>{
   const file=await source(),original=item(await run([{path:file}]));
   expect(await ds.replaceImage(original.imageId,{path:file})).toMatchObject({undoToken:null,imageId:original.imageId});
