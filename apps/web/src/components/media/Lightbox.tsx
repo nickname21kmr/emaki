@@ -73,8 +73,11 @@ export function Lightbox() {
   return (
     <D.Root open={open} onOpenChange={(v) => !v && putBack()}>
       <D.Portal>
-        {/* 暗房：不透明的底，不用全屏背景模糊（缩放拖动时每帧重算，纯成本） */}
-        <D.Overlay
+        {/* 暗房：不透明的底，不用全屏背景模糊（缩放拖动时每帧重算，纯成本）。
+            不用 D.Overlay：它带着滚动锁，打开时往 head 插样式表、改 body，整页样式重算一遍，正压在拿起动画前面。
+            文档本身不滚、看图器铺满全屏，那把锁用不上；淡出仍由 Portal 的 Presence 按 data-state 等动画放完 */}
+        <div
+          data-state={open ? 'open' : 'closed'}
           className={cn(
             'fixed inset-0 z-50 bg-stage transition-opacity duration-300 data-[state=closed]:animate-[fade-in_180ms_ease-in_reverse_both] data-[state=open]:animate-fade-in',
             returning && 'opacity-0',

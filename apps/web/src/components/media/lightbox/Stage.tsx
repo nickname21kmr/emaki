@@ -16,6 +16,8 @@ export type StageMeta = Pick<ImageItem, 'width' | 'height' | 'rating' | 'dominan
 const PAD_X = 84;
 const PAD_Y = 68;
 const EASE = EASE_OUT;
+/** 从格子里拿起到居中的时长（秒） */
+const LIFT_S = 0.46;
 
 /**
  * 看图器的舞台：居中显示图片，先 960 缩略图再换原图；滚轮 / 双击缩放，放大后拖动平移。
@@ -167,6 +169,25 @@ export function Stage({
       : null;
   const from = originRect ? toRect(originRect) : null;
   const back = returnRect ? toRect(returnRect) : null;
+  // 拿起的动画等第一帧画出来再起跑：打开那一下主线程要挂上整个看图器（几十毫秒），
+  // 动画若在那时就开始计时，第一帧已经走掉一截，看起来是从格子里「跳」出来的。
+  // 落定之前原图先不换上去：大图第一次上屏要传一整张纹理给 GPU，放在动画中间就是一顿
+  const [liftedFor, setLiftedFor] = useState<LightboxRect | null>(null);
+  const [landedFor, setLandedFor] = useState<LightboxRect | null>(null);
+  useEffect(() => {
+    if (!originRect) return;
+    let timer = 0;
+    const frame = requestAnimationFrame(() => {
+      setLiftedFor(originRect);
+      timer = window.setTimeout(() => setLandedFor(originRect), LIFT_S * 1000);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [originRect]);
+  const holding = !!from && liftedFor !== originRect;
+  const lifting = !!originRect && landedFor !== originRect;
   const initial = from
     ? { opacity: 1, ...from }
     : slideshow
@@ -179,9 +200,9 @@ export function Stage({
       <motion.div
         key={id}
         initial={initial}
-        animate={back ? { opacity: 1, ...back } : returnRect ? { opacity: 0, x: 0, y: 0, scale: 0.96 } : { opacity: 1, x: 0, y: 0, scale: 1 }}
+        animate={back ? { opacity: 1, ...back } : returnRect ? { opacity: 0, x: 0, y: 0, scale: 0.96 } : holding ? initial : { opacity: 1, x: 0, y: 0, scale: 1 }}
         exit={{ opacity: 0 }}
-        transition={{ duration: returnRect ? 0.3 : originRect ? 0.46 : (slideshow?.crossfade ?? 0.42), ease: slideshow ? 'linear' : EASE }}
+        transition={{ duration: returnRect ? 0.3 : originRect ? LIFT_S : (slideshow?.crossfade ?? 0.42), ease: slideshow ? 'linear' : EASE }}
         className="absolute"
         style={{ left: (size.w - boxW) / 2, top: (size.h - boxH) / 2, width: boxW, height: boxH }}
       >
@@ -204,6 +225,7 @@ export function Stage({
             placeholder={originRect?.thumb}
             flat={!!returnRect}
             slide={!!slideshow}
+            holdFull={lifting}
           />
         </div>
       </motion.div>
@@ -273,6 +295,17 @@ export function Stage({
   );
 }
 
+/**
+ * 下载完先 decode() 再显示：直接换上去的话，大 JPEG 的解码落在合成器光栅化里（几十到上百毫秒），
+ * 正赶上拿起动画就卡一下。decode() 在后台解完，换上去时已经是现成的位图；解不了也照样显示。
+ */
+function showDecoded(img: HTMLImageElement, show: () => void) {
+  void img
+    .decode()
+    .catch(() => {})
+    .then(show);
+}
+
 /** 一张图：主色占位 → 960 缩略图 → 原图淡入。按 id 重新挂载，加载状态天然隔离。 */
 function StageImage({
   id,
@@ -283,6 +316,7 @@ function StageImage({
   placeholder,
   flat,
   slide,
+  holdFull,
 }: {
   id: ID;
   meta: StageMeta;
@@ -295,10 +329,13 @@ function StageImage({
   flat?: boolean;
   /** 放映中：外层已经在交叉淡化，缩略图（已预先解码）直接出现，不再叠一层淡入 */
   slide?: boolean;
+  /** 拿起动画还没落定：原图下好了也先不换上去 */
+  holdFull?: boolean;
 }) {
   const [thumbLoaded, setThumbLoaded] = useState(false);
   const [fullLoaded, setFullLoaded] = useState(false);
   const [fullFailed, setFullFailed] = useState(false);
+  const fullShown = fullLoaded && !holdFull;
 
   const imgClass = cn(
     'absolute inset-0 size-full object-contain transition-[opacity,filter,scale] duration-500 ease-[var(--ease-out-soft)]',
@@ -311,23 +348,23 @@ function StageImage({
         'relative size-full overflow-hidden rounded-[3px] transition-shadow duration-300',
         !flat && 'shadow-[0_40px_120px_-30px_rgb(0_0_0/0.8)]',
       )}
-      style={{ backgroundColor: placeholder || thumbLoaded || fullLoaded ? undefined : meta.dominantColor }}
+      style={{ backgroundColor: placeholder || thumbLoaded || fullShown ? undefined : meta.dominantColor }}
     >
-      {placeholder && !fullLoaded && <img src={imageUrl.thumb(id, placeholder)} alt="" draggable={false} className={imgClass} />}
+      {placeholder && !fullShown && <img src={imageUrl.thumb(id, placeholder)} alt="" draggable={false} className={imgClass} />}
       <img
         src={imageUrl.thumb(id, 960)}
         alt=""
         draggable={false}
         // 看图器里正在看的这张优先：网格里几十张缩略图同时在下载时，它不用排队
         fetchPriority="high"
-        onLoad={() => setThumbLoaded(true)}
+        onLoad={(e) => showDecoded(e.currentTarget, () => setThumbLoaded(true))}
         className={cn(
           imgClass,
           // 原图淡入完成后再隐藏缩略图，避免透明 PNG 叠出重影
-          thumbLoaded && !fullLoaded ? 'opacity-100' : 'opacity-0',
-          fullLoaded && 'delay-300',
+          thumbLoaded && !fullShown ? 'opacity-100' : 'opacity-0',
+          fullShown && 'delay-300',
         )}
-        style={slide && !fullLoaded ? { transitionDuration: '0ms' } : undefined}
+        style={slide && !fullShown ? { transitionDuration: '0ms' } : undefined}
       />
       {!fullFailed && (
         <img
@@ -336,9 +373,9 @@ function StageImage({
           draggable={false}
           decoding="async"
           fetchPriority="high"
-          onLoad={() => setFullLoaded(true)}
+          onLoad={(e) => showDecoded(e.currentTarget, () => setFullLoaded(true))}
           onError={() => setFullFailed(true)}
-          className={cn(imgClass, fullLoaded ? 'opacity-100' : 'opacity-0')}
+          className={cn(imgClass, fullShown ? 'opacity-100' : 'opacity-0')}
         />
       )}
 

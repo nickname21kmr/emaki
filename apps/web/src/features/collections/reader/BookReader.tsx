@@ -33,7 +33,7 @@ export function BookReader() {
   }, [setReaderOpen]);
   if (!q.data) {
     return (
-      <div style={YIELD} className="fixed inset-0 z-40 flex items-center justify-center bg-stage text-white/70">
+      <div data-assistant-yield style={YIELD} className="fixed inset-0 z-40 flex items-center justify-center bg-stage text-white/70">
         {q.isError ? '读不到这本合集' : <Spinner className="size-5" />}
       </div>
     );
@@ -168,7 +168,7 @@ function Reader({ data }: { data: GetCollectionResponse }) {
   const m = COLLECTION_META[c.kind];
 
   return (
-    <div style={YIELD} className="fixed inset-0 z-40 flex flex-col bg-stage text-white/85 select-none" onMouseMove={poke} onWheel={onWheel}>
+    <div data-assistant-yield style={YIELD} className="fixed inset-0 z-40 flex flex-col bg-stage text-white/85 select-none" onMouseMove={poke} onWheel={onWheel}>
       <header className={cn('flex h-12 shrink-0 items-center gap-3 px-4 transition-opacity duration-300', !chrome && 'opacity-0 hover:opacity-100')}>
         <ReaderButton label="回到扉页" onClick={back}>
           <ArrowLeft className="size-4" />

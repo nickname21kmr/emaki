@@ -620,7 +620,7 @@
 
 /*
  * 助手附页贴右时，toast 和多选栏在看得见的那块里居中（final-spec §3.7）。
- * 两个变量由 AssistantRoot 写在 :root 上：--assistant-right 是并排或覆盖时附页占的宽（W + 8），
+ * 两个变量由 AssistantRoot 只写给 toast、多选栏和阅读器（不写 :root，免得整页重算样式）：--assistant-right 是并排或覆盖时附页占的宽（W + 8），
  * --assistant-cover 只在覆盖时有值（并排时主纸已经让位，多选栏本来就居中）。
  * 暗房里 --assistant-right 是插槽加信息面板的宽，toast 落在图的那块。
  * sonner 用 transform 居中，这里用独立的 translate 叠上去，整个挪到附页左边那块的正中；

@@ -16,6 +16,19 @@ import { Sheet } from './view/Sheet';
 let mounted = 0;
 
 /**
+ * 避让用的两个变量（index.css）只写给用得到的元素：toast、多选栏、合集阅读器（data-assistant-yield）。
+ * 不写在 :root 上：:root 的自定义属性一变，整页每个元素都要重算样式（十几毫秒），进出看图器时正压在拿起动画上；
+ * 改这张小样式表只重算命中的那几个
+ */
+const YIELD_TARGETS = '[data-sonner-toaster], .assistant-cover-shift, [data-assistant-yield]';
+let yieldSheet: HTMLStyleElement | null = null;
+function setYield(right: number, cover: number) {
+  yieldSheet ??= document.head.appendChild(document.createElement('style'));
+  const text = `${YIELD_TARGETS}{--assistant-right:${right}px;--assistant-cover:${cover}px}`;
+  if (yieldSheet.textContent !== text) yieldSheet.textContent = text;
+}
+
+/**
  * 助手的根（懒加载，开启后才下载）：注册 mod+J，挂着对话状态，在胶囊和附页之间二选一，
  * 附页平时 portal 到 body，看图器开着时 portal 到暗房插槽。另有一个只给读屏的播报区。
  */
@@ -30,9 +43,7 @@ export function AssistantRoot() {
       setTimeout(() => {
         if (mounted) return;
         useAssistantDock.setState({ open: false, shown: false, wantsFocus: false, lastStatus: null, runStartedAt: null, unseen: null });
-        const root = document.documentElement.style;
-        root.setProperty('--assistant-right', '0px');
-        root.setProperty('--assistant-cover', '0px');
+        setYield(0, 0);
       });
     };
   }, []);
@@ -72,9 +83,7 @@ function Assistant({ backend }: { backend: AssistantBackend | null }) {
       : leaf ? leafWidth(form, width, vw) + 8
       : form === 'darkroom' ? leafWidth(form, width, vw) + 12 + (infoPanel ? PANEL_W : 0)
       : 0;
-    const root = document.documentElement.style;
-    root.setProperty('--assistant-right', `${right}px`);
-    root.setProperty('--assistant-cover', form === 'overlay' ? `${right}px` : '0px');
+    setYield(right, form === 'overlay' ? right : 0);
   }, [form, width, vw, shown, infoPanel]);
 
   // 看图器开着时附页留在 Dialog 里（暗房并排，窄窗时是看图器里的底页）
