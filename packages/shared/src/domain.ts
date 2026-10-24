@@ -238,6 +238,8 @@ export interface CollectionSummary {
 
 export interface CollectionPage {
   imageId: ID;
+  /** File revision, also used by reader and thumbnail URLs after replacement/undo. */
+  modifiedAt: ISODate;
   /** 可见页里的序号，1..n */
   pageNo: number;
   width: number;

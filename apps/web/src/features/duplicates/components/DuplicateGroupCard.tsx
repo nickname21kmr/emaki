@@ -55,7 +55,7 @@ export const DuplicateGroupCard = forwardRef<
   const lensActive = lensOn && group.kind === 'similar';
   useEffect(() => {
     if (!lensActive) return setLens(null);
-    for (const img of group.images) new Image().src = imageUrl.file(img.id);
+    for (const img of group.images) new Image().src = imageUrl.file(img.id, img.modifiedAt);
   }, [lensActive, group.images]);
   const ratios = group.images.map(tileRatio);
   // 每行最多 PER_ROW 张；超过 FOLDED_ROWS 行先折起来（几十张的组挤成一行会小得看不清）

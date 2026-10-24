@@ -90,7 +90,7 @@ export function DuplicateTile({
           <div
             aria-hidden
             className="pointer-events-none absolute inset-0 animate-fade-in bg-sunken bg-no-repeat"
-            style={{ backgroundImage: `url(${imageUrl.file(image.id)})`, backgroundSize: '300%', backgroundPosition: `${lens.x * 100}% ${lens.y * 100}%` }}
+            style={{ backgroundImage: `url(${imageUrl.file(image.id, image.modifiedAt)})`, backgroundSize: '300%', backgroundPosition: `${lens.x * 100}% ${lens.y * 100}%` }}
           />
         )}
 

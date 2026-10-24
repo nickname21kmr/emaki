@@ -182,6 +182,13 @@ export class Pipeline {
     else this.afterThumbnail();
   }
 
+  /** 显式导入已经完成入库，接续像素处理和识别，不重复扫描。 */
+  afterImport(): void {
+    this.dedupeDirty = true;
+    this.requestTag();
+    this.d.jobs().enqueue('thumbnail');
+  }
+
   /** 启动时发现从没查过重、或查重之后又有新图：下次任务链走到时补跑查重 */
   markDedupeDirty(): void {
     this.dedupeDirty = true;

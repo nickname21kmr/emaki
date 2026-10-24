@@ -31,6 +31,10 @@ import {
   type ListCollectionsQuery,
   type UpdateCollectionBody,
   type Character,
+  type ImportImagesBody,
+  type ImportImagesResult,
+  type ReplaceImageBody,
+  type ReplaceImageResult,
   type CharacterSuggestion,
   type CreateCharacterBody,
   type CustomCharacterMatch,
@@ -140,6 +144,12 @@ const RATING_TIER: Record<Rating, number> = { general: 0, sensitive: 0, question
  * 这样前端在 mock 模式下开发完，切到 sqlite 就能直接用。
  */
 export class MockDataSource implements DataSource {
+  async replaceImage(_id: ID, _body: ReplaceImageBody): Promise<ReplaceImageResult> {
+    throw new BadRequestError('演示图库不替换本机文件，请切换到本地图库');
+  }
+  async importImages(_body: ImportImagesBody): Promise<ImportImagesResult> {
+    throw new BadRequestError('演示图库不导入本机文件，请切换到本地图库');
+  }
   private readonly db: MockDb;
   private readonly undoStack = new UndoStack();
   private readonly jobs: JobQueue;

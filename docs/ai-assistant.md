@@ -4,6 +4,10 @@
 
 ## 使用
 
+助手通过 MCP `replace_image` 将下载的高清版替换到原图片，保留图片 ID、角色、来源、画师和收藏，更新尺寸和缩略图，并支持撤销恢复原版本。用户已要求为某张图找高清版或替换时直接执行；新增还是替换不明确时通过 `ask_user` 提供选择。
+
+新增图片使用 `import_images`；通过 `read_library /api/library-roots` 选择目录，按内容复用完全相同的现有文件。重名返回 `needs_confirm` 和已有图片 ID，只有明确要保留两个版本时才设置 `keepBoth=true`。工具返回可立即查询的图片 ID，无需额外全库扫描。HTTP 接口为 `POST /api/images/import`，参数 `{rootId, dir, files:[{path, fileName?}], keepBoth?}`；替换为 `POST /api/images/:id/replace`，参数 `{path}`。本地普通图片文件每个最多 128 MiB，新增每次 1–20 张。两者均保留原下载；新增的撤销将副本送到系统回收站，替换的撤销恢复原文件内容与媒体字段，之后的元数据修改保留。原版本与恢复记录存放在数据目录 `image-replacements`，服务重启后仍保留备份（撤销按钮沿用现有进程内撤销栈）。
+
 1. 打开开关，弹窗会列出开启后哪些内容会发出去、助手在本机能做什么，确认后才开启，并检测本机 Agent 应用。检测只检查安装、认证状态和模型列表，不发起推理，也不发送图库内容。
 2. 在设置页选择 Agent 应用：
    - **Codex**：使用已有 Codex 安装和登录。自动检查 PATH 及 Windows Codex 桌面安装位置；也可指定可执行文件的绝对路径。Codex 的线程记录（消息、工具输出、模型回复）由 Codex 自己保存在 `CODEX_HOME`（默认 `~/.codex/sessions`），也会出现在 Codex 自己的历史列表里；删除或关闭 Emaki 数据不会清理这些记录，需要时在 Codex 里归档或删除。
@@ -39,6 +43,8 @@ DSH 启动时优先保留进程环境和原 DSH home `.env` 中的代理配置�
 
 | 工具 | 能力 |
 | --- | --- |
+| `import_images` | 新增下载图片，精确查重；重名时给出选择，支持撤销新增副本 |
+| `replace_image` | 将下载的高清版替换到原图片，保留 ID 与元数据，支持撤销恢复 |
 | `describe_database` / `query_database` | 当前表结构、自由只读 SQL；关联、统计、抽样由 agent 自行组织 |
 | `read_library` | 读取应用现有图库、角色、作品、任务、未识别等 API，保留页面口径 |
 | `read_media` | 实际看图，也支持按像素裁剪局部 |

@@ -58,6 +58,24 @@ export interface MutationResult {
   undoToken: string | null;
 }
 
+/** POST /api/images/import: copy downloaded local files into an existing library root. */
+export interface ImportImagesBody {
+  rootId: ID;
+  /** Relative destination folder; empty string means the root itself. */
+  dir: string;
+  files: { path: string; fileName?: string }[];
+  /** Only set when the user wants to keep both versions of a same-named file. */
+  keepBoth?: boolean;
+}
+export interface ImportImagesResult extends MutationResult {
+  items: ({ path: string; status: 'imported' | 'existing'; imageId: ID; absPath: string }
+    | { path: string; status: 'failed'; error: string; code?: 'needs_confirm'; existingImageId?: ID })[];
+}
+
+/** POST /api/images/:id/replace: upgrade an existing image, retaining its identity and metadata. */
+export interface ReplaceImageBody { path: string }
+export interface ReplaceImageResult extends MutationResult { imageId: ID; absPath: string }
+
 export interface ApiError {
   ok: false;
   error: string;

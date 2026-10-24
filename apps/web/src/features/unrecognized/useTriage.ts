@@ -109,7 +109,7 @@ export function useTriage(bucket: 'suggested' | 'untagged', artKind?: Unrecogniz
     if (index < 0) return;
     for (const it of items.slice(index + 1, index + 3)) {
       const img = new Image();
-      img.src = imageUrl.thumb(it.image.id, 960);
+      img.src = imageUrl.thumb(it.image.id, 960, it.image.modifiedAt);
     }
   }, [items, index]);
 
