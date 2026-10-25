@@ -168,14 +168,6 @@ export function GalleryToolbar({
               </Chip>
             </Tooltip>
 
-            <Divider />
-            <Chip size="sm" selected={filters.favorite} onClick={() => update({ favorite: !filters.favorite })}>
-              <span className="inline-flex items-center gap-1.5">
-                <Heart className={cn('size-3', filters.favorite && 'fill-current')} />
-                只看收藏
-              </span>
-            </Chip>
-
             {hasFilters && (
               <button
                 type="button"
@@ -190,6 +182,21 @@ export function GalleryToolbar({
         </div>
 
         <div className="ml-auto flex shrink-0 items-center gap-0.5 @max-[760px]/toolbar:min-w-0 @max-[760px]/toolbar:shrink">
+          {/* 只看收藏：常用的开关，放在不会滚走的右侧，不和上面那排会横向滚动的筛选混在一起 */}
+          <Tooltip content={filters.favorite ? '正在只看收藏，点一下看全部' : '只看收藏的图'}>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-pressed={filters.favorite}
+              icon={<Heart className={cn(filters.favorite && 'fill-current')} />}
+              onClick={() => update({ favorite: !filters.favorite })}
+              className={cn('text-[12.5px]', filters.favorite && 'bg-shu-soft text-shu-fg hover:bg-shu-soft hover:text-shu-fg')}
+            >
+              收藏
+            </Button>
+          </Tooltip>
+          <div className="mx-1.5 h-4 w-px shrink-0 bg-line-strong" />
+
           <Menu
             width={188}
             trigger={
