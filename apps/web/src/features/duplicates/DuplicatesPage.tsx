@@ -18,7 +18,8 @@ import { RescanButton, useDedupeJob } from './components/RescanButton';
 import { ResolveAllDialog, type ResolvePlan } from './components/ResolveAllDialog';
 import { ResolvedGroups, ResolvedGroupsSkeleton } from './components/ResolvedGroups';
 import { useIncremental } from './useIncremental';
-import { reclaimBytes, resolveKeep } from './utils';
+import { useBriefGuard } from '@/lib/guard';
+import { enterAction, reclaimBytes, resolveKeep } from './utils';
 
 type View = 'pending' | 'resolved';
 
@@ -28,7 +29,7 @@ const isInteractive = (target: EventTarget | null) =>
 
 /**
  * 重复 —— 逐组确认保留哪张，其余移到回收站。
- * 键盘：J / K 在组间移动，Enter 按当前选择（默认即推荐）处理当前组。
+ * 键盘：J / K 在组间移动，Enter 全部保留当前组；要移到回收站的组按 Shift+Enter。
  */
 /** 挨着的、setId 相同的组归成一段，外面套一个「可能是同一套」的框；i 是全局序号（J / K、编号用） */
 function segments(groups: DuplicateGroup[]): { setId: ID | null; items: { g: DuplicateGroup; i: number }[] }[] {
@@ -91,8 +92,13 @@ export function DuplicatesPage() {
   const activeIndex = found >= 0 ? found : groups.length ? 0 : -1;
   const keepOf = (g: DuplicateGroup) => resolveKeep(g, overrides[g.id]);
 
+  // 一组处理完、下一组挪到鼠标下面：它的按钮和回车先停 400ms，免得连点删到下一组
+  const arrival = useBriefGuard();
+  const armArrival = arrival.arm;
+
   /** 隐藏处理完的组；如果当前组被处理了，焦点落到它后面那组（没有就前一组） */
   const dismiss = useCallback((ids: ID[]) => {
+    armArrival();
     const gone = new Set(ids);
     setActiveId((cur) => {
       const list = groupsRef.current;
@@ -110,12 +116,13 @@ export function DuplicatesPage() {
       return next?.id ?? null;
     });
     setDismissed((prev) => new Set([...prev, ...ids]));
-  }, []);
+  }, [armArrival]);
 
   const resolveM = useMutate((v: { id: ID; keepIds: ID[] }) => api.resolveDuplicate(v.id, v.keepIds), {
+    label: '处理一组重复',
     onSuccess: (_, v) => dismiss([v.id]),
   });
-  const ignoreM = useMutate((id: ID) => api.ignoreDuplicate(id), { onSuccess: (_, id) => dismiss([id]) });
+  const ignoreM = useMutate((id: ID) => api.ignoreDuplicate(id), { label: '标记不是重复', onSuccess: (_, id) => dismiss([id]) });
 
   /** 每组各自的 loading（可以连续处理多组，不互相阻塞） */
   const track = (id: ID, promise: Promise<unknown>) => {
@@ -131,10 +138,10 @@ export function DuplicatesPage() {
       );
   };
   const resolveGroup = (g: DuplicateGroup) => {
-    if (!busy.has(g.id)) track(g.id, resolveM.mutateAsync({ id: g.id, keepIds: keepOf(g) }));
+    if (!busy.has(g.id) && !arrival.isActive()) track(g.id, resolveM.mutateAsync({ id: g.id, keepIds: keepOf(g) }));
   };
   const ignoreGroup = (g: DuplicateGroup) => {
-    if (!busy.has(g.id)) track(g.id, ignoreM.mutateAsync(g.id));
+    if (!busy.has(g.id) && !arrival.isActive()) track(g.id, ignoreM.mutateAsync(g.id));
   };
 
   const toggle = (g: DuplicateGroup, imageId: ID) => {
@@ -183,16 +190,16 @@ export function DuplicatesPage() {
   );
   useHotkey('j', () => moveTo(activeIndex + 1), { enabled: keysOn, repeat: true });
   useHotkey('k', () => moveTo(activeIndex - 1), { enabled: keysOn, repeat: true });
-  useHotkey(
-    'enter',
-    (e) => {
-      if (isInteractive(e.target)) return;
-      e.preventDefault();
-      const g = groups[activeIndex];
-      if (g) resolveGroup(g);
-    },
-    { enabled: keysOn, preventDefault: false },
-  );
+  const onEnter = (e: KeyboardEvent) => {
+    if (isInteractive(e.target)) return;
+    e.preventDefault();
+    const g = groups[activeIndex];
+    if (!g) return;
+    const trash = g.images.length - keepOf(g).length;
+    if (enterAction(trash, e.shiftKey) === 'needShift') return void toast(`这组会把 ${trash} 张移到回收站，确认请按 Shift+Enter`);
+    resolveGroup(g);
+  };
+  useHotkey(['enter', 'shift+enter'], onEnter, { enabled: keysOn, preventDefault: false });
 
   // ------------------------------------------------------------ 头部
   const suggestedReclaim = useMemo(() => groups.reduce((n, g) => n + reclaimBytes(g, g.suggestedKeepIds), 0), [groups]);
@@ -254,7 +261,9 @@ export function DuplicatesPage() {
                 <Kbd>K</Kbd>
                 <span className="mr-2">切换</span>
                 <Kbd>↵</Kbd>
-                <span className="mr-2">处理当前组</span>
+                <span className="mr-2">全部保留</span>
+                <Kbd>⇧ ↵</Kbd>
+                <span className="mr-2">移到回收站</span>
                 <Kbd>Z</Kbd>
                 <span>放大对比</span>
               </span>
@@ -304,6 +313,7 @@ export function DuplicatesPage() {
                       keepIds={keepOf(g)}
                       active={i === activeIndex}
                       busy={busy.has(g.id)}
+                      guarded={arrival.active}
                       roots={roots}
                       onActivate={() => setActiveId(g.id)}
                       onToggle={(imageId) => toggle(g, imageId)}

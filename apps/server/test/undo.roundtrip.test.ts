@@ -1,7 +1,7 @@
 /**
  * T19 / T24 第 7 步（sqlite 专属）：所有可撤销操作「执行 → 撤销 → 状态相同」。
  * 从契约夹具出发（见 fixtures/contract-db.ts），每个用例新建环境；dumpCore 按主键导出核心表，撤销后必须逐行一致。
- * 不可撤销的操作不在这里：移到回收站（bulk trash、resolveDuplicate 真删图）、addLibraryRoot、updateSettings、markCharacterSeen。
+ * 不可撤销的操作不在这里：addLibraryRoot、updateSettings、markCharacterSeen。移到回收站在最近 5 次内可撤销，在这里测。
  */
 import type { MutationResult } from '@emaki/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -58,6 +58,8 @@ const OPS: Op[] = [
     run: () => ds.bulkImages({ ids: img('i2', 'i3'), action: { type: 'restore' } }),
   },
   { name: 'bulk 收藏', run: () => ds.bulkImages({ ids: img('i1', 'i2', 'i3'), action: { type: 'favorite', value: true } }) },
+  { name: 'bulk 移到回收站（文件还没真的移）', run: () => ds.bulkImages({ ids: img('i1', 'i2'), action: { type: 'trash' } }) },
+  { name: 'resolveDuplicate 其余移到回收站', run: () => ds.resolveDuplicate(id('duplicate', 'd1'), img('i15')) },
   { name: 'bulk 加画师', run: () => ds.bulkImages({ ids: img('i1', 'i2'), action: { type: 'artist', mode: 'add', artists: ['kantoku'] } }) },
   {
     name: 'bulk 换画师',

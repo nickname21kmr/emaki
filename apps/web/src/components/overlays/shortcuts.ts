@@ -113,7 +113,8 @@ export const SHORTCUT_GROUPS: Record<ShortcutGroupId, ShortcutGroup> = {
     hint: '逐组处理',
     items: [
       { label: '下一组 / 上一组', keys: [['J'], ['K']] },
-      { label: '按推荐处理当前组', keys: [['Enter']] },
+      { label: '当前组全部保留 / 标记已处理', keys: [['Enter']] },
+      { label: '处理当前组（会移到回收站时）', keys: [['Shift', 'Enter']] },
       { label: '放大对比（相似组，组内同步）', keys: [['Z']] },
     ],
   },

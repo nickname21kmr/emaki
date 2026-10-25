@@ -55,7 +55,15 @@ export const sqliteFactory: ContractFactory = async () => {
   const bus = new EventBus();
   const events = collect(bus);
   const dataDir = makeTmpDir('contract');
-  const ds = await SqliteDataSource.open(bus, dataDir, { memory: true, clock: () => NOW, autoJobs: false, importDict: false });
+  // 夹具里的 D:/Pics 不一定存在：不查盘符，假回收站什么也不做（文件本来就不在）
+  const ds = await SqliteDataSource.open(bus, dataDir, {
+    memory: true,
+    clock: () => NOW,
+    autoJobs: false,
+    importDict: false,
+    checkRecyclable: async () => {},
+    trashImpl: async () => {},
+  });
   const map = seedFromMockDb(ds.ctx.db, buildContractDb(NOW), { now: NOW });
   ds.ctx.invalidate();
   const reverse = new Map<string, Map<string, string>>();

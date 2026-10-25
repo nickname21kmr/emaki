@@ -2,6 +2,8 @@ import { editedSource } from '../../services/source/editSource.ts';
 import { inferCoverFocus } from '../../services/covers/focus.ts';
 import {
   CONTENT_KINDS,
+  REMOVED_ROOT_KEEP_DAYS,
+  type PromotableSuggestions,
   UNRECOGNIZED_ANNEX_KINDS,
   UNRECOGNIZED_ART_KINDS,
   UNRECOGNIZED_THEMES,
@@ -77,7 +79,7 @@ import {
 } from '@emaki/shared';
 import type { EventBus } from '../../core/events.ts';
 import { JobQueue, type JobRunner } from '../../core/jobs.ts';
-import { done, UndoStack } from '../../core/undo.ts';
+import { done, TRASH_COMMITTED, TRASH_UNDO_WINDOW, UndoStack } from '../../core/undo.ts';
 import { BadRequestError, ConflictError, NeedsConfirmError, NotFoundError } from '../../http/errors.ts';
 import type { DataSource, FileResponse } from '../DataSource.ts';
 import { buildMockDb, type CharacterRow, type ImageRow, type MockDb, type WorkRow } from './fixtures.ts';
@@ -151,6 +153,8 @@ export class MockDataSource implements DataSource {
     throw new BadRequestError('演示图库不导入本机文件，请切换到本地图库');
   }
   private readonly db: MockDb;
+  /** 移除过的图库文件夹（小写路径 → 原记录）：重新添加时沿用原 id，图跟着回来 */
+  private readonly removedRoots = new Map<string, LibraryRoot>();
   private readonly undoStack = new UndoStack();
   private readonly jobs: JobQueue;
   private index: Index | null = null;
@@ -491,6 +495,22 @@ export class MockDataSource implements DataSource {
     const ch = this.db.characters.get(id);
     if (!ch) throw new NotFoundError('角色');
     return ch;
+  }
+
+  // 移到回收站最近 TRASH_UNDO_WINDOW 次可撤销（同 sqlite 的 pendingTrash.ts）；grp 相同的算一次
+  private pendingTrash: { token: string; grp: string }[] = [];
+
+  private trashWindow(res: MutationResult, grp?: string): MutationResult {
+    if (!res.undoToken) return res;
+    // 已经撤销的不占位置
+    this.pendingTrash = this.pendingTrash.filter((p) => this.undoStack.status(p.token) === 'live');
+    this.pendingTrash.push({ token: res.undoToken, grp: grp ?? `#${res.undoToken}` });
+    const newest = [...new Set(this.pendingTrash.map((p) => p.grp).reverse())].slice(0, TRASH_UNDO_WINDOW);
+    const out = this.pendingTrash.filter((p) => !newest.includes(p.grp));
+    if (!out.length) return res;
+    this.pendingTrash = this.pendingTrash.filter((p) => newest.includes(p.grp));
+    for (const p of out) this.undoStack.expire(p.token, TRASH_COMMITTED);
+    return { ...res, expiredUndoTokens: out.map((p) => p.token) };
   }
 
   private withUndo(message: string, revert: () => void): MutationResult {
@@ -1036,6 +1056,7 @@ export class MockDataSource implements DataSource {
     const before = {
       ...(sourceEdit ? { source: row.source, sourceManual: row.sourceManual } : {}),
       characterIds: [...row.characterIds],
+      vetoedCharacterIds: row.vetoedCharacterIds,
       rating: row.rating,
       ratingManual: row.ratingManual,
       favorite: row.favorite,
@@ -1048,7 +1069,10 @@ export class MockDataSource implements DataSource {
       this.setKind([row], body.kind);
     }
     if (body.characterIds) {
-      row.characterIds = [...new Set(body.characterIds)];
+      const next = [...new Set(body.characterIds)];
+      // 去掉的角色记下来（同 sqlite）
+      this.veto(row, row.characterIds.filter((c) => !next.includes(c)));
+      row.characterIds = next;
     }
     if (sourceEdit) { row.source = sourceEdit.source; row.sourceManual = sourceEdit.manual; }
     if (body.rating) {
@@ -1144,6 +1168,7 @@ export class MockDataSource implements DataSource {
       copyrightWorkIds: [...r.copyrightWorkIds],
       artists: r.artists,
       artistsManual: r.artistsManual,
+      vetoedCharacterIds: r.vetoedCharacterIds,
     }));
     const exclusionsBefore = [...this.db.exclusions];
     const n = rows.length;
@@ -1159,6 +1184,8 @@ export class MockDataSource implements DataSource {
       }
       case 'unassign': {
         const ch = this.requireCharacter(action.characterId);
+        // 同 sqlite：记下去掉的角色，之后采纳建议不再加回
+        for (const r of rows) if (r.characterIds.includes(ch.id)) this.veto(r, [ch.id]);
         for (const r of rows) r.characterIds = r.characterIds.filter((c) => c !== ch.id);
         message = `已从「${ch.name}」移除 ${n} 张图`;
         break;
@@ -1250,7 +1277,7 @@ export class MockDataSource implements DataSource {
       }
     }
 
-    return this.withUndo(message, () => {
+    const res = this.withUndo(message, () => {
       for (const s of snapshots) {
         s.row.characterIds = s.characterIds;
         s.row.excludedBy = s.excludedBy;
@@ -1267,9 +1294,11 @@ export class MockDataSource implements DataSource {
         s.row.copyrightWorkIds = s.copyrightWorkIds;
         s.row.artists = s.artists;
         s.row.artistsManual = s.artistsManual;
+        s.row.vetoedCharacterIds = s.vetoedCharacterIds;
       }
       this.db.exclusions = exclusionsBefore;
     });
+    return action.type === 'trash' ? this.trashWindow(res) : res;
   }
 
   async getThumbnail(id: ID, width: ThumbWidth): Promise<FileResponse | null> {
@@ -1469,7 +1498,7 @@ export class MockDataSource implements DataSource {
       .sort((a, b) => (wantResolved ? 0 : Number(b.kind === 'exact') - Number(a.kind === 'exact') || b.similarity - a.similarity));
   }
 
-  async resolveDuplicate(id: ID, keepIds: ID[]): Promise<MutationResult> {
+  async resolveDuplicate(id: ID, keepIds: ID[], batch?: string): Promise<MutationResult> {
     const group = this.db.duplicates.find((d) => d.id === id);
     if (!group) throw new NotFoundError('重复组');
     if (!keepIds.length) throw new BadRequestError('至少保留一张');
@@ -1492,11 +1521,12 @@ export class MockDataSource implements DataSource {
     this.carryOver(kept, trashed.filter((img) => this.isVisible(img)));
     for (const img of trashed) img.trashed = true;
     group.resolved = true;
-    return this.withUndo(`已保留 ${keepIds.length} 张，${trashed.length} 张移到回收站`, () => {
+    const res = this.withUndo(`已保留 ${keepIds.length} 张，${trashed.length} 张移到回收站`, () => {
       for (const img of trashed) img.trashed = false;
       for (const { r, ...b } of before) Object.assign(r, b);
       group.resolved = false;
     });
+    return trashed.length ? this.trashWindow(res, batch ? `g:${batch}` : undefined) : res;
   }
 
   /** 同 sqlite/duplicates.ts 的 carryOver：副本上手动做的整理并到保留的图上（mock 不分角色来源，副本的角色都并过去） */
@@ -1669,7 +1699,6 @@ export class MockDataSource implements DataSource {
   async updateSettings(body: UpdateSettingsBody): Promise<Settings> {
     const s = this.db.settings;
     const { danbooruApiKey, ...rest } = body;
-    const before = s.tagger.autoAcceptThreshold;
     const beforeSourceMode = s.tagger.pixivFilenameMode;
     if (rest.tagger) Object.assign(s.tagger, rest.tagger);
     if (s.tagger.pixivFilenameMode !== beforeSourceMode) {
@@ -1679,18 +1708,7 @@ export class MockDataSource implements DataSource {
         img.source = next;
       }
     }
-    // 调低自动采纳阈值：插画和漫画上已达标、库里已有这个角色的建议当场归入（与 sqlite 同口径）
-    if (s.tagger.autoAcceptThreshold < before) {
-      for (const img of this.db.images.values()) {
-        if (img.trashed || !isArt(img) || !img.suggestions.length) continue;
-        img.suggestions = img.suggestions.filter(([tag, score]) => {
-          const ch = score >= s.tagger.autoAcceptThreshold ? this.idx.charByTag.get(tag) : undefined;
-          if (!ch) return true;
-          if (!img.characterIds.includes(ch.id)) img.characterIds = [...img.characterIds, ch.id];
-          return false;
-        });
-      }
-    }
+    // 调低自动采纳阈值不在保存时动已有建议（同 sqlite）：用户点按钮才走 promoteSuggestions
     if (rest.danbooru) Object.assign(s.danbooru, rest.danbooru);
     if (rest.dedupe) Object.assign(s.dedupe, rest.dedupe);
     if (rest.ui) Object.assign(s.ui, rest.ui);
@@ -1698,6 +1716,49 @@ export class MockDataSource implements DataSource {
     if (danbooruApiKey !== undefined) s.danbooru.hasApiKey = danbooruApiKey.length > 0;
     this.touch();
     return this.getSettings();
+  }
+
+  /** 记下用户从图上去掉的角色（同 sqlite 的 character_vetoes） */
+  private veto(img: ImageRow, ids: ID[]): void {
+    if (ids.length) img.vetoedCharacterIds = [...new Set([...(img.vetoedCharacterIds ?? []), ...ids])];
+  }
+
+  /** 达标、库里已有这个角色、图上还没有、没被用户去掉过的建议（mock 不新建角色） */
+  private promotable(): { img: ImageRow; tag: string; ch: CharacterRow }[] {
+    const t = this.db.settings.tagger.autoAcceptThreshold;
+    const out: { img: ImageRow; tag: string; ch: CharacterRow }[] = [];
+    for (const img of this.db.images.values()) {
+      if (!this.isVisible(img) || !isArt(img) || !img.suggestions.length) continue;
+      for (const [tag, score] of img.suggestions) {
+        const ch = score >= t ? this.idx.charByTag.get(tag) : undefined;
+        if (ch) out.push({ img, tag, ch });
+      }
+    }
+    return out;
+  }
+
+  async promotableSuggestions(): Promise<PromotableSuggestions> {
+    const rows = this.promotable().filter(({ img, ch }) => !img.characterIds.includes(ch.id) && !img.vetoedCharacterIds?.includes(ch.id));
+    return { images: new Set(rows.map((r) => r.img.id)).size, suggestions: rows.length, threshold: this.db.settings.tagger.autoAcceptThreshold };
+  }
+
+  async promoteSuggestions(): Promise<MutationResult> {
+    const rows = this.promotable();
+    if (!rows.length) return done('没有达标的建议了');
+    const snap = [...new Set(rows.map((r) => r.img))].map((img) => ({ img, characterIds: img.characterIds, suggestions: img.suggestions }));
+    const linked = new Set<ID>();
+    for (const { img, tag, ch } of rows) {
+      // 用户去掉过的不加回，建议也删掉（同 sqlite）
+      if (!img.vetoedCharacterIds?.includes(ch.id) && !img.characterIds.includes(ch.id)) {
+        img.characterIds = [...img.characterIds, ch.id];
+        linked.add(img.id);
+      }
+      img.suggestions = img.suggestions.filter(([t]) => t !== tag);
+    }
+    this.touch();
+    return this.withUndo(linked.size ? `已把 ${linked.size} 张图按达标的建议归到角色` : '没有达标的建议了', () => {
+      for (const s of snap) Object.assign(s.img, { characterIds: s.characterIds, suggestions: s.suggestions });
+    });
   }
 
   async addLibraryRoot(body: AddLibraryRootBody): Promise<MutationResult> {
@@ -1724,16 +1785,20 @@ export class MockDataSource implements DataSource {
           (disabled.length ? `其中${disabled.join('')}现在是停用的，合并后会重新显示。` : ''),
       );
     }
+    // 移除过的同一个文件夹：沿用原记录，图和整理结果跟着回来（同 sqlite 的复活）
+    const removed = this.removedRoots.get(path.toLowerCase());
+    if (removed) this.removedRoots.delete(path.toLowerCase());
+    const revived = removed ? [...this.db.images.values()].filter((img) => img.libraryRootId === removed.id).length : 0;
     const root: LibraryRoot = {
-      id: `root_${hashString(path).toString(36)}`,
+      id: removed?.id ?? `root_${hashString(path).toString(36)}`,
       path,
       enabled: true,
       imageCount: 0,
-      lastScanAt: null,
-      importedAt: new Date().toISOString(),
+      lastScanAt: removed?.lastScanAt ?? null,
+      importedAt: removed ? removed.importedAt : new Date().toISOString(),
       mode: body.mode ?? 'auto',
       comicRating: body.comicRating ?? 'general',
-      comicFolders: [],
+      comicFolders: removed ? [...removed.comicFolders] : [],
     };
     let merged = 0;
     for (const c of children) {
@@ -1756,11 +1821,16 @@ export class MockDataSource implements DataSource {
       if (c.importedAt && root.importedAt && c.importedAt < root.importedAt) root.importedAt = c.importedAt;
     }
     roots.push(root);
-    if (children.length) this.applyRootMode(root);
+    if (children.length || removed) this.applyRootMode(root);
     this.touch();
     this.jobs.enqueue('scan');
+    const found = revived ? `（找回了 ${revived} 张图以前的整理结果）` : '';
     return done(
-      children.length ? `已合并成一个文件夹（保留了 ${merged} 张图的整理结果），开始扫描其余部分：${path}` : `已添加文件夹，开始扫描：${path}`,
+      children.length
+        ? `已合并成一个文件夹（保留了 ${merged + revived} 张图的整理结果），开始扫描其余部分：${path}`
+        : body.mode === 'comic'
+          ? `已按漫画导入${found}，开始扫描（不识别，每个子文件夹成一本）：${path}`
+          : `已添加文件夹${found}，开始扫描：${path}`,
     );
   }
 
@@ -1876,7 +1946,10 @@ export class MockDataSource implements DataSource {
     const idx = this.db.settings.libraryRoots.findIndex((r) => r.id === id);
     if (idx < 0) throw new NotFoundError('图库文件夹');
     const [root] = this.db.settings.libraryRoots.splice(idx, 1);
-    return this.withUndo(`已移除文件夹（不会删除磁盘上的文件）：${root!.path}`, () => {
+    // 同 sqlite：图留着（隐藏），重新添加同一个路径时找回
+    this.removedRoots.set(root!.path.toLowerCase(), root!);
+    return this.withUndo(`已移除文件夹：${root!.path}。磁盘上的文件没动，${REMOVED_ROOT_KEEP_DAYS} 天内重新添加它能找回整理结果`, () => {
+      this.removedRoots.delete(root!.path.toLowerCase());
       this.db.settings.libraryRoots.splice(idx, 0, root!);
       if (root!.enabled) this.jobs.enqueue('scan', { requeueIfRunning: true });
     });

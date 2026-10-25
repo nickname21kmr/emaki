@@ -1,7 +1,7 @@
 import type { BulkCollectionAction, CollectionSummary, ID } from '@emaki/shared';
 import { Check, UserRoundPlus } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Link } from 'react-router';
 import { BookFace, BookPlate } from '@/components/media/BookPlate';
 import { Button, EmptyState, ErrorState, Skeleton } from '@/components/ui';
@@ -11,6 +11,8 @@ import { displayTitle, shouldCloth, toShelfUnits, unitWord, type ShelfUnit } fro
 import { formatCount } from '@/lib/format';
 import { EASE_OUT } from '@/lib/motion';
 import { useCollections, useMutate } from '@/lib/queries';
+import { DoneNote } from '@/components/ui/DoneNote';
+import { useDoneRows, type DoneInfo } from '@/lib/doneRows';
 import { useBlurPrefs } from '@/lib/stores';
 import { CharacterPicker } from '@/features/gallery/CharacterPicker';
 
@@ -24,24 +26,25 @@ const unitHead = (u: ShelfUnit): CollectionSummary => (u.type === 'single' ? u.c
  */
 export function PendingCollections() {
   const list = useCollections({ pending: true });
-  const [gone, setGone] = useState<ReadonlySet<string>>(() => new Set());
   const units = useMemo(() => {
     const all = toShelfUnits(list.data ?? []);
     const art = (u: ShelfUnit) => (unitHead(u).kind === 'artbook' ? 0 : 1);
     return all.map((u, i) => ({ u, i })).sort((a, b) => art(a.u) - art(b.u) || a.i - b.i).map((x) => x.u);
   }, [list.data]);
-  const visible = units.filter((u) => !gone.has(unitKey(u)));
+  // 处理过的那本原地变成「已整理 · 撤销」，鼠标离开几秒后才收起，后面的书不会挪到鼠标下面
+  const { rows: visible, done, mark, unmark, hoverProps } = useDoneRows(units, unitKey);
+  const pendingCount = visible.filter((u) => !done.has(unitKey(u))).length;
 
-  const bulk = useMutate((v: { key: string; ids: ID[]; action: BulkCollectionAction }) => api.bulkCollections({ ids: v.ids, action: v.action }));
+  const bulk = useMutate((v: { key: string; ids: ID[]; action: BulkCollectionAction }) => api.bulkCollections({ ids: v.ids, action: v.action }), {
+    label: (v) => (v.action.type === 'review' ? '标为已整理' : '关联角色'),
+  });
   const act = (u: ShelfUnit, action: BulkCollectionAction) => {
     const key = unitKey(u);
-    setGone((s) => new Set(s).add(key));
-    bulk.mutateAsync({ key, ids: unitIds(u), action }).catch(() =>
-      setGone((s) => {
-        const next = new Set(s);
-        next.delete(key);
-        return next;
-      }),
+    const label = action.type === 'review' ? '已整理' : '已关联';
+    mark(key, { label, token: null });
+    bulk.mutateAsync({ key, ids: unitIds(u), action }).then(
+      (r) => mark(key, { label, token: r.undoToken }),
+      () => unmark(key),
     );
   };
 
@@ -60,7 +63,7 @@ export function PendingCollections() {
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="mb-3 flex items-baseline gap-3">
         <h3 className="text-[14px] font-semibold">成册待整理</h3>
-        <span className="numeral text-[15px] text-fg-muted tabular">{formatCount(visible.length)}</span>
+        <span className="numeral text-[15px] text-fg-muted tabular">{formatCount(pendingCount)}</span>
         <span className="text-[12px] text-fg-subtle">一本只处理一次：关联角色，或标为已整理</span>
       </div>
       {visible.length === 0 ? (
@@ -69,7 +72,7 @@ export function PendingCollections() {
         </div>
       ) : (
         <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1 pt-2 pb-8 scrollbar-thin">
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-5 gap-y-9">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-5 gap-y-9" {...hoverProps}>
             <AnimatePresence initial={false}>
               {visible.map((u, i) => (
                 <motion.div
@@ -80,7 +83,12 @@ export function PendingCollections() {
                   className="animate-rise"
                   style={{ animationDelay: `${Math.min(i, 12) * 25}ms` }}
                 >
-                  <Unit u={u} onReview={() => act(u, { type: 'review' })} onCharacter={(id) => act(u, { type: 'addCharacter', characterId: id })} />
+                  <Unit
+                    u={u}
+                    done={done.get(unitKey(u))}
+                    onReview={() => act(u, { type: 'review' })}
+                    onCharacter={(id) => act(u, { type: 'addCharacter', characterId: id })}
+                  />
                 </motion.div>
               ))}
             </AnimatePresence>
@@ -91,7 +99,7 @@ export function PendingCollections() {
   );
 }
 
-function Unit({ u, onReview, onCharacter }: { u: ShelfUnit; onReview: () => void; onCharacter: (id: ID) => void }) {
+function Unit({ u, done, onReview, onCharacter }: { u: ShelfUnit; done?: DoneInfo; onReview: () => void; onCharacter: (id: ID) => void }) {
   const prefs = useBlurPrefs();
   const head = unitHead(u);
   const href =
@@ -127,16 +135,20 @@ function Unit({ u, onReview, onCharacter }: { u: ShelfUnit; onReview: () => void
         </div>
         <div className="mt-0.5 text-[11.5px] text-fg-muted tabular">{info}</div>
       </Link>
-      <div className="mt-2.5 flex gap-1.5">
-        <CharacterPicker title="关联角色" onPick={(c) => onCharacter(c.id)}>
-          <Button size="sm" variant="secondary" icon={<UserRoundPlus className="size-3.5" />}>
-            关联…
+      {done ? (
+        <DoneNote label={done.label} token={done.token} className="mt-2.5 h-7" />
+      ) : (
+        <div className="mt-2.5 flex gap-1.5">
+          <CharacterPicker title="关联角色" onPick={(c) => onCharacter(c.id)}>
+            <Button size="sm" variant="secondary" icon={<UserRoundPlus className="size-3.5" />}>
+              关联…
+            </Button>
+          </CharacterPicker>
+          <Button size="sm" variant="ghost" icon={<Check className="size-3.5" />} onClick={onReview}>
+            已整理
           </Button>
-        </CharacterPicker>
-        <Button size="sm" variant="ghost" icon={<Check className="size-3.5" />} onClick={onReview}>
-          已整理
-        </Button>
-      </div>
+        </div>
+      )}
     </div>
   );
 }

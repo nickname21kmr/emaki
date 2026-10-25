@@ -179,6 +179,24 @@ describe('TagResultWriter', () => {
     expect(count('SELECT count(*) FROM character_suggestions')).toBe(0);
     expect(count('SELECT count(*) FROM image_characters')).toBe(1);
   });
+
+  it('用户去掉过的角色：重新识别不加回、不建议，提升建议也跳过；别的图照常', () => {
+    const w = writer();
+    w.writeBatch([ok(1, [['mika_(blue_archive)', 0.95]])]);
+    const mika = count("SELECT id FROM characters WHERE danbooru_tag = 'mika_(blue_archive)'");
+    db.prepare('DELETE FROM image_characters WHERE image_id = 1').run();
+    db.prepare("INSERT INTO character_vetoes (image_id, character_id, created_at) VALUES (1, ?, 'x')").run(mika);
+    w.writeBatch([ok(1, [['mika_(blue_archive)', 0.95]])]);
+    expect(count('SELECT count(*) FROM image_characters WHERE image_id = 1')).toBe(0);
+    w.writeBatch([ok(1, [['mika_(blue_archive)', 0.5]])]);
+    expect(count('SELECT count(*) FROM character_suggestions WHERE image_id = 1')).toBe(0);
+    w.writeBatch([ok(2, [['mika_(blue_archive)', 0.95]])]);
+    expect(count('SELECT count(*) FROM image_characters WHERE image_id = 2')).toBe(1);
+    db.prepare("INSERT INTO character_suggestions (image_id, danbooru_tag, score) VALUES (1, 'mika_(blue_archive)', 0.9)").run();
+    expect(w.promoteSuggestions()).toBe(0);
+    expect(count('SELECT count(*) FROM image_characters WHERE image_id = 1')).toBe(0);
+    expect(count('SELECT count(*) FROM character_suggestions WHERE image_id = 1')).toBe(0);
+  });
 });
 
 describe('tagJob', () => {

@@ -114,6 +114,10 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
     return ds.updateSettings(body);
   });
 
+  // 调低自动采纳阈值后：有多少已有建议达标；用户点按钮再归（可撤销）
+  app.get('/api/tagger/promotable', () => ds.promotableSuggestions());
+  app.post('/api/tagger/promote', () => ds.promoteSuggestions());
+
   app.post('/api/library-roots', (req) => {
     const body = parse(
       z.object({ path: z.string().min(1), merge: z.boolean().optional(), mode: rootMode.optional(), comicRating: ratingSchema.optional() }),

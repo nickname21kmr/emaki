@@ -140,6 +140,19 @@ interface LightboxState {
   go: (delta: number) => void;
   /** 列表变化（比如无限滚动加载了更多）时同步；传了 source 且不是打开看图器的那个来源就忽略 */
   syncIds: (ids: ID[], source?: string) => void;
+  /** 刚排除 / 移到回收站、还在原地停留的那张：列表刷新时先不拿掉它 */
+  hold: ID | null;
+  setHold: (id: ID | null) => void;
+}
+
+/** 列表刷新后 hold 那张不在了：放回它在旧列表里的位置（排在旧列表里它后面那张之前） */
+export function keepHeld(prev: readonly ID[], ids: ID[], hold: ID | null): ID[] {
+  if (!hold || ids.includes(hold)) return ids;
+  const i = prev.indexOf(hold);
+  if (i < 0) return ids;
+  const after = new Set(prev.slice(i + 1));
+  const pos = ids.findIndex((x) => after.has(x));
+  return pos < 0 ? [...ids, hold] : [...ids.slice(0, pos), hold, ...ids.slice(pos)];
 }
 
 export const useLightbox = create<LightboxState>((set, get) => ({
@@ -165,6 +178,7 @@ export const useLightbox = create<LightboxState>((set, get) => ({
       hasMore: false,
       loadMore: null,
       pendingNext: false,
+      hold: null,
       autoplay: opts?.autoplay ?? null,
     }),
   close: () => set({ open: false, originRect: null, returning: null, pendingNext: false }),
@@ -193,9 +207,12 @@ export const useLightbox = create<LightboxState>((set, get) => ({
     }
     set({ index: Math.min(Math.max(index + delta, 0), ids.length - 1), originRect: null });
   },
-  syncIds: (ids, source) => {
-    const { ids: prev, index, open, source: owner, pendingNext } = get();
+  hold: null,
+  setHold: (hold) => set({ hold }),
+  syncIds: (fresh, source) => {
+    const { ids: prev, index, open, source: owner, pendingNext, hold } = get();
     if (!open || (source !== undefined && source !== owner)) return;
+    const ids = keepHeld(prev, fresh, hold);
     const current = prev[index];
     const at = current ? ids.indexOf(current) : -1;
     const base = at >= 0 ? at : Math.min(index, ids.length - 1);
@@ -260,13 +277,19 @@ export const useSelection = create<SelectionState>((set, get) => ({
 
 // ------------------------------------------------------------------ 撤销栈（顶栏撤销按钮）
 
-interface UndoEntry {
+export interface UndoEntry {
   token: string;
   label: string;
   /** 记下时后端的启动 id：后端重启后服务端的撤销栈就空了，这条也跟着作废 */
   boot?: string;
   /** 撤销不了的一步：占住位置，撤销时只提示、把它拿掉 */
   barrier?: boolean;
+  /** 撤销不了时提示里的补充说明；不写就按「已经放进系统回收站」说 */
+  note?: string;
+  /** 还在进行的操作（占位）：Ctrl+Z 按到它时等它做完再撤；不存进 sessionStorage */
+  pending?: boolean;
+  /** 一次点下去产生的多个 token（例如一键处理全部重复）：撤销时倒序一起撤 */
+  tokens?: string[];
 }
 
 interface UndoState {
@@ -275,8 +298,23 @@ interface UndoState {
   boot: string | null;
   push: (e: UndoEntry) => void;
   remove: (token: string) => void;
+  /** 原地换掉一条（占位落定时用）；null 就是拿掉 */
+  replace: (token: string, next: UndoEntry | null) => void;
+  /** 这几条撤销不了了（已经放进系统回收站）：原地变成占位，Ctrl+Z 不会越过它们 */
+  markBarrier: (tokens: string[]) => void;
   /** 连上后端：丢掉别的启动留下的记录，没连上时记下的归到这次启动 */
   setBoot: (boot: string | null) => void;
+}
+
+/**
+ * 挨着的、说法一样的「没有撤销」占位只留一条：拖一下设置滑块、连改几次设置不会把撤销栈占满，
+ * 把真正能撤销的挤出去（回收站那种不合并）
+ */
+function squashBarriers(entries: UndoEntry[]): UndoEntry[] {
+  return entries.filter((e, i) => {
+    const above = entries[i - 1];
+    return !(e.barrier && e.note && above?.barrier && above.note === e.note && above.label === e.label);
+  });
 }
 
 // 按标签页存在 sessionStorage：刷新后顶栏撤销和 Ctrl+Z 还能接着用（服务端的撤销栈在后端重启前一直在）
@@ -285,15 +323,26 @@ export const useUndoStore = create<UndoState>()(
     (set) => ({
       entries: [],
       boot: null,
-      push: (e) => set((s) => ({ entries: [{ ...e, ...(s.boot ? { boot: s.boot } : {}) }, ...s.entries].slice(0, 20) })),
+      push: (e) => set((s) => ({ entries: squashBarriers([{ ...e, ...(s.boot ? { boot: s.boot } : {}) }, ...s.entries]).slice(0, 20) })),
       remove: (token) => set((s) => ({ entries: s.entries.filter((e) => e.token !== token) })),
+      replace: (token, next) =>
+        set((s) => ({
+          entries: squashBarriers(
+            s.entries.flatMap((e) => (e.token !== token ? [e] : next ? [{ ...next, ...(e.boot ? { boot: e.boot } : {}) }] : [])),
+          ),
+        })),
+      markBarrier: (tokens) => {
+        // 合并的那种只要有一个 token 过期就整条撤销不了
+        const hit = (e: UndoEntry) => tokens.includes(e.token) || !!e.tokens?.some((t) => tokens.includes(t));
+        set((s) => (s.entries.some(hit) ? { entries: s.entries.map((e) => (hit(e) ? { ...e, barrier: true, note: undefined } : e)) } : s));
+      },
       setBoot: (boot) =>
         set((s) => ({
           boot,
           entries: boot ? s.entries.filter((e) => !e.boot || e.boot === boot).map((e) => (e.boot ? e : { ...e, boot })) : s.entries,
         })),
     }),
-    { name: 'emaki.undo', storage: createJSONStorage(() => sessionStorage), partialize: (s) => ({ entries: s.entries }) },
+    { name: 'emaki.undo', storage: createJSONStorage(() => sessionStorage), partialize: (s) => ({ entries: s.entries.filter((e) => !e.pending) }) },
   ),
 );
 

@@ -25,6 +25,14 @@ export function resolveKeep(group: DuplicateGroup, override: readonly ID[] | und
   return [ids.has(group.suggestedKeepId) ? group.suggestedKeepId : group.images[0]!.id];
 }
 
+/**
+ * 回车处理当前组：会把图移到回收站的组必须按 Shift+Enter（处理完会自动跳到下一组，连按回车就删到下一组了）；
+ * 全部保留的照旧按 Enter
+ */
+export function enterAction(trashCount: number, shift: boolean): 'resolve' | 'needShift' {
+  return trashCount > 0 && !shift ? 'needShift' : 'resolve';
+}
+
 /** 处理后能释放的空间 = 不保留的图片体积之和 */
 export function reclaimBytes(group: DuplicateGroup, keepIds: readonly ID[]): number {
   return group.images.reduce((sum, img) => (keepIds.includes(img.id) ? sum : sum + img.bytes), 0);

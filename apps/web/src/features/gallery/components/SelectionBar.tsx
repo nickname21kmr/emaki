@@ -17,7 +17,7 @@ import { cn } from '@/lib/cn';
 import { formatCount, RATING_LABEL } from '@/lib/format';
 import { KIND_ICON, KIND_LABEL } from '@/lib/kinds';
 import { modKeyLabel, useHotkey } from '@/lib/hotkeys';
-import { useMutate, useTrashHint } from '@/lib/queries';
+import { TRASH_HINT, useMutate } from '@/lib/queries';
 import { useLightbox, useOverlays, useSelection } from '@/lib/stores';
 import { KindMenu } from '@/components/media/KindMenu';
 import { MoveImagesDialog } from '@/components/media/MoveImagesDialog';
@@ -48,7 +48,6 @@ export function SelectionBar({
   artist?: { tag: string; name: string; tags: string[] };
 }) {
   const ids = useSelection((s) => (s.scope === scope ? s.ids : EMPTY));
-  const trashHint = useTrashHint();
   const setMany = useSelection((s) => s.setMany);
   const clear = useSelection((s) => s.clear);
   const lightboxOpen = useLightbox((s) => s.open);
@@ -274,7 +273,7 @@ export function SelectionBar({
               </BarButton>
             </Tooltip>
 
-            <Tooltip content={trashHint} side="top">
+            <Tooltip content={TRASH_HINT} side="top">
               <BarButton
                 icon={<Trash2 />}
                 pending={pendingType === 'trash'}

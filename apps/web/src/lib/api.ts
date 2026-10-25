@@ -44,6 +44,7 @@ import type {
   ListImagesResponse,
   ListJobsResponse,
   ListTaggerModelsResponse,
+  PromotableSuggestions,
   ListUnrecognizedQuery,
   ListUnrecognizedResponse,
   RetagResult,
@@ -177,8 +178,9 @@ export const api = {
     post<MutationResult>(`/unrecognized/${encodeURIComponent(imageId)}/accept`, body),
 
   duplicates: (q: ListDuplicatesQuery = {}) => get<ListDuplicatesResponse>('/duplicates', q),
-  resolveDuplicate: (id: ID, keepIds: ID[]) =>
-    post<MutationResult>(`/duplicates/${encodeURIComponent(id)}/resolve`, { keepIds }),
+  /** batch：「全部处理」各组传同一个，在最近 5 次可撤销里只算一次 */
+  resolveDuplicate: (id: ID, keepIds: ID[], batch?: string) =>
+    post<MutationResult>(`/duplicates/${encodeURIComponent(id)}/resolve`, batch ? { keepIds, batch } : { keepIds }),
   ignoreDuplicate: (id: ID) => post<MutationResult>(`/duplicates/${encodeURIComponent(id)}/ignore`),
 
   exclusions: () => get<ListExclusionsResponse>('/exclusions'),
@@ -192,6 +194,10 @@ export const api = {
   settings: () => get<GetSettingsResponse>('/settings'),
   /** 可选的识别模型（设置页下拉框） */
   taggerModels: () => get<ListTaggerModelsResponse>('/tagger/models'),
+  /** 已有建议里分数达到自动采纳阈值的（调低阈值后才会有） */
+  promotableSuggestions: () => get<PromotableSuggestions>('/tagger/promotable'),
+  /** 把达标的建议归到角色（可撤销） */
+  promoteSuggestions: () => post<MutationResult>('/tagger/promote'),
   updateSettings: (body: UpdateSettingsBody) => put<Settings>('/settings', body),
   addLibraryRoot: (body: AddLibraryRootBody) => post<MutationResult>('/library-roots', body),
   updateArtistLinks: (body: UpdateArtistLinksBody) => post<MutationResult>('/artists/links', body),

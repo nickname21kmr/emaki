@@ -21,7 +21,7 @@ import { ActionTile, Section } from './PanelParts';
 import { PanelSource } from './PanelSource';
 import { PanelTags } from './PanelTags';
 import type { ImageActions } from './useImageActions';
-import { useCharacter, useSettings, useTrashHint } from '@/lib/queries';
+import { TRASH_HINT, useCharacter, useSettings } from '@/lib/queries';
 import { CharacterAvatar } from '@/features/gallery/CharacterPicker';
 
 const RATINGS = Object.keys(RATING_LABEL) as Rating[];
@@ -48,7 +48,6 @@ export function InfoPanel({
   onNavigate: () => void;
   onTagClick: (tag: string) => void;
 }) {
-  const trashHint = useTrashHint();
   const artistsOn = useSettings().data?.tagger.artists ?? false;
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-[20px] bg-sheet text-fg shadow-pop ring-1 ring-line">
@@ -87,16 +86,17 @@ export function InfoPanel({
             tooltip="排除：不再出现在图库和统计里，文件不会被删除"
             shortcut="E"
             pending={actions.busy.exclude}
-            disabled={!base}
+            disabled={!base || !!actions.leaving}
             onClick={actions.exclude}
           />
           <ActionTile
             icon={<Trash2 />}
             label="回收站"
-            tooltip={trashHint}
+            tooltip={TRASH_HINT}
             danger
             pending={actions.busy.trash}
-            disabled={!base}
+            // 刚排除 / 移走的那张还停在原地：连点不会落到下一张
+            disabled={!base || !!actions.leaving}
             onClick={actions.trash}
           />
         </div>

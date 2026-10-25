@@ -46,6 +46,7 @@ import type {
   SearchQuery,
   TagSuggestion,
   TagSuggestionsQuery,
+  PromotableSuggestions,
   Settings,
   ThumbWidth,
   TopCharactersQuery,
@@ -134,7 +135,8 @@ export interface DataSource {
 
   // 重复
   listDuplicates(query: ListDuplicatesQuery): Promise<DuplicateGroup[]>;
-  resolveDuplicate(id: ID, keepIds: ID[]): Promise<MutationResult>;
+  /** 移到回收站的最近 5 次可撤销；batch 相同的几次（「全部处理」）只算一次 */
+  resolveDuplicate(id: ID, keepIds: ID[], batch?: string): Promise<MutationResult>;
   ignoreDuplicate(id: ID): Promise<MutationResult>;
 
   // 排除
@@ -150,6 +152,10 @@ export interface DataSource {
   // 设置
   getSettings(): Promise<Settings>;
   updateSettings(body: UpdateSettingsBody): Promise<Settings>;
+  /** 已有建议里分数达到自动采纳阈值的（调低阈值后才会有；保存设置时不自动归） */
+  promotableSuggestions(): Promise<PromotableSuggestions>;
+  /** 把达标的建议归到角色，可撤销 */
+  promoteSuggestions(): Promise<MutationResult>;
   addLibraryRoot(body: AddLibraryRootBody): Promise<MutationResult>;
   updateLibraryRoot(id: ID, body: UpdateLibraryRootBody): Promise<MutationResult>;
   removeLibraryRoot(id: ID): Promise<MutationResult>;

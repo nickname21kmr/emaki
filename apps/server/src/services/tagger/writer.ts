@@ -5,6 +5,7 @@
  *   rating 取 argmax（手动改过的不动）；DECODE / UNSUPPORTED 也标记已处理；ENOENT 不写，留给扫描器标 missing；
  *   IO（文件暂时读不了）也不写，下次识别再试。
  * 重打标签时 image_tags / suggestions / image_copyrights 先删后写，image_characters 只增不删。
+ * 用户从图上去掉过的角色（character_vetoes）不再加回，也不再作为建议。
  * T27：写完标签后按标签重算内容类型、主题和 art_score（manual 只保护类型）；截图、文字、照片、表情、动图上的
  * 未知角色不新建，只进建议（BI-15），已有角色照常关联。
  */
@@ -77,6 +78,8 @@ export class TagResultWriter {
       classRow: db.prepare(`SELECT ${CLASS_COLS} FROM images WHERE id = ?`),
       kindOf: db.prepare('SELECT content_kind FROM images WHERE id = ?').pluck(),
       delSuggestion: db.prepare('DELETE FROM character_suggestions WHERE image_id = ? AND danbooru_tag = ?'),
+      // 用户从这张图上去掉过这个角色：不再加回，也不再作为建议
+      vetoed: db.prepare('SELECT 1 FROM character_vetoes WHERE image_id = ? AND character_id = ?').pluck(),
     };
     this.cls = classificationStatements(db);
   }
@@ -145,8 +148,12 @@ export class TagResultWriter {
     s.delImageCopyrights!.run(r.id);
 
     const pending = new Set<string>(); // 别册图上的未知高分角色：留作建议
+    const vetoed = (tag: string) => {
+      const cid = catalog.resolveCharacterId(tag);
+      return cid !== null && s.vetoed!.get(r.id, cid) !== undefined;
+    };
     for (const [tag, score] of sorted) {
-      if (score < o.autoAcceptThreshold) continue;
+      if (score < o.autoAcceptThreshold || vetoed(tag)) continue;
       if (!art && catalog.resolveCharacterId(tag) === null) {
         pending.add(tag);
         continue;
@@ -162,6 +169,7 @@ export class TagResultWriter {
       if ((score >= o.autoAcceptThreshold && !pending.has(tag)) || score < o.characterThreshold || n >= (o.maxSuggestions ?? 5)) continue;
       const cid = catalog.resolveCharacterId(tag);
       if (cid !== null && linked.has(cid)) continue; // 已经归到这个角色了（包括手动归的、合并后的重定向）
+      if (cid !== null && s.vetoed!.get(r.id, cid) !== undefined) continue; // 用户去掉过的不再建议
       s.insSuggestion!.run(r.id, tag, score);
       n++;
       // 建议角色的主作品：只挂已存在的作品，不新建
@@ -178,13 +186,21 @@ export class TagResultWriter {
     return r.id;
   }
 
-  /** 阶段 0：分数已达到（可能被调低的）自动采纳阈值的建议，直接提升为角色关联 */
+  /**
+   * 分数已达到（可能被调低的）自动采纳阈值的建议，直接提升为角色关联；用户去掉过的角色只删建议、不加回。
+   * 不可撤销，识别任务已经不再自动调用；设置页的按钮走 datasource/sqlite/kinds.ts 的 promoteSuggestionsInTx（可撤销）
+   */
   promoteSuggestions(): number {
     const now = this.nowIso();
     this.catalog.clearCache();
     return this.db.transaction(() => {
       let n = 0;
       for (const row of this.s.promotable!.all(this.o.autoAcceptThreshold) as { imageId: number; tag: string; score: number }[]) {
+        const known = this.catalog.resolveCharacterId(row.tag);
+        if (known !== null && this.s.vetoed!.get(row.imageId, known) !== undefined) {
+          this.s.delSuggestion!.run(row.imageId, row.tag);
+          continue;
+        }
         const { id, created } = this.catalog.ensureCharacter(row.tag, now);
         if (created) this.stats.createdCharacters++;
         this.s.insImageChar!.run({ imageId: row.imageId, characterId: id, score: row.score, now });

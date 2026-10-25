@@ -8,7 +8,7 @@ import { useLocation, useNavigate } from 'react-router';
 import { imageUrl } from '@/lib/api';
 import { blurLabel, blurReason } from '@/lib/blur';
 import { formatCount } from '@/lib/format';
-import { isTypingTarget, useHotkey } from '@/lib/hotkeys';
+import { isTypingTarget, modKeyLabel, useHotkey } from '@/lib/hotkeys';
 import { useImage } from '@/lib/queries';
 import { useBlurPrefs, useLightbox } from '@/lib/stores';
 import { findCachedImage, preloadAhead, preloadNeighbors, whenDecoded } from './lightbox/cache';
@@ -374,6 +374,24 @@ function LightboxView({
           onBackdropClick={leave}
           slideshow={slideshow ? { crossfade: reduce ? 0.15 : 0.8, idle } : null}
         />
+
+        {/* 刚排除 / 移到回收站：原地变暗停一下再换下一张（减少动态时不渐变） */}
+        <AnimatePresence>
+          {actions.leaving?.id === id && (
+            <motion.div
+              key="leaving"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: reduce ? 0 : 0.18 }}
+              className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/55"
+            >
+              <span role="status" className="flex h-9 items-center rounded-full bg-black/60 px-4 text-[13px] text-white ring-1 ring-white/10 backdrop-blur-md">
+                {actions.leaving.kind === 'exclude' ? '已排除' : '已移到回收站'} · {modKeyLabel === '⌘' ? '⌘Z' : 'Ctrl+Z'} 撤销
+              </span>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <Filmstrip
           ids={ids}

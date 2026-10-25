@@ -33,6 +33,8 @@ export const DuplicateGroupCard = forwardRef<
     keepIds: ID[];
     active: boolean;
     busy: boolean;
+    /** 上一组刚处理完：按钮先禁用一下，免得连点落到挪上来的这组 */
+    guarded?: boolean;
     roots: ReadonlyMap<ID, LibraryRoot>;
     onActivate: () => void;
     onToggle: (imageId: ID) => void;
@@ -44,7 +46,7 @@ export const DuplicateGroupCard = forwardRef<
     onToggleLens: () => void;
   }
 >(function DuplicateGroupCard(
-  { group, index, keepIds, active, busy, roots, onActivate, onToggle, onResolve, onIgnore, onOpen, lensOn, onToggleLens },
+  { group, index, keepIds, active, busy, guarded = false, roots, onActivate, onToggle, onResolve, onIgnore, onOpen, lensOn, onToggleLens },
   ref,
 ) {
   const best = useMemo(() => bestValues(group.images), [group.images]);
@@ -189,18 +191,20 @@ export const DuplicateGroupCard = forwardRef<
           )}
         </p>
         <div className="ml-auto flex items-center gap-1.5">
-          <Button variant="ghost" size="sm" onClick={onIgnore} disabled={busy}>
+          <Button variant="ghost" size="sm" onClick={onIgnore} disabled={busy || guarded}>
             不是重复
           </Button>
+          {/* 会移到回收站的用危险样式、Shift+Enter；全部保留的照旧黑色、Enter */}
           <Button
-            variant="primary"
+            variant={trashCount > 0 ? 'danger' : 'primary'}
             size="sm"
             onClick={onResolve}
             loading={busy}
+            disabled={guarded}
             trailing={
               active && !busy ? (
-                <Kbd tone="inverse" className="ml-0.5">
-                  ↵
+                <Kbd tone={trashCount > 0 ? undefined : 'inverse'} className="ml-0.5">
+                  {trashCount > 0 ? '⇧ ↵' : '↵'}
                 </Kbd>
               ) : undefined
             }

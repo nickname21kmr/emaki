@@ -262,6 +262,16 @@ export class CharacterMutations {
       // 严格按此顺序记录（撤销逆序：先还原目标的标签，再插回被合并的角色，再恢复各子表）
       u.sql('DELETE FROM image_characters WHERE character_id = ? AND image_id IN (SELECT value FROM json_each(?))', [to.id, movedImages]);
       u.set('image_characters', 'character_id = ?', [from.id]);
+      // 用户在图上去掉过的被合并角色：搬到目标上，免得按目标的名字又被识别加回。撤销时同样先删搬过去的再插回
+      const movedVetoes = list(
+        'SELECT image_id FROM character_vetoes WHERE character_id = @from AND image_id NOT IN (SELECT image_id FROM character_vetoes WHERE character_id = @to)',
+        p,
+      );
+      u.sql('DELETE FROM character_vetoes WHERE character_id = ? AND image_id IN (SELECT value FROM json_each(?))', [to.id, movedVetoes]);
+      u.set('character_vetoes', 'character_id = ?', [from.id]);
+      this.db
+        .prepare('INSERT OR IGNORE INTO character_vetoes (image_id, character_id, created_at) SELECT image_id, @to, created_at FROM character_vetoes WHERE character_id = @from')
+        .run(p);
       // 同上：必须在 characters 之前记录。撤销时先删搬过去的行，再插回原来的
       u.set('character_suggestions', 'character_id = ?', [from.id]);
       u.sql('DELETE FROM character_suggestions WHERE danbooru_tag = ? AND image_id IN (SELECT value FROM json_each(?))', [sug.tag, movedSuggestions]);

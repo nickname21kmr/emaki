@@ -38,7 +38,7 @@ import {
 import { toast } from 'sonner';
 import { api, ApiRequestError } from './api';
 import { useLiveJobs } from './events';
-import { useUndoStore } from './stores';
+import { useUndoStore, type UndoEntry } from './stores';
 
 export const qk = {
   stats: ['stats'] as const,
@@ -234,9 +234,8 @@ export const useJobs = () => useQuery({ queryKey: qk.jobs, queryFn: api.jobs });
 /** 后端版本、数据源（mock / sqlite）、数据目录；进程内不会变 */
 export const useHealth = () => useQuery({ queryKey: qk.health, queryFn: api.health, staleTime: Infinity });
 
-/** 真实数据的「移到回收站」不能在 Emaki 里撤销（只能去系统回收站还原）；演示数据可以 */
-export const useCanUndoTrash = () => useHealth().data?.dataSource === 'mock';
-export const useTrashHint = () => (useCanUndoTrash() ? '移到系统回收站（可撤销）' : '移到系统回收站（可在回收站里还原）');
+/** 移到回收站最近 5 次可以撤销，更早的已经放进系统回收站，要去那里还原 */
+export const TRASH_HINT = '移到回收站（最近 5 次可撤销）';
 
 // ------------------------------------------------------------------ 修改
 
@@ -244,37 +243,130 @@ export function invalidateAll(client: QueryClient) {
   return client.invalidateQueries();
 }
 
-/** 显示结果 toast；带 undoToken 的附带「撤销」按钮，并记入顶栏撤销栈。 */
-export function announce(result: MutationResult, client: QueryClient) {
+const PLAIN_NOTE = '这一步不能撤销，需要的话请手动改回去（任务可以在设置里取消）。再按一次撤销会撤更早的操作。';
+const TRASH_NOTE = '文件已经放进系统回收站，要找回请去系统回收站还原。再按一次撤销会撤更早的操作。';
+const barrierId = () => `barrier:${crypto.randomUUID()}`;
+
+/**
+ * 一次写操作在撤销栈里记什么：有 token 记 token；回收站那种撤销不了的占位；
+ * 其余改了图库 / 设置的写操作传 barrier（占位的说法）也占一格，Ctrl+Z 不会悄悄越过它去撤更早的
+ */
+export function entryOf(result: MutationResult, barrier?: string | null): UndoEntry | null {
+  if (result.undoToken) return { token: result.undoToken, label: result.message };
+  if (result.irreversible) return { token: barrierId(), label: result.message, barrier: true };
+  if (barrier) return { token: barrierId(), label: barrier, barrier: true, note: PLAIN_NOTE };
+  return null;
+}
+
+// 还在进行的写操作的占位：落定后给出 token（没做成是 false）
+const pendingWaiters = new Map<string, { promise: Promise<string | null | false>; resolve: (t: string | null | false) => void }>();
+// Ctrl+Z 已经在等的占位：落定时不再弹结果 toast，马上就撤掉了
+const undoQueued = new Set<string>();
+
+/** 写操作一开始就在撤销栈顶占个位置，免得请求还没回来时 Ctrl+Z 撤到上一步 */
+export function beginPending(label: string): string {
+  const id = `pending:${crypto.randomUUID()}`;
+  let resolve!: (t: string | null | false) => void;
+  const promise = new Promise<string | null | false>((r) => (resolve = r));
+  pendingWaiters.set(id, { promise, resolve });
+  useUndoStore.getState().push({ token: id, label, pending: true });
+  return id;
+}
+
+/** 占位落定：原地换成真正的那条（null 拿掉）；failed 表示操作没做成 */
+export function settlePending(id: string, entry: UndoEntry | null, failed = false) {
+  useUndoStore.getState().replace(id, entry);
+  pendingWaiters.get(id)?.resolve(failed ? false : (entry?.token ?? null));
+  pendingWaiters.delete(id);
+}
+
+/**
+ * 显示结果 toast；带 undoToken 的附带「撤销」按钮，并记入顶栏撤销栈。
+ * pending：开始时占的位置；barrier：没有撤销时占位用的说法；entry：自己决定记什么（例如多个 token 合成一条）
+ */
+export function announce(
+  result: MutationResult,
+  client: QueryClient,
+  opts: { pending?: string; silent?: boolean; barrier?: string | null; entry?: UndoEntry | null } = {},
+) {
   // 墨色胶囊 + 朱色引信（SEL-11）；可撤销的记入顶栏撤销栈
-  if (result.undoToken) useUndoStore.getState().push({ token: result.undoToken, label: result.message });
-  else if (result.irreversible) useUndoStore.getState().push({ token: `barrier:${crypto.randomUUID()}`, label: result.message, barrier: true });
-  showResultToast(result.message, result.undoToken, client);
+  const entry = opts.entry !== undefined ? opts.entry : entryOf(result, opts.barrier);
+  if (opts.pending) settlePending(opts.pending, entry);
+  else if (entry) useUndoStore.getState().push(entry);
+  markCommitted(result);
+  const queued = !!opts.pending && undoQueued.delete(opts.pending);
+  if (!opts.silent && !queued) showResultToast(result.message, result.undoToken, client);
+}
+
+/** 顶栏撤销按钮 / 命令面板里怎么说栈顶这一条 */
+export const undoTitle = (e: UndoEntry) =>
+  e.barrier ? `上一步撤销不了：${e.label}` : e.pending ? `撤销：${e.label}（还在进行）` : `撤销：${e.label}`;
+
+/** 这次移到回收站把更早的几次挤出了可撤销的范围：撤销栈里那几条原地变成撤销不了的占位 */
+export function markCommitted(result: MutationResult) {
+  if (result.expiredUndoTokens?.length) useUndoStore.getState().markBarrier(result.expiredUndoTokens);
 }
 
 /**
  * 返回撤销的结果：'ok' 成功（交给 toast 处理的也算）；'gone' 后端回了话但撤销不了（token 没了，再试也没用）；
  * 'failed' 连不上，可以再试。只管弹提示的调用方忽略返回值即可。注意 'gone' 也是真值，别拿来当成功判断
  */
-export async function undo(token: string, client: QueryClient): Promise<'ok' | 'gone' | 'failed'> {
+export function undo(token: string, client: QueryClient): Promise<UndoOutcome> {
+  // 连按两次 Ctrl+Z 拿到的是同一个 promise，不会撤两遍
+  const running = undoing.get(token);
+  if (running) return running;
+  const p = runUndo(token, client).finally(() => undoing.delete(token));
+  undoing.set(token, p);
+  return p;
+}
+
+type UndoOutcome = 'ok' | 'gone' | 'failed';
+const undoing = new Map<string, Promise<UndoOutcome>>();
+
+async function runUndo(token: string, client: QueryClient): Promise<UndoOutcome> {
+  const entry = useUndoStore.getState().entries.find((e) => e.token === token);
+  // 还没做完的那一步：等它落定再撤
+  if (entry?.pending) {
+    const waiter = pendingWaiters.get(token);
+    if (!waiter) {
+      useUndoStore.getState().remove(token);
+      return 'gone';
+    }
+    undoQueued.add(token);
+    const id = toast.loading('正在撤销…', { description: `等「${entry.label}」做完再撤` });
+    const final = await waiter.promise;
+    undoQueued.delete(token);
+    toast.dismiss(id);
+    if (final === false) {
+      toast(`「${entry.label}」没有做成，不用撤销`);
+      return 'gone';
+    }
+    if (!final) return 'gone';
+    // 落定和这里之间只隔微任务，按键插不进来；接着登记，第二次 Ctrl+Z 拿到的还是这一次
+    return undo(final, client);
+  }
   // 撤销不了的那一步：说一声再拿掉，下一次 Ctrl+Z 才轮到更早的
-  const barrier = useUndoStore.getState().entries.find((e) => e.token === token && e.barrier);
-  if (barrier) {
+  if (entry?.barrier) {
     useUndoStore.getState().remove(token);
-    toast(`上一步撤销不了：${barrier.label}`, { description: '移到回收站的文件请在系统回收站还原。再按一次撤销会撤更早的操作。' });
+    toast(`上一步撤销不了：${entry.label}`, { description: entry.note ?? TRASH_NOTE });
     return 'gone';
   }
   // 这条的 toast 还在：交给它撤销，胶囊原地变成「已撤销」
   if (undoViaToast(token)) return 'ok';
   try {
-    const res = await api.undo(token);
+    let message: string;
+    if (entry?.tokens) {
+      for (const t of [...entry.tokens].reverse()) await api.undo(t);
+      message = `已撤销：${entry.label}`;
+    } else message = (await api.undo(token)).message;
     useUndoStore.getState().remove(token);
-    toast(res.message);
+    toast(message);
     await invalidateAll(client);
     return 'ok';
   } catch (err) {
     forgetFailedUndo(token, err);
     toast.error(errorMessage(err));
+    if (entry?.tokens) await invalidateAll(client);
     return err instanceof ApiRequestError && err.code !== 'network' ? 'gone' : 'failed';
   }
 }
@@ -347,17 +439,33 @@ export function useMutate<TVars, TResult extends MutationResult = MutationResult
     onSuccess?: (result: TResult, vars: TVars) => void;
     /** 自己显示错误（例如表单下方的小字）；不传则弹错误 toast */
     onError?: (message: string, err: unknown) => void;
+    /** 撤销栈里的说法：进行中显示它；没有撤销的结果也用它占位（不传就用结果那句话） */
+    label?: string | ((vars: TVars) => string);
+    /** false：不碰撤销栈，留给纯外观偏好、只读的动作 */
+    undo?: false;
+    /** 自己决定撤销栈里记什么（例如多个 token 合成一条） */
+    entry?: (result: TResult, vars: TVars) => UndoEntry | null;
   } = {},
 ) {
   const client = useQueryClient();
+  const labelOf = (vars: TVars) => (typeof opts.label === 'function' ? opts.label(vars) : opts.label);
   return useMutation({
     mutationFn: fn,
-    onSuccess: async (result, vars) => {
-      if (!opts.silent) announce(result, client);
+    // 一点下去就占住撤销栈顶：乐观更新的页面不等接口返回就往下走，这时按 Ctrl+Z 也该撤这一步
+    onMutate: (vars): string | undefined => (opts.undo === false ? undefined : beginPending(labelOf(vars) ?? '刚才的操作')),
+    onSuccess: async (result, vars, pending) => {
+      // silent 的自己弹提示，但 token / 占位照样进撤销栈
+      announce(result, client, {
+        pending,
+        silent: opts.silent,
+        barrier: opts.undo === false ? null : (labelOf(vars) ?? result.message),
+        ...(opts.entry && { entry: opts.entry(result, vars) }),
+      });
       opts.onSuccess?.(result, vars);
       await invalidateAll(client);
     },
-    onError: (err) => {
+    onError: (err, _vars, pending) => {
+      if (pending) settlePending(pending, null, true);
       if (opts.onError) opts.onError(errorMessage(err), err);
       else toast.error(errorMessage(err));
     },

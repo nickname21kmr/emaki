@@ -59,7 +59,9 @@ import type {
   UpdateArtistLinksBody,
   Rating,
   Work,
+  PromotableSuggestions,
 } from '@emaki/shared';
+import { REMOVED_ROOT_KEEP_DAYS } from '@emaki/shared';
 import { access, mkdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { EventBus } from '../../core/events.ts';
@@ -106,25 +108,26 @@ import { hydrateImages, IMAGE_COLS, type ImageRow } from './hydrate.ts';
 import { listImages } from './queries/listImages.ts';
 import { loadSuggestions } from './suggestions.ts';
 import { dismissPixivCharacterChecks } from './pixivChecks.ts';
+import { vetoRemovedCharacter } from './vetoes.ts';
 import { clearPendingPixivCache, pendingPixivCount, queuePixivImages, queueUnseenPixivAnimations, resetPixivBackoff, syncPixivCharacters } from '../../services/pixiv/sync.ts';
 import { refreshPixivAliases } from '../../services/pixiv/aliases.ts';
 import { createPixivDiscovery } from '../../services/pixiv/discovery.ts';
 import { DanbooruClient } from '../../services/danbooru/client.ts';
 import { BulkOps, RATING_LABEL } from './bulk.ts';
 import { CollectionQueries } from './collections.ts';
-import { assertKindValue, KIND_LABEL, setKindInTx, type KindDeps } from './kinds.ts';
+import { assertKindValue, countPromotable, KIND_LABEL, promoteSuggestionsInTx, setKindInTx, type KindDeps } from './kinds.ts';
 import { describeKindReason } from './hydrate.ts';
 import { DuplicateQueries } from './duplicates.ts';
 import { SearchQueries } from './search.ts';
 import { DedupeService } from '../../services/dedupe/DedupeService.ts';
 import type { TrashImpl } from '../../services/trash/recycleBin.ts';
+import { PendingTrash } from './pendingTrash.ts';
 import { CharacterMutations } from './characters.ts';
 import { UnrecognizedQueries } from './unrecognized.ts';
 import { createContext } from './context.ts';
 import { Derived } from './derived.ts';
 import { applyExclusionRules, applyExclusionRulesTracked, ExclusionQueries, revertNewlyExcluded, type NewlyExcluded } from './exclusions.ts';
 import { LibraryQueries } from './library.ts';
-import { TagResultWriter } from '../../services/tagger/writer.ts';
 import { moveBack, moveImageFiles, normalizeSubdir, type MoveRow } from './move.ts';
 import { importImages } from './importImages.ts';
 import { replaceImage } from './replaceImage.ts';
@@ -148,6 +151,8 @@ export interface SqliteOpenOptions {
   importDict?: boolean;
   /** 替换系统回收站（测试用） */
   trashImpl?: TrashImpl;
+  /** 替换「这个盘有没有回收站」的检查（测试用：夹具里的 D:/Pics 不一定存在） */
+  checkRecyclable?: (rootPath: string) => Promise<void>;
 }
 
 /**
@@ -324,6 +329,8 @@ export class SqliteDataSource implements DataSource {
       ds.requests.requestFull();
       ds.ctx.jobs.enqueue('scan');
     }
+    // 上次没正常退出时留下的待移文件：现在移进系统回收站（撤销栈已经随重启清空了）
+    void ds.pendingTrash.flushAll();
     return ds;
   }
 
@@ -344,6 +351,8 @@ export class SqliteDataSource implements DataSource {
   private readonly characters: CharacterMutations;
   private readonly unrecognized: UnrecognizedQueries;
   private readonly bulk: BulkOps;
+  /** 移到回收站的延后执行（最近几次可撤销） */
+  readonly pendingTrash: PendingTrash;
   private readonly kindDeps: KindDeps;
   /** 合集（T38b） */
   readonly collections: CollectionService;
@@ -403,11 +412,12 @@ export class SqliteDataSource implements DataSource {
     this.collectionQueries = new CollectionQueries(this.ctx, this.collections, this.derived);
     this.library = new LibraryQueries(this.ctx, this.derived, () => this.collectionQueries.stats());
     this.kindDeps = { catalog: () => this.makeCatalog().catalog, autoAcceptThreshold: () => readSettings(db).tagger.autoAcceptThreshold };
-    this.bulk = new BulkOps(this.ctx, (ids) => this.requireVisibleImages(ids), this.kindDeps, this.collectionsHook);
+    this.pendingTrash = new PendingTrash(this.ctx, { trashImpl: opts.trashImpl, checkRoot: opts.checkRecyclable });
+    this.bulk = new BulkOps(this.ctx, (ids) => this.requireVisibleImages(ids), this.kindDeps, this.pendingTrash, this.collectionsHook);
     this.unrecognized = new UnrecognizedQueries(this.ctx, () => this.makeCatalog().catalog, softMs);
     this.characters = new CharacterMutations(this.ctx, this.derived, () => this.danbooru, () => this.makeCatalog().catalog);
     this.exclusions = new ExclusionQueries(this.ctx, this.collectionsHook);
-    this.duplicates = new DuplicateQueries(this.ctx, opts.trashImpl, this.collectionsHook);
+    this.duplicates = new DuplicateQueries(this.ctx, this.pendingTrash, this.collectionsHook);
     this.searchQueries = new SearchQueries(db, this.derived);
     this.dedupe = new DedupeService({
       db,
@@ -486,6 +496,8 @@ export class SqliteDataSource implements DataSource {
 
   async close(): Promise<void> {
     await this.watcher?.close();
+    // 还能撤销的回收站操作：退出前真的移进系统回收站
+    await this.pendingTrash.flushAll();
     await shutdownTagger(); // 关掉推理子进程，释放显存
     clearInterval(this.optimizeTimer);
     closeDatabase(this.ctx.db);
@@ -715,6 +727,9 @@ export class SqliteDataSource implements DataSource {
         const ids = JSON.stringify(charIds);
         const removed = this.ctx.stmt('SELECT 1 FROM image_characters WHERE image_id = ? AND character_id NOT IN (SELECT value FROM json_each(?)) LIMIT 1').get(iid,ids);
         if (removed) dismissPixivCharacterChecks(this.ctx.db,u,[iid],now);
+        // 去掉的角色记下来，重新识别时不再加回（撤销时一起去掉）
+        const gone = this.ctx.stmt('SELECT character_id FROM image_characters WHERE image_id = ? AND character_id NOT IN (SELECT value FROM json_each(?))').pluck().all(iid, ids) as number[];
+        for (const cid of gone) vetoRemovedCharacter(this.ctx.db, u, cid, [iid], now);
         this.ctx.stmt('DELETE FROM image_characters WHERE image_id = @iid AND character_id NOT IN (SELECT value FROM json_each(@ids))').run({ iid, ids });
         this.ctx
           .stmt(
@@ -904,8 +919,8 @@ export class SqliteDataSource implements DataSource {
   async listDuplicates(query: ListDuplicatesQuery): Promise<DuplicateGroup[]> {
     return this.results.get(`dups:${query.resolved ? 1 : 0}`, () => this.duplicates.list(query)) as DuplicateGroup[];
   }
-  async resolveDuplicate(id: ID, keepIds: ID[]): Promise<MutationResult> {
-    return this.duplicates.resolve(id, keepIds);
+  async resolveDuplicate(id: ID, keepIds: ID[], batch?: string): Promise<MutationResult> {
+    return this.duplicates.resolve(id, keepIds, batch);
   }
   async ignoreDuplicate(id: ID): Promise<MutationResult> {
     return this.duplicates.ignore(id);
@@ -951,11 +966,15 @@ export class SqliteDataSource implements DataSource {
     for (const fn of this.rootsListeners) fn();
   }
 
-  /** 启动时真正删除上次「移除」的文件夹（级联删除它的图）和指向已删除图片的单张排除规则 */
+  /**
+   * 启动时真正删除移除超过 30 天的文件夹（级联删除它的图）和指向已删除图片的单张排除规则。
+   * 30 天内的留着：重新添加同一个文件夹时角色、收藏、分级等整理结果都能找回
+   */
   purgeRemovedRoots(): void {
     const db = this.ctx.db;
+    const cutoff = iso(this.ctx.clock() - REMOVED_ROOT_KEEP_DAYS * 86_400_000);
     db.transaction(() => {
-      const roots = db.prepare('DELETE FROM library_roots WHERE removed_at IS NOT NULL').run().changes;
+      const roots = db.prepare('DELETE FROM library_roots WHERE removed_at IS NOT NULL AND removed_at < ?').run(cutoff).changes;
       const ex = db
         .prepare("DELETE FROM exclusions WHERE kind = 'image' AND CAST(target AS INTEGER) NOT IN (SELECT id FROM images)")
         .run().changes;
@@ -1005,28 +1024,12 @@ export class SqliteDataSource implements DataSource {
   }
 
   async updateSettings(body: UpdateSettingsBody): Promise<Settings> {
-    const before = readSettings(this.ctx.db).tagger.autoAcceptThreshold;
     const beforeArtists = readSettings(this.ctx.db).tagger.artists;
     const beforePixiv = readSettings(this.ctx.db).tagger.pixiv;
     applySettingsPatch(this.ctx.db, body as Parameters<typeof applySettingsPatch>[1]);
     if (body.tagger?.pixivFilenameMode !== undefined) backfillSources(this.ctx.db);
     const settings = await this.getSettings();
-    // 调低自动采纳阈值：已达标的建议当场归到角色（和识别任务开头的「阶段 0」同一段逻辑）
-    if (settings.tagger.autoAcceptThreshold < before) {
-      const t = settings.tagger;
-      const { catalog, copyrights } = this.makeCatalog();
-      const writer = new TagResultWriter(this.ctx.db, catalog, copyrights, {
-        repo: t.model,
-        generalThreshold: t.generalThreshold,
-        characterThreshold: t.characterThreshold,
-        autoAcceptThreshold: t.autoAcceptThreshold,
-      });
-      const promoted = writer.promoteSuggestions();
-      if (promoted) {
-        this.ctx.db.transaction(() => catalog.backfillWorks(new Date(this.ctx.clock()).toISOString()))();
-        this.refreshCollections('mutation');
-      }
-    }
+    // 调低自动采纳阈值不在保存时动已有建议：设置页显示有多少达标，用户点按钮才归（promoteSuggestions，可撤销）
     // 刚打开「识别画师」：给已识别的图补跑（任务在显卡道里排在识别后面，可以随时取消）
     if (body.tagger?.artists === true && !beforeArtists) {
       this.pipeline.noteManualStart('artists');
@@ -1045,6 +1048,21 @@ export class SqliteDataSource implements DataSource {
     for (const fn of this.settingsListeners) fn(settings);
     this.ctx.touch();
     return settings;
+  }
+
+  /** 已有建议里分数达到现在的自动采纳阈值的（调低阈值后才会有） */
+  async promotableSuggestions(): Promise<PromotableSuggestions> {
+    const threshold = readSettings(this.ctx.db).tagger.autoAcceptThreshold;
+    return { ...countPromotable(this.ctx.db, threshold), threshold };
+  }
+
+  /** 用户点按钮：把达标的建议归到角色，可撤销 */
+  async promoteSuggestions(): Promise<MutationResult> {
+    return this.ctx.mutate((u) => {
+      const ids = promoteSuggestionsInTx(this.ctx, u, null, this.kindDeps);
+      if (ids.length) this.collectionsHook(u, ids);
+      return { message: ids.length ? `已把 ${ids.length} 张图按达标的建议归到角色` : '没有达标的建议了' };
+    });
   }
 
   private requireRoot(id: ID): { id: number; path: string; enabled: number } {
@@ -1123,6 +1141,7 @@ export class SqliteDataSource implements DataSource {
     let rootId = 0;
     let merged = 0;
     let adopted = 0;
+    let revived = 0;
     db.transaction(() => {
       if (removed) {
         // 复活：旧图和识别结果全部回来
@@ -1133,6 +1152,7 @@ export class SqliteDataSource implements DataSource {
           removed.id,
         );
         rootId = removed.id;
+        revived = db.prepare('SELECT COUNT(*) FROM images WHERE root_id = ?').pluck().get(rootId) as number;
       } else {
         rootId = Number(
           db.prepare('INSERT INTO library_roots (path, enabled, content_mode, comic_rating) VALUES (?, 1, ?, ?)').run(p, mode, comicRating).lastInsertRowid,
@@ -1154,10 +1174,12 @@ export class SqliteDataSource implements DataSource {
     // 只扫新文件夹；扫描正在跑时也再排一次，别丢了这个请求
     this.requests.addDirty({ rootId, relDir: '', recursive: true });
     this.ctx.jobs.enqueue('scan', { requeueIfRunning: true });
-    const found = adopted ? `（找回了 ${adopted} 张图以前的整理结果）` : '';
+    // 复活的、接管的、并进来的移除过的子文件夹，都算找回
+    const back = revived + adopted + merged;
+    const found = back ? `（找回了 ${back} 张图以前的整理结果）` : '';
     return done(
       activeChildren.length
-        ? `已合并成一个文件夹（保留了 ${merged + adopted} 张图的整理结果），开始扫描其余部分：${p}`
+        ? `已合并成一个文件夹（保留了 ${back} 张图的整理结果），开始扫描其余部分：${p}`
         : mode === 'comic'
           ? `已按漫画导入${found}，开始扫描（不识别，每个子文件夹成一本）：${p}`
           : `已添加文件夹${found}，开始扫描：${p}`,
@@ -1352,7 +1374,7 @@ export class SqliteDataSource implements DataSource {
     this.collectionsHook(null, 'all');
     this.ctx.touch();
     this.notifyRoots();
-    return this.ctx.undo.result(`已移除文件夹（不会删除磁盘上的文件）：${root.path}`, () => {
+    return this.ctx.undo.result(`已移除文件夹：${root.path}。磁盘上的文件没动，${REMOVED_ROOT_KEEP_DAYS} 天内重新添加它能找回整理结果`, () => {
       set.run(null, root.id);
       this.collectionsHook(null, 'all');
       this.ctx.touch();

@@ -293,10 +293,17 @@ export class Scanner {
 
     // ---- 阶段 4：分类
     const c = classify(disk, dbRows, failedDirs, scanErrors);
+    // 刚移到回收站、还能撤销的图文件还在原处：不算恢复、改动，也不当移动的来源
+    const pending = new Set(db.prepare('SELECT image_id FROM pending_trash_items').pluck().all() as number[]);
+    if (pending.size) {
+      c.restored = c.restored.filter((id) => !pending.has(id));
+      c.changed = c.changed.filter((x) => !pending.has(x.row.id));
+      c.gone = c.gone.filter((r) => !pending.has(r.id));
+    }
 
     // 移动候选 = 本次消失的 ∪ 全库早就丢失的
     const candidates = new Map<number, DbRow>();
-    for (const r of [...c.gone, ...missingRows]) candidates.set(r.id, r);
+    for (const r of [...c.gone, ...missingRows]) if (!pending.has(r.id)) candidates.set(r.id, r);
     const goneIds = new Set(c.gone.map((r) => r.id));
     const ops: Op[] = [];
     const takeCandidate = (row: DbRow) => {

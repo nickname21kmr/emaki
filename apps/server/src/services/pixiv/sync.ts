@@ -114,6 +114,7 @@ export async function syncPixivCharacters(
   // 自建角色的建议：danbooru_tag 写伪标签占主键，character_id 写真外键（读的时候看 character_id）
   const suggest = db.prepare("INSERT OR IGNORE INTO character_suggestions (image_id,danbooru_tag,character_id,score,source) VALUES (?,?,?,0,'pixiv')");
   const clearPixivSuggestions = db.prepare("DELETE FROM character_suggestions WHERE image_id=? AND source='pixiv'");
+  const vetoed = db.prepare('SELECT 1 FROM character_vetoes WHERE image_id=? AND character_id=?').pluck();
   const liveCustom = db.prepare('SELECT 1 FROM characters WHERE id=? AND danbooru_tag IS NULL');
   for (let n = 0; n < posts.length; n++) {
     job.signal.throwIfAborted();
@@ -212,6 +213,9 @@ export async function syncPixivCharacters(
           ids.push(row.id);
         }
         for (const tag of result.tags) {
+          // 用户从这张图上去掉过的角色：不加回、不建议
+          const known = catalog.resolveCharacterId(tag);
+          if (known !== null && vetoed.get(row.id, known) !== undefined) continue;
           if (result.automatic) {
             const character = catalog.ensureCharacter(tag, now);
             linkChanges += insert.run(row.id, character.id, now).changes;

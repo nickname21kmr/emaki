@@ -44,17 +44,51 @@ export function settingsContract(make: ContractFactory, name: Name) {
       expect(s.ui).toEqual({ theme: 'system', blurSensitive: true, density: 'comfortable' });
     });
 
-    it('调低自动采纳阈值：已达标的建议保存时立即归到角色', async () => {
+    it('调低自动采纳阈值：保存时不动已有建议，显示达标张数，点按钮才归到角色（可撤销）', async () => {
       const e = env();
+      const chars = async (img: string) => (await e.ds.getImage(e.id('image', img)))!.characterIds.map((c) => e.back('character', c));
       expect((await e.ds.getStats()).unrecognizedCount).toBe(7);
+      expect(await e.ds.promotableSuggestions()).toEqual({ images: 0, suggestions: 0, threshold: 0.85 });
       await e.ds.updateSettings({ tagger: { autoAcceptThreshold: 0.65 } });
-      // i26 的 mika 建议 0.7 ≥ 0.65 → 归到圣园未花；i24 的 0.6 不够
-      expect((await e.ds.getImage(e.id('image', 'i26')))!.characterIds.map((c) => e.back('character', c))).toEqual(['c1']);
-      expect((await e.ds.getImage(e.id('image', 'i24')))!.characterIds).toEqual([]);
+      // 保存不归
+      expect(await chars('i26')).toEqual([]);
+      expect((await e.ds.getStats()).unrecognizedCount).toBe(7);
+      // i26 的 mika 建议 0.7 ≥ 0.65；i24 的 0.6 不够
+      expect(await e.ds.promotableSuggestions()).toEqual({ images: 1, suggestions: 1, threshold: 0.65 });
+      const r = await e.ds.promoteSuggestions();
+      expect(r.message).toBe('已把 1 张图按达标的建议归到角色');
+      expect(await chars('i26')).toEqual(['c1']);
+      expect(await chars('i24')).toEqual([]);
       expect((await e.ds.getStats()).unrecognizedCount).toBe(6);
-      // 调高不会撤回
+      expect((await e.ds.promotableSuggestions()).images).toBe(0);
+      // 撤销：角色去掉，建议回来
+      await e.ds.undo(r.undoToken!);
+      expect(await chars('i26')).toEqual([]);
+      expect((await e.ds.promotableSuggestions()).images).toBe(1);
+      // 没有达标的：不给撤销
       await e.ds.updateSettings({ tagger: { autoAcceptThreshold: 0.9 } });
-      expect((await e.ds.getStats()).unrecognizedCount).toBe(6);
+      expect((await e.ds.promoteSuggestions()).undoToken).toBeNull();
+    });
+
+    it('手动去掉的角色不会被采纳建议加回；撤销去掉后不再拦', async () => {
+      const e = env();
+      const i26 = e.id('image', 'i26');
+      const chars = async () => (await e.ds.getImage(i26))!.characterIds.map((c) => e.back('character', c));
+      const add = await e.ds.updateImage(i26, { characterIds: [e.id('character', 'c1')] });
+      const drop = await e.ds.updateImage(i26, { characterIds: [] });
+      await e.ds.updateSettings({ tagger: { autoAcceptThreshold: 0.65 } });
+      expect((await e.ds.promotableSuggestions()).images).toBe(0);
+      // 撤销去掉（角色回来、记录作废），再撤销手动加：建议又能采纳
+      await e.ds.undo(drop.undoToken!);
+      await e.ds.undo(add.undoToken!);
+      expect(await chars()).toEqual([]);
+      expect((await e.ds.promotableSuggestions()).images).toBe(1);
+      await e.ds.updateImage(i26, { characterIds: [e.id('character', 'c1')] });
+      await e.ds.updateImage(i26, { characterIds: [] });
+      // 去掉后点按钮：不加回，这条建议也清掉
+      await e.ds.promoteSuggestions();
+      expect(await chars()).toEqual([]);
+      expect((await e.ds.promotableSuggestions()).images).toBe(0);
     });
 
     it('修改设置：深合并，API key 只写不读', async () => {
@@ -1022,6 +1056,34 @@ export function duplicatesContract(make: ContractFactory, name: Name) {
       expect((await e.ds.listDuplicates({})).map((g) => e.back('duplicate', g.id))).toEqual(['d1']);
     });
 
+    it('保留一张、其余移到回收站：可撤销，撤销后组回到待处理', async () => {
+      const e = env();
+      const d1 = e.id('duplicate', 'd1');
+      const keep = e.id('image', 'i15');
+      const gone = e.id('image', 'i37');
+      const before = canon(e, await e.ds.getImage(keep));
+      const r = await e.ds.resolveDuplicate(d1, [keep]);
+      expect(r.message).toBe('已保留 1 张，1 张移到回收站');
+      expect(r.undoToken).toBeTruthy();
+      expect(await e.ds.listDuplicates({})).toEqual([]);
+      expect((await e.ds.listImages({})).items.some((i) => i.id === gone)).toBe(false);
+      await e.ds.undo(r.undoToken!);
+      expect(brief(e, await e.ds.listDuplicates({}))).toEqual([
+        { id: 'd1', kind: 'similar', similarity: 0.95, images: ['i15', 'i37'], keep: 'i15', resolved: false },
+      ]);
+      expect(canon(e, await e.ds.getImage(keep))).toEqual(before);
+    });
+
+    it('同一个 batch 处理的几组在「最近 5 次」里只算一次', async () => {
+      const e = env();
+      const r = await e.ds.resolveDuplicate(e.id('duplicate', 'd1'), [e.id('image', 'i15')], 'b1');
+      // 再 4 次单独的移到回收站：加上这一批正好 5 次，都还能撤销
+      for (const x of ['i1', 'i2', 'i3', 'i4']) await e.ds.bulkImages({ ids: [e.id('image', x)], action: { type: 'trash' } });
+      expect(await e.ds.undoStatus([r.undoToken!])).toEqual({ [r.undoToken!]: 'live' });
+      const sixth = await e.ds.bulkImages({ ids: [e.id('image', 'i5')], action: { type: 'trash' } });
+      expect(sixth.expiredUndoTokens).toEqual([r.undoToken]);
+    });
+
     it('resolve 参数校验：空保留 400、组外图片 400、不存在的组 404', async () => {
       const e = env();
       const d1 = e.id('duplicate', 'd1');
@@ -1181,6 +1243,41 @@ export function bulkContract(make: ContractFactory, name: Name) {
         statusCode: 404,
       });
       expect(await snapshot(e, [id])).toEqual(before);
+    });
+
+    it('trash：图从列表里消失，撤销后完全还原', async () => {
+      const e = env();
+      const ids = [e.id('image', 'i1'), e.id('image', 'i2')];
+      const before = await snapshot(e, ids);
+      const total = async () => (await e.ds.listImages({})).total;
+      const n = await total();
+      const r = await e.ds.bulkImages({ ids, action: { type: 'trash' } });
+      expect(r.message).toBe('已把 2 张图移到回收站');
+      expect(r.undoToken).toBeTruthy();
+      expect(r.expiredUndoTokens).toBeUndefined();
+      expect(await total()).toBe(n - 2);
+      await e.ds.undo(r.undoToken!);
+      expect(await total()).toBe(n);
+      expect(await snapshot(e, ids)).toEqual(before);
+    });
+
+    it('trash：最近 5 次可撤销，第 6 次让最早那次作废（已放进系统回收站）', async () => {
+      const e = env();
+      const ids = ['i1', 'i2', 'i3', 'i4', 'i5', 'i6'].map((x) => e.id('image', x));
+      const rs = [];
+      for (const id of ids) rs.push(await e.ds.bulkImages({ ids: [id], action: { type: 'trash' } }));
+      const tokens = rs.map((r) => r.undoToken!);
+      expect(rs.slice(0, 5).map((r) => r.expiredUndoTokens)).toEqual(Array(5).fill(undefined));
+      expect(rs[5]!.expiredUndoTokens).toEqual([tokens[0]]);
+      const st = await e.ds.undoStatus(tokens);
+      expect(tokens.map((t) => st[t])).toEqual(['expired', 'live', 'live', 'live', 'live', 'live']);
+      await expect(e.ds.undo(tokens[0]!)).rejects.toMatchObject({ code: 'not_found', message: '这一步已经放进系统回收站，撤销不了' });
+      const n = (await e.ds.listImages({})).total;
+      for (const t of tokens.slice(1).reverse()) await e.ds.undo(t);
+      expect((await e.ds.listImages({})).total).toBe(n + 5);
+      // 撤销掉的不占位置：再移一次，不会挤掉别的
+      const again = await e.ds.bulkImages({ ids: [ids[1]!], action: { type: 'trash' } });
+      expect(again.expiredUndoTokens).toBeUndefined();
     });
   });
 }

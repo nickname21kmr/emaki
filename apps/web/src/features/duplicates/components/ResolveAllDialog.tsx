@@ -6,7 +6,8 @@ import { toast } from 'sonner';
 import { Button, Dialog, DialogFooter, Progress, Segmented } from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatBytes, formatCount } from '@/lib/format';
-import { errorMessage, invalidateAll, useCanUndoTrash, useMutate } from '@/lib/queries';
+import { errorMessage, markCommitted, undo, useMutate } from '@/lib/queries';
+import { useUndoStore } from '@/lib/stores';
 
 export interface ResolvePlan {
   id: ID;
@@ -44,7 +45,6 @@ export function ResolveAllDialog({
   onDone: (ids: ID[]) => void;
 }) {
   const client = useQueryClient();
-  const canUndo = useCanUndoTrash();
   const [progress, setProgress] = useState(0);
   const stopRef = useRef(false);
   const [stopping, setStopping] = useState(false);
@@ -58,21 +58,12 @@ export function ResolveAllDialog({
   const exactCount = plans.filter((p) => p.exact).length;
   const chosen = scope === 'exact' ? plans.filter((p) => p.exact) : plans;
 
-  const undoAll = async (tokens: string[]) => {
-    try {
-      for (const token of [...tokens].reverse()) await api.undo(token);
-      toast(`已撤销，${tokens.length} 组重复回到待处理`);
-    } catch (err) {
-      toast.error(errorMessage(err));
-    } finally {
-      await invalidateAll(client);
-    }
-  };
-
   const run = useMutate(
     async (list: ResolvePlan[]): Promise<BatchResult> => {
       const tokens: string[] = [];
       const done: ID[] = [];
+      // 这一次点下去的各组共用一个 batch，在「最近 5 次可撤销」里只算一次
+      const batch = crypto.randomUUID();
       let trashed = 0;
       setProgress(0);
       stopRef.current = false;
@@ -89,8 +80,9 @@ export function ResolveAllDialog({
           };
         }
         try {
-          const res = await api.resolveDuplicate(plan.id, plan.keepIds);
+          const res = await api.resolveDuplicate(plan.id, plan.keepIds, batch);
           if (res.undoToken) tokens.push(res.undoToken);
+          markCommitted(res);
           done.push(plan.id);
           trashed += plan.trashCount;
           setProgress(done.length);
@@ -118,9 +110,16 @@ export function ResolveAllDialog({
     },
     {
       silent: true,
+      label: '全部按推荐处理',
+      // 各组的 token 在撤销栈里合成一条：Ctrl+Z 一次把这一批倒序撤回
+      entry: (res) =>
+        res.tokens.length
+          ? { token: `group:${crypto.randomUUID()}`, label: res.message, tokens: res.tokens }
+          : { token: `barrier:${crypto.randomUUID()}`, label: res.message, barrier: true },
       onSuccess: (res) => {
         const notify = res.failed ? toast.warning : toast.success;
-        notify(res.message, res.tokens.length ? { action: { label: '撤销', onClick: () => void undoAll(res.tokens) } } : {});
+        const entry = useUndoStore.getState().entries.find((e) => e.tokens === res.tokens);
+        notify(res.message, entry ? { action: { label: '撤销', onClick: () => void undo(entry.token, client) } } : {});
         onOpenChange(false);
       },
     },
@@ -179,9 +178,7 @@ export function ResolveAllDialog({
         ) : (
           <p className="flex items-center gap-2 text-[12.5px] leading-relaxed text-fg-muted">
             <Undo2 className="size-4 shrink-0 text-fg-subtle" />
-            {canUndo
-              ? '处理完成后，提示里的「撤销」可以把这些组一次性恢复原样。'
-              : '文件会移到系统回收站，可以在回收站里还原；这一步不能在 Emaki 里撤销。'}
+            处理完成后，提示里的「撤销」可以把这些组一次性恢复原样。之后再移到回收站 5 次，这一批就会放进系统回收站，只能去那里还原。
           </p>
         )}
       </div>

@@ -87,7 +87,7 @@ describe('添加父文件夹：合并已有的图库文件夹', () => {
     await ds.removeLibraryRoot(String(rootId(sub('C1'))));
     await ds.removeLibraryRoot(String(rootId(sub('C2'))));
     const r = await ds.addLibraryRoot({ path: P() });
-    expect(r.message).toBe(`已添加文件夹，开始扫描：${P()}`);
+    expect(r.message).toBe(`已添加文件夹（找回了 4 张图以前的整理结果），开始扫描：${P()}`);
     expect(rowOf(1)).toEqual({ root_id: rootId(P()), rel_path: 'C1/a.png' });
   });
 
@@ -527,5 +527,64 @@ describe('按漫画导入', () => {
     const books = await ds.listCollections({ kind: 'doujin' });
     expect(books.map((b) => [b.title, b.pageCount, b.pending])).toEqual([['单行本', 3, false]]);
     expect((await ds.unrecognizedSummary()).art.total).toBe(0);
+  });
+});
+
+describe('移除的图库文件夹：重启后不清掉，30 天内重新添加能找回', () => {
+  let dir: string;
+  let ds: SqliteDataSource;
+  let now = Date.parse('2026-10-01T00:00:00.000Z');
+  const DAY = 86_400_000;
+  const open = () => SqliteDataSource.open(new EventBus(), path.join(dir, 'data'), { autoJobs: false, importDict: false, clock: () => now });
+  const idle = async () => {
+    while ((await ds.listJobs()).some((j) => j.status === 'queued' || j.status === 'running')) await new Promise((r) => setTimeout(r, 10));
+  };
+  beforeEach(() => {
+    dir = makeTmpDir('removed-keep');
+    mkdirSync(path.join(dir, 'Lib'));
+  });
+  afterEach(async () => {
+    await ds.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('重启后整理结果还在，重新添加找回；超过 30 天的启动时才清掉', async () => {
+    const lib = path.join(dir, 'Lib').replace(/\\/g, '/');
+    ds = await open();
+    await ds.addLibraryRoot({ path: lib });
+    await idle();
+    const db = () => ds.ctx.db;
+    const root = db().prepare('SELECT id FROM library_roots').pluck().get() as number;
+    db()
+      .prepare(
+        `INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at, favorite)
+         VALUES (1, ?, 'a.png', 'a.png', 1, 1, 1, 'png', 's1', 'x', 'x', 1)`,
+      )
+      .run(root);
+    db().prepare("INSERT INTO characters (id, name, source, created_at) VALUES (7, '圣园未花', 'custom', 'x')").run();
+    db().prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (1, 7, 'manual', 'x')").run();
+    ds.ctx.invalidate();
+    const r = await ds.removeLibraryRoot(String(root));
+    expect(r.message).toBe(`已移除文件夹：${lib}。磁盘上的文件没动，30 天内重新添加它能找回整理结果`);
+    await ds.close();
+
+    // 10 天后重启：没清
+    now += 10 * DAY;
+    ds = await open();
+    expect(db().prepare('SELECT COUNT(*) FROM images').pluck().get()).toBe(1);
+    expect((await ds.getSettings()).libraryRoots).toEqual([]);
+    expect(await ds.getImage('1')).toBeNull();
+    const added = await ds.addLibraryRoot({ path: lib });
+    expect(added.message).toBe(`已添加文件夹（找回了 1 张图以前的整理结果），开始扫描：${lib}`);
+    expect(await ds.getImage('1')).toMatchObject({ favorite: true, characterIds: ['7'] });
+    await idle();
+
+    // 再移除，31 天后重启：清掉
+    await ds.removeLibraryRoot(String(root));
+    await ds.close();
+    now += 31 * DAY;
+    ds = await open();
+    expect(db().prepare('SELECT COUNT(*) FROM library_roots').pluck().get()).toBe(0);
+    expect(db().prepare('SELECT COUNT(*) FROM images').pluck().get()).toBe(0);
   });
 });

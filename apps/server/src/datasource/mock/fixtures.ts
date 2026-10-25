@@ -58,6 +58,8 @@ export interface ImageRow {
   /** 用户手动改过分级（images.rating_manual） */
   ratingManual?: boolean;
   characterIds: ID[];
+  /** 用户从这张图上去掉过的角色（同 sqlite 的 character_vetoes）：采纳建议时不再加回 */
+  vetoedCharacterIds?: ID[];
   /** tagger 识别出的作品（即使没识别出角色也可能有） */
   copyrightWorkIds: ID[];
   hue: number;

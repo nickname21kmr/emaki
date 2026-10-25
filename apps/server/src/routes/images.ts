@@ -187,8 +187,8 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
 
   app.post('/api/duplicates/:id/resolve', (req) => {
     const { id } = parse(idParam, req.params);
-    const { keepIds } = parse(z.object({ keepIds: z.array(z.string()).min(1) }), req.body);
-    return ds.resolveDuplicate(id, keepIds);
+    const { keepIds, batch } = parse(z.object({ keepIds: z.array(z.string()).min(1), batch: z.string().min(1).max(100).optional() }), req.body);
+    return ds.resolveDuplicate(id, keepIds, batch);
   });
 
   app.post('/api/duplicates/:id/ignore', (req) => {

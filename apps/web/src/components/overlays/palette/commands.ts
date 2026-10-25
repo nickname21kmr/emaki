@@ -25,7 +25,7 @@ import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { formatCount } from '@/lib/format';
-import { qk, undo, useMutate, useSettings, useStartJob, useStats } from '@/lib/queries';
+import { qk, undo, undoTitle, useMutate, useSettings, useStartJob, useStats } from '@/lib/queries';
 import { useOverlays, usePrefs, useUndoStore } from '@/lib/stores';
 import { GLOBAL_KEYS, PAGE_JUMPS, type KeyCombo } from '../shortcuts';
 
@@ -85,7 +85,7 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
       throw err;
     }
     return done(THEME_MESSAGE[theme]);
-  });
+  }, { undo: false }); // 换主题只是外观，不占撤销栈
 
   const applyTheme = (theme: ThemePreference) => {
     // 先乐观写入缓存，ThemeSync 立刻换肤，不用等请求回来
@@ -185,7 +185,7 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
           {
             value: 'act:undo',
             section: 'act' as const,
-            label: lastUndo.barrier ? `上一步撤销不了：${lastUndo.label}` : `撤销：${lastUndo.label}`,
+            label: undoTitle(lastUndo),
             keywords: ['undo', '撤销', 'chexiao', 'cx'],
             icon: Undo2,
             keys: GLOBAL_KEYS.undo,

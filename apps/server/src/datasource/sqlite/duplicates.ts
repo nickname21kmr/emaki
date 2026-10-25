@@ -1,17 +1,16 @@
 /**
  * 重复组的查询与处理（T16）。组本身由 services/dedupe/DedupeService 生成。
- * resolve 把没选中的移到系统回收站（逐个核实），不可撤销；一张都没删（全部保留）时可撤销。
+ * resolve 把没选中的移到回收站（先在库里标记，晚一点才真的移，见 pendingTrash.ts），可撤销。
  * 删之前把副本上手动做的整理（手动角色、收藏、原创、分级、画师、来源）并到保留的图上，免得跟着副本一起没了。
  */
 import type { Db } from '../../db/connection.ts';
 import type { DuplicateGroup, ID, ListDuplicatesQuery, MutationResult } from '@emaki/shared';
-import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
+import { BadRequestError, NotFoundError } from '../../http/errors.ts';
 import { parseDHash, popcount32 } from '../../services/dedupe/hamming.ts';
 import { pickKeep } from '../../services/dedupe/pickKeep.ts';
 import { toAbs } from '../../services/fs/paths.ts';
-import { assertRecyclable } from '../../services/trash/driveType.ts';
-import { moveToRecycleBin, type TrashImpl } from '../../services/trash/recycleBin.ts';
 import type { SqliteContext } from './context.ts';
+import type { PendingTrash } from './pendingTrash.ts';
 import { hydrateImages, IMAGE_COLS, type ImageRow } from './hydrate.ts';
 import type { CollectionsHook } from '../../services/collections/CollectionService.ts';
 import { iso, parseId, toId } from './sql.ts';
@@ -33,6 +32,21 @@ export const SET_FOLDER_MAX = 500;
 
 /** 分级从松到严，副本上手动改过的分级不一样时取最严的 */
 const RATING_ORDER = `CASE d.rating WHEN 'explicit' THEN 3 WHEN 'questionable' THEN 2 WHEN 'sensitive' THEN 1 ELSE 0 END`;
+
+/** carryOver 会改到的 images 列（撤销时还原） */
+const CARRY_COLS = [
+  'favorite',
+  'original_at',
+  'rating',
+  'rating_manual',
+  'source_site',
+  'source_post_id',
+  'source_artist',
+  'source_url',
+  'source_manual',
+  'artist_manual',
+  'artist_checked_at',
+];
 
 /**
  * 移到回收站之前，把副本上用户手动做的整理并到保留的图上：手动归的角色、收藏、归为原创、手动分级、手动改的画师、手动确认的来源。
@@ -87,8 +101,7 @@ function carryOver(db: Db, keep: number[], gone: number[], now: string): void {
 export class DuplicateQueries {
   constructor(
     private readonly ctx: SqliteContext,
-    /** 测试里替换成假的回收站 */
-    private readonly trashImpl?: TrashImpl,
+    private readonly pending: PendingTrash,
     /** 移到回收站之后重算合集（T38b） */
     private readonly collections: CollectionsHook = () => {},
   ) {}
@@ -220,7 +233,8 @@ export class DuplicateQueries {
     return g;
   }
 
-  async resolve(idStr: ID, keepIdStrs: ID[]): Promise<MutationResult> {
+  /** batch：「全部处理」一次点下去的多组传同一个，在可撤销的窗口里只算一次 */
+  async resolve(idStr: ID, keepIdStrs: ID[], batch?: string): Promise<MutationResult> {
     const g = this.group(idStr);
     if (!keepIdStrs.length) throw new BadRequestError('至少保留一张');
     const rows = this.members([g.id]).get(g.id) ?? [];
@@ -238,22 +252,27 @@ export class DuplicateQueries {
       });
     }
 
-    for (const root of new Set(toTrash.map((m) => m.root_path))) await assertRecyclable(root);
-    const byPath = new Map(toTrash.map((m) => [toAbs(m.root_path, m.rel_path), m.id]));
-    const res = await moveToRecycleBin([...byPath.keys()], this.trashImpl);
-    const done = [...res.trashed, ...res.alreadyGone].map((p) => byPath.get(p)!);
-    if (!done.length) throw new ConflictError(`没有文件被移到回收站：${res.failed[0]?.reason ?? '未知原因'}`);
+    // 点的时候就检查有没有回收站；文件晚一点才真的移（pendingTrash.ts），这一步可撤销
+    for (const root of new Set(toTrash.map((m) => m.root_path))) await this.pending.checkRoot(root);
+    const gone = toTrash.map((m) => m.id);
     const kept = rows.filter((m) => keep.has(m.id)).map((m) => m.id);
-    return this.ctx.write(() => {
+    let batchId = 0;
+    const res = this.ctx.mutate((u) => {
       const db = this.ctx.db;
-      carryOver(db, kept, done, now);
-      db.prepare('UPDATE images SET trashed_at = ? WHERE id IN (SELECT value FROM json_each(?))').run(now, JSON.stringify(done));
+      const kj = JSON.stringify(kept);
+      // carryOver 会改保留的图：先记下来，撤销时还原
+      for (const t of ['image_characters', 'image_copyrights', 'image_artists'] as const) u.set(t, 'image_id IN (SELECT value FROM json_each(?))', [kj]);
+      u.columns('images', [...CARRY_COLS, 'trashed_at'], [...kept, ...gone]);
+      u.columns('duplicate_groups', ['resolved_at'], [g.id]);
+      carryOver(db, kept, gone, now);
+      db.prepare('UPDATE images SET trashed_at = ? WHERE id IN (SELECT value FROM json_each(?))').run(now, JSON.stringify(gone));
       // 保留的图可能刚并进了角色，它所在的合集也要重算
-      this.collections(null, [...done, ...kept]);
-      if (!res.failed.length) db.prepare('UPDATE duplicate_groups SET resolved_at = ? WHERE id = ?').run(now, g.id);
-      const tail = res.failed.length ? `，${res.failed.length} 张失败（文件可能被占用）` : '';
-      return `已保留 ${keep.size} 张，${done.length} 张移到回收站（可在系统回收站还原）${tail}`;
+      this.collections(u, [...gone, ...kept]);
+      db.prepare('UPDATE duplicate_groups SET resolved_at = ? WHERE id = ?').run(now, g.id);
+      batchId = this.pending.record(u, toTrash.map((m) => ({ id: m.id, abs: toAbs(m.root_path, m.rel_path) })), batch);
+      return { message: `已保留 ${keep.size} 张，${gone.length} 张移到回收站` };
     });
+    return this.pending.added(batchId, res);
   }
 
   ignore(idStr: ID): MutationResult {

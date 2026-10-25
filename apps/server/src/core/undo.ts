@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { MutationResult, UndoTokenStatus } from '@emaki/shared';
-import { NotFoundError } from '../http/errors.ts';
+import { HttpError, NotFoundError } from '../http/errors.ts';
 
 interface UndoEntry {
   label: string;
@@ -17,6 +17,8 @@ export class UndoStack {
   // 撤销过 / 被挤掉的 token，只留最近 SETTLED_MAX 条；更早的和重启前的都按 expired 算
   private static readonly SETTLED_MAX = 1000;
   private readonly settled = new Map<string, 'undone' | 'expired'>();
+  // 主动作废的 token 再撤销时报的话（例如已经放进系统回收站）
+  private readonly reasons = new Map<string, string>();
 
   private settle(token: string, state: 'undone' | 'expired') {
     this.settled.delete(token);
@@ -25,7 +27,15 @@ export class UndoStack {
       const oldest = this.settled.keys().next().value;
       if (oldest === undefined) break;
       this.settled.delete(oldest);
+      this.reasons.delete(oldest);
     }
+  }
+
+  /** 让还没撤销的 token 作废，之后撤销它报 reason。不认识或已经撤销的不动 */
+  expire(token: string, reason?: string): void {
+    if (!this.entries.delete(token)) return;
+    if (reason) this.reasons.set(token, reason);
+    this.settle(token, 'expired');
   }
 
   push(label: string, revert: UndoEntry['revert']): string {
@@ -52,7 +62,10 @@ export class UndoStack {
 
   async run(token: string): Promise<MutationResult> {
     const entry = this.entries.get(token);
-    if (!entry) throw new NotFoundError('可撤销的操作（可能已过期）');
+    if (!entry) {
+      const reason = this.reasons.get(token);
+      throw reason ? new HttpError(404, 'not_found', reason) : new NotFoundError('可撤销的操作（可能已过期）');
+    }
     this.entries.delete(token);
     try {
       await entry.revert();
@@ -65,6 +78,11 @@ export class UndoStack {
     return { ok: true, message: `已撤销：${entry.label}`, undoToken: null };
   }
 }
+
+/** 移到回收站先只在库里标记，最近这么多次还能撤销；再多就把最早的真的放进系统回收站 */
+export const TRASH_UNDO_WINDOW = 5;
+/** 挤出窗口的那次再撤销时的提示 */
+export const TRASH_COMMITTED = '这一步已经放进系统回收站，撤销不了';
 
 /** 不可撤销的操作用这个。 */
 export function done(message: string): MutationResult {

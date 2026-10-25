@@ -1,13 +1,12 @@
 /**
  * 批量操作（T18）。assign / unassign / exclude / restore / favorite / rating / kind / artist 可撤销；
- * trash 把文件移到系统回收站（绝不永久删除，逐个核实），不可撤销——用户可以从回收站还原，扫描后原 id 回来。
+ * trash 先只在库里标记、记一批待移（pendingTrash.ts），最近几次可撤销；挤出窗口后才真的移到系统回收站（绝不永久删除）。
  */
 import type { BulkImagesBody, MutationResult, Rating } from '@emaki/shared';
-import { ConflictError, NotFoundError } from '../../http/errors.ts';
+import { NotFoundError } from '../../http/errors.ts';
 import { toAbs } from '../../services/fs/paths.ts';
-import { assertRecyclable } from '../../services/trash/driveType.ts';
-import { moveToRecycleBin } from '../../services/trash/recycleBin.ts';
 import type { SqliteContext } from './context.ts';
+import type { PendingTrash } from './pendingTrash.ts';
 import { artistAutoMessage, artistEditMessage, normArtists } from '../artistEdits.ts';
 import { artistGroupMap, artistNames } from './artists.ts';
 import { createExclusionInTx } from './exclusions.ts';
@@ -15,6 +14,7 @@ import { assertKindValue, setKindInTx, type KindDeps } from './kinds.ts';
 import type { CollectionsHook } from '../../services/collections/CollectionService.ts';
 import { iso, parseId } from './sql.ts';
 import { dismissPixivCharacterChecks } from './pixivChecks.ts';
+import { vetoRemovedCharacter } from './vetoes.ts';
 
 export const RATING_LABEL: Record<Rating, string> = { general: '全年龄', sensitive: '轻微', questionable: '较敏感', explicit: '限制级' };
 
@@ -24,6 +24,7 @@ export class BulkOps {
     /** T05 的 requireVisibleImages：任意一个不可见或不存在 → NotFoundError，不做任何改动 */
     private readonly requireVisible: (ids: string[]) => number[],
     private readonly kindDeps: KindDeps,
+    private readonly pending: PendingTrash,
     /** 排除 / 恢复 / 改类型 / 回收站之后重算合集（T38b） */
     private readonly collections: CollectionsHook = () => {},
   ) {}
@@ -65,6 +66,8 @@ export class BulkOps {
           const removed = db.prepare('SELECT image_id FROM image_characters WHERE character_id = ? AND image_id IN (SELECT value FROM json_each(?))')
             .pluck().all(ch.id,json) as number[];
           dismissPixivCharacterChecks(db,u,removed,now);
+          // 手动去掉的角色，重新识别时不再加回来
+          vetoRemovedCharacter(db, u, ch.id, removed, now);
           db.prepare('DELETE FROM image_characters WHERE character_id = ? AND image_id IN (SELECT value FROM json_each(?))').run(ch.id, json);
           return { message: `已从「${ch.name}」移除 ${n} 张图` };
         });
@@ -196,17 +199,16 @@ export class BulkOps {
          WHERE i.id IN (SELECT value FROM json_each(?))`,
       )
       .all(JSON.stringify(ids)) as { id: number; rel_path: string; root: string }[];
-    // 任一文件夹没有回收站 → 400，一张都不删
-    for (const root of new Set(rows.map((r) => r.root))) await assertRecyclable(root);
-    const byPath = new Map(rows.map((r) => [toAbs(r.root, r.rel_path), r.id]));
-    const res = await moveToRecycleBin([...byPath.keys()]);
-    const done = [...res.trashed, ...res.alreadyGone].map((p) => byPath.get(p)!);
-    if (!done.length) throw new ConflictError(`没有文件被移到回收站：${res.failed[0]?.reason ?? '未知原因'}`);
-    return this.ctx.write(() => {
-      this.ctx.db.prepare('UPDATE images SET trashed_at = ? WHERE id IN (SELECT value FROM json_each(?))').run(now, JSON.stringify(done));
-      this.collections(null, done);
-      const tail = res.failed.length ? `，${res.failed.length} 张失败（文件可能被其他程序占用）` : '';
-      return `已把 ${done.length} 张图移到回收站（可在系统回收站还原）${tail}`;
+    // 任一文件夹没有回收站 → 400，一张都不动（点的时候就报，不等真的移文件）
+    for (const root of new Set(rows.map((r) => r.root))) await this.pending.checkRoot(root);
+    let batch = 0;
+    const res = this.ctx.mutate((u) => {
+      u.columns('images', ['trashed_at'], ids);
+      this.ctx.db.prepare('UPDATE images SET trashed_at = ? WHERE id IN (SELECT value FROM json_each(?))').run(now, JSON.stringify(ids));
+      this.collections(u, ids);
+      batch = this.pending.record(u, rows.map((r) => ({ id: r.id, abs: toAbs(r.root, r.rel_path) })));
+      return { message: `已把 ${ids.length} 张图移到回收站` };
     });
+    return this.pending.added(batch, res);
   }
 }

@@ -198,11 +198,10 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
       artists: !!t.artists && spec.labelsFormat === 'pixai-json',
     });
 
-    // 阶段 0：阈值调低后已达标的建议直接采纳；没有作品的角色补挂作品
-    const promoted = writer.promoteSuggestions();
+    // 阶段 0：没有作品的角色补挂作品。调低阈值后已有的达标建议不在这里自动归（撤销不了），由设置页的按钮做
     db.transaction(() => catalog.backfillWorks(nowIso()))();
 
-    if (total === 0) return { message: promoted ? `已按新阈值采纳 ${promoted} 条建议` : null, yielded: false };
+    if (total === 0) return { message: null, yielded: false };
 
     // 自动排上的识别不在后台下载旧图模型（1 GB 多，离线时还会每次都失败）：这一轮先跳过，用户点「运行识别」才下
     if (legacy && !manual && !modelReady(spec, deps.modelsDir)) {

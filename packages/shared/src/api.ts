@@ -58,6 +58,8 @@ export interface MutationResult {
   undoToken: string | null;
   /** 做了但撤销不了（文件已移到系统回收站）：前端在撤销栈里占一格，Ctrl+Z 不会越过它去撤销更早的操作 */
   irreversible?: true;
+  /** 这次移到回收站把更早的几次挤出了可撤销的窗口（文件已放进系统回收站）：这些 token 撤销不了了 */
+  expiredUndoTokens?: string[];
 }
 
 /** POST /api/images/import: copy downloaded local files into an existing library root. */
@@ -493,6 +495,8 @@ export type ListDuplicatesResponse = DuplicateGroup[];
 /** POST /api/duplicates/:id/resolve —— 保留 keepIds，其余移入回收站 */
 export interface ResolveDuplicateBody {
   keepIds: ID[];
+  /** 「全部处理」一次点下去的各组传同一个值：在「最近 5 次可撤销」里只算一次 */
+  batch?: string;
 }
 
 /** POST /api/duplicates/:id/ignore —— 标记为「不是重复」 */
@@ -545,6 +549,18 @@ export type TagSuggestionsResponse = TagSuggestion[];
 export const TAG_FILTER_MIN_SCORE = 0.5;
 /** 自定义画面的数量 / 名字 / 标签上限（标签是三组合计） */
 export const CUSTOM_THEME_LIMITS = { themes: 30, name: 12, tags: 20 } as const;
+
+/** 移除的图库文件夹保留整理结果的天数：这期间重新添加同一个文件夹能找回 */
+export const REMOVED_ROOT_KEEP_DAYS = 30;
+
+/** GET /api/tagger/promotable —— 已有建议里分数已达自动采纳阈值的（调低阈值后才会有） */
+export interface PromotableSuggestions {
+  /** 涉及的图片张数 */
+  images: number;
+  /** 建议条数 */
+  suggestions: number;
+  threshold: number;
+}
 
 // ---------------------------------------------------------------- 设置
 

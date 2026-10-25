@@ -434,6 +434,16 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     expect(json).toEqual(expect.arrayContaining([expect.objectContaining({ repo: expect.any(String), isDefault: true })]));
   });
 
+  route('GET /api/tagger/promotable', async () => {
+    const { status, json } = await call('GET', '/api/tagger/promotable');
+    expect([status, json]).toEqual([200, { images: expect.any(Number), suggestions: expect.any(Number), threshold: expect.any(Number) }]);
+  });
+
+  route('POST /api/tagger/promote', async () => {
+    const { status, json } = await call('POST', '/api/tagger/promote');
+    expect([status, json]).toMatchObject([200, mutation]);
+  });
+
   route('GET /api/settings', async () => {
     const { status, json } = await call('GET', '/api/settings');
     expect(status).toBe(200);

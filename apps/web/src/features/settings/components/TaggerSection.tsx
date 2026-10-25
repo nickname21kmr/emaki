@@ -6,6 +6,7 @@ import { Button, Field, Segmented, Switch } from '@/components/ui';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
+import { useMutate } from '@/lib/queries';
 import { useSaveSettings } from '../hooks';
 import { CommitSlider } from './CommitSlider';
 import { JobAction } from './JobAction';
@@ -171,7 +172,15 @@ export function TaggerSection({
           />
         </Field>
 
-        <Field label="自动采纳阈值" hint="达到它直接归到角色；介于两者之间的交给你在「未识别」里确认。调低后，已有建议里达标的会在保存时立即归入。">
+        <Field
+          label="自动采纳阈值"
+          hint={
+            <>
+              达到它直接归到角色；介于两者之间的交给你在「未识别」里确认。调低只影响之后的识别，已有的建议不会自动归。
+              <PromoteSuggestions threshold={tagger.autoAcceptThreshold} />
+            </>
+          }
+        >
           <CommitSlider
             label="自动采纳阈值"
             value={tagger.autoAcceptThreshold}
@@ -243,6 +252,26 @@ export function TaggerSection({
         </Field>
       </SettingsCard>
     </SettingsSection>
+  );
+}
+
+/**
+ * 调低自动采纳阈值后：已有建议里有多少张达标，用户点按钮才归到角色（toast 里可撤销）。
+ * 平时（没调低过）数量是 0，不显示
+ */
+function PromoteSuggestions({ threshold }: { threshold: number }) {
+  const { data } = useQuery({ queryKey: ['tagger', 'promotable', threshold], queryFn: api.promotableSuggestions });
+  const promote = useMutate(() => api.promoteSuggestions());
+  // 保存还没回来时查到的是旧阈值的数，不显示
+  if (!data || data.threshold !== threshold || data.images === 0) return null;
+  const n = formatCount(data.images);
+  return (
+    <span className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+      <span className="text-fg">已有建议里有 {n} 张图达到这个阈值。</span>
+      <Button size="sm" variant="secondary" loading={promote.isPending} onClick={() => promote.mutate(undefined)}>
+        把 {n} 张达标的建议归到角色
+      </Button>
+    </span>
   );
 }
 

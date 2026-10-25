@@ -47,7 +47,10 @@ function applyPatch(prev: Settings, body: UpdateSettingsBody): Settings {
  */
 export function useSaveSettings() {
   const client = useQueryClient();
-  const { mutate } = useMutate((body: UpdateSettingsBody) => api.updateSettings(body).then(() => done('已保存')));
+  const { mutate } = useMutate((body: UpdateSettingsBody) => api.updateSettings(body).then(() => done('已保存')), {
+    // 设置改了撤不回：在撤销栈里占一格，Ctrl+Z 不会越过它去撤图库里更早的操作
+    label: '改了设置',
+  });
   return useCallback(
     (body: UpdateSettingsBody) => {
       const prev = client.getQueryData<Settings>(qk.settings);

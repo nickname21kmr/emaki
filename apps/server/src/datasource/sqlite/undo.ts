@@ -20,6 +20,7 @@ export type UndoTable =
   | 'comic_folders'
   | 'character_suggestions'
   | 'pixiv_character_checks'
+  | 'character_vetoes'
   | 'exclusions'
   | 'library_roots'
   | 'duplicate_groups'

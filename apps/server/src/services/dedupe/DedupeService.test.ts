@@ -181,7 +181,7 @@ describe('DedupeService + 接口（:memory:）', () => {
     expect((await ds.listDuplicates({})).every((g) => g.setId === null)).toBe(true);
   });
 
-  it('resolve：其余移到回收站，组标为已处理，不可撤销', async () => {
+  it('resolve：其余移到回收站，组标为已处理；文件先不动，可撤销，退出时才真的移走', async () => {
     const keep = addImage('a.png', 's1', H);
     addImage('a (1).png', 's1', H);
     addImage('a - 副本.png', 's2', flip(H, 1));
@@ -189,14 +189,46 @@ describe('DedupeService + 接口（:memory:）', () => {
     const [g] = await ds.listDuplicates({});
     expect(g!.suggestedKeepId).toBe(String(keep));
     const r = await ds.resolveDuplicate(g!.id, [String(keep)]);
-    expect(r.message).toBe('已保留 1 张，2 张移到回收站（可在系统回收站还原）');
-    expect(r.undoToken).toBeNull();
-    expect(existsSync(path.join(dir, 'a.png'))).toBe(true);
-    expect(existsSync(path.join(dir, 'a (1).png'))).toBe(false);
+    expect(r.message).toBe('已保留 1 张，2 张移到回收站');
+    expect(r.undoToken).toBeTruthy();
+    expect(existsSync(path.join(dir, 'a (1).png'))).toBe(true); // 还没真的移
     expect(await ds.listDuplicates({})).toEqual([]);
     const [done] = await ds.listDuplicates({ resolved: true });
     expect(done!.images).toHaveLength(3); // 已处理的保留全部成员
     expect((await ds.getStats()).duplicateGroupCount).toBe(0);
+
+    // 撤销：组回到待处理，待移记录也没了
+    await ds.undo(r.undoToken!);
+    expect((await ds.listDuplicates({})).map((x) => x.images.length)).toEqual([3]);
+    expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM pending_trash').pluck().get()).toBe(0);
+
+    // 再处理一次，退出时移进回收站
+    await ds.resolveDuplicate(g!.id, [String(keep)]);
+    await ds.pendingTrash.flushAll();
+    expect(existsSync(path.join(dir, 'a.png'))).toBe(true);
+    expect(existsSync(path.join(dir, 'a (1).png'))).toBe(false);
+    expect(existsSync(path.join(dir, 'a - 副本.png'))).toBe(false);
+    expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM pending_trash').pluck().get()).toBe(0);
+  });
+
+  it('resolve 撤销：并到保留图上的整理一起还原', async () => {
+    const db = ds.ctx.db;
+    const a = addImage('a.png', 's1', H);
+    const b = addImage('a (1).png', 's1', H);
+    db.prepare("INSERT INTO characters (id, name, source, created_at) VALUES (2, '莫宁', 'custom', ?)").run(T);
+    db.prepare("INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, 2, 'manual', NULL, ?)").run(b, T);
+    db.prepare("UPDATE images SET favorite = 1, rating = 'questionable', rating_manual = 1 WHERE id = ?").run(b);
+    ds.dedupe.runOnce();
+    const [g] = await ds.listDuplicates({});
+    const snap = () => [
+      db.prepare('SELECT favorite, rating, rating_manual, trashed_at FROM images WHERE id IN (?, ?) ORDER BY id').all(a, b),
+      db.prepare('SELECT image_id, character_id FROM image_characters ORDER BY image_id').all(),
+    ];
+    const before = snap();
+    const r = await ds.resolveDuplicate(g!.id, [String(a)]);
+    expect((await ds.getImage(String(a)))!.characterIds).toEqual(['2']);
+    await ds.undo(r.undoToken!);
+    expect(snap()).toEqual(before);
   });
 
   it('resolve：副本上手动做的整理并到保留的图上（手动角色、收藏、原创、分级、画师、来源），识别器认的不搬', async () => {

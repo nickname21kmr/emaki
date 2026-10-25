@@ -1,4 +1,4 @@
-import type { LibraryRoot, LibraryRootMode, Rating, UpdateLibraryRootBody } from '@emaki/shared';
+import { REMOVED_ROOT_KEEP_DAYS, type LibraryRoot, type LibraryRootMode, type Rating, type UpdateLibraryRootBody } from '@emaki/shared';
 import { BookOpen, ChevronDown, FolderInput, FolderOpen, FolderSearch, FolderX, Trash, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useRef, useState, type FormEvent, type ReactNode } from 'react';
@@ -196,13 +196,15 @@ export function AddFolderForm({
 
 /**
  * 已添加的文件夹：路径、张数、上次扫描、启用开关、移除（toast 可撤销）。
- * 移除最后一个有图的文件夹会立刻跳到首次使用引导，所以先问一句（引导页里不用问）。
+ * 移除前都先问一句，说清张数、文件不动、30 天内重新添加能找回，并推荐改用停用。
+ * confirmLast：移除最后一个有图的文件夹会跳到首次使用引导，要额外提一句（引导页里不用提）。
  */
 export function RootList({ roots, className, confirmLast = true }: { roots: LibraryRoot[]; className?: string; confirmLast?: boolean }) {
   const update = useUpdateRoot();
   const remove = useRemoveRoot();
   const [asking, setAsking] = useState<LibraryRoot | null>(null);
   const total = roots.reduce((sum, r) => sum + (r.enabled ? r.imageCount : 0), 0);
+  const last = confirmLast && roots.length === 1 && (asking?.imageCount ?? 0) > 0;
   return (
     <>
       <ul className={cn('relative divide-y divide-line', className)}>
@@ -213,7 +215,7 @@ export function RootList({ roots, className, confirmLast = true }: { roots: Libr
               root={root}
               share={roots.length > 1 && total > 0 && root.enabled ? root.imageCount / total : null}
               onUpdate={(body) => update(root.id, body)}
-              onRemove={() => (confirmLast && roots.length === 1 && root.imageCount > 0 ? setAsking(root) : remove(root.id))}
+              onRemove={() => setAsking(root)}
             />
           ))}
         </AnimatePresence>
@@ -221,27 +223,45 @@ export function RootList({ roots, className, confirmLast = true }: { roots: Libr
       <Dialog
         open={asking !== null}
         onOpenChange={(o) => !o && setAsking(null)}
-        title="移除唯一的图库文件夹？"
+        title={last ? '移除唯一的图库文件夹？' : '移除这个图库文件夹？'}
         description={asking ? `${asking.path} · ${formatCount(asking.imageCount)} 张` : undefined}
-        width={440}
+        width={460}
       >
-        <p className="text-[13px] leading-relaxed text-fg-muted">
-          移除后图库就空了，会回到首次使用引导。磁盘上的文件不会删，移除后也能撤销。
-          {asking?.enabled && '只想暂时不看的话，用右边的开关停用就好。'}
-        </p>
+        <div className="space-y-2 text-[13px] leading-relaxed text-fg-muted">
+          <p>
+            磁盘上的文件不会动，只是这 {formatCount(asking?.imageCount ?? 0)} 张图不再出现在 Emaki 里。
+            角色、收藏、分级这些整理结果会保留 {REMOVED_ROOT_KEEP_DAYS} 天，这期间重新添加这个文件夹就能找回；超过 {REMOVED_ROOT_KEEP_DAYS}{' '}
+            天会清掉。
+          </p>
+          {last && <p>移除后图库就空了，会回到首次使用引导。</p>}
+          {asking?.enabled && <p className="text-fg">只是暂时不想看的话，停用更稳妥：整理结果一直保留，随时打开开关就回来。</p>}
+        </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => setAsking(null)}>
             取消
           </Button>
           <Button
-            variant="danger"
+            variant={asking?.enabled ? 'ghost' : 'danger'}
+            className={asking?.enabled ? 'text-danger' : undefined}
             onClick={() => {
               if (asking) remove(asking.id);
               setAsking(null);
             }}
           >
-            移除
+            仍然移除
           </Button>
+          {asking?.enabled && (
+            <Button
+              variant="primary"
+              icon={<FolderX />}
+              onClick={() => {
+                update(asking.id, { enabled: false });
+                setAsking(null);
+              }}
+            >
+              停用
+            </Button>
+          )}
         </DialogFooter>
       </Dialog>
     </>
