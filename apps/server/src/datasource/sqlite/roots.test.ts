@@ -171,7 +171,7 @@ describe('移除、停用后再显示：合集 id 和页码不变，重复组找
     // 扫描后已经自动查过一次重（任务链里的「需要查重」标记清掉了，下面不会顺带再查）
     expect((await ds.listJobs()).map((j) => [j.kind, j.status])).toContainEqual(['dedupe', 'done']);
     const db = ds.ctx.db;
-    ds.dedupe.runOnce();
+    await ds.dedupe.runOnce();
     const root = (await ds.getSettings()).libraryRoots[0]!.id;
     const state = () => [db.prepare('SELECT id, rel_dir FROM collections ORDER BY id').all(), db.prepare('SELECT id, collection_id, page_no FROM images ORDER BY id').all()];
     const groups = () => db.prepare('SELECT COUNT(*) FROM duplicate_groups WHERE resolved_at IS NULL').pluck().get();
@@ -179,8 +179,8 @@ describe('移除、停用后再显示：合集 id 和页码不变，重复组找
     expect(before[0]).toHaveLength(2);
     expect(groups()).toBe(1);
     // 文件夹隐藏期间跑过查重：它的未处理组在对账时被删掉，再显示后要自动找回来
-    const dedupeWhileHidden = () => {
-      ds.dedupe.runOnce();
+    const dedupeWhileHidden = async () => {
+      await ds.dedupe.runOnce();
       expect(groups()).toBe(0);
     };
     const shownAgain = async () => {
@@ -195,22 +195,22 @@ describe('移除、停用后再显示：合集 id 和页码不变，重复组找
     expect(await ds.listCollections({})).toEqual([]);
     expect(await ds.getCollection(book)).toBeNull();
     await expect(ds.updateCollection(book, { title: 'x' })).rejects.toMatchObject({ statusCode: 404 });
-    dedupeWhileHidden();
+    await dedupeWhileHidden();
     await ds.undo(rm1.undoToken!);
     await shownAgain();
 
     const off = await ds.updateLibraryRoot(root, { enabled: false });
-    dedupeWhileHidden();
+    await dedupeWhileHidden();
     await ds.undo(off.undoToken!);
     await shownAgain();
 
     await ds.updateLibraryRoot(root, { enabled: false });
-    dedupeWhileHidden();
+    await dedupeWhileHidden();
     await ds.updateLibraryRoot(root, { enabled: true });
     await shownAgain();
 
     await ds.removeLibraryRoot(root);
-    dedupeWhileHidden();
+    await dedupeWhileHidden();
     await ds.addLibraryRoot({ path: rootPath, mode: 'comic' });
     await shownAgain();
   });

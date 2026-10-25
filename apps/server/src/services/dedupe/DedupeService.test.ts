@@ -2,9 +2,11 @@ import { existsSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from 'node:f
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../../core/events.ts';
+import type { JobContext } from '../../core/jobs.ts';
 import { SqliteDataSource } from '../../datasource/sqlite/SqliteDataSource.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
 import { SET_FOLDER_MAX } from '../../datasource/sqlite/duplicates.ts';
+import { sharp } from '../image/sharpConfig.ts';
 import { buildGroups, MAX_COMPONENT, type DedupeRow } from './DedupeService.ts';
 
 const H = '3c3c3c3c3c3c3c3c'; // 32 位 1，信息量正常
@@ -30,6 +32,14 @@ const row = (o: Partial<DedupeRow> = {}): DedupeRow => {
 };
 
 describe('buildGroups', () => {
+  it('a rejected pair cannot be joined through an intermediate image', () => {
+    const a = row({ dhash: H }), b = row({ dhash: H }), c = row({ dhash: H });
+    const result = buildGroups([a, b, c], 8, undefined, {
+      same: (x, y) => !([x.id, y.id].includes(a.id) && [x.id, y.id].includes(c.id)),
+      diff: () => 0.001,
+    });
+    expect(result.groups.map((g) => g.memberIds)).toEqual([[a.id, b.id]]);
+  });
   it('同 sha → exact；dHash 接近 → similar，similarity 取最大两两距离', () => {
     const a = row({ sha256: 'x', dhash: H });
     const b = row({ sha256: 'x', dhash: H, file_name: 'a - 副本.png' });
@@ -80,11 +90,12 @@ describe('DedupeService + 接口（:memory:）', () => {
   let ds: SqliteDataSource;
   let dir: string;
   let dataDir: string;
+  let imageBytes: Buffer;
   const T = '2026-03-01T00:00:00.000Z';
 
   const addImage = (name: string, sha: string, dhash: string | null) => {
     mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
-    writeFileSync(path.join(dir, name), name);
+    writeFileSync(path.join(dir, name), imageBytes);
     return Number(
       ds.ctx.db
         .prepare(
@@ -97,6 +108,7 @@ describe('DedupeService + 接口（:memory:）', () => {
   const unresolved = () => ds.ctx.db.prepare('SELECT COUNT(*) FROM duplicate_groups WHERE resolved_at IS NULL').pluck().get();
 
   beforeEach(async () => {
+    imageBytes = await sharp({ create: { width: 64, height: 48, channels: 3, background: '#a37b51' } }).png().toBuffer();
     dir = makeTmpDir('dedupe');
     const trashImpl = async (paths: string[]) => paths.forEach((p) => unlinkSync(p)); // 假回收站
     dataDir = makeTmpDir('dedupe-data');
@@ -119,24 +131,71 @@ describe('DedupeService + 接口（:memory:）', () => {
     const a = addImage('a.png', 's1', H);
     addImage('a (1).png', 's2', flip(H, 2));
     expect((await ds.getSettings()).dedupe.lastRunAt).toBeNull();
-    expect(ds.dedupe.runOnce().reconcile).toEqual({ inserted: 1, updated: 0, deleted: 0 });
+    expect((await ds.dedupe.runOnce()).reconcile).toEqual({ inserted: 1, updated: 0, deleted: 0 });
     expect((await ds.getSettings()).dedupe.lastRunAt).toBe(T); // 跑完记下时间（T26）
-    expect(ds.dedupe.runOnce().reconcile).toEqual({ inserted: 0, updated: 1, deleted: 0 });
+    expect((await ds.dedupe.runOnce()).reconcile).toEqual({ inserted: 0, updated: 1, deleted: 0 });
     ds.ctx.db.prepare("UPDATE images SET dhash = 'f0f0aaaa0f0f5555' WHERE id = ?").run(a);
-    expect(ds.dedupe.runOnce().reconcile).toEqual({ inserted: 0, updated: 0, deleted: 1 });
+    expect((await ds.dedupe.runOnce()).reconcile).toEqual({ inserted: 0, updated: 0, deleted: 1 });
     expect(unresolved()).toBe(0);
+  });
+
+  it('caches verified pairs by original content; failed reads never become duplicate suggestions', async () => {
+    const a = addImage('a.png', 's1', H);
+    addImage('b.png', 's2', H);
+    const first = await ds.dedupe.runOnce();
+    expect(first.build.groups[0]!.comparison).toBe('pixels');
+    expect((await ds.listDuplicates({}))[0]!.comparison).toBe('pixels');
+    expect(ds.ctx.db.prepare('SELECT count(*) FROM duplicate_comparisons').pluck().get()).toBe(1);
+    expect((await ds.dedupe.runOnce()).reconcile.updated).toBe(1);
+    expect(ds.ctx.db.prepare('SELECT count(*) FROM duplicate_comparisons').pluck().get()).toBe(1);
+    // A changed original must not reuse its old pair decision.
+    ds.ctx.db.prepare("UPDATE images SET sha256 = 'changed' WHERE id = ?").run(a);
+    writeFileSync(path.join(dir, 'a.png'), 'broken');
+    const next = await ds.dedupe.runOnce();
+    expect(next.build.groups).toEqual([]);
+    expect(next.build.failedPairs).toBe(1);
+    expect(ds.ctx.db.prepare('SELECT count(*) FROM duplicate_comparisons').pluck().get()).toBe(1);
+  });
+
+  it('cancelled or yielded jobs keep the existing groups and resume from completed pair decisions', async () => {
+    addImage('a.png', 's1', H);
+    addImage('b.png', 's2', H);
+    await ds.dedupe.runOnce();
+    const before = await ds.listDuplicates({});
+    addImage('c.png', 's3', H);
+    const controller = new AbortController();
+    let shouldYield = false, requeued = false;
+    const ctx: JobContext = {
+      signal: controller.signal, setTotal() {}, setMessage() {},
+      advance: () => controller.abort(), shouldYield: () => shouldYield,
+      requeue: () => { requeued = true; }, yielded: false,
+    };
+    expect(await ds.dedupe.run(ctx)).toBe('查找重复：已取消');
+    expect(await ds.listDuplicates({})).toEqual(before);
+    const nextCtx = { ...ctx, signal: new AbortController().signal, advance: () => { shouldYield = true; } };
+    expect(await ds.dedupe.run(nextCtx)).toBe('查找重复：已让出给扫描');
+    expect(requeued).toBe(true);
+    expect(await ds.listDuplicates({})).toEqual(before);
+    expect((await ds.dedupe.runOnce()).build.groups[0]!.memberIds).toHaveLength(3);
+  });
+
+  it('does not use a known animation cover as evidence of a duplicate', async () => {
+    const a = addImage('a.png', 's1', H);
+    addImage('b.png', 's2', H);
+    ds.ctx.db.prepare('UPDATE images SET frame_count = 2 WHERE id = ?').run(a);
+    expect((await ds.dedupe.runOnce()).build.groups).toEqual([]);
   });
 
   it('ignored 组的子集不再上报', async () => {
     addImage('a.png', 's1', H);
     addImage('b.png', 's2', flip(H, 2));
     addImage('c.png', 's3', flip(H, 4));
-    ds.dedupe.runOnce();
+    await ds.dedupe.runOnce();
     const [g] = await ds.listDuplicates({});
     expect(g!.images).toHaveLength(3);
     await ds.ignoreDuplicate(g!.id);
     ds.ctx.db.prepare("UPDATE images SET dhash = 'f0f0aaaa0f0f5555' WHERE file_name = 'c.png'").run();
-    expect(ds.dedupe.runOnce().reconcile.inserted).toBe(0);
+    expect((await ds.dedupe.runOnce()).reconcile.inserted).toBe(0);
     expect(await ds.listDuplicates({})).toEqual([]);
   });
 
@@ -153,7 +212,7 @@ describe('DedupeService + 接口（:memory:）', () => {
     pair('other', 'x', other.toString(16).padStart(16, '0'));
     pair('cg', 'b', flip(H, 12));
     pair('cg', 'c', flip(H, 24)); // 和 b 近、和 a 远
-    ds.dedupe.runOnce();
+    await ds.dedupe.runOnce();
     const list = await ds.listDuplicates({});
     const folderOf = (g: (typeof list)[number]) => g.images[0]!.relPath.split('/')[0];
     const tagged = list.map((g) => [folderOf(g), g.images[0]!.relPath.split('/')[1]![0], g.setId]);
@@ -185,7 +244,7 @@ describe('DedupeService + 接口（:memory:）', () => {
     const keep = addImage('a.png', 's1', H);
     addImage('a (1).png', 's1', H);
     addImage('a - 副本.png', 's2', flip(H, 1));
-    ds.dedupe.runOnce();
+    await ds.dedupe.runOnce();
     const [g] = await ds.listDuplicates({});
     expect(g!.suggestedKeepId).toBe(String(keep));
     const r = await ds.resolveDuplicate(g!.id, [String(keep)]);
@@ -246,7 +305,7 @@ describe('DedupeService + 接口（:memory:）', () => {
     db.prepare(
       "UPDATE images SET source_site = 'pixiv', source_post_id = '98785437', source_artist = 'Killy', source_url = 'https://www.pixiv.net/artworks/98785437', source_manual = 1 WHERE id = ?",
     ).run(b);
-    ds.dedupe.runOnce();
+    await ds.dedupe.runOnce();
     const [g] = await ds.listDuplicates({});
     expect(g!.suggestedKeepId).toBe(String(a));
     await ds.resolveDuplicate(g!.id, [String(a)]);
@@ -278,7 +337,7 @@ describe('DedupeService + 接口（:memory:）', () => {
     const a = addImage('a.png', 's1', H);
     const b = addImage('a (1).png', 's1', H);
     await ds.bulkImages({ ids: [String(b)], action: { type: 'original', value: true } });
-    ds.dedupe.runOnce();
+    await ds.dedupe.runOnce();
     const [g] = await ds.listDuplicates({});
     await ds.resolveDuplicate(g!.id, [String(a)]);
     const wid = (await ds.getStats()).originalWorkId!;
@@ -298,7 +357,7 @@ describe('DedupeService + 接口（:memory:）', () => {
       "UPDATE images SET rating = 'explicit', rating_manual = 1, artist_manual = 1, source_site = 'pixiv', source_post_id = '98785437', source_url = 'https://www.pixiv.net/artworks/98785437', source_manual = 1 WHERE id = ?",
     ).run(b);
     db.prepare("INSERT INTO image_artists (image_id, artist, score) VALUES (?, 'kantoku', 1)").run(b);
-    ds.dedupe.runOnce();
+    await ds.dedupe.runOnce();
     const [g] = await ds.listDuplicates({});
     await ds.resolveDuplicate(g!.id, [String(a)]);
     expect(db.prepare('SELECT rating, favorite FROM images WHERE id = ?').get(a)).toEqual({ rating: 'general', favorite: 0 });
@@ -315,7 +374,7 @@ describe('DedupeService + 接口（:memory:）', () => {
     for (const id of [a, b, c]) auto.run(id);
     db.prepare('UPDATE images SET source_site = NULL, source_post_id = NULL, source_url = NULL, source_manual = 1 WHERE id = ?').run(b);
     db.prepare("UPDATE images SET source_site = 'twitter', source_post_id = '1234567890', source_url = 'https://x.com/someone/status/1234567890', source_manual = 1 WHERE id = ?").run(c);
-    ds.dedupe.runOnce();
+    await ds.dedupe.runOnce();
     const [g] = await ds.listDuplicates({});
     expect(g!.suggestedKeepId).toBe(String(a));
     await ds.resolveDuplicate(g!.id, [String(a)]);

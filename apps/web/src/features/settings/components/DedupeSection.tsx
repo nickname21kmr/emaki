@@ -11,10 +11,10 @@ import { SettingsCard, SettingsSection } from './SettingsSection';
 
 /** 汉明距离翻译成人话：数字本身对用户没有意义 */
 function describe(h: number): string {
-  if (h === 0) return '只找几乎逐像素相同的图';
-  if (h <= 4) return '找出同一张图的缩放、转码版本';
-  if (h <= 10) return '还包括轻微裁剪、加水印、调色的版本';
-  return '很宽松，构图相近的不同图也可能被算进来';
+  if (h === 0) return '搜索范围最小，部分缩放、压缩副本可能遗漏';
+  if (h <= 4) return '优先搜索构图非常接近的图片';
+  if (h <= 10) return '适合查找常见的缩放、压缩副本';
+  return '扩大候选范围，核对耗时也会增加';
 }
 
 export function DedupeSection({
@@ -26,26 +26,25 @@ export function DedupeSection({
 }) {
   const save = useSaveSettings();
   const [draft, setDraft] = useState<number | null>(null);
-  const shown = draft ?? dedupe.hammingThreshold;
+  const shown = draft ?? Math.min(16, dedupe.hammingThreshold);
 
   return (
-    <SettingsSection id="dedupe" description="用感知哈希比较图片，缩放、转码、轻微裁剪后的同一张图也能找出来。">
+    <SettingsSection id="dedupe" description="查找相同图片和缩放、压缩副本，并核对原图的整体与局部差异。">
       <SettingsCard>
         <Field
-          label="相似度阈值"
+          label="候选搜索范围"
           hint={
             <>
-              两张图哈希的汉明距离，越小越严格。
+              范围越大，参与原图核对的候选越多。
               <span className="mt-0.5 block text-fg">{describe(shown)}</span>
             </>
           }
         >
           <CommitSlider
-            label="相似度阈值"
-            value={dedupe.hammingThreshold}
+            label="候选搜索范围"
+            value={Math.min(16, dedupe.hammingThreshold)}
             min={0}
-            // 规格给 0–16；服务端允许到 64，已存了更大的值时放宽上限，免得被截断
-            max={Math.max(16, dedupe.hammingThreshold)}
+            max={16}
             step={1}
             ends={['严格', '宽松']}
             onDraftChange={setDraft}

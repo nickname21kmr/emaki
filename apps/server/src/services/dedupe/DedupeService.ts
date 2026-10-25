@@ -1,5 +1,5 @@
 /**
- * 查重（T16）：sha256 完全重复 + dHash 相似（MIH 近邻 + 并查集），再和库里已有的组对账。
+ * 查重：SHA256 文件重复 + dHash 候选 + Pixelmatch 原图复核，再和库里已有的组对账。
  * 分两层：buildGroups 是纯函数（输入行、输出组），reconcile 负责写库。
  */
 import type { Db } from '../../db/connection.ts';
@@ -7,7 +7,10 @@ import type { JobContext } from '../../core/jobs.ts';
 import { findSimilarPairs, parseDHash, popcount32 } from './hamming.ts';
 import { pickKeep, type KeepCandidate } from './pickKeep.ts';
 import { UnionFind } from './unionFind.ts';
-import { compareFingerprints, computeFingerprint, FINE_BITS, looksSame, type Fingerprint } from './fingerprint.ts';
+import { setImmediate } from 'node:timers/promises';
+import { toAbs } from '../fs/paths.ts';
+import { compareImages, COMPARISON_VERSION, type ImageComparison } from './compareImages.ts';
+import { ComparisonWorker, ComparisonWorkerError } from './ComparisonWorker.ts';
 
 export interface DedupeRow extends KeepCandidate {
   sha256: string;
@@ -20,6 +23,7 @@ export interface BuiltGroup {
   /** 升序 */
   memberIds: number[];
   suggestedKeepId: number;
+  comparison?: 'pixels' | 'visual';
 }
 
 export interface BuildResult {
@@ -29,6 +33,7 @@ export interface BuildResult {
   /** 没有 dHash 的代表数（还没算感知哈希） */
   missingHash: number;
   representatives: number;
+  failedPairs?: number;
 }
 
 export const MAX_COMPONENT = 30;
@@ -40,10 +45,11 @@ const distance = (a: string, b: string) => {
   return popcount32((ah ^ bh) >>> 0) + popcount32((al ^ bl) >>> 0);
 };
 
-/** 复核：候选对是不是真的像；diff 给相似度用（0 = 一样，1 = 完全不同），没有细指纹时返回 null 用粗哈希 */
+/** 复核结果；diff 只供内部排序，pixels 表示原尺寸解码像素相等 */
 export interface PairCheck {
   same(a: DedupeRow, b: DedupeRow): boolean;
   diff(a: DedupeRow, b: DedupeRow): number | null;
+  pixels?(a: DedupeRow, b: DedupeRow): boolean;
 }
 
 export interface Candidates {
@@ -106,7 +112,18 @@ export function findCandidates(rows: DedupeRow[], threshold: number): Candidates
 /** 3–4：复核候选对 → 并查集连成组 → 展开成桶里的所有图 */
 export function groupCandidates({ buckets, reps, pairs, missingHash }: Candidates, check?: PairCheck): BuildResult {
   const uf = new UnionFind(reps.length);
-  for (const [a, b] of pairs) if (!check || check.same(reps[a]!, reps[b]!)) uf.union(a, b);
+  const membersByRoot = new Map(reps.map((_, k) => [k, [k]]));
+  for (const [a, b] of pairs) {
+    const ar = uf.find(a), br = uf.find(b);
+    if (ar === br) continue;
+    const as = membersByRoot.get(ar)!, bs = membersByRoot.get(br)!;
+    // Complete-link verification: an unverified or rejected pair must not enter via a chain.
+    if (check && !as.every((x) => bs.every((y) => check.same(reps[x]!, reps[y]!)))) continue;
+    uf.union(ar, br);
+    membersByRoot.delete(ar);
+    membersByRoot.delete(br);
+    membersByRoot.set(uf.find(ar), [...as, ...bs]);
+  }
 
   // 连通分量 → 展开成桶里的所有图
   const comps = new Map<number, number[]>();
@@ -128,15 +145,17 @@ export function groupCandidates({ buckets, reps, pairs, missingHash }: Candidate
     }
     let similarity = 1;
     let kind: BuiltGroup['kind'] = 'exact';
+    let pixels = Boolean(check?.pixels);
     if (ks.length > 1) {
       kind = 'similar';
-      // 组里最不像的那一对决定相似度；有细指纹就用细的（256 位，更能区分 88% 和 98%）
+      // 最差一对的像素差异用于内部排序，不作为面向用户的相似百分比
       let max = 0;
       for (let x = 0; x < ks.length; x++)
         for (let y = x + 1; y < ks.length; y++) {
           const a = reps[ks[x]!]!;
           const b = reps[ks[y]!]!;
           max = Math.max(max, check?.diff(a, b) ?? distance(a.dhash!, b.dhash!) / 64);
+          pixels &&= Boolean(check?.pixels?.(a, b));
         }
       similarity = 1 - max;
     }
@@ -145,6 +164,7 @@ export function groupCandidates({ buckets, reps, pairs, missingHash }: Candidate
       similarity,
       memberIds: members.map((m) => m.id).sort((a, b) => a - b),
       suggestedKeepId: pickKeep(members).id,
+      ...(kind === 'similar' && check ? { comparison: pixels ? 'pixels' as const : 'visual' as const } : {}),
     });
   }
   return { groups, droppedLarge, missingHash, representatives: reps.length };
@@ -176,9 +196,9 @@ export function reconcile(db: Db, groups: BuiltGroup[], now: string): ReconcileR
     if (g.ignored) ignoredSets.push(new Set(ids));
   }
 
-  const upd = db.prepare('UPDATE duplicate_groups SET kind = ?, similarity = ?, suggested_keep_id = ? WHERE id = ?');
+  const upd = db.prepare('UPDATE duplicate_groups SET kind = ?, similarity = ?, suggested_keep_id = ?, comparison = ? WHERE id = ?');
   const insGroup = db.prepare(
-    'INSERT INTO duplicate_groups (kind, similarity, suggested_keep_id, resolved_at, ignored, created_at) VALUES (?, ?, ?, NULL, 0, ?)',
+    'INSERT INTO duplicate_groups (kind, similarity, suggested_keep_id, resolved_at, ignored, created_at, comparison) VALUES (?, ?, ?, NULL, 0, ?, ?)',
   );
   const insMember = db.prepare('INSERT INTO duplicate_members (group_id, image_id) VALUES (?, ?)');
   const matched = new Set<number>();
@@ -189,13 +209,13 @@ export function reconcile(db: Db, groups: BuiltGroup[], now: string): ReconcileR
     if (old) {
       matched.add(old.id);
       if (old.resolved_at === null && !old.ignored) {
-        upd.run(g.kind, g.similarity, g.suggestedKeepId, old.id);
+        upd.run(g.kind, g.similarity, g.suggestedKeepId, g.comparison ?? null, old.id);
         out.updated++;
       }
       continue;
     }
     if (ignoredSets.some((s) => g.memberIds.every((id) => s.has(id)))) continue;
-    const gid = Number(insGroup.run(g.kind, g.similarity, g.suggestedKeepId, now).lastInsertRowid);
+    const gid = Number(insGroup.run(g.kind, g.similarity, g.suggestedKeepId, now, g.comparison ?? null).lastInsertRowid);
     for (const id of g.memberIds) insMember.run(gid, id);
     out.inserted++;
   }
@@ -215,8 +235,6 @@ export interface DedupeServiceDeps {
   getThreshold: () => number;
   /** 写库后让缓存失效（stats 的 duplicateGroupCount） */
   onChanged?: () => void;
-  /** 240 宽缩略图的路径（细指纹从它算）；不给就只用粗哈希 */
-  thumbFile?: (sha256: string) => string;
   /** 成功跑完（没被取消）：记下时间，写进 settings.dedupe.lastRunAt */
   onFinished?: (atIso: string) => void;
 }
@@ -230,53 +248,55 @@ export class DedupeService {
       .all() as DedupeRow[];
   }
 
-  /**
-   * 候选对涉及的图的细指纹：先从 image_fingerprints 读，没有的从 240 缩略图算出来存进去。
-   * 第一次要算的可能有上万张（约一两分钟），之后只算新图。有扫描在排队时返回 null 让出。
-   * 缩略图还没生成、读失败的不算，复核时当作通过（退回只看粗哈希）。
-   */
-  private async fingerprints(c: Candidates, ctx: JobContext): Promise<Map<string, Fingerprint> | null> {
-    const shas = new Set<string>();
-    for (const [a, b] of c.pairs) {
-      shas.add(c.reps[a]!.sha256);
-      shas.add(c.reps[b]!.sha256);
-    }
-    const out = new Map<string, Fingerprint>();
-    const { db } = this.d;
-    const saved = db
-      .prepare('SELECT sha256, fine, color FROM image_fingerprints WHERE sha256 IN (SELECT value FROM json_each(?))')
-      .all(JSON.stringify([...shas])) as { sha256: string; fine: Buffer; color: Buffer }[];
-    for (const r of saved) out.set(r.sha256, { fine: r.fine, color: r.color });
-    const todo = [...shas].filter((s) => !out.has(s));
-    if (!todo.length || !this.d.thumbFile) return out;
-    const ins = db.prepare('INSERT OR REPLACE INTO image_fingerprints (sha256, fine, color) VALUES (?, ?, ?)');
-    for (let i = 0; i < todo.length; i += 16) {
-      if (ctx.signal.aborted) return out;
-      if (ctx.shouldYield()) return null;
-      ctx.setMessage(`查找重复：复核细节 ${i} / ${todo.length}`);
-      const got = await Promise.all(
-        todo.slice(i, i + 16).map(async (sha) => {
-          try {
-            return [sha, await computeFingerprint(this.d.thumbFile!(sha))] as const;
-          } catch {
-            return null;
-          }
-        }),
-      );
-      db.transaction(() => {
-        for (const g of got) {
-          if (!g) continue;
-          ins.run(g[0], g[1].fine, g[1].color);
-          out.set(g[0], g[1]);
+  /** Fine verification is shared by jobs and the standalone runner; failures never fall back to dHash. */
+  private async build(ctx?: JobContext, compare = compareImages): Promise<BuildResult | null> {
+    const cand = findCandidates(this.loadRows(), this.d.getThreshold());
+    ctx?.setTotal(cand.pairs.length);
+    const sources = this.d.db.prepare(
+      'SELECT i.id, i.rel_path, i.frame_count, r.path AS root_path FROM v_counted_images i JOIN library_roots r ON r.id = i.root_id',
+    ).all() as { id: number; rel_path: string; frame_count: number | null; root_path: string }[];
+    const files = new Map(sources.map((r) => [r.id, toAbs(r.root_path, r.rel_path)]));
+    const animated = new Set(sources.filter((r) => (r.frame_count ?? 1) > 1).map((r) => r.id));
+    const pairKey = (a: DedupeRow, b: DedupeRow) => [a.sha256, b.sha256].sort().join(':');
+    const decisions = new Map<string, ImageComparison>();
+    const get = this.d.db.prepare('SELECT result FROM duplicate_comparisons WHERE sha_a = ? AND sha_b = ? AND version = ?');
+    const put = this.d.db.prepare('INSERT OR REPLACE INTO duplicate_comparisons (sha_a, sha_b, version, result) VALUES (?, ?, ?, ?)');
+    let failedPairs = 0;
+    for (let i = 0; i < cand.pairs.length; i++) {
+      if (ctx?.signal.aborted || ctx?.shouldYield()) return null;
+      const [ai, bi] = cand.pairs[i]!;
+      const a = cand.reps[ai]!, b = cand.reps[bi]!;
+      if (animated.has(a.id) || animated.has(b.id)) {
+        ctx?.advance(1);
+        continue;
+      }
+      const [sa, sb] = [a.sha256, b.sha256].sort() as [string, string];
+      const cached = get.get(sa, sb, COMPARISON_VERSION) as { result: string } | undefined;
+      if (cached) decisions.set(pairKey(a, b), JSON.parse(cached.result) as ImageComparison);
+      else {
+        try {
+          const result = await compare(files.get(a.id)!, files.get(b.id)!);
+          decisions.set(pairKey(a, b), result);
+          put.run(sa, sb, COMPARISON_VERSION, JSON.stringify(result));
+        } catch (error) {
+          if (error instanceof ComparisonWorkerError) throw error;
+          // Keep unreadable pairs out of deletion suggestions; retry them on the next run.
+          failedPairs++;
         }
-      })();
+      }
+      ctx?.advance(1, `查找重复：核对图片 ${i + 1} / ${cand.pairs.length}`);
+      if (i % 16 === 0) await setImmediate();
     }
-    return out;
+    const result = (a: DedupeRow, b: DedupeRow) => decisions.get(pairKey(a, b));
+    const build = groupCandidates(cand, {
+      same: (a, b) => Boolean(result(a, b)?.match),
+      diff: (a, b) => result(a, b)?.differentFraction ?? 1,
+      pixels: (a, b) => result(a, b)?.match === 'pixels',
+    });
+    return { ...build, failedPairs };
   }
 
-  /** 不依赖任务队列的版本（脚本和测试用） */
-  runOnce(): { build: BuildResult; reconcile: ReconcileResult; message: string } {
-    const build = buildGroups(this.loadRows(), this.d.getThreshold());
+  private finish(build: BuildResult) {
     const at = new Date(this.d.clock()).toISOString();
     const r = this.d.db.transaction(() => reconcile(this.d.db, build.groups, at))();
     this.d.onFinished?.(at);
@@ -284,44 +304,39 @@ export class DedupeService {
     return { build, reconcile: r, message: summarize(build) };
   }
 
+  /** Standalone scripts/tests use the same verifier and persistent pair cache. */
+  async runOnce(): Promise<{ build: BuildResult; reconcile: ReconcileResult; message: string }> {
+    return this.finish((await this.build())!);
+  }
+
   async run(ctx: JobContext): Promise<string> {
+    if (ctx.signal.aborted) return '查找重复：已取消';
     if (ctx.shouldYield()) {
       ctx.requeue();
       return '查找重复：已让出给扫描';
     }
-    const rows = this.loadRows();
-    ctx.setTotal(rows.length);
-    const cand = findCandidates(rows, this.d.getThreshold());
-    ctx.advance(rows.length);
-    const fps = await this.fingerprints(cand, ctx);
-    if (!fps) {
-      ctx.requeue(); // 算到一半有扫描在排队：已经算好的存进库了，下次接着算
-      return '查找重复：已让出给扫描';
+    const worker = new ComparisonWorker();
+    const abort = () => { void worker.close(); };
+    ctx.signal.addEventListener('abort', abort, { once: true });
+    try {
+      const build = await this.build(ctx, worker.compare);
+      if (ctx.signal.aborted) return '查找重复：已取消';
+      if (!build) {
+        ctx.requeue();
+        return '查找重复：已让出给扫描';
+      }
+      return this.finish(build).message;
+    } finally {
+      ctx.signal.removeEventListener('abort', abort);
+      await worker.close();
     }
-    if (ctx.signal.aborted) return '查找重复：已取消';
-    const build = groupCandidates(cand, {
-      same: (a, b) => {
-        const fa = fps.get(a.sha256);
-        const fb = fps.get(b.sha256);
-        return !fa || !fb || looksSame(fa, fb);
-      },
-      diff: (a, b) => {
-        const fa = fps.get(a.sha256);
-        const fb = fps.get(b.sha256);
-        return fa && fb ? compareFingerprints(fa, fb).fd / FINE_BITS : null;
-      },
-    });
-    const at = new Date(this.d.clock()).toISOString();
-    this.d.db.transaction(() => reconcile(this.d.db, build.groups, at))();
-    this.d.onFinished?.(at);
-    this.d.onChanged?.();
-    return summarize(build);
   }
 }
 
 export function summarize(b: BuildResult): string {
   const exact = b.groups.filter((g) => g.kind === 'exact').length;
   const parts = [`查找重复：${b.groups.length} 组（完全重复 ${exact}，相似 ${b.groups.length - exact}）`];
+  if (b.failedPairs) parts.push(`${b.failedPairs} 对图片读取失败，稍后可重试`);
   if (b.missingHash) parts.push(`${b.missingHash} 张还没有感知哈希`);
   if (b.droppedLarge) parts.push(`${b.droppedLarge} 个过大的相似簇已忽略`);
   return parts.join(' · ');

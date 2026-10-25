@@ -436,7 +436,6 @@ export class SqliteDataSource implements DataSource {
       db,
       clock: this.ctx.clock,
       getThreshold: () => readSettings(db).dedupe.hammingThreshold,
-      thumbFile: (sha) => thumbPath(path.join(dataDir, 'thumbs', 'v1'), sha, 240),
       onChanged: () => this.ctx.invalidate('all'),
       onFinished: (at) => patchSettingsInternal(db, 'dedupe', { lastRunAt: at }),
     });
