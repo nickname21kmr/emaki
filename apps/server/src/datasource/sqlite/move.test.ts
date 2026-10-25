@@ -161,4 +161,95 @@ describe('移动到文件夹（真的移动文件）', () => {
     ds.ctx.db.prepare('UPDATE library_roots SET enabled = 0 WHERE id = 2').run();
     await expect(ds.moveImages({ ids: ['1'], rootId: '2', dir: '' })).rejects.toThrow('停用');
   });
+
+  it('预览：数出会移的图、同时属于别的角色的张数；提交 ids 后只移确认过的这些', async () => {
+    ds.ctx.db.prepare("INSERT INTO characters (id, name, source, created_at) VALUES (8, '早濑优香', 'custom', 'x')").run();
+    ds.ctx.db.prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (1, 8, 'manual', 'x')").run();
+    const p = await ds.previewMove({ characterId: '7', rootId: '1', dir: 'x' });
+    expect(p).toEqual({ ids: ['3'], alreadyThere: 2, inCollection: 1, otherCharacters: 0 });
+    const p2 = await ds.previewMove({ characterId: '7', rootId: '1', dir: '未花' });
+    expect(p2).toEqual({ ids: ['1', '2', '3'], alreadyThere: 0, inCollection: 1, otherCharacters: 1 });
+    // 预览之后角色又多了一张：只移对话框里确认过的
+    file(A(), 'x/late.png');
+    addImage(5, 1, 'x/late.png', { character: 7 });
+    const r = await ds.moveImages({ ids: p2.ids, rootId: '1', dir: '未花' });
+    expect(r.message).toBe(`已移动 3 张到 ${A()}/未花`);
+    expect(rowOf(5)).toEqual({ root_id: 1, rel_path: 'x/late.png', file_name: 'late.png' });
+    // 选中的图：两个及以上角色的算「同时属于别的角色」
+    expect(await ds.previewMove({ ids: ['1', '5'], rootId: '2', dir: '' })).toMatchObject({ otherCharacters: 1 });
+  });
+});
+
+/** 移动记录存在库里：重启后还能在「最近的移动」里移回原处，移不回的逐张说明 */
+describe('移回原处（跨重启）', () => {
+  let dir: string;
+  let ds: SqliteDataSource;
+  const A = () => path.join(dir, 'A').replace(/\\/g, '/');
+  const dataDir = () => path.join(dir, 'data');
+  const open = () => SqliteDataSource.open(new EventBus(), dataDir(), { autoJobs: false, importDict: false });
+  const rowOf = (id: number) => ds.ctx.db.prepare('SELECT root_id, rel_path FROM images WHERE id = ?').get(id);
+
+  beforeEach(async () => {
+    dir = makeTmpDir('moveback');
+    ds = await open();
+    const db = ds.ctx.db;
+    db.prepare('INSERT INTO library_roots (id, path) VALUES (1, ?)').run(A());
+    for (const [id, rel] of [[1, 'x/a.png'], [2, 'x/b.png'], [3, 'x/c.png']] as const) {
+      mkdirSync(path.join(A(), 'x'), { recursive: true });
+      writeFileSync(path.join(A(), rel), rel);
+      db.prepare(
+        `INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
+         VALUES (?, 1, ?, ?, 1, 1, 1, 'png', ?, 'x', 'x')`,
+      ).run(id, rel, rel.split('/').pop(), `s${id}`);
+    }
+    ds.ctx.invalidate();
+  });
+  afterEach(async () => {
+    await ds.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('重启后移回；原位置被占的跳过并说明，腾出来后再移回剩下的', async () => {
+    const r = await ds.moveImages({ ids: ['1', '2'], rootId: '1', dir: 'Z' });
+    expect(r.undoToken).toEqual(expect.any(String));
+    await ds.close();
+    ds = await open();
+    // 撤销栈随重启清空了，但记录还在
+    expect(await ds.undoStatus([r.undoToken!])).toEqual({ [r.undoToken!]: 'expired' });
+    const [entry] = await ds.listChanges('move');
+    expect(entry).toMatchObject({ kind: 'move', count: 2, revertable: true, summary: `2 张移到 ${A()}/Z` });
+
+    writeFileSync(path.join(A(), 'x/b.png'), '别的文件');
+    const back = await ds.revertChange(entry!.id);
+    expect(back).toEqual({ ok: true, message: '移回了 1 张；1 张没能移回：b.png（原位置已经有同名文件）', undoToken: null });
+    expect(rowOf(1)).toEqual({ root_id: 1, rel_path: 'x/a.png' });
+    expect(existsSync(path.join(A(), 'x/a.png'))).toBe(true);
+    expect(rowOf(2)).toEqual({ root_id: 1, rel_path: 'Z/b.png' });
+    expect((await ds.listChanges('move'))[0]).toMatchObject({ count: 1, revertable: true, note: '没能移回：b.png（原位置已经有同名文件）' });
+
+    rmSync(path.join(A(), 'x/b.png'));
+    expect((await ds.revertChange(entry!.id)).message).toBe('已把 1 张移回原处');
+    expect(rowOf(2)).toEqual({ root_id: 1, rel_path: 'x/b.png' });
+    expect(await ds.listChanges('move')).toEqual([expect.objectContaining({ revertable: false, count: 0, revertedAt: expect.any(String), note: null })]);
+    await expect(ds.revertChange(entry!.id)).rejects.toThrow('已经撤回');
+  });
+
+  it('文件被删了、之后又移动过：一张都移不回时报错并逐张说明', async () => {
+    await ds.moveImages({ ids: ['1', '2'], rootId: '1', dir: 'Z' });
+    rmSync(path.join(A(), 'Z/a.png'));
+    await ds.moveImages({ ids: ['2'], rootId: '1', dir: 'W' });
+    const entry = (await ds.listChanges('move')).find((e) => e.summary.endsWith('/Z'))!;
+    expect(entry.count).toBe(1);
+    await expect(ds.revertChange(entry.id)).rejects.toThrow('移回了 0 张，2 张没能移回：b.png（之后又移动或改过名）、a.png（文件不在了）');
+  });
+
+  it('toast 里的撤销照样能用；在列表里移回后它就失效', async () => {
+    const r = await ds.moveImages({ ids: ['3'], rootId: '1', dir: 'Z' });
+    await ds.undo(r.undoToken!);
+    expect(rowOf(3)).toEqual({ root_id: 1, rel_path: 'x/c.png' });
+    expect((await ds.listChanges('move'))[0]).toMatchObject({ revertable: false });
+    const r2 = await ds.moveImages({ ids: ['3'], rootId: '1', dir: 'Z' });
+    await ds.revertChange((await ds.listChanges('move'))[0]!.id);
+    await expect(ds.undo(r2.undoToken!)).rejects.toThrow('已经在「最近的移动」里移回原处了');
+  });
 });

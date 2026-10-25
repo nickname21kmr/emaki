@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Button, EmptyState } from '@/components/ui';
 import { AddFolderDialog } from './AddFolderDialog';
 import { JobAction } from './JobAction';
+import { RecentChanges } from './RecentChanges';
 import { RootList } from './LibraryRootsEditor';
 import { SettingsCard, SettingsSection } from './SettingsSection';
 
@@ -41,7 +42,10 @@ export function LibrarySection({ roots }: { roots: LibraryRoot[] }) {
             className="py-12"
           />
         ) : (
-          <RootList roots={roots} />
+          <>
+            <RootList roots={roots} />
+            <RecentChanges group="move" />
+          </>
         )}
       </SettingsCard>
       <AddFolderDialog open={adding} onOpenChange={setAdding} roots={roots} />

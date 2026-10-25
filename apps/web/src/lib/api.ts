@@ -52,6 +52,10 @@ import type {
   UnrecognizedSummaryQuery,
   HealthResponse,
   MoveImagesBody,
+  MovePreview,
+  ChangeEntry,
+  ChangeGroup,
+  SourceModePreview,
   NetworkCheckResponse,
   PickFolderResponse,
   ListWorksQuery,
@@ -216,6 +220,14 @@ export const api = {
   pickFolder: () => post<PickFolderResponse>('/system/pick-folder'),
   /** 移到图库里的某个文件夹（磁盘上真的移动），可撤销 */
   moveImages: (body: MoveImagesBody) => post<MutationResult>('/images/move', body),
+  /** 移动前先数：服务端会移哪些图（按角色移动时拿这里的 ids 再提交） */
+  previewMove: (body: MoveImagesBody) => post<MovePreview>('/images/move/preview', body),
+  /** 切换 Pixiv 投稿号识别方式：先数影响，再切换（可撤销） */
+  previewSourceMode: (mode: 'strict' | 'broad') => get<SourceModePreview>(`/settings/source-mode?mode=${mode}`),
+  setSourceMode: (mode: 'strict' | 'broad') => post<MutationResult>('/settings/source-mode', { mode }),
+  /** 最近的改动（自动关联、Pixiv 补充 / 移动到文件夹），重启后也能撤回 */
+  changes: (group: ChangeGroup) => get<ChangeEntry[]>(`/changes?group=${group}`),
+  revertChange: (id: ID) => post<MutationResult>(`/changes/${encodeURIComponent(id)}/revert`),
   /** 连一下 Danbooru、Hugging Face 和国内镜像，排查同步失败 */
   checkNetwork: () => post<NetworkCheckResponse>('/system/network-check'),
 };

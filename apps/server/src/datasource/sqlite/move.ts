@@ -130,29 +130,38 @@ export function moveImageFiles(db: Db, rows: MoveRow[], dest: { rootId: number; 
   return out;
 }
 
-/** 撤销：按原路移回。记录或文件已经变了、原位置被占了的跳过 */
-export function moveBack(db: Db, moved: Moved[]): { restored: number; failed: string[] } {
+export interface MoveBackFailure {
+  id: number;
+  name: string;
+  reason: string;
+}
+
+/** 撤销：按原路移回。记录或文件已经变了、原位置被占了的跳过，每张记下原因 */
+export function moveBack(db: Db, moved: Moved[]): { restored: number; restoredIds: number[]; failed: MoveBackFailure[] } {
   const current = db.prepare('SELECT root_id, rel_path FROM images WHERE id = ?');
+  const rootAlive = db.prepare('SELECT path FROM library_roots WHERE id = ? AND removed_at IS NULL').pluck();
   const update = db.prepare('UPDATE images SET root_id = ?, rel_path = ?, file_name = ? WHERE id = ?');
-  let restored = 0;
-  const failed: string[] = [];
+  const restoredIds: number[] = [];
+  const failed: MoveBackFailure[] = [];
   for (const m of [...moved].reverse()) {
     const row = current.get(m.id) as { root_id: number; rel_path: string } | undefined;
     const src = toAbs(m.to.rootPath, m.to.rel);
     const dst = toAbs(m.from.rootPath, m.from.rel);
-    if (!row || row.root_id !== m.to.rootId || row.rel_path !== m.to.rel || !existsSync(src) || existsSync(dst)) {
-      failed.push(m.to.name);
-      continue;
-    }
+    const fail = (reason: string) => failed.push({ id: m.id, name: m.to.name, reason });
+    if (!row) { fail('图已经不在库里了'); continue; }
+    if (row.root_id !== m.to.rootId || row.rel_path !== m.to.rel) { fail('之后又移动或改过名'); continue; }
+    if (rootAlive.get(m.from.rootId) === undefined) { fail('原来的图库文件夹已经移除'); continue; }
+    if (!existsSync(src)) { fail('文件不在了'); continue; }
+    if (existsSync(dst)) { fail('原位置已经有同名文件'); continue; }
     try {
       mkdirSync(path.dirname(dst), { recursive: true });
       moveFile(src, dst);
-    } catch {
-      failed.push(m.to.name);
+    } catch (err) {
+      fail(`移动失败：${(err as NodeJS.ErrnoException).code ?? (err as Error).message}`);
       continue;
     }
     update.run(m.from.rootId, m.from.rel, m.from.name, m.id);
-    restored++;
+    restoredIds.push(m.id);
   }
-  return { restored, failed };
+  return { restored: restoredIds.length, restoredIds, failed };
 }

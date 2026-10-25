@@ -57,6 +57,10 @@ import type {
   UpdateImageBody,
   UpdateSettingsBody,
   Work,
+  ChangeEntry,
+  ChangeGroup,
+  MovePreview,
+  SourceModePreview,
 } from '@emaki/shared';
 
 /** 图片文件响应：要么直接给内容（mock 的 SVG），要么给磁盘路径让 fastify 流式发送。 */
@@ -119,6 +123,8 @@ export interface DataSource {
   bulkImages(body: BulkImagesBody): Promise<MutationResult>;
   /** 移到图库里的某个文件夹（真的移动文件），可撤销 */
   moveImages(body: MoveImagesBody): Promise<MutationResult>;
+  /** 移动前先数：会移哪些图、几张已经在那里、几张同时属于别的角色（只读） */
+  previewMove(body: MoveImagesBody): Promise<MovePreview>;
   getThumbnail(id: ID, width: ThumbWidth): Promise<FileResponse | null>;
   getOriginal(id: ID): Promise<FileResponse | null>;
   revealImage(id: ID): Promise<void>;
@@ -152,6 +158,10 @@ export interface DataSource {
   // 设置
   getSettings(): Promise<Settings>;
   updateSettings(body: UpdateSettingsBody): Promise<Settings>;
+  /** 切换 Pixiv 投稿号识别方式前先数影响（只读） */
+  previewSourceMode(mode: 'strict' | 'broad'): Promise<SourceModePreview>;
+  /** 切换 Pixiv 投稿号识别方式：报告影响了多少张，可撤销 */
+  setSourceMode(mode: 'strict' | 'broad'): Promise<MutationResult>;
   /** 已有建议里分数达到自动采纳阈值的（调低阈值后才会有；保存设置时不自动归） */
   promotableSuggestions(): Promise<PromotableSuggestions>;
   /** 把达标的建议归到角色，可撤销 */
@@ -164,6 +174,10 @@ export interface DataSource {
   listJobs(): Promise<Job[]>;
   startJob(kind: JobKind, options?: Pick<StartJobBody, 'refreshPixiv'>): Promise<Job>;
   cancelJob(id: ID): Promise<void>;
+
+  // 最近的改动（自动关联、Pixiv 补充、移动到文件夹），重启后也能撤回
+  listChanges(group: ChangeGroup): Promise<ChangeEntry[]>;
+  revertChange(id: ID): Promise<MutationResult>;
 
   // 撤销
   undo(token: string): Promise<MutationResult>;

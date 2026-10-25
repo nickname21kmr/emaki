@@ -10,6 +10,7 @@ import { isOriginalArtwork, PixivAccessError, PixivClient, PixivPostError } from
 import { createPixivMatcher, type PixivMatcher } from './match.ts';
 import type { PixivDiscover } from './discovery.ts';
 import { cachedArtwork, cacheArtwork } from './cache.ts';
+import { recordChange, type PixivPayload } from '../../datasource/sqlite/changeLog.ts';
 
 // Pixiv 也能认出动图的角色：动图不进未识别，但这里一起查。
 // 漫画页在设置关掉「未识别里也列出漫画页」时不查（QUEUE_KINDS_SQL）
@@ -116,6 +117,9 @@ export async function syncPixivCharacters(
   const clearPixivSuggestions = db.prepare("DELETE FROM character_suggestions WHERE image_id=? AND source='pixiv'");
   const vetoed = db.prepare('SELECT 1 FROM character_vetoes WHERE image_id=? AND character_id=?').pluck();
   const liveCustom = db.prepare('SELECT 1 FROM characters WHERE id=? AND danbooru_tag IS NULL');
+  // 这一轮加的关联和原创标记：结束（包括让出、出错）时记成一条「自动改动」，设置里能撤回
+  const round: PixivPayload = { links: [], originals: [] };
+  try {
   for (let n = 0; n < posts.length; n++) {
     job.signal.throwIfAborted();
     const post = posts[n]!;
@@ -193,6 +197,7 @@ export async function syncPixivCharacters(
     const noMatch = !result.tags.length && !isOriginal;
     const outcome = isOriginal ? 'original' : noMatch ? 'unmatched' : result.automatic ? 'linked' : 'suggested';
     const ids: number[] = [];
+    const added: PixivPayload = { links: [], originals: [] };
     db.transaction(() => {
       const rows = current.all({...scopeParams,postId:post.id}) as { id: number }[];
       const now = new Date(ctx.clock()).toISOString();
@@ -208,7 +213,8 @@ export async function syncPixivCharacters(
         if (isOriginal) {
           const work = catalog.ensureWork('original', now);
           db.prepare('UPDATE images SET original_at=? WHERE id=?').run(now,row.id);
-          db.prepare('INSERT OR IGNORE INTO image_copyrights(image_id,work_id,score) VALUES (?,?,NULL)').run(row.id,work.id);
+          const cw = db.prepare('INSERT OR IGNORE INTO image_copyrights(image_id,work_id,score) VALUES (?,?,NULL)').run(row.id,work.id).changes;
+          added.originals.push([row.id, work.id, now, cw ? 1 : 0]);
           original++;
           ids.push(row.id);
         }
@@ -218,7 +224,9 @@ export async function syncPixivCharacters(
           if (known !== null && vetoed.get(row.id, known) !== undefined) continue;
           if (result.automatic) {
             const character = catalog.ensureCharacter(tag, now);
-            linkChanges += insert.run(row.id, character.id, now).changes;
+            const c = insert.run(row.id, character.id, now).changes;
+            if (c) added.links.push([row.id, character.id, now]);
+            linkChanges += c;
             db.prepare('DELETE FROM character_suggestions WHERE image_id=? AND danbooru_tag=?').run(row.id, tag);
           } else {
             const existing = catalog.resolveCharacterId(tag);
@@ -235,9 +243,34 @@ export async function syncPixivCharacters(
       }
       if (ids.length) applyExclusionRules(ctx, { imageIds: ids });
     })();
+    round.links.push(...added.links);
+    round.originals.push(...added.originals);
     if (ids.length) ctx.touch();
     if (noMatch) unmatched++;
     job.advance(1, summary());
   }
+  } finally {
+    recordPixivRound(ctx, round);
+  }
   return summary();
+}
+
+/** 一轮 Pixiv 补充加了关联或原创标记就记一条，什么都没加不记 */
+function recordPixivRound(ctx: SqliteContext, round: PixivPayload): void {
+  if (!round.links.length && !round.originals.length) return;
+  const images = new Set([...round.links.map((l) => l[0]), ...round.originals.map((o) => o[0])]).size;
+  const chars = [...new Set(round.links.map((l) => l[1]))];
+  const names = ctx.db
+    .prepare('SELECT name FROM characters WHERE id IN (SELECT value FROM json_each(?)) ORDER BY name LIMIT 3')
+    .pluck()
+    .all(JSON.stringify(chars)) as string[];
+  const linkedImages = new Set(round.links.map((l) => l[0])).size;
+  const parts = [
+    round.links.length && `给 ${linkedImages} 张图加了角色（${names.join('、')}${chars.length > 3 ? ` 等 ${chars.length} 个` : ''}）`,
+    round.originals.length && `${round.originals.length} 张标为原创`,
+  ].filter(Boolean);
+  recordChange(ctx, 'pixiv-sync', `Pixiv 补充：${parts.join('，')}`, round, {
+    count: images,
+    hint: `去掉这轮 Pixiv 补充加上的角色和原创标记（${images} 张图）。`,
+  });
 }

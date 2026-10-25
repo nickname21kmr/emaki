@@ -29,7 +29,8 @@ export type UndoTable =
   | 'custom_character_matches'
   | 'collections'
   | 'collection_characters'
-  | 'collection_works';
+  | 'collection_works'
+  | 'change_log';
 
 type Row = Record<string, unknown>;
 type Op =

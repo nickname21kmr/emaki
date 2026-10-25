@@ -60,12 +60,16 @@ import type {
   Rating,
   Work,
   PromotableSuggestions,
+  ChangeEntry,
+  ChangeGroup,
+  MovePreview,
+  SourceModePreview,
 } from '@emaki/shared';
 import { REMOVED_ROOT_KEEP_DAYS } from '@emaki/shared';
 import { access, mkdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { EventBus } from '../../core/events.ts';
-import { JobQueue } from '../../core/jobs.ts';
+import { JobQueue, type JobContext } from '../../core/jobs.ts';
 import { done, UndoStack } from '../../core/undo.ts';
 import { closeDatabase, openDatabase, transact, type Db } from '../../db/connection.ts';
 import { migrate } from '../../db/migrate.ts';
@@ -74,14 +78,16 @@ import { SoftCache } from './softCache.ts';
 import { consolidateCharacterTags, consolidateWorkTags } from './consolidate.ts';
 import { BadRequestError, ConflictError, NeedsConfirmError, NotFoundError, NotImplementedError } from '../../http/errors.ts';
 import type { DataSource, FileResponse } from '../DataSource.ts';
-import { toAbs } from '../../services/fs/paths.ts';
+import { parentRel, toAbs } from '../../services/fs/paths.ts';
 import { revealInFileManager } from '../../services/fs/reveal.ts';
 import { ThumbnailService, type ThumbRow } from '../../services/image/ThumbnailService.ts';
 import { thumbPath } from '../../services/image/pixels.ts';
 import { Pipeline } from '../../services/pipeline.ts';
 import { Scanner } from '../../services/scan/Scanner.ts';
 import { ScanRequests } from '../../services/scan/ScanRequests.ts';
-import { backfillSources } from '../../services/source/backfill.ts';
+import { applySourceChanges, backfillSources, diffSources, markSourcesCurrent, type SourceChange } from '../../services/source/backfill.ts';
+import { recomputeCustomMatches } from '../../services/danbooru/matcher.ts';
+import { ChangeLog, recordChange, type MovePayload } from './changeLog.ts';
 import { htmlAnimationCache, readHtmlAnimation } from '../../services/image/htmlAnimation.ts';
 import { sha256Buffer } from '../../services/fs/hash.ts';
 import { backfillClassification } from '../../services/classify/backfill.ts';
@@ -126,9 +132,9 @@ import { CharacterMutations } from './characters.ts';
 import { UnrecognizedQueries } from './unrecognized.ts';
 import { createContext } from './context.ts';
 import { Derived } from './derived.ts';
-import { applyExclusionRules, applyExclusionRulesTracked, ExclusionQueries, revertNewlyExcluded, type NewlyExcluded } from './exclusions.ts';
+import { applyExclusionRules, applyExclusionRulesTracked, ExclusionQueries, type NewlyExcluded } from './exclusions.ts';
 import { LibraryQueries } from './library.ts';
-import { moveBack, moveImageFiles, normalizeSubdir, type MoveRow } from './move.ts';
+import { moveImageFiles, normalizeSubdir, type MoveRow } from './move.ts';
 import { importImages } from './importImages.ts';
 import { replaceImage } from './replaceImage.ts';
 import { artistNames, imageArtists, linkGroups, listArtists as listArtistsQuery, tagNames } from './artists.ts';
@@ -195,7 +201,8 @@ export class SqliteDataSource implements DataSource {
     if (refreshPlannerStats(db, { skipImageTags: true })) console.log('[db] 行数变化较大，已重新采样查询统计');
     const ds = new SqliteDataSource(db, bus, dataDir, opts);
     ds.purgeRemovedRoots();
-    backfillSources(db); // 来源解析规则升级后重算
+    // 来源解析规则升级后重算；投稿号变了的重新登记 Pixiv 补充
+    backfillSources(db, (changes) => ds.requeuePixivAfterSourceChange(changes));
     // 内容类型 / 主题 / 质量分（T27）：规则版本过期的行在 HTTP 监听前同步重算；EMAKI_CLASSIFY=0 跳过（全部按插画统计，保持旧值）
     if (process.env.EMAKI_CLASSIFY !== '0') {
       const r = backfillClassification(db);
@@ -375,6 +382,8 @@ export class SqliteDataSource implements DataSource {
   private readonly library: LibraryQueries;
   private readonly collectionQueries: CollectionQueries;
   private readonly exclusions: ExclusionQueries;
+  /** 最近的改动：自动关联、Pixiv 补充、移动到文件夹（重启后也能撤回） */
+  private readonly changes: ChangeLog;
 
   protected constructor(db: Db, bus: EventBus, dataDir: string, opts: SqliteOpenOptions) {
     this.importTrashImpl = opts.trashImpl;
@@ -417,6 +426,10 @@ export class SqliteDataSource implements DataSource {
     this.unrecognized = new UnrecognizedQueries(this.ctx, () => this.makeCatalog().catalog, softMs);
     this.characters = new CharacterMutations(this.ctx, this.derived, () => this.danbooru, () => this.makeCatalog().catalog);
     this.exclusions = new ExclusionQueries(this.ctx, this.collectionsHook);
+    this.changes = new ChangeLog(this.ctx, {
+      collectionsHook: this.collectionsHook,
+      recomputeCustomMatches: (ids) => recomputeCustomMatches(db, this.danbooru, ids),
+    });
     this.duplicates = new DuplicateQueries(this.ctx, this.pendingTrash, this.collectionsHook);
     this.searchQueries = new SearchQueries(db, this.derived);
     this.dedupe = new DedupeService({
@@ -813,13 +826,14 @@ export class SqliteDataSource implements DataSource {
     return r;
   }
 
-  async moveImages(body: MoveImagesBody): Promise<MutationResult> {
+  /** 移动要处理的图：按角色时是这个角色现在可见的图，否则是给的 ids */
+  private moveRows(body: MoveImagesBody) {
     const root = this.requireRoot(body.rootId);
     if (!root.enabled) throw new BadRequestError('这个图库文件夹停用了，先启用再移动');
     const dir = normalizeSubdir(body.dir);
     const cols = `i.id, i.root_id, i.rel_path, i.file_name, i.collection_id, i.tagged_at, i.retag, ${IN_COMIC('i')} AS in_comic, r.path AS root_path`;
     let rows: (MoveRow & { tagged_at: string | null; retag: number; in_comic: number })[];
-    if (body.characterId !== undefined) {
+    if (body.characterId !== undefined && body.ids === undefined) {
       const c = this.requireCharacterId(body.characterId);
       rows = this.ctx
         .stmt(
@@ -833,6 +847,32 @@ export class SqliteDataSource implements DataSource {
         .stmt(`SELECT ${cols} FROM images i JOIN library_roots r ON r.id = i.root_id WHERE i.id IN (SELECT value FROM json_each(?)) ORDER BY i.id`)
         .all(JSON.stringify(ids)) as typeof rows;
     }
+    return { root, dir, rows };
+  }
+
+  /** 移动前先数（对话框显示的就是服务端会移的） */
+  async previewMove(body: MoveImagesBody): Promise<MovePreview> {
+    const { root, dir, rows } = this.moveRows(body);
+    let alreadyThere = 0;
+    let inCollection = 0;
+    const ids: number[] = [];
+    for (const r of rows) {
+      if (r.collection_id !== null) inCollection++;
+      else if (r.root_id === root.id && parentRel(r.rel_path).toLowerCase() === dir.toLowerCase()) alreadyThere++;
+      else ids.push(r.id);
+    }
+    const cid = body.characterId === undefined ? null : this.requireCharacterId(body.characterId);
+    const json = JSON.stringify(ids);
+    const otherCharacters = (
+      cid === null
+        ? this.ctx.db.prepare('SELECT COUNT(*) FROM (SELECT image_id FROM image_characters WHERE image_id IN (SELECT value FROM json_each(?)) GROUP BY image_id HAVING COUNT(*) > 1)').pluck().get(json)
+        : this.ctx.db.prepare('SELECT COUNT(DISTINCT image_id) FROM image_characters WHERE image_id IN (SELECT value FROM json_each(?)) AND character_id <> ?').pluck().get(json, cid)
+    ) as number;
+    return { ids: ids.map(toId), alreadyThere, inCollection, otherCharacters };
+  }
+
+  async moveImages(body: MoveImagesBody): Promise<MutationResult> {
+    const { root, dir, rows } = this.moveRows(body);
     if (!rows.length) throw new BadRequestError('没有可以移动的图');
 
     // 扫描、识别正在读这些文件时不能移（扫描会把移走的图当成丢失）
@@ -869,29 +909,22 @@ export class SqliteDataSource implements DataSource {
       if (out.failed.length) throw new ConflictError(message);
       return done(message);
     }
-    return this.ctx.undo.result(message, async () => {
-      if ((await this.ctx.jobs.list()).some((j) => j.status === 'running' && j.kind === 'scan')) {
-        throw new ConflictError('正在扫描图库，等扫描结束再撤销');
-      }
-      const back = moveBack(this.ctx.db, out.moved);
-      this.ctx.db.transaction(() => {
-        // 角色这期间被删掉、合并掉的不插（外键会报错），这几页留着重新识别
-        const ins = this.ctx.db.prepare(
-          `INSERT OR IGNORE INTO image_characters (image_id, character_id, origin, score, added_at)
-           SELECT @image_id, @character_id, @origin, @score, @added_at WHERE EXISTS (SELECT 1 FROM characters WHERE id = @character_id)`,
-        );
-        const lost = new Set<number>();
-        for (const r of charSnap as { image_id: number }[]) if (!ins.run(r).changes) lost.add(r.image_id);
-        syncRootModes(this.ctx.db, ids);
-        // 重新识别的标记最后按移动前写回（同步可能刚标过）
-        const setRetag = this.ctx.db.prepare('UPDATE images SET retag = @retag WHERE id = @id');
-        for (const r of retagSnap as { id: number; retag: number }[]) setRetag.run({ id: r.id, retag: lost.has(r.id) ? 1 : r.retag });
-        // 移动时按规则排除的：移回原位不再命中就放出来（没能移回的照规则还会排除）
-        revertNewlyExcluded(this.ctx, excluded);
-      })();
-      this.ctx.touch();
-      if (back.failed.length) throw new ConflictError(`移回了 ${back.restored} 张，${back.failed.length} 张没能移回（文件或位置已经变了）`);
+    // 记进库里：重启后也能在「最近的移动」里移回原处
+    const payload: MovePayload = { where, items: out.moved, charSnap: charSnap as MovePayload['charSnap'], retagSnap: retagSnap as MovePayload['retagSnap'], excluded };
+    const logId = recordChange(this.ctx, 'move', `${out.moved.length} 张移到 ${where}`, payload);
+    const result = this.ctx.undo.result(message, async () => {
+      await this.changes.revertMove(logId, true);
     });
+    this.changes.rememberMoveToken(logId, result.undoToken!);
+    return result;
+  }
+
+  // 最近的改动（自动关联、Pixiv 补充、移动到文件夹）
+  async listChanges(group: ChangeGroup): Promise<ChangeEntry[]> {
+    return this.changes.list(group);
+  }
+  async revertChange(id: ID): Promise<MutationResult> {
+    return this.changes.revert(id);
   }
 
   // T15 未识别
@@ -1023,11 +1056,132 @@ export class SqliteDataSource implements DataSource {
     };
   }
 
+  /** 切换 Pixiv 投稿号识别方式前先数：多少张来源会变、多少张先去掉 Pixiv 建议、多少张要重新补（有缓存的不联网） */
+  async previewSourceMode(mode: 'strict' | 'broad'): Promise<SourceModePreview> {
+    const changes = diffSources(this.ctx.db, mode);
+    const requeue = changes.filter((c) => c.newPixivPost !== null);
+    const cached = new Set(
+      this.ctx.db.prepare('SELECT post_id FROM pixiv_artwork_cache WHERE post_id IN (SELECT value FROM json_each(?))').pluck()
+        .all(JSON.stringify([...new Set(requeue.map((c) => c.newPixivPost))])) as string[],
+    );
+    const hasPixivSug = this.ctx.db.prepare("SELECT 1 FROM character_suggestions WHERE image_id = ? AND source = 'pixiv' LIMIT 1");
+    return {
+      mode,
+      changed: changes.length,
+      suggestionsDropped: changes.filter((c) => c.before.site === 'pixiv' && c.pixivPostChanged && hasPixivSug.get(c.id)).length,
+      requeued: requeue.length,
+      cached: requeue.filter((c) => cached.has(c.newPixivPost!)).length,
+    };
+  }
+
+  /**
+   * 来源变了的图：投稿号换了的重新登记 Pixiv 补充（删掉旧的检查记录再登记，切回原来的投稿号也会重查）。
+   * 在事务里调用；返回重新登记的图
+   */
+  private requeuePixivAfterSourceChange(changes: SourceChange[]): number[] {
+    const ids = changes.filter((c) => c.newPixivPost !== null).map((c) => c.id);
+    if (!ids.length) return [];
+    this.ctx.db.prepare('DELETE FROM pixiv_character_checks WHERE image_id IN (SELECT value FROM json_each(?))').run(JSON.stringify(ids));
+    queuePixivImages(this.ctx, ids);
+    return ids;
+  }
+
+  /** 有缓存的投稿马上在本地重新匹配（不联网）；返回找回了 Pixiv 建议或关联的张数 */
+  private async rematchCachedPixiv(ids: number[]): Promise<number> {
+    if (!ids.length || !this.makeCatalog) return 0;
+    const cachedIds = this.ctx.db
+      .prepare(
+        `SELECT i.id FROM images i JOIN pixiv_character_checks p ON p.image_id = i.id AND p.checked_at IS NULL
+         WHERE i.id IN (SELECT value FROM json_each(?)) AND i.source_post_id IN (SELECT post_id FROM pixiv_artwork_cache)`,
+      )
+      .pluck()
+      .all(JSON.stringify(ids)) as number[];
+    if (!cachedIds.length) return 0;
+    const controller = new AbortController();
+    const job: JobContext = {
+      signal: controller.signal,
+      setTotal: () => {},
+      advance: () => {},
+      setMessage: () => {},
+      shouldYield: () => false,
+      requeue: () => {},
+      yielded: false,
+    };
+    // 只挑有缓存的图，client 不会被调用；万一调用了也不联网
+    const offline = { artwork: async () => { throw new Error('离线重新匹配不联网'); } };
+    try {
+      await syncPixivCharacters(this.ctx, job, this.makeCatalog, offline, 0, undefined, { imageIds: cachedIds });
+    } catch (error) {
+      console.warn(`[pixiv-tags] 切换识别方式后本地重新匹配失败：${String(error)}`);
+      return 0;
+    }
+    return this.ctx.db
+      .prepare(
+        `SELECT COUNT(DISTINCT i.id) FROM images i WHERE i.id IN (SELECT value FROM json_each(?)) AND (
+           EXISTS (SELECT 1 FROM character_suggestions cs WHERE cs.image_id = i.id AND cs.source = 'pixiv')
+           OR EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id))`,
+      )
+      .pluck()
+      .get(JSON.stringify(cachedIds)) as number;
+  }
+
+  /**
+   * 切换 Pixiv 投稿号识别方式（设置 → 识别）：报告影响了多少张，可撤销（来源、Pixiv 建议、补充记录、设置一起回去）。
+   * 投稿号真的变了的才去掉 Pixiv 建议；切回原来的投稿号时有缓存的马上找回，没缓存的等补充 Pixiv 角色
+   */
+  async setSourceMode(mode: 'strict' | 'broad'): Promise<MutationResult> {
+    const db = this.ctx.db;
+    const before = readSettings(db).tagger.pixivFilenameMode;
+    const label = mode === 'broad' ? '宽泛' : '严格';
+    if (mode === before) return done(`已经是${label}了`);
+    let requeued: number[] = [];
+    let changed = 0;
+    let dropped = 0;
+    const result = this.ctx.mutate((u) => {
+      const changes = diffSources(db, mode);
+      changed = changes.length;
+      const ids = JSON.stringify(changes.map((c) => c.id));
+      u.columns('images', ['source_site', 'source_post_id', 'source_artist', 'source_url'], changes.map((c) => c.id));
+      u.set('character_suggestions', "source = 'pixiv' AND image_id IN (SELECT value FROM json_each(?))", [ids]);
+      u.set('pixiv_character_checks', 'image_id IN (SELECT value FROM json_each(?))', [ids]);
+      // 设置只改回这一项，期间改的其他设置不动
+      u.sql("UPDATE settings SET value = json_set(value, '$.pixivFilenameMode', ?) WHERE key = 'tagger'", [before]);
+      u.sql("INSERT INTO settings (key, value) VALUES ('sourceParserMode', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(before)]);
+      u.onUndo(async () => this.notifySettings());
+      dropped = db.prepare("SELECT COUNT(DISTINCT image_id) FROM character_suggestions WHERE source = 'pixiv' AND image_id IN (SELECT value FROM json_each(?))").pluck().get(
+        JSON.stringify(changes.filter((c) => c.before.site === 'pixiv' && c.pixivPostChanged).map((c) => c.id)),
+      ) as number;
+      applySettingsPatch(db, { tagger: { pixivFilenameMode: mode } });
+      applySourceChanges(db, changes);
+      markSourcesCurrent(db, mode);
+      requeued = this.requeuePixivAfterSourceChange(changes);
+      return { message: `已改为${label}：${changed} 张图的来源变了` };
+    });
+    await this.notifySettings();
+    const found = await this.rematchCachedPixiv(requeued);
+    const left = requeued.length - found;
+    const notes = [
+      dropped && `${dropped} 张的 Pixiv 建议先去掉了（投稿号变了，切回来能找回）`,
+      found && `${found} 张从缓存找回了 Pixiv 角色`,
+      left > 0 && `${left} 张等「补充 Pixiv 角色」时再查`,
+    ].filter(Boolean);
+    if (left > 0) this.pipeline.requestPixiv();
+    return { ...result, message: `${result.message}${notes.length ? `；${notes.join('，')}` : ''}` };
+  }
+
+  private async notifySettings(): Promise<void> {
+    const settings = await this.getSettings();
+    for (const fn of this.settingsListeners) fn(settings);
+  }
+
   async updateSettings(body: UpdateSettingsBody): Promise<Settings> {
     const beforeArtists = readSettings(this.ctx.db).tagger.artists;
     const beforePixiv = readSettings(this.ctx.db).tagger.pixiv;
-    applySettingsPatch(this.ctx.db, body as Parameters<typeof applySettingsPatch>[1]);
-    if (body.tagger?.pixivFilenameMode !== undefined) backfillSources(this.ctx.db);
+    const beforeMode = readSettings(this.ctx.db).tagger.pixivFilenameMode;
+    const { pixivFilenameMode, ...taggerRest } = body.tagger ?? {};
+    // 换识别方式走 setSourceMode（报告影响、可撤销），其余照常保存
+    applySettingsPatch(this.ctx.db, { ...body, ...(body.tagger && { tagger: taggerRest }) } as Parameters<typeof applySettingsPatch>[1]);
+    if (pixivFilenameMode !== undefined && pixivFilenameMode !== beforeMode) await this.setSourceMode(pixivFilenameMode);
     const settings = await this.getSettings();
     // 调低自动采纳阈值不在保存时动已有建议：设置页显示有多少达标，用户点按钮才归（promoteSuggestions，可撤销）
     // 刚打开「识别画师」：给已识别的图补跑（任务在显卡道里排在识别后面，可以随时取消）

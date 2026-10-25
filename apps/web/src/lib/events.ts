@@ -1,6 +1,7 @@
 import type { Job, JobItemEvent, ServerEvent } from '@emaki/shared';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
+import { toast } from 'sonner';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { api } from './api';
@@ -173,6 +174,13 @@ export function useServerEvents() {
         case 'job-item':
           // 只做「在干活」的反馈，不让任何 query 失效
           useLiveJobs.getState().pushItem(event);
+          break;
+        case 'auto-change':
+          void client.invalidateQueries({ queryKey: ['changes'] });
+          // 自动关联改了用户建的角色：提一句在哪能撤回（Pixiv 补充一轮一条，太频繁，只刷新列表）
+          if (event.change.kind === 'auto-associate') {
+            toast(event.change.summary, { description: '不对的话，到「设置 → 识别 → 最近的自动改动」里撤回' });
+          }
           break;
       }
     };

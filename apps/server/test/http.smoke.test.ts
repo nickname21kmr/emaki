@@ -274,6 +274,16 @@ describe('图片、未识别、重复、排除（routes/images.ts）', () => {
     expect((await call('POST', '/api/images/move', { ids: ['i1'], rootId: 'root1', dir: 'a:b' })).status).toBe(400);
   });
 
+  route('POST /api/images/move/preview', async () => {
+    const { status, json } = await call('POST', '/api/images/move/preview', { characterId: 'c1', rootId: 'root1', dir: '角色/未花' });
+    expect(status).toBe(200);
+    expect(json).toEqual({ ids: expect.any(Array), alreadyThere: expect.any(Number), inCollection: expect.any(Number), otherCharacters: expect.any(Number) });
+    expect(json.ids.length).toBeGreaterThan(0);
+    // 预览可以 ids + characterId 一起给（选中的图里有几张还属于别的角色）
+    expect((await call('POST', '/api/images/move/preview', { ids: ['i1'], characterId: 'c1', rootId: 'root1', dir: '' })).status).toBe(200);
+    expect((await call('POST', '/api/images/move/preview', { rootId: 'root1', dir: '' })).status).toBe(400);
+  });
+
   route('GET /api/images/:id', async () => {
     const { status, json } = await call('GET', '/api/images/i1');
     expect(status).toBe(200);
@@ -402,6 +412,38 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     expect(json.dataDir).toBe(dataState.dir);
     // 助手关着时启动不建目录、不写文件
     expect(existsSync(path.join(dataState.dir, 'assistant'))).toBe(false);
+  });
+
+  route('GET /api/settings/source-mode', async () => {
+    const { status, json } = await call('GET', '/api/settings/source-mode?mode=broad');
+    expect([status, json]).toEqual([200, { mode: 'broad', changed: 0, suggestionsDropped: 0, requeued: 0, cached: 0 }]);
+    expect((await call('GET', '/api/settings/source-mode?mode=x')).status).toBe(400);
+  });
+
+  route('POST /api/settings/source-mode', async () => {
+    const { status, json } = await call('POST', '/api/settings/source-mode', { mode: 'broad' });
+    expect([status, json]).toEqual([200, withUndo]);
+    expect(json.message).toBe('已改为宽泛：0 张图的来源变了');
+    expect((await call('GET', '/api/settings')).json.tagger.pixivFilenameMode).toBe('broad');
+    expect((await call('POST', '/api/settings/source-mode', { mode: 'nope' })).status).toBe(400);
+  });
+
+  route('GET /api/changes', async () => {
+    expect(await call('GET', '/api/changes?group=auto')).toMatchObject({ status: 200, json: [] });
+    await call('POST', '/api/images/move', { ids: ['i1'], rootId: 'root1', dir: '别处' });
+    const { status, json } = await call('GET', '/api/changes?group=move');
+    expect(status).toBe(200);
+    expect(json).toEqual([expect.objectContaining({ kind: 'move', count: 1, revertable: true })]);
+    expect((await call('GET', '/api/changes?group=x')).status).toBe(400);
+  });
+
+  route('POST /api/changes/:id/revert', async () => {
+    await call('POST', '/api/images/move', { ids: ['i1'], rootId: 'root1', dir: '别处' });
+    const [entry] = (await call('GET', '/api/changes?group=move')).json;
+    const r = await call('POST', `/api/changes/${entry.id}/revert`);
+    expect([r.status, r.json]).toEqual([200, { ok: true, message: '已把 1 张移回原处', undoToken: null }]);
+    expect((await call('POST', `/api/changes/${entry.id}/revert`)).status).toBe(409);
+    expect((await call('POST', '/api/changes/nope/revert')).status).toBe(404);
   });
 
   route('POST /api/system/pick-folder', async () => {

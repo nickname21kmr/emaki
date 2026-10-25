@@ -1,11 +1,12 @@
 import type { ID } from '@emaki/shared';
+import { useQuery } from '@tanstack/react-query';
 import { FolderInput, FolderOpen } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Button, Dialog, DialogFooter, Input } from '@/components/ui';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
-import { useMutate, useSettings } from '@/lib/queries';
+import { errorMessage, useMutate, useSettings } from '@/lib/queries';
 import { resolveMoveDir } from './moveDir';
 
 /** 角色名当默认文件夹名：去掉 Windows 不允许的字符 */
@@ -21,7 +22,8 @@ export type MoveTarget = { characterId: ID; ids?: undefined } | { ids: ID[]; cha
 
 /**
  * 移到图库里的某个文件夹（issue #1：识别完按角色分文件夹）。
- * 只能选图库里的文件夹，移完图还在图库里，识别和整理结果都保留；toast 里可以撤销。
+ * 只能选图库里的文件夹，移完图还在图库里，识别和整理结果都保留；toast 里可以撤销，设置 → 图库「最近的移动」里重启后也能移回。
+ * 先向后端要预览：显示的张数就是会移的张数，提交的是预览里的 ids（按角色移动时不会多移打开对话框之后新归进来的图）。
  */
 export function MoveImagesDialog({
   open,
@@ -61,7 +63,16 @@ export function MoveImagesDialog({
   const root = roots.find((r) => r.id === (pastedRootId ?? rootId)) ?? roots[0];
   const canMove = !!root && !pathError;
 
-  const move = useMutate(() => api.moveImages({ ...target, rootId: root!.id, dir: subdir }), {
+  const preview = useQuery({
+    queryKey: ['move-preview', target.characterId ?? null, target.ids ?? null, root?.id ?? null, subdir],
+    queryFn: () => api.previewMove({ ...target, rootId: root!.id, dir: subdir }),
+    enabled: open && canMove,
+    staleTime: 0,
+    gcTime: 0,
+  });
+  const plan = preview.data;
+  const n = plan?.ids.length ?? 0;
+  const move = useMutate(() => api.moveImages({ ids: plan!.ids, rootId: root!.id, dir: subdir }), {
     onError: setError,
     onSuccess: () => {
       onOpenChange(false);
@@ -77,7 +88,7 @@ export function MoveImagesDialog({
       open={open}
       onOpenChange={onOpenChange}
       title="移动到文件夹"
-      description={`把${what} ${formatCount(count)} 张图移到图库里的一个文件夹。磁盘上的文件会真的移动，识别和整理结果都保留，可以撤销。`}
+      description={`把${what} ${formatCount(count)} 张图移到图库里的一个文件夹。磁盘上的文件会真的移动，识别和整理结果都保留，可以撤销，重启后也能在设置 → 图库里移回原处。`}
       width={520}
     >
       <div className="text-[13px] font-medium">图库文件夹</div>
@@ -120,7 +131,7 @@ export function MoveImagesDialog({
         spellCheck={false}
         autoComplete="off"
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && canMove && !move.isPending) move.mutate(undefined);
+          if (e.key === 'Enter' && canMove && n > 0 && !move.isPending) move.mutate(undefined);
         }}
       />
       <p className={cn('mt-2 text-xs leading-relaxed', error || pathError ? 'text-danger' : 'text-fg-subtle')}>
@@ -133,6 +144,22 @@ export function MoveImagesDialog({
         <div className="mt-4 rounded-lg bg-sunken px-3.5 py-2.5 text-[12.5px]">
           <span className="text-fg-muted">移到 </span>
           <span className="font-mono break-all">{dest}</span>
+          <div className="mt-1.5 leading-relaxed text-fg-muted">
+            {preview.isError
+              ? <span className="text-danger">{errorMessage(preview.error)}</span>
+              : !plan
+                ? '正在数会移动多少张…'
+                : [
+                    `会移动 ${formatCount(n)} 张`,
+                    plan.alreadyThere > 0 && `${formatCount(plan.alreadyThere)} 张本来就在这里`,
+                    plan.inCollection > 0 && `合集里的 ${formatCount(plan.inCollection)} 张不动`,
+                  ].filter(Boolean).join('，') + '。'}
+            {plan && plan.otherCharacters > 0 && (
+              <span className="block text-fg">
+                其中 {formatCount(plan.otherCharacters)} 张{target.characterId ? '同时属于别的角色' : '属于不止一个角色'}，移走后在那些角色里看也是新位置。
+              </span>
+            )}
+          </div>
         </div>
       )}
 
@@ -140,8 +167,8 @@ export function MoveImagesDialog({
         <Button variant="ghost" onClick={() => onOpenChange(false)}>
           取消
         </Button>
-        <Button variant="primary" icon={<FolderInput />} disabled={!canMove} loading={move.isPending} onClick={() => move.mutate(undefined)}>
-          移动 {formatCount(count)} 张
+        <Button variant="primary" icon={<FolderInput />} disabled={!canMove || !n} loading={move.isPending} onClick={() => move.mutate(undefined)}>
+          移动 {formatCount(plan ? n : count)} 张
         </Button>
       </DialogFooter>
     </Dialog>

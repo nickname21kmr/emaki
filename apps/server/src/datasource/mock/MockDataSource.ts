@@ -27,6 +27,10 @@ import {
   type Artist,
   type BulkImagesBody,
   type MoveImagesBody,
+  type MovePreview,
+  type ChangeEntry,
+  type ChangeGroup,
+  type SourceModePreview,
   type CollectionSummary,
   type CreateCollectionBody,
   type GetCollectionResponse,
@@ -1097,19 +1101,111 @@ export class MockDataSource implements DataSource {
     });
   }
 
-  /** mock 只改记录，不碰文件；规则同 sqlite/move.ts */
-  async moveImages(body: MoveImagesBody): Promise<MutationResult> {
+  private moveRows(body: MoveImagesBody): { root: LibraryRoot; dir: string; rows: ImageRow[] } {
     const root = this.db.settings.libraryRoots.find((r) => r.id === body.rootId);
     if (!root) throw new NotFoundError('图库文件夹');
     if (!root.enabled) throw new BadRequestError('这个图库文件夹停用了，先启用再移动');
     const dir = normalizeSubdir(body.dir);
     let rows: ImageRow[];
-    if (body.characterId !== undefined) {
+    if (body.characterId !== undefined && body.ids === undefined) {
       const ch = this.requireCharacter(body.characterId);
       rows = [...this.db.images.values()].filter((i) => this.isVisible(i) && !i.excludedBy && i.characterIds.includes(ch.id));
     } else {
       rows = (body.ids ?? []).map((id) => this.requireImage(id));
     }
+    return { root, dir, rows };
+  }
+
+  /** 同 sqlite：会移哪些图、几张已经在那里、合集里几张不动、几张同时属于别的角色 */
+  async previewMove(body: MoveImagesBody): Promise<MovePreview> {
+    const { root, dir, rows } = this.moveRows(body);
+    const cid = body.characterId === undefined ? null : this.requireCharacter(body.characterId).id;
+    let alreadyThere = 0;
+    let inCollection = 0;
+    const moving: ImageRow[] = [];
+    for (const r of [...rows].sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1)) || a.id.localeCompare(b.id))) {
+      const parent = r.relPath.includes('/') ? r.relPath.slice(0, r.relPath.lastIndexOf('/')) : '';
+      if (r.collectionId) inCollection++;
+      else if (r.libraryRootId === root.id && parent.toLowerCase() === dir.toLowerCase()) alreadyThere++;
+      else moving.push(r);
+    }
+    const otherCharacters = moving.filter((r) => (cid === null ? r.characterIds.length > 1 : r.characterIds.some((c) => c !== cid))).length;
+    return { ids: moving.map((r) => r.id), alreadyThere, inCollection, otherCharacters };
+  }
+
+  /** 移动批次（同 sqlite 的 change_log）：mock 只在内存里 */
+  private moveBatches: {
+    id: ID;
+    createdAt: string;
+    summary: string;
+    items: { r: ImageRow; rootId: ID; relPath: string; fileName: string; toRootId: ID; toRelPath: string; restore: () => void }[];
+    revertedAt: string | null;
+    note: string | null;
+    token: string | null;
+  }[] = [];
+  private changeSeq = 0;
+
+  async listChanges(group: ChangeGroup): Promise<ChangeEntry[]> {
+    if (group === 'auto') return []; // 演示数据没有后台自动改动
+    return this.moveBatches.slice(0, 20).map((b) => {
+      const n = b.revertedAt ? 0 : b.items.filter((it) => this.db.images.get(it.r.id) === it.r && it.r.libraryRootId === it.toRootId && it.r.relPath === it.toRelPath).length;
+      return {
+        id: b.id,
+        kind: 'move' as const,
+        createdAt: b.createdAt,
+        summary: b.summary,
+        revertedAt: b.revertedAt,
+        note: b.note,
+        count: n,
+        revertHint: b.revertedAt ? '已经撤回了' : n ? `把 ${n} 张图移回原来的位置。原位置已经有同名文件、文件不在了的会跳过并列出来。` : '这批图之后都移动或删除过了，没有可移回的',
+        revertable: !b.revertedAt && n > 0,
+      };
+    });
+  }
+
+  async revertChange(id: ID): Promise<MutationResult> {
+    const b = this.moveBatches.find((x) => x.id === id);
+    if (!b) throw new NotFoundError('这条改动记录');
+    if (b.revertedAt) throw new ConflictError('这条已经撤回了');
+    const r = this.revertMoveBatch(b, false);
+    if (b.token) this.undoStack.expire(b.token, '这批已经在「最近的移动」里移回原处了');
+    return r;
+  }
+
+  private revertMoveBatch(b: (typeof this.moveBatches)[number], strict: boolean): MutationResult {
+    if (b.revertedAt) throw new ConflictError('这批已经移回去了');
+    const failed: string[] = [];
+    let restored = 0;
+    const left: typeof b.items = [];
+    for (const it of [...b.items].reverse()) {
+      const reason =
+        this.db.images.get(it.r.id) !== it.r
+          ? '图已经不在库里了'
+          : it.r.libraryRootId !== it.toRootId || it.r.relPath !== it.toRelPath
+            ? '之后又移动或改过名'
+            : [...this.db.images.values()].some((o) => o !== it.r && o.libraryRootId === it.rootId && o.relPath.toLowerCase() === it.relPath.toLowerCase())
+              ? '原位置已经有同名文件'
+              : null;
+      if (reason) {
+        failed.push(`${it.r.fileName}（${reason}）`);
+        left.unshift(it);
+        continue;
+      }
+      it.restore();
+      restored++;
+    }
+    const list = `${failed.slice(0, 5).join('、')}${failed.length > 5 ? ` 等 ${failed.length} 张` : ''}`;
+    b.items = left;
+    b.note = failed.length ? `没能移回：${list}` : null;
+    if (!left.length) b.revertedAt = new Date(this.now).toISOString();
+    if (restored) this.touch();
+    if (failed.length && (strict || !restored)) throw new ConflictError(`移回了 ${restored} 张，${failed.length} 张没能移回：${list}`);
+    return done(failed.length ? `移回了 ${restored} 张；${failed.length} 张没能移回：${list}` : `已把 ${restored} 张移回原处`);
+  }
+
+  /** mock 只改记录，不碰文件；规则同 sqlite/move.ts */
+  async moveImages(body: MoveImagesBody): Promise<MutationResult> {
+    const { root, dir, rows } = this.moveRows(body);
     if (!rows.length) throw new BadRequestError('没有可以移动的图');
     const used = new Set([...this.db.images.values()].filter((i) => i.libraryRootId === root.id).map((i) => i.relPath.toLowerCase()));
     const before = rows.map((r) => ({ r, rootId: r.libraryRootId, relPath: r.relPath, fileName: r.fileName, kind: r.kind, kindSource: r.kindSource, kindEvidence: r.kindEvidence, rating: r.rating, characterIds: r.characterIds }));
@@ -1142,9 +1238,60 @@ export class MockDataSource implements DataSource {
     if (!moved) return done(message);
     // 同 sqlite：移进 / 移出按漫画导入的文件夹，类型、分级跟着文件夹
     this.syncComic(rows);
-    return this.withUndo(message, () => {
-      for (const { r, ...b } of before)
-        Object.assign(r, { libraryRootId: b.rootId, relPath: b.relPath, fileName: b.fileName, kind: b.kind, kindSource: b.kindSource, kindEvidence: b.kindEvidence, rating: b.rating, characterIds: b.characterIds });
+    const batch: (typeof this.moveBatches)[number] = {
+      id: `m${++this.changeSeq}`,
+      createdAt: new Date(this.now).toISOString(),
+      summary: `${moved} 张移到 ${where}`,
+      items: before
+        .filter(({ r, rootId, relPath }) => r.libraryRootId !== rootId || r.relPath !== relPath)
+        .map(({ r, ...b }) => ({
+          r,
+          rootId: b.rootId,
+          relPath: b.relPath,
+          fileName: b.fileName,
+          toRootId: r.libraryRootId,
+          toRelPath: r.relPath,
+          restore: () =>
+            Object.assign(r, { libraryRootId: b.rootId, relPath: b.relPath, fileName: b.fileName, kind: b.kind, kindSource: b.kindSource, kindEvidence: b.kindEvidence, rating: b.rating, characterIds: b.characterIds }),
+        })),
+      revertedAt: null,
+      note: null,
+      token: null,
+    };
+    this.moveBatches.unshift(batch);
+    const result = this.withUndo(message, () => void this.revertMoveBatch(batch, true));
+    batch.token = result.undoToken;
+    return result;
+  }
+
+  /** 同 sqlite：会变的自动来源 */
+  private sourceChanges(mode: 'strict' | 'broad'): { img: ImageRow; next: ImageRow['source'] }[] {
+    const out: { img: ImageRow; next: ImageRow['source'] }[] = [];
+    for (const img of this.db.images.values()) {
+      if (img.sourceManual) continue;
+      const next = editedSource('auto', img.relPath, mode).source;
+      if (JSON.stringify(next ?? null) !== JSON.stringify(img.source ?? null)) out.push({ img, next });
+    }
+    return out;
+  }
+
+  async previewSourceMode(mode: 'strict' | 'broad'): Promise<SourceModePreview> {
+    const changes = this.sourceChanges(mode);
+    const requeued = changes.filter(({ img, next }) => next?.site === 'pixiv' && !(img.source?.site === 'pixiv' && img.source.postId === next.postId)).length;
+    // 演示数据没有 Pixiv 建议和缓存
+    return { mode, changed: changes.length, suggestionsDropped: 0, requeued, cached: 0 };
+  }
+
+  async setSourceMode(mode: 'strict' | 'broad'): Promise<MutationResult> {
+    const label = mode === 'broad' ? '宽泛' : '严格';
+    const before = this.db.settings.tagger.pixivFilenameMode;
+    if (mode === before) return done(`已经是${label}了`);
+    const changes = this.sourceChanges(mode).map((c) => ({ ...c, prev: c.img.source }));
+    this.db.settings.tagger.pixivFilenameMode = mode;
+    for (const c of changes) c.img.source = c.next;
+    return this.withUndo(`已改为${label}：${changes.length} 张图的来源变了`, () => {
+      this.db.settings.tagger.pixivFilenameMode = before;
+      for (const c of changes) c.img.source = c.prev;
     });
   }
 

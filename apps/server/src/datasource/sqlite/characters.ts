@@ -12,6 +12,7 @@ import type { Derived } from './derived.ts';
 import { toCharacter } from './library.ts';
 import { iso, parseId } from './sql.ts';
 import type { UndoRecorder } from './undo.ts';
+import { recordChange, type AssociatePayload } from './changeLog.ts';
 
 /** 可撤销地按标签新建 danbooru 角色（必要时新建作品）。调用方必须在 ctx.mutate 里调用 */
 export function insertDanbooruCharacter(
@@ -108,32 +109,45 @@ export class CharacterMutations {
   }
 
   /** 明确匹配的绑定与当前操作共用事务、撤销记录；名称和已有图片关联保持原样。 */
-  private autoAssociateInTx(u: UndoRecorder, ids?: number[]): number {
+  private autoAssociateInTx(u: UndoRecorder, ids?: number[]): AssociatePayload[] {
     const matches = automaticCustomMatches(this.db, this.danbooru()).filter((m) => !ids || ids.includes(m.id));
+    const out: AssociatePayload[] = [];
     for (const { id, match } of matches) {
+      const row = this.db.prepare('SELECT name, created_at, works_locked FROM characters WHERE id = ?').get(id) as { name: string; created_at: string; works_locked: number };
+      const worksBefore = this.db.prepare('SELECT work_id, position FROM character_works WHERE character_id = ? ORDER BY position').all(id) as AssociatePayload['worksBefore'];
+      const createdWorkIds: number[] = [];
       u.columns('characters', ['danbooru_tag', 'source'], [id]);
       this.db.prepare("UPDATE characters SET danbooru_tag = ?, source = 'danbooru' WHERE id = ?").run(match.danbooruTag, id);
       // 没有手动指定作品时补上所属作品；用户已有的作品选择保持。
-      if (this.db.prepare('SELECT works_locked FROM characters WHERE id = ?').pluck().get(id) === 0) {
+      if (row.works_locked === 0) {
         u.set('character_works', 'character_id = ?', [id]);
         for (const wid of this.catalog().linkWorks(id, match.danbooruTag, iso(this.ctx.clock()))) {
+          createdWorkIds.push(wid);
           u.inserted('works', wid);
           u.sql("DELETE FROM aliases WHERE owner_type = 'work' AND owner_id = ?", [wid]);
         }
       }
+      out.push({ characterId: id, name: row.name, tag: match.danbooruTag, characterCreatedAt: row.created_at, worksChanged: row.works_locked === 0, worksBefore, createdWorkIds });
     }
-    return matches.length;
+    return out;
   }
 
+  /** 后台自动关联（启动时、同步 Danbooru 后）：每个角色记一条「自动改动」，在设置里能撤回 */
   associateAutomatic(): void {
     if (!automaticCustomMatches(this.db, this.danbooru()).length) {
       recomputeCustomMatches(this.db, this.danbooru());
       return;
     }
     this.ctx.mutate((u) => {
-      const count = this.autoAssociateInTx(u);
+      const done = this.autoAssociateInTx(u);
+      for (const a of done) {
+        recordChange(this.ctx, 'auto-associate', `「${a.name}」自动绑上了 Danbooru 标签 ${a.tag}`, a, {
+          count: 0,
+          hint: `解除「${a.name}」和 ${a.tag} 的绑定。手动归的图不动，以后也不再自动绑这个标签。`,
+        });
+      }
       u.onUndo(() => recomputeCustomMatches(this.db, this.danbooru()));
-      return { message: `已自动关联 ${count} 个角色的 Danbooru 标签` };
+      return { message: `已自动关联 ${done.length} 个角色的 Danbooru 标签` };
     });
     recomputeCustomMatches(this.db, this.danbooru());
   }

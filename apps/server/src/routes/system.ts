@@ -194,6 +194,20 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
     });
   });
 
+  // ---------------------------------------------------------- 切换 Pixiv 投稿号识别方式
+
+  const sourceMode = z.object({ mode: z.enum(['strict', 'broad']) });
+  app.get('/api/settings/source-mode', (req) => ds.previewSourceMode(parse(sourceMode, req.query).mode));
+  app.post('/api/settings/source-mode', (req) => ds.setSourceMode(parse(sourceMode, req.body).mode));
+
+  // ---------------------------------------------------------- 最近的改动（重启后也能撤回）
+
+  app.get('/api/changes', (req) => ds.listChanges(parse(z.object({ group: z.enum(['auto', 'move']) }), req.query).group));
+  app.post('/api/changes/:id/revert', (req) => {
+    const { id } = parse(idParam, req.params);
+    return ds.revertChange(id);
+  });
+
   // ---------------------------------------------------------- 撤销
 
   // 静态路由优先于 /api/undo/:id，不会被当成 token

@@ -1,12 +1,14 @@
-import type { Settings } from '@emaki/shared';
+import type { Settings, SourceModePreview } from '@emaki/shared';
 import { Cpu, Palette, ScanFace, Zap } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Button, Field, Segmented, Switch } from '@/components/ui';
+import { toast } from 'sonner';
+import { Button, Dialog, DialogFooter, Field, Segmented, Switch } from '@/components/ui';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
-import { useMutate } from '@/lib/queries';
+import { errorMessage, useMutate } from '@/lib/queries';
+import { RecentChanges } from './RecentChanges';
 import { useSaveSettings } from '../hooks';
 import { CommitSlider } from './CommitSlider';
 import { JobAction } from './JobAction';
@@ -117,13 +119,9 @@ export function TaggerSection({
 
         <Field
           label="Pixiv 投稿号识别"
-          hint="严格：识别「投稿号_p0」、带哈希的原图名和 App 保存名。宽泛：额外接受「投稿号_标题」「投稿号_标题_页码」等下载器命名。切换后立即更新已有图片的自动来源，手工填写的来源保留。"
+          hint="严格：识别「投稿号_p0」、带哈希的原图名和 App 保存名。宽泛：额外接受「投稿号_标题」「投稿号_标题_页码」等下载器命名。切换前会先告诉你有多少张图的来源会变，确认后更新，可以撤销；手工填写的来源保留。"
         >
-          <Segmented
-            value={tagger.pixivFilenameMode}
-            onChange={(pixivFilenameMode) => save({ tagger: { pixivFilenameMode } })}
-            options={[{ value: 'strict', label: '严格' }, { value: 'broad', label: '宽泛' }]}
-          />
+          <SourceModeSwitch mode={tagger.pixivFilenameMode} />
         </Field>
 
         <Field
@@ -250,8 +248,75 @@ export function TaggerSection({
             运行识别
           </JobAction>
         </Field>
+
+        <RecentChanges group="auto" />
       </SettingsCard>
     </SettingsSection>
+  );
+}
+
+type SourceMode = Settings['tagger']['pixivFilenameMode'];
+const MODE_LABEL: Record<SourceMode, string> = { strict: '严格', broad: '宽泛' };
+
+/**
+ * Pixiv 投稿号识别（严格 / 宽泛）：先问后端会影响多少张，有影响就确认后再切换。切换结果在 toast 里，可以撤销
+ */
+function SourceModeSwitch({ mode }: { mode: SourceMode }) {
+  const [pending, setPending] = useState<SourceModePreview | null>(null);
+  const [checking, setChecking] = useState(false);
+  const apply = useMutate((m: SourceMode) => api.setSourceMode(m), { label: '切换 Pixiv 投稿号识别方式' });
+  const choose = async (next: SourceMode) => {
+    if (next === mode || checking) return;
+    setChecking(true);
+    try {
+      const p = await api.previewSourceMode(next);
+      if (p.changed === 0) apply.mutate(next);
+      else setPending(p);
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setChecking(false);
+    }
+  };
+  const p = pending;
+  return (
+    <>
+      <Segmented value={mode} onChange={(m) => void choose(m)} options={[{ value: 'strict', label: '严格' }, { value: 'broad', label: '宽泛' }]} />
+      <Dialog open={!!p} onOpenChange={(o) => !o && setPending(null)} title={p ? `改为${MODE_LABEL[p.mode]}？` : ''} width={480}>
+        {p && (
+          <ul className="list-disc space-y-1.5 pl-5 text-[13px] leading-relaxed">
+            <li>{formatCount(p.changed)} 张图的自动来源会变，手工填的来源不动。</li>
+            {p.suggestionsDropped > 0 && (
+              <li>其中 {formatCount(p.suggestionsDropped)} 张的投稿号变了，它们的 Pixiv 建议先去掉；切回来时有缓存的马上找回。</li>
+            )}
+            {p.requeued > 0 && (
+              <li>
+                {formatCount(p.requeued)} 张拿到新的投稿号，会重新补 Pixiv 角色：
+                {p.cached === p.requeued
+                  ? '都有缓存，不用联网。'
+                  : `${formatCount(p.cached)} 张有缓存不用联网，其余 ${formatCount(p.requeued - p.cached)} 张等「补充 Pixiv 角色」时再查（会联网）。`}
+              </li>
+            )}
+            <li>改完可以在提示里撤销。</li>
+          </ul>
+        )}
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => setPending(null)}>
+            取消
+          </Button>
+          <Button
+            variant="primary"
+            loading={apply.isPending}
+            onClick={() => {
+              if (!p) return;
+              apply.mutate(p.mode, { onSettled: () => setPending(null) });
+            }}
+          >
+            改为{p ? MODE_LABEL[p.mode] : ''}
+          </Button>
+        </DialogFooter>
+      </Dialog>
+    </>
   );
 }
 

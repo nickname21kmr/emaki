@@ -277,6 +277,66 @@ export interface MoveImagesBody {
 }
 
 /**
+ * POST /api/images/move/preview —— 移动前先数：服务端实际会移哪些图（按角色移动时以这里返回的 ids 为准再提交）。
+ */
+export interface MovePreview {
+  /** 会真的移动的图（不含本来就在目标里的、合集里的） */
+  ids: ID[];
+  /** 已经在目标文件夹里的张数 */
+  alreadyThere: number;
+  /** 合集（本子、画集）里不动的张数 */
+  inCollection: number;
+  /** 会移动的图里同时属于别的角色的张数（按角色移动时是「除这个角色以外」，选中的图是「两个及以上角色」） */
+  otherCharacters: number;
+}
+
+/**
+ * 最近的改动（GET /api/changes?group=auto|move）：后台自动做的改动和「移动到文件夹」，重启后也能撤回。
+ * - auto-associate：自建角色自动绑上了 Danbooru 标签
+ * - pixiv-sync：一轮 Pixiv 补充加的角色和原创标记
+ * - move：一次移动到文件夹
+ */
+export type ChangeKind = 'auto-associate' | 'pixiv-sync' | 'move';
+
+export interface ChangeEntry {
+  id: ID;
+  kind: ChangeKind;
+  createdAt: string;
+  /** 一句话说明做了什么 */
+  summary: string;
+  revertedAt: string | null;
+  /** 撤回时的补充说明（例如哪些文件没能移回） */
+  note: string | null;
+  /** 现在撤回会动到的张数（确认框里用）；0 表示已经没什么可撤回的 */
+  count: number;
+  /** 确认框里的一句话：撤回会做什么；不能撤回时说明原因 */
+  revertHint: string;
+  /** 现在还能撤回（没撤回过、相关数据没被改掉） */
+  revertable: boolean;
+}
+
+/** GET /api/changes 的 group：auto = 自动关联和 Pixiv 补充，move = 移动到文件夹 */
+export type ChangeGroup = 'auto' | 'move';
+
+/** SSE：后台刚做了一次自动改动（前端弹提示、刷新「最近的自动改动」） */
+export interface AutoChangeEvent {
+  type: 'auto-change';
+  change: ChangeEntry;
+}
+
+/** GET /api/settings/source-mode?mode= —— 切换 Pixiv 投稿号识别方式前先数会影响多少张 */
+export interface SourceModePreview {
+  mode: 'strict' | 'broad';
+  /** 自动来源会变的张数（手工填的来源不算） */
+  changed: number;
+  /** 投稿号变了、先去掉 Pixiv 建议的张数 */
+  suggestionsDropped: number;
+  /** 拿到新投稿号、要重新补 Pixiv 角色的张数；其中 cached 张有缓存，不用联网 */
+  requeued: number;
+  cached: number;
+}
+
+/**
  * 图片文件本身不走 JSON：
  * - GET /api/images/:id/thumb?w=480  缩略图（webp，按宽度取最近的档位 240/480/960）
  * - GET /api/images/:id/file         原图
@@ -636,7 +696,8 @@ export type ServerEvent =
   | { type: 'job'; job: Job }
   | JobItemEvent
   | { type: 'library-changed'; reason: 'scan' | 'tag' | 'mutation' }
-  | { type: 'stats'; stats: LibraryStats };
+  | { type: 'stats'; stats: LibraryStats }
+  | AutoChangeEvent;
 
 /**
  * 识别胶卷（SEL-19）：tag 任务刚识别完的一张图。每批最多推一条、每秒最多 4 条；

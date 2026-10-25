@@ -75,20 +75,30 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
     return ds.bulkImages(body);
   });
 
-  app.post('/api/images/move', (req) => {
+  // 按角色移动时前端先拿 preview 的 ids 再提交，服务端只移确认过的这些
+  const moveBody = z
+    .object({
+      ids: z.array(z.string()).min(1).max(50000).optional(),
+      characterId: z.string().optional(),
+      rootId: z.string().min(1),
+      dir: z.string().max(400),
+    })
+    .refine((b) => (b.ids === undefined) !== (b.characterId === undefined), '要么给 ids，要么给 characterId');
+  app.post('/api/images/move/preview', (req) => {
     const body = parse(
       z
         .object({
-          ids: z.array(z.string()).min(1).max(5000).optional(),
+          ids: z.array(z.string()).min(1).max(50000).optional(),
           characterId: z.string().optional(),
           rootId: z.string().min(1),
           dir: z.string().max(400),
         })
-        .refine((b) => (b.ids === undefined) !== (b.characterId === undefined), '要么给 ids，要么给 characterId'),
+        .refine((b) => b.ids !== undefined || b.characterId !== undefined, '要么给 ids，要么给 characterId'),
       req.body,
     );
-    return ds.moveImages(body);
+    return ds.previewMove(body);
   });
+  app.post('/api/images/move', (req) => ds.moveImages(parse(moveBody, req.body)));
 
   app.get('/api/images/:id', async (req) => {
     const { id } = parse(idParam, req.params);
