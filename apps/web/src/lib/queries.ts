@@ -38,7 +38,9 @@ import {
 import { toast } from 'sonner';
 import { api, ApiRequestError } from './api';
 import { useLiveJobs } from './events';
-import { useUndoStore, type UndoEntry } from './stores';
+import { modKeyLabel } from './hotkeys';
+import { useUndoReveal, useUndoStore, type UndoEntry, type UndoFocus } from './stores';
+import { confirmText, madeHere, needsConfirm } from './undoPlace';
 
 export const qk = {
   stats: ['stats'] as const,
@@ -264,18 +266,23 @@ const pendingWaiters = new Map<string, { promise: Promise<string | null | false>
 const undoQueued = new Set<string>();
 
 /** 写操作一开始就在撤销栈顶占个位置，免得请求还没回来时 Ctrl+Z 撤到上一步 */
-export function beginPending(label: string): string {
+export function beginPending(label: string, focus?: UndoFocus): string {
   const id = `pending:${crypto.randomUUID()}`;
   let resolve!: (t: string | null | false) => void;
   const promise = new Promise<string | null | false>((r) => (resolve = r));
   pendingWaiters.set(id, { promise, resolve });
-  useUndoStore.getState().push({ token: id, label, pending: true });
+  useUndoStore.getState().push({ token: id, label, pending: true, ...(focus && { focus }) });
   return id;
 }
 
 /** 占位落定：原地换成真正的那条（null 拿掉）；failed 表示操作没做成 */
 export function settlePending(id: string, entry: UndoEntry | null, failed = false) {
   useUndoStore.getState().replace(id, entry);
+  // 正在问「要不要撤销」的就是这条：跟着换成真正的 token，没做成就收起提示
+  if (asking?.token === id) {
+    if (entry) asking.token = entry.token;
+    else dismissAsk();
+  }
   pendingWaiters.get(id)?.resolve(failed ? false : (entry?.token ?? null));
   pendingWaiters.delete(id);
 }
@@ -360,7 +367,9 @@ async function runUndo(token: string, client: QueryClient): Promise<UndoOutcome>
       message = `已撤销：${entry.label}`;
     } else message = (await api.undo(token)).message;
     useUndoStore.getState().remove(token);
-    toast(message);
+    // 别的页面做的：给个「去看看」；本页做的：刷新后把撤回来的东西指给用户看
+    const where = afterUndone(entry);
+    toast(message, where === 'elsewhere' && entry ? { action: { label: '去看看', onClick: () => goToUndone(entry) } } : undefined);
     await invalidateAll(client);
     return 'ok';
   } catch (err) {
@@ -369,6 +378,93 @@ async function runUndo(token: string, client: QueryClient): Promise<UndoOutcome>
     if (entry?.tokens) await invalidateAll(client);
     return err instanceof ApiRequestError && err.code !== 'network' ? 'gone' : 'failed';
   }
+}
+
+// ------------------------------------------------------------------ Ctrl+Z / 顶栏撤销：先看在哪、多久以前
+
+/** 正在问「要不要撤销」的那条和它的提示 toast */
+let asking: { token: string; toastId: string | number } | null = null;
+
+function dismissAsk() {
+  if (!asking) return;
+  toast.dismiss(asking.toastId);
+  asking = null;
+}
+
+const herePath = () => (typeof window !== 'undefined' ? window.location.pathname : '/');
+
+/**
+ * Ctrl+Z、顶栏撤销、命令面板撤销都走这里：撤栈顶那一步。
+ * 别的页面做的、或者超过 2 分钟的，先弹一条带「撤销 / 取消」的提示；提示还在时再按一次就是确认。
+ * 返回 'asked' 弹了提示，'undone' 开始撤销，'none' 栈是空的
+ */
+export function requestUndo(client: QueryClient, path = herePath(), now = Date.now()): 'none' | 'asked' | 'undone' {
+  const top = useUndoStore.getState().entries[0];
+  if (asking) {
+    const confirmed = !!top && asking.token === top.token;
+    dismissAsk();
+    if (confirmed) {
+      void undo(top.token, client);
+      return 'undone';
+    }
+  }
+  if (!top) return 'none';
+  if (!needsConfirm(top, path, now)) {
+    void undo(top.token, client);
+    return 'undone';
+  }
+  const ask: { token: string; toastId: string | number } = { token: top.token, toastId: '' };
+  const clear = () => {
+    if (asking === ask) asking = null;
+  };
+  ask.toastId = toast(confirmText(top, path, now), {
+    description: `再按一次 ${modKeyLabel} Z 也是确认`,
+    duration: 8000,
+    action: {
+      label: '撤销',
+      onClick: () => {
+        clear();
+        // 问的时候又做了新的操作：不越过它去撤更早的
+        if (useUndoStore.getState().entries[0]?.token !== ask.token) return void toast('又有了新的操作，这次没有撤销');
+        void undo(ask.token, client);
+      },
+    },
+    cancel: { label: '取消', onClick: clear },
+    onDismiss: clear,
+    onAutoClose: clear,
+  });
+  asking = ask;
+  return 'asked';
+}
+
+/** 测试用：现在是不是在问 */
+export const isAskingUndo = () => asking !== null;
+
+let navigateTo: ((href: string) => void) | null = null;
+/** AppShell 把路由的 navigate 交过来，「去看看」用 */
+export function setUndoNavigate(fn: ((href: string) => void) | null) {
+  navigateTo = fn;
+}
+
+/**
+ * 撤销成功之后：本页做的，把要指给人看的东西交给页面（useUndoReveal）；别的页面做的返回 'elsewhere'，调用方给个「去看看」
+ */
+export function afterUndone(e: UndoEntry | undefined, path = herePath()): 'here' | 'elsewhere' | null {
+  if (!e) return null;
+  if (madeHere(e, path)) {
+    if (e.focus) useUndoReveal.setState({ reveal: { path, focus: e.focus, at: Date.now() } });
+    return 'here';
+  }
+  return 'elsewhere';
+}
+
+/** 「去看看」：回到做这一步的页面，到了以后照样指给用户看 */
+export function goToUndone(e: UndoEntry) {
+  if (!e.path) return;
+  if (e.focus) useUndoReveal.setState({ reveal: { path: e.path, focus: e.focus, at: Date.now() } });
+  const href = e.href ?? e.path;
+  if (navigateTo) navigateTo(href);
+  else window.location.assign(href);
 }
 
 // 同一轮渲染里各条勘误要问的 token 攒成一次请求
@@ -421,6 +517,15 @@ export function useStartJob(message: (job: Job) => string) {
   );
 }
 
+/** 从写操作的参数里猜撤销后要指给人看的图：{ ids: [...] } 或 { id } */
+export function focusOf(vars: unknown): UndoFocus | undefined {
+  if (!vars || typeof vars !== 'object') return undefined;
+  const v = vars as { ids?: unknown; id?: unknown };
+  if (Array.isArray(v.ids) && v.ids.length && v.ids.every((x) => typeof x === 'string')) return { images: v.ids.slice(0, 200) as ID[] };
+  if (typeof v.id === 'string') return { images: [v.id] };
+  return undefined;
+}
+
 export function errorMessage(err: unknown): string {
   if (err instanceof ApiRequestError) return err.message;
   return err instanceof Error ? err.message : String(err);
@@ -445,6 +550,8 @@ export function useMutate<TVars, TResult extends MutationResult = MutationResult
     undo?: false;
     /** 自己决定撤销栈里记什么（例如多个 token 合成一条） */
     entry?: (result: TResult, vars: TVars) => UndoEntry | null;
+    /** 撤销后要指给用户看什么；不传时从参数里的 ids / id 猜是哪些图 */
+    focus?: (vars: TVars) => UndoFocus | undefined;
   } = {},
 ) {
   const client = useQueryClient();
@@ -452,7 +559,8 @@ export function useMutate<TVars, TResult extends MutationResult = MutationResult
   return useMutation({
     mutationFn: fn,
     // 一点下去就占住撤销栈顶：乐观更新的页面不等接口返回就往下走，这时按 Ctrl+Z 也该撤这一步
-    onMutate: (vars): string | undefined => (opts.undo === false ? undefined : beginPending(labelOf(vars) ?? '刚才的操作')),
+    onMutate: (vars): string | undefined =>
+      opts.undo === false ? undefined : beginPending(labelOf(vars) ?? '刚才的操作', opts.focus ? opts.focus(vars) : focusOf(vars)),
     onSuccess: async (result, vars, pending) => {
       // silent 的自己弹提示，但 token / 占位照样进撤销栈
       announce(result, client, {

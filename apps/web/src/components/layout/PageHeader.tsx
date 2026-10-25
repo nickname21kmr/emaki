@@ -10,7 +10,8 @@ import { getChapter } from './chapters';
 import { IconButton, Kbd } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { modKeyLabel } from '@/lib/hotkeys';
-import { undo, undoTitle } from '@/lib/queries';
+import { requestUndo, undoTitle } from '@/lib/queries';
+import { placeText } from '@/lib/undoPlace';
 import { useBlurPrefs, useOverlays, usePrefs, useUndoStore } from '@/lib/stores';
 
 /**
@@ -171,6 +172,14 @@ export function GlobalActions() {
   const what = [blurLevel === 'explicit' ? '限制级图片' : '敏感图片', blurPhoto && '照片', blurText && '文字图'].filter(Boolean).join('、');
   const toggleBlur = usePrefs((s) => s.toggleBlurSensitive);
   const lastUndo = useUndoStore((s) => s.entries[0]);
+  // 提示里的「3 分钟前」每半分钟走一次
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!lastUndo) return;
+    setNow(Date.now());
+    const t = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(t);
+  }, [lastUndo]);
 
   return (
     <>
@@ -188,10 +197,10 @@ export function GlobalActions() {
         {blur ? <EyeOff /> : <Eye />}
       </IconButton>
       <IconButton
-        label={lastUndo ? undoTitle(lastUndo) : '没有可撤销的操作'}
+        label={lastUndo ? undoTitle(lastUndo) + placeText(lastUndo, now) : '没有可撤销的操作'}
         shortcut={`${modKeyLabel} Z`}
         disabled={!lastUndo}
-        onClick={() => lastUndo && void undo(lastUndo.token, client)}
+        onClick={() => void requestUndo(client)}
       >
         <UndoNod />
       </IconButton>

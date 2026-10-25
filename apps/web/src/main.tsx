@@ -43,6 +43,9 @@ createRoot(document.getElementById('root')!).render(
                   // 胶囊样式只给 sonner 自带的 toast；自绘的结果 toast（SEL-11）data-styled=false，自己画
                   '!pointer-events-auto data-[styled=true]:!rounded-full data-[styled=true]:!bg-ink data-[styled=true]:!text-fg-inverse data-[styled=true]:!border-0 data-[styled=true]:!shadow-pop data-[styled=true]:!px-5 data-[styled=true]:!py-3 data-[styled=true]:!text-[13px] data-[styled=true]:!font-medium data-[styled=true]:!gap-3',
                 actionButton: '!bg-white/15 !text-fg-inverse !rounded-full !px-3 !font-semibold',
+                // 撤销确认里的「取消」：比「撤销」淡一档
+                cancelButton: '!bg-transparent !text-fg-inverse/70 hover:!text-fg-inverse !rounded-full !px-2',
+                description: '!text-fg-inverse/65',
                 error: '!bg-danger !text-white',
               },
             }}

@@ -6,10 +6,10 @@ import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { modKeyLabel } from '@/lib/hotkeys';
-import { useUndoStore } from '@/lib/stores';
+import { useUndoStore, type UndoEntry } from '@/lib/stores';
 import { Kbd } from './Kbd';
 import { Spinner } from './Button';
-import { errorMessage, forgetFailedUndo } from '@/lib/queries';
+import { afterUndone, errorMessage, forgetFailedUndo, goToUndone } from '@/lib/queries';
 
 /** 正在显示的可撤销 toast：Ctrl+Z 优先交给它，胶囊原地变成「已撤销」 */
 const live = new Map<string, () => void>();
@@ -37,6 +37,7 @@ type Phase = 'idle' | 'undoing' | 'undone' | 'failed';
 function ResultToast({ id, message, undoToken, client }: { id: string | number; message: string; undoToken: string | null; client: QueryClient }) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState('');
+  const [goTo, setGoTo] = useState<UndoEntry | null>(null);
   const [hidden, setHidden] = useState(document.hidden);
   // 悬停 / 键盘聚焦 / 切到后台时引信停烧（内联 animation 会盖过 class，所以用 state）
   const [hover, setHover] = useState(false);
@@ -55,11 +56,15 @@ function ResultToast({ id, message, undoToken, client }: { id: string | number; 
     if (!undoToken || phase !== 'idle') return;
     setPhase('undoing');
     try {
+      const entry = useUndoStore.getState().entries.find((e) => e.token === undoToken);
       await api.undo(undoToken);
       useUndoStore.getState().remove(undoToken);
+      // 本页做的：交给页面指出撤回来的东西；别的页面做的：胶囊上给个「去看看」，多停一会儿
+      const elsewhere = afterUndone(entry) === 'elsewhere';
+      if (elsewhere && entry) setGoTo(entry);
       setPhase('undone');
       void client.invalidateQueries();
-      window.setTimeout(() => toast.dismiss(id), 1400);
+      window.setTimeout(() => toast.dismiss(id), elsewhere ? 4000 : 1400);
     } catch (err) {
       forgetFailedUndo(undoToken, err);
       setError(errorMessage(err));
@@ -94,6 +99,18 @@ function ResultToast({ id, message, undoToken, client }: { id: string | number; 
         <motion.span key="undone" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.2 }} className="flex items-center gap-2 pr-3">
           <Undo2 className="size-4 text-ok" />
           已撤销 · {message}
+          {goTo && (
+            <button
+              type="button"
+              onClick={() => {
+                goToUndone(goTo);
+                toast.dismiss(id);
+              }}
+              className="-mr-1 ml-2 flex h-8 items-center rounded-full bg-fg-inverse/15 px-3 text-[12.5px] font-semibold transition-colors hover:bg-fg-inverse/25"
+            >
+              去看看
+            </button>
+          )}
         </motion.span>
       ) : phase === 'failed' ? (
         <span className="pr-3 text-danger-soft">撤销失败：{error}</span>

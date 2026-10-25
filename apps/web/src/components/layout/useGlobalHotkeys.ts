@@ -1,8 +1,9 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router';
 import { isTypingTarget, useHotkey } from '@/lib/hotkeys';
-import { undo } from '@/lib/queries';
-import { useLightbox, useOverlays, usePrefs, useUndoStore } from '@/lib/stores';
+import { useEffect } from 'react';
+import { requestUndo, setUndoNavigate } from '@/lib/queries';
+import { useLightbox, useOverlays, usePrefs } from '@/lib/stores';
 
 /**
  * 全局快捷键（帮助面板 HelpDialog 里列出的那些）。
@@ -18,6 +19,12 @@ export function useGlobalHotkeys() {
   // 阅读器自己处理 b、方向键，数字键和 / 不跳页（T38e）
   const onReader = pathname.endsWith('/read');
   const pageKeys = !lightboxOpen && !onTriage && !onReader;
+
+  // 撤销提示里的「去看看」用路由跳转，不整页刷新
+  useEffect(() => {
+    setUndoNavigate((href) => void navigate(href));
+    return () => setUndoNavigate(null);
+  }, [navigate]);
 
   // 看图器打开时不要在它上面再叠命令面板 / 帮助
   useHotkey('mod+k', () => overlays.setCommandOpen(!overlays.commandOpen), { allowInInputs: true, enabled: !lightboxOpen });
@@ -46,8 +53,8 @@ export function useUndoHotkey({ inEmptyInputs = false } = {}) {
     (e) => {
       if (isTypingTarget(e.target) && !(inEmptyInputs && isEmptyField(e.target))) return;
       e.preventDefault();
-      const top = useUndoStore.getState().entries[0];
-      if (top) void undo(top.token, client);
+      // 别的页面的、超过 2 分钟的先问；问着的时候再按一次就是确认
+      requestUndo(client);
     },
     { allowInInputs: true, preventDefault: false },
   );

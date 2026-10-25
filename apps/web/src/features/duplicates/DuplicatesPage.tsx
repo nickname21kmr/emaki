@@ -20,6 +20,8 @@ import { ResolvedGroups, ResolvedGroupsSkeleton } from './components/ResolvedGro
 import { useIncremental } from './useIncremental';
 import { useBriefGuard } from '@/lib/guard';
 import { enterAction, reclaimBytes, resolveKeep } from './utils';
+import { pickRevealed } from '@/lib/undoPlace';
+import { useUndoRevealTarget } from '@/lib/useUndoReveal';
 
 type View = 'pending' | 'resolved';
 
@@ -120,9 +122,14 @@ export function DuplicatesPage() {
 
   const resolveM = useMutate((v: { id: ID; keepIds: ID[] }) => api.resolveDuplicate(v.id, v.keepIds), {
     label: '处理一组重复',
+    focus: (v) => ({ groups: [v.id] }),
     onSuccess: (_, v) => dismiss([v.id]),
   });
-  const ignoreM = useMutate((id: ID) => api.ignoreDuplicate(id), { label: '标记不是重复', onSuccess: (_, id) => dismiss([id]) });
+  const ignoreM = useMutate((id: ID) => api.ignoreDuplicate(id), {
+    label: '标记不是重复',
+    focus: (id) => ({ groups: [id] }),
+    onSuccess: (_, id) => dismiss([id]),
+  });
 
   /** 每组各自的 loading（可以连续处理多组，不互相阻塞） */
   const track = (id: ID, promise: Promise<unknown>) => {
@@ -171,6 +178,22 @@ export function DuplicatesPage() {
     setActiveId(g.id);
     scrollTarget.current = g.id;
   };
+
+  // 在这一页撤销了一步：刚藏起来的组放出来，刷新后滚到撤回来的那组
+  const { reveal, done: revealDone } = useUndoRevealTarget();
+  useEffect(() => {
+    const want = reveal?.focus.groups;
+    if (!want?.length || view !== 'pending') return;
+    setDismissed((prev) => (want.some((id) => prev.has(id)) ? new Set([...prev].filter((id) => !want.includes(id))) : prev));
+    const hit = pickRevealed(groups.map((g) => g.id), want);
+    if (!hit) return;
+    moveTo(hit.index);
+    revealDone();
+    // 刚放回来的组有入场动画，平滑滚动会被打断：动画差不多结束时再滚一次
+    window.setTimeout(() => document.getElementById(`dup-${hit.id}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 450);
+    // moveTo 每次渲染都是新的，只在目标或列表变化时跑
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reveal, groups, view, revealDone]);
 
   const lightboxOpen = useLightbox((s) => s.open);
   const showLightbox = useLightbox((s) => s.show);

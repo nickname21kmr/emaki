@@ -25,7 +25,8 @@ import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { formatCount } from '@/lib/format';
-import { qk, undo, undoTitle, useMutate, useSettings, useStartJob, useStats } from '@/lib/queries';
+import { qk, requestUndo, undoTitle, useMutate, useSettings, useStartJob, useStats } from '@/lib/queries';
+import { placeText } from '@/lib/undoPlace';
 import { useOverlays, usePrefs, useUndoStore } from '@/lib/stores';
 import { GLOBAL_KEYS, PAGE_JUMPS, type KeyCombo } from '../shortcuts';
 
@@ -185,11 +186,12 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
           {
             value: 'act:undo',
             section: 'act' as const,
-            label: undoTitle(lastUndo),
+            label: undoTitle(lastUndo) + placeText(lastUndo),
             keywords: ['undo', '撤销', 'chexiao', 'cx'],
             icon: Undo2,
             keys: GLOBAL_KEYS.undo,
-            run: act(() => void undo(lastUndo.token, client)),
+            // 别的页面的、太久以前的先问一声（和 Ctrl+Z 一样）
+            run: act(() => void requestUndo(client)),
           },
         ]
       : []),

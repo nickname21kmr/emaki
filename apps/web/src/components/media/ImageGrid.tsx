@@ -7,7 +7,11 @@ import { cn } from '@/lib/cn';
 import { api } from '@/lib/api';
 import { useMutate } from '@/lib/queries';
 import { useLightbox, useSelection } from '@/lib/stores';
+import { pickRevealed } from '@/lib/undoPlace';
+import { useUndoRevealTarget } from '@/lib/useUndoReveal';
 import { justify } from './justify';
+
+const NO_FLASH: ReadonlySet<ID> = new Set();
 import { Thumb } from './Thumb';
 
 export interface ImageGridProps {
@@ -76,6 +80,24 @@ export function ImageGrid({
     if (row >= 0) virtualizer.scrollToIndex(row, { align: 'center' });
   });
 
+  // 在这一页撤销了一步：撤回来的图在网格里就滚过去，描一下朱框
+  const { reveal, done: revealDone } = useUndoRevealTarget();
+  const [flash, setFlash] = useState<ReadonlySet<ID>>(NO_FLASH);
+  const flashTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(flashTimer.current), []);
+  useEffect(() => {
+    const want = reveal?.focus.images;
+    if (!want?.length || !rows.length) return;
+    const hit = pickRevealed(ids, want);
+    if (!hit) return;
+    const row = rows.findIndex((r) => hit.index >= r.start && hit.index < r.start + r.widths.length);
+    if (row >= 0) virtualizer.scrollToIndex(row, { align: 'center' });
+    setFlash(new Set(want));
+    revealDone();
+    window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setFlash(NO_FLASH), 1600);
+  }, [reveal, ids, rows, virtualizer, revealDone]);
+
   const virtualRows = virtualizer.getVirtualItems();
   const lastIndex = virtualRows[virtualRows.length - 1]?.index ?? -1;
   useEffect(() => {
@@ -103,6 +125,7 @@ export function ImageGrid({
                   width={w}
                   height={row.height}
                   selected={selected}
+                  flash={flash.has(image.id)}
                   selectable={!!selectionScope}
                   selecting={selecting}
                   onClick={(e) => handleClick(e, image, index)}
@@ -285,11 +308,14 @@ function Tile({
   overlay,
   forceBlur,
   onFavorite,
+  flash,
 }: {
   image: ImageItem;
   width: number;
   height: number;
   selected: boolean;
+  /** 刚撤销回来：描一道朱框，1.6 秒后淡掉 */
+  flash?: boolean;
   selectable: boolean;
   selecting: boolean;
   onClick: (e: React.MouseEvent) => void;
@@ -302,8 +328,10 @@ function Tile({
   return (
     <div
       className={cn(
-        'group/tile group/reveal relative shrink-0 overflow-hidden rounded-[var(--radius-plate-sm)] transition-[scale,box-shadow,translate] duration-[280ms] ease-[var(--ease-out-soft)] hover:z-10',
+        'group/tile group/reveal relative shrink-0 overflow-hidden rounded-[var(--radius-plate-sm)] transition-[scale,box-shadow,translate,outline-color] duration-[280ms] ease-[var(--ease-out-soft)] hover:z-10',
         selected ? 'motion-safe:scale-[.955]' : 'hover:-translate-y-0.5 hover:shadow-lift',
+        'outline-offset-2',
+        flash ? 'outline-[3px] outline-shu' : 'outline-[3px] outline-transparent',
       )}
       style={{ width, height }}
       data-image-id={image.id}

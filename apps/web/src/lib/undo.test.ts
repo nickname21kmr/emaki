@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiRequestError } from './api';
-import { announce, beginPending, forgetFailedUndo, settlePending, undo } from './queries';
-import { useUndoStore } from './stores';
+import { afterUndone, announce, beginPending, focusOf, forgetFailedUndo, isAskingUndo, requestUndo, settlePending, undo } from './queries';
+import { useUndoReveal, useUndoStore } from './stores';
+import { agoText, confirmText, needsConfirm, pageName, pickRevealed, placeText } from './undoPlace';
 
 // 撤销栈存在 sessionStorage：node 里没有，换成一个 Map（要赶在 import stores 之前）
 const saved = vi.hoisted(() => {
@@ -36,7 +37,7 @@ describe('撤销栈', () => {
     useUndoStore.getState().push({ token: 't2', label: '归为原创' });
     const after = await reload();
     expect(after).not.toBe(useUndoStore);
-    expect(after.getState().entries).toEqual([
+    expect(after.getState().entries).toMatchObject([
       { token: 't2', label: '归为原创' },
       { token: 't1', label: '收藏 1 张' },
     ]);
@@ -245,5 +246,148 @@ describe('合成一条的多个 token', () => {
     useUndoStore.getState().push({ token: 'group:1', label: '已处理 3 组', tokens: ['a', 'b'] });
     useUndoStore.getState().markBarrier(['b']);
     expect(useUndoStore.getState().entries[0]!.barrier).toBe(true);
+  });
+});
+
+describe('撤销前先看在哪、多久以前', () => {
+  const client = { invalidateQueries: vi.fn() } as never;
+  const now = Date.parse('2026-10-25T12:00:00Z');
+  const min = 60_000;
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+  beforeEach(() => {
+    saved.clear();
+    useUndoStore.setState({ entries: [], boot: null });
+    useUndoReveal.setState({ reveal: null });
+    // 上一个用例留下的提示收掉
+    if (isAskingUndo()) requestUndo(client, '/__none__', now);
+  });
+
+  it('同一页、2 分钟内的直接撤；别的页面的、更早的要问；撤销不了的占位不用问', () => {
+    const e = { token: 't', label: '全部保留', path: '/duplicates', page: '重复', at: now - 30_000 };
+    expect(needsConfirm(e, '/duplicates', now)).toBe(false);
+    expect(needsConfirm(e, '/duplicates/', now)).toBe(false);
+    expect(needsConfirm(e, '/unrecognized', now)).toBe(true);
+    expect(needsConfirm({ ...e, at: now - 3 * min }, '/duplicates', now)).toBe(true);
+    expect(needsConfirm({ ...e, at: now - 2 * min }, '/duplicates', now)).toBe(false);
+    expect(needsConfirm({ ...e, barrier: true }, '/gallery', now)).toBe(false);
+    // 升级前存下的旧记录没有位置和时间：照旧直接撤
+    expect(needsConfirm({ token: 'old', label: 'a' }, '/gallery', now)).toBe(false);
+  });
+
+  it('提示的说法带上页名和多久以前', () => {
+    const e = { token: 't', label: '全部保留', path: '/duplicates', page: '重复', at: now - 3 * min };
+    expect(confirmText(e, '/unrecognized', now)).toBe('撤销 3 分钟前在「重复」页的操作：全部保留？');
+    expect(confirmText(e, '/duplicates', now)).toBe('撤销 3 分钟前的操作：全部保留？');
+    expect(confirmText({ ...e, at: now - 5_000 }, '/gallery', now)).toBe('撤销刚刚在「重复」页的操作：全部保留？');
+    expect(placeText(e, now)).toBe(' · 重复页 · 3 分钟前');
+    expect(placeText({ token: 'old', label: 'a' }, now)).toBe('');
+    expect(agoText(now - 2 * 3600_000, now)).toBe('2 小时前');
+    expect(pageName('/characters/c1')).toBe('角色详情');
+    expect(pageName('/collections/x/read')).toBe('阅读器');
+    expect(pageName('/annex/photo')).toBe('别册');
+  });
+
+  it('push 时记下当前页面和时间', () => {
+    vi.stubGlobal('window', { location: { pathname: '/duplicates', search: '?view=pending' } });
+    try {
+      useUndoStore.getState().push({ token: 't1', label: 'a' });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(useUndoStore.getState().entries[0]).toMatchObject({ path: '/duplicates', page: '重复', href: '/duplicates?view=pending' });
+    expect(Date.now() - useUndoStore.getState().entries[0]!.at!).toBeLessThan(1000);
+  });
+
+  it('同一页刚做的：Ctrl+Z 直接撤', async () => {
+    const spy = vi.spyOn(api, 'undo').mockResolvedValue({ ok: true, message: '已撤销', undoToken: null });
+    useUndoStore.getState().push({ token: 't1', label: '收藏 1 张', path: '/gallery', at: now - 10_000 });
+    expect(requestUndo(client, '/gallery', now)).toBe('undone');
+    await flush();
+    expect(spy).toHaveBeenCalledWith('t1');
+    spy.mockRestore();
+  });
+
+  it('别的页面做的：先问，不撤；再按一次 Ctrl+Z 就是确认', async () => {
+    const spy = vi.spyOn(api, 'undo').mockResolvedValue({ ok: true, message: '已撤销', undoToken: null });
+    useUndoStore.getState().push({ token: 't1', label: '全部保留', path: '/duplicates', page: '重复', at: now - 3 * min });
+    expect(requestUndo(client, '/unrecognized', now)).toBe('asked');
+    expect(isAskingUndo()).toBe(true);
+    await flush();
+    expect(spy).not.toHaveBeenCalled();
+    expect(requestUndo(client, '/unrecognized', now)).toBe('undone');
+    expect(isAskingUndo()).toBe(false);
+    await flush();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith('t1');
+    spy.mockRestore();
+  });
+
+  it('同一页但超过 2 分钟：也先问', () => {
+    useUndoStore.getState().push({ token: 't1', label: 'a', path: '/gallery', at: now - 5 * min });
+    expect(requestUndo(client, '/gallery', now)).toBe('asked');
+  });
+
+  it('问着的时候又做了新的操作：再按 Ctrl+Z 不会去撤旧的那条', async () => {
+    const spy = vi.spyOn(api, 'undo').mockResolvedValue({ ok: true, message: '已撤销', undoToken: null });
+    useUndoStore.getState().push({ token: 'old', label: 'a', path: '/duplicates', at: now - 5 * min });
+    expect(requestUndo(client, '/gallery', now)).toBe('asked');
+    useUndoStore.getState().push({ token: 'new', label: 'b', path: '/gallery', at: now });
+    expect(requestUndo(client, '/gallery', now)).toBe('undone');
+    await flush();
+    expect(spy).toHaveBeenCalledWith('new');
+    expect(spy).not.toHaveBeenCalledWith('old');
+    spy.mockRestore();
+  });
+
+  it('别的页面还在进行的那步：问着时落定了，确认后撤落定后的 token；位置和要指的图沿用开始时的', async () => {
+    const spy = vi.spyOn(api, 'undo').mockResolvedValue({ ok: true, message: '已撤销', undoToken: null });
+    const id = beginPending('归为原创', { images: ['img1'] });
+    const begun = useUndoStore.getState().entries[0]!;
+    expect(begun).toMatchObject({ pending: true, path: '/', focus: { images: ['img1'] } });
+    expect(requestUndo(client, '/gallery', now)).toBe('asked');
+    announce({ ok: true, message: '已归为原创', undoToken: 't1' }, client, { pending: id, silent: true });
+    const settled = useUndoStore.getState().entries[0]!;
+    expect(settled).toMatchObject({ token: 't1', path: '/', at: begun.at, focus: { images: ['img1'] } });
+    expect(settled.pending).toBeUndefined();
+    expect(requestUndo(client, '/gallery', now)).toBe('undone');
+    await flush();
+    expect(spy).toHaveBeenCalledWith('t1');
+    spy.mockRestore();
+  });
+
+  it('问着的那步没做成：提示收起', () => {
+    const id = beginPending('收藏');
+    expect(requestUndo(client, '/gallery', now)).toBe('asked');
+    settlePending(id, null, true);
+    expect(isAskingUndo()).toBe(false);
+  });
+
+  it('别的页面的撤销不了的占位：不问，直接提示并拿掉', async () => {
+    useUndoStore.getState().push({ token: 'older', label: 'a' });
+    useUndoStore.getState().push({ token: 'barrier:1', label: '改了设置', barrier: true, path: '/settings', at: now - 10 * min });
+    expect(requestUndo(client, '/gallery', now)).toBe('undone');
+    await flush();
+    expect(tokens(useUndoStore)).toEqual(['older']);
+  });
+
+  it('撤销成功后：本页做的交给页面去指，别的页面做的给「去看看」', () => {
+    const e = { token: 't', label: 'a', path: '/unrecognized', focus: { images: ['img1'] } };
+    expect(afterUndone(e, '/gallery')).toBe('elsewhere');
+    expect(useUndoReveal.getState().reveal).toBeNull();
+    expect(afterUndone(e, '/unrecognized')).toBe('here');
+    expect(useUndoReveal.getState().reveal).toMatchObject({ path: '/unrecognized', focus: { images: ['img1'] } });
+  });
+
+  it('从写操作的参数里猜要指的图', () => {
+    expect(focusOf({ ids: ['a', 'b'], action: { type: 'exclude' } })).toEqual({ images: ['a', 'b'] });
+    expect(focusOf({ id: 'a', value: true })).toEqual({ images: ['a'] });
+    expect(focusOf('g1')).toBeUndefined();
+    expect(focusOf({ ids: [] })).toBeUndefined();
+  });
+
+  it('光标落到撤回来的图里排在最前的那张；还没刷新出来就等', () => {
+    expect(pickRevealed(['a', 'b', 'c', 'd'], ['d', 'b'])).toEqual({ id: 'b', index: 1 });
+    expect(pickRevealed(['a', 'c'], ['x'])).toBeNull();
+    expect(pickRevealed(['a'], [])).toBeNull();
   });
 });

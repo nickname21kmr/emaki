@@ -7,6 +7,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { useShallow } from 'zustand/react/shallow';
 import type { BlurLevel, BlurPrefs } from './blur';
 import type { CoverCrop } from './coverCrop';
+import { currentPlace } from './undoPlace';
 
 // ------------------------------------------------------------------ 偏好（持久化到 localStorage）
 
@@ -290,7 +291,28 @@ export interface UndoEntry {
   pending?: boolean;
   /** 一次点下去产生的多个 token（例如一键处理全部重复）：撤销时倒序一起撤 */
   tokens?: string[];
+  /** 在哪个页面做的（pathname）、页名、带查询参数的地址、什么时候；push 时自动记 */
+  path?: string;
+  page?: string;
+  href?: string;
+  at?: number;
+  /** 撤销后要带用户去看的东西：图片 / 重复组 */
+  focus?: UndoFocus;
 }
+
+export interface UndoFocus {
+  images?: ID[];
+  groups?: ID[];
+}
+
+/** 刚撤销完、要在页面里指给用户看的那一步（页面自己认领，见 lib/useUndoReveal.ts） */
+export interface UndoReveal {
+  path: string;
+  focus: UndoFocus;
+  at: number;
+}
+
+export const useUndoReveal = create<{ reveal: UndoReveal | null }>(() => ({ reveal: null }));
 
 interface UndoState {
   entries: UndoEntry[];
@@ -310,6 +332,8 @@ interface UndoState {
  * 挨着的、说法一样的「没有撤销」占位只留一条：拖一下设置滑块、连改几次设置不会把撤销栈占满，
  * 把真正能撤销的挤出去（回收站那种不合并）
  */
+const keepPlace = ({ path, page, href, at }: UndoEntry) => ({ path, page, href, at });
+
 function squashBarriers(entries: UndoEntry[]): UndoEntry[] {
   return entries.filter((e, i) => {
     const above = entries[i - 1];
@@ -323,12 +347,16 @@ export const useUndoStore = create<UndoState>()(
     (set) => ({
       entries: [],
       boot: null,
-      push: (e) => set((s) => ({ entries: squashBarriers([{ ...e, ...(s.boot ? { boot: s.boot } : {}) }, ...s.entries]).slice(0, 20) })),
+      // 没写位置的就记当前页面和时间
+      push: (e) => set((s) => ({ entries: squashBarriers([{ ...currentPlace(), ...e, ...(s.boot ? { boot: s.boot } : {}) }, ...s.entries]).slice(0, 20) })),
       remove: (token) => set((s) => ({ entries: s.entries.filter((e) => e.token !== token) })),
       replace: (token, next) =>
         set((s) => ({
           entries: squashBarriers(
-            s.entries.flatMap((e) => (e.token !== token ? [e] : next ? [{ ...next, ...(e.boot ? { boot: e.boot } : {}) }] : [])),
+            // 占位落定：位置、时间、要指给人看的东西沿用开始时记下的
+            s.entries.flatMap((e) =>
+              e.token !== token ? [e] : next ? [{ ...next, ...keepPlace(e), focus: next.focus ?? e.focus, ...(e.boot ? { boot: e.boot } : {}) }] : [],
+            ),
           ),
         })),
       markBarrier: (tokens) => {

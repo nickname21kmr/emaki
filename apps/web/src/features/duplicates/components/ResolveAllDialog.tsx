@@ -111,6 +111,7 @@ export function ResolveAllDialog({
     {
       silent: true,
       label: '全部按推荐处理',
+      focus: (list) => ({ groups: list.map((p) => p.id) }),
       // 各组的 token 在撤销栈里合成一条：Ctrl+Z 一次把这一批倒序撤回
       entry: (res) =>
         res.tokens.length

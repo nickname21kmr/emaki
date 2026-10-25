@@ -7,6 +7,8 @@ import { KIND_LABEL } from '@/lib/kinds';
 import { useMutate, useUnrecognizedInfinite } from '@/lib/queries';
 import { useSelection } from '@/lib/stores';
 import { useReconcileSelection } from '@/lib/useReconcileSelection';
+import { pickRevealed } from '@/lib/undoPlace';
+import { useUndoRevealTarget } from '@/lib/useUndoReveal';
 import type { AggregatedSuggestion, AssignTarget, Direction, StampEvent } from './types';
 
 const SCOPE = 'unrecognized';
@@ -98,6 +100,18 @@ export function useTriage(bucket: 'suggested' | 'untagged', artKind?: Unrecogniz
       setCursor({ id: currentId, index });
     }
   }, [currentId, cursor, index, items.length]);
+
+  // 在这一页撤销了一步：刷新后撤回来的图回到队列里，光标落到它上面
+  const { reveal, done: revealDone } = useUndoRevealTarget();
+  useEffect(() => {
+    const want = reveal?.focus.images;
+    if (!want?.length) return;
+    const hit = pickRevealed(items.map((it) => it.image.id), want);
+    if (!hit) return;
+    setDirection(hit.index < index ? -1 : 1);
+    setCursor(hit);
+    revealDone();
+  }, [reveal, items, index, revealDone]);
 
   // 快到已加载的末尾就提前拉下一页，前进时不会卡住
   useEffect(() => {
