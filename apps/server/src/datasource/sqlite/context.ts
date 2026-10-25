@@ -76,7 +76,8 @@ export function createContext(init: {
     write(fn: () => string): MutationResult {
       const msg = init.db.transaction(fn)();
       ctx.touch();
-      return done(msg);
+      // write 只给撤销不了的操作用（移到回收站）
+      return { ...done(msg), irreversible: true };
     },
     onInvalidate(listener: InvalidateListener) {
       listeners.push(listener);

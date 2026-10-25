@@ -265,6 +265,8 @@ interface UndoEntry {
   label: string;
   /** 记下时后端的启动 id：后端重启后服务端的撤销栈就空了，这条也跟着作废 */
   boot?: string;
+  /** 撤销不了的一步：占住位置，撤销时只提示、把它拿掉 */
+  barrier?: boolean;
 }
 
 interface UndoState {

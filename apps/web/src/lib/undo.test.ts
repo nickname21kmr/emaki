@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiRequestError } from './api';
-import { forgetFailedUndo } from './queries';
+import { announce, forgetFailedUndo, undo } from './queries';
 import { useUndoStore } from './stores';
 
 // 撤销栈存在 sessionStorage：node 里没有，换成一个 Map（要赶在 import stores 之前）
@@ -81,5 +81,27 @@ describe('撤销栈', () => {
     // revert 抛错时后端也已经把 token 删了
     forgetFailedUndo('t1', new ApiRequestError(409, 'conflict', '冲突'));
     expect(tokens(useUndoStore)).toEqual([]);
+  });
+});
+
+describe('撤销不了的一步', () => {
+  beforeEach(() => {
+    saved.clear();
+    useUndoStore.setState({ entries: [], boot: null });
+  });
+
+  it('移到回收站占住撤销栈，Ctrl+Z 只提示并拿掉它，不越过去撤更早的', async () => {
+    const client = { invalidateQueries: vi.fn() } as never;
+    useUndoStore.getState().push({ token: 'older', label: '全部保留' });
+    announce({ ok: true, message: '已保留 1 张，2 张移到回收站', undoToken: null, irreversible: true }, client);
+    const top = useUndoStore.getState().entries[0]!;
+    expect(top.barrier).toBe(true);
+    expect(await undo(top.token, client)).toBe('gone');
+    expect(tokens(useUndoStore)).toEqual(['older']);
+  });
+
+  it('普通的没有撤销的结果不占位置', () => {
+    announce({ ok: true, message: '已保存', undoToken: null }, { invalidateQueries: vi.fn() } as never);
+    expect(useUndoStore.getState().entries).toEqual([]);
   });
 });

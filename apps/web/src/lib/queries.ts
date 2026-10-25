@@ -248,6 +248,7 @@ export function invalidateAll(client: QueryClient) {
 export function announce(result: MutationResult, client: QueryClient) {
   // 墨色胶囊 + 朱色引信（SEL-11）；可撤销的记入顶栏撤销栈
   if (result.undoToken) useUndoStore.getState().push({ token: result.undoToken, label: result.message });
+  else if (result.irreversible) useUndoStore.getState().push({ token: `barrier:${crypto.randomUUID()}`, label: result.message, barrier: true });
   showResultToast(result.message, result.undoToken, client);
 }
 
@@ -256,6 +257,13 @@ export function announce(result: MutationResult, client: QueryClient) {
  * 'failed' 连不上，可以再试。只管弹提示的调用方忽略返回值即可。注意 'gone' 也是真值，别拿来当成功判断
  */
 export async function undo(token: string, client: QueryClient): Promise<'ok' | 'gone' | 'failed'> {
+  // 撤销不了的那一步：说一声再拿掉，下一次 Ctrl+Z 才轮到更早的
+  const barrier = useUndoStore.getState().entries.find((e) => e.token === token && e.barrier);
+  if (barrier) {
+    useUndoStore.getState().remove(token);
+    toast(`上一步撤销不了：${barrier.label}`, { description: '移到回收站的文件请在系统回收站还原。再按一次撤销会撤更早的操作。' });
+    return 'gone';
+  }
   // 这条的 toast 还在：交给它撤销，胶囊原地变成「已撤销」
   if (undoViaToast(token)) return 'ok';
   try {

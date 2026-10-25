@@ -56,6 +56,8 @@ export interface MutationResult {
   /** 给 toast 用的一句话，例如「已将 12 张图归到 圣园未花」 */
   message: string;
   undoToken: string | null;
+  /** 做了但撤销不了（文件已移到系统回收站）：前端在撤销栈里占一格，Ctrl+Z 不会越过它去撤销更早的操作 */
+  irreversible?: true;
 }
 
 /** POST /api/images/import: copy downloaded local files into an existing library root. */

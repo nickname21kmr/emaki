@@ -188,7 +188,7 @@ export function GlobalActions() {
         {blur ? <EyeOff /> : <Eye />}
       </IconButton>
       <IconButton
-        label={lastUndo ? `撤销：${lastUndo.label}` : '没有可撤销的操作'}
+        label={lastUndo ? (lastUndo.barrier ? `上一步撤销不了：${lastUndo.label}` : `撤销：${lastUndo.label}`) : '没有可撤销的操作'}
         shortcut={`${modKeyLabel} Z`}
         disabled={!lastUndo}
         onClick={() => lastUndo && void undo(lastUndo.token, client)}

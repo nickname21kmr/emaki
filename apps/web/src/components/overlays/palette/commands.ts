@@ -185,7 +185,7 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
           {
             value: 'act:undo',
             section: 'act' as const,
-            label: `撤销：${lastUndo.label}`,
+            label: lastUndo.barrier ? `上一步撤销不了：${lastUndo.label}` : `撤销：${lastUndo.label}`,
             keywords: ['undo', '撤销', 'chexiao', 'cx'],
             icon: Undo2,
             keys: GLOBAL_KEYS.undo,
