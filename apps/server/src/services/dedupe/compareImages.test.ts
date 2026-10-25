@@ -56,7 +56,7 @@ describe('Pixelmatch and local SSIM candidate verification', () => {
     await sharp(raw, { raw: { width, height, channels: 3 } }).png().toFile(b);
     const result = await compareImages(a, b);
     expect(result.differentFraction).toBe(0);
-    expect(result.localStructure).toBeLessThan(0.8);
+    expect(result.localStructure).toBeLessThan(0.6);
     expect(result.match).toBeNull();
   });
 
@@ -77,9 +77,23 @@ describe('Pixelmatch and local SSIM candidate verification', () => {
     expect((await compareImages(b, alpha)).match).toBeNull();
   });
 
-  it('never inherits an old visual acceptance or an old local-only rejection', () => {
+  it('rejects a local color-only edit even when its whole-image area is tiny', async () => {
+    const a = path.join(dir, 'pink.png'), b = path.join(dir, 'recolored.png');
+    const width = 512, height = 512;
+    const raw = Buffer.alloc(width * height * 3);
+    for (let i = 0; i < width * height; i++) raw.set([255, 180, 255], i * 3);
+    await sharp(raw, { raw: { width, height, channels: 3 } }).png().toFile(a);
+    for (let y = 200; y < 216; y++) for (let x = 200; x < 216; x++) raw[(y * width + x) * 3 + 1] = 20;
+    await sharp(raw, { raw: { width, height, channels: 3 } }).png().toFile(b);
+    const result = await compareImages(a, b);
+    expect(result.differentFraction).toBeLessThan(0.005);
+    expect(result.maxLocalDifference).toBeGreaterThan(28);
+    expect(result.match).toBeNull();
+  });
+
+  it('rechecks old visual acceptances and inherits only the unchanged rejecting pixel checks', () => {
     expect(compatibleDecision({ match: 'visual', differentFraction: 0 })).toBeNull();
-    expect(compatibleDecision({ match: null, differentFraction: 0.00001 })).toBeNull();
+    expect(compatibleDecision({ match: null, differentFraction: 0.00001, maxLocalDifference: 200 })).toEqual({ match: null, differentFraction: 0.00001, maxLocalDifference: 200 });
     expect(compatibleDecision({ match: null, differentFraction: 0.1 })).toEqual({ match: null, differentFraction: 0.1 });
     expect(compatibleDecision({ match: 'pixels', differentFraction: 0 })).toEqual({ match: 'pixels', differentFraction: 0, localStructure: 1 });
   });

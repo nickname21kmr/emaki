@@ -3,7 +3,7 @@ import { ssim } from 'ssim.js/dist/ssim.js';
 
 // Use the original Gaussian SSIM map, not its default automatic downsampling or grayscale average.
 const OPTIONS = getOptions({ ssim: 'fast', downsample: false, windowSize: 11 });
-const REGION = 16;
+const REGION = 4;
 
 /** Minimum sliding regional mean: a small edit must not disappear in a whole-image average. */
 function minimumRegionalMean(data: ArrayLike<number>, width: number, height: number): number {

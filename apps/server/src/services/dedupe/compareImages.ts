@@ -7,14 +7,15 @@ import { sharp } from '../image/sharpConfig.ts';
 import { localStructure } from './localStructure.ts';
 
 // Bump when preprocessing or decision limits change: cached decisions must be recomputed.
-export const COMPARISON_VERSION = 'pixelmatch8-ssim3-v2';
+export const COMPARISON_VERSION = 'pixelmatch8-ssim3-v4';
 export const COMPATIBLE_PIXEL_VERSION = 'pixelmatch-8-v1';
 export const COMPARISON_LIMITS = {
   // Calibrated on resized/recompressed library samples; see docs/duplicate-detection.md.
   colorThreshold: 0.15,
   maxDifferentFraction: 0.005,
+  maxLocalDifference: 28,
   noiseSigma: 1,
-  minLocalStructure: 0.8,
+  minLocalStructure: 0.6,
 } as const;
 const MAX_EDGE = 1024;
 const MAX_EXACT_PIXELS = 32 * 1024 * 1024;
@@ -22,15 +23,15 @@ const MAX_EXACT_PIXELS = 32 * 1024 * 1024;
 export interface ImageComparison {
   match: 'pixels' | 'visual' | null;
   differentFraction: number;
-  /** Worst 16x16 regional RGB SSIM; absent when the coarse pixel gate already rejected the pair. */
+  /** Worst 4x4 mean of the RGB SSIM map; absent when the pixel gate already rejected the pair. */
   localStructure?: number;
+  maxLocalDifference?: number;
 }
 
-/** The global pixel gate and full-size equality are unchanged, so these old results remain valid. */
+/** Both Pixelmatch gates and full-size equality are unchanged; SSIM only narrows acceptance. */
 export function compatibleDecision(old: ImageComparison): ImageComparison | null {
   if (old.match === 'pixels') return { match: 'pixels', differentFraction: 0, localStructure: 1 };
-  if (old.differentFraction > COMPARISON_LIMITS.maxDifferentFraction)
-    return { match: null, differentFraction: old.differentFraction };
+  if (old.match === null) return { match: null, differentFraction: old.differentFraction, ...(old.maxLocalDifference === undefined ? {} : { maxLocalDifference: old.maxLocalDifference }) };
   return null;
 }
 
@@ -68,6 +69,8 @@ export async function compareImages(aFile: string, bFile: string): Promise<Image
   const options = { threshold: COMPARISON_LIMITS.colorThreshold, includeAA: false };
   const differentFraction = pixelmatch(ap, bp, null, width, height, options) / (width * height);
   if (differentFraction > COMPARISON_LIMITS.maxDifferentFraction) return { match: null, differentFraction };
+  const maxLocalDifference = pixelmatch(ap, bp, null, width, height, { ...options, windowSize: 16 });
+  if (maxLocalDifference > COMPARISON_LIMITS.maxLocalDifference) return { match: null, differentFraction, maxLocalDifference };
   // A fixed Gaussian low-pass suppresses JPEG ringing before structural comparison.
   // The pixel gate above still sees the unblurred colors; equality is always checked at full resolution.
   const structurePixels = await Promise.all([ap, bp].map(p => sharp(p, { raw: { width, height, channels: 4 } })
@@ -77,5 +80,6 @@ export async function compareImages(aFile: string, bFile: string): Promise<Image
     match: structure >= COMPARISON_LIMITS.minLocalStructure ? 'visual' : null,
     differentFraction,
     localStructure: structure,
+    maxLocalDifference,
   };
 }

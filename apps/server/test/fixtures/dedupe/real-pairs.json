@@ -420,6 +420,26 @@
         "6e42dfe7db9d051be51ff443078d186e915913a7eda50585efee162e65bc4d79",
         "c748aaf976e33de4422bc62cb5cade37c2e0466ad820ea470582de27443de736"
       ]
+    },
+    {
+      "name": "pixiv-92554291-14284-14285",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "mouth shape",
+      "sha256": [
+        "09c7eae43b640dc59744bd665579023212c88772bcdaf287ef8f43ff2c0014e3",
+        "1e22308debce255148052970e6fc4058980fcad880a5f8b3f41d50f9a281fd7b"
+      ]
+    },
+    {
+      "name": "pixiv-96080620-15667-15668",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "small tears",
+      "sha256": [
+        "8f8a5e8e618223091eebdd1dcaea3d24fc33f47f0cfa1bec290eeeb149da857e",
+        "a1a25c978e636a51827b4ad0dd5139ab470f70d8c720e6af75ec3b5e7d9967cb"
+      ]
     }
   ]
 }
