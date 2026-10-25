@@ -1,5 +1,5 @@
 /**
- * 查重：SHA256 文件重复 + dHash 候选 + Pixelmatch 原图复核，再和库里已有的组对账。
+ * 查重：SHA256 文件重复 + dHash 候选 + Pixelmatch + 局部 SSIM 原图复核，再和库里已有的组对账。
  * 分两层：buildGroups 是纯函数（输入行、输出组），reconcile 负责写库。
  */
 import type { Db } from '../../db/connection.ts';
@@ -9,7 +9,7 @@ import { pickKeep, type KeepCandidate } from './pickKeep.ts';
 import { UnionFind } from './unionFind.ts';
 import { setImmediate } from 'node:timers/promises';
 import { toAbs } from '../fs/paths.ts';
-import { compareImages, COMPARISON_VERSION, type ImageComparison } from './compareImages.ts';
+import { compareImages, compatibleDecision, COMPATIBLE_PIXEL_VERSION, COMPARISON_VERSION, type ImageComparison } from './compareImages.ts';
 import { ComparisonWorker, ComparisonWorkerError } from './ComparisonWorker.ts';
 
 export interface DedupeRow extends KeepCandidate {
@@ -242,6 +242,11 @@ export interface DedupeServiceDeps {
 export class DedupeService {
   constructor(private readonly d: DedupeServiceDeps) {}
 
+  needsRecheck(): boolean {
+    const version = this.d.db.prepare("SELECT value FROM settings WHERE key = 'dedupe.comparisonVersion'").pluck().get();
+    return version !== JSON.stringify(COMPARISON_VERSION);
+  }
+
   loadRows(): DedupeRow[] {
     return this.d.db
       .prepare('SELECT i.id, i.sha256, i.dhash, i.width, i.height, i.bytes, i.added_at, i.file_name, i.collection_id FROM v_counted_images i')
@@ -271,7 +276,15 @@ export class DedupeService {
         continue;
       }
       const [sa, sb] = [a.sha256, b.sha256].sort() as [string, string];
-      const cached = get.get(sa, sb, COMPARISON_VERSION) as { result: string } | undefined;
+      let cached = get.get(sa, sb, COMPARISON_VERSION) as { result: string } | undefined;
+      if (!cached) {
+        const old = get.get(sa, sb, COMPATIBLE_PIXEL_VERSION) as { result: string } | undefined;
+        const compatible = old ? compatibleDecision(JSON.parse(old.result) as ImageComparison) : null;
+        if (compatible) {
+          cached = { result: JSON.stringify(compatible) };
+          put.run(sa, sb, COMPARISON_VERSION, cached.result);
+        }
+      }
       if (cached) decisions.set(pairKey(a, b), JSON.parse(cached.result) as ImageComparison);
       else {
         try {
@@ -298,7 +311,11 @@ export class DedupeService {
 
   private finish(build: BuildResult) {
     const at = new Date(this.d.clock()).toISOString();
-    const r = this.d.db.transaction(() => reconcile(this.d.db, build.groups, at))();
+    const r = this.d.db.transaction(() => {
+      const result = reconcile(this.d.db, build.groups, at);
+      this.d.db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('dedupe.comparisonVersion', JSON.stringify(COMPARISON_VERSION));
+      return result;
+    })();
     this.d.onFinished?.(at);
     this.d.onChanged?.();
     return { build, reconcile: r, message: summarize(build) };

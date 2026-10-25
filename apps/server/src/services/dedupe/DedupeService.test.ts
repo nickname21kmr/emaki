@@ -8,6 +8,7 @@ import { makeTmpDir } from '../../../test/helpers/tmp.ts';
 import { SET_FOLDER_MAX } from '../../datasource/sqlite/duplicates.ts';
 import { sharp } from '../image/sharpConfig.ts';
 import { buildGroups, MAX_COMPONENT, type DedupeRow } from './DedupeService.ts';
+import { COMPARISON_VERSION, COMPATIBLE_PIXEL_VERSION } from './compareImages.ts';
 
 const H = '3c3c3c3c3c3c3c3c'; // 32 位 1，信息量正常
 const flip = (hex: string, bits: number) => {
@@ -155,6 +156,20 @@ describe('DedupeService + 接口（:memory:）', () => {
     expect(next.build.groups).toEqual([]);
     expect(next.build.failedPairs).toBe(1);
     expect(ds.ctx.db.prepare('SELECT count(*) FROM duplicate_comparisons').pluck().get()).toBe(1);
+  });
+
+  it('rechecks old visual acceptances and only carries forward an unchanged rejecting pixel gate', async () => {
+    addImage('a.png', 's1', H);
+    addImage('b.png', 's2', H);
+    const insert = ds.ctx.db.prepare('INSERT INTO duplicate_comparisons (sha_a, sha_b, version, result) VALUES (?, ?, ?, ?)');
+    insert.run('s1', 's2', COMPATIBLE_PIXEL_VERSION, JSON.stringify({ match: 'visual', differentFraction: 0, maxLocalDifference: 0 }));
+    expect(ds.dedupe.needsRecheck()).toBe(true);
+    expect((await ds.dedupe.runOnce()).build.groups[0]!.comparison).toBe('pixels');
+    expect(ds.dedupe.needsRecheck()).toBe(false);
+    ds.ctx.db.prepare('DELETE FROM duplicate_comparisons WHERE version = ?').run(COMPARISON_VERSION);
+    ds.ctx.db.prepare('UPDATE duplicate_comparisons SET result = ?').run(JSON.stringify({ match: null, differentFraction: 0.2, maxLocalDifference: 256 }));
+    expect((await ds.dedupe.runOnce()).build.groups).toEqual([]);
+    expect(ds.ctx.db.prepare('SELECT json_extract(result,\'$.differentFraction\') FROM duplicate_comparisons WHERE version = ?').pluck().get(COMPARISON_VERSION)).toBe(0.2);
   });
 
   it('cancelled or yielded jobs keep the existing groups and resume from completed pair decisions', async () => {

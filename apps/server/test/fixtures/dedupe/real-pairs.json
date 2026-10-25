@@ -1,0 +1,425 @@
+{
+  "note": "Visual labels for a local regression corpus. Images are not distributed; resolve original content by SHA256 in a read-only library. Uncertain pairs are excluded.",
+  "cases": [
+    {
+      "name": "pixiv-77499952-25963-23707",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "face covering",
+      "sha256": [
+        "2af0f24a859b0c5f9c62899117370cf9a3af4031e068112524a84a28ab566433",
+        "f329643f9496554c9dfd1fa13bbbcada8d615cd04978bb8b8fdbf252c3537471"
+      ]
+    },
+    {
+      "name": "pixiv-89797921-13000-13001",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "mouth expression",
+      "sha256": [
+        "873333403811795d14ad6f032703b46f551c72b0da96dc414979456e99742720",
+        "e28d3e9bc1bd5e1f15ce92d1505822a2f905f5664e5419ccb190bec1f7b4f42e"
+      ]
+    },
+    {
+      "name": "pixiv-91265581-13707-13706",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "facial expression",
+      "sha256": [
+        "16915eca7e563614396c308e5bedb141e7bc6144dda5e6d1aac083f99037dd7a",
+        "26df4dd3f9546ceacdfbd218197c809698d4b217338a6f9bfe6c2184116ef8c7"
+      ]
+    },
+    {
+      "name": "pixiv-93395601-14639-14638",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "water droplets",
+      "sha256": [
+        "9215cc55cbda8ce7d5be70a0fc2cb8bf5c44f507f46bf47a85eb85950cf689cb",
+        "a11a134664521ef429f9855d129072ce6450d82554cc85ee420d7aaede195a62"
+      ]
+    },
+    {
+      "name": "pixiv-94231997-15037-15038",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "clothing",
+      "sha256": [
+        "0a2037212a18e28005ae95df1557c2d0ad6807f83c1a530f8da2acc42882d260",
+        "87458260153fd57bab5fdebad0f06c86e172fa7cc93aa233acc14e8a5088168d"
+      ]
+    },
+    {
+      "name": "pixiv-95446572-15486-15485",
+      "set": "regression",
+      "expected": "copy",
+      "reason": "same page saved twice",
+      "sha256": [
+        "e097696afda8c73552300b4127684f8afd2042094a756bcbcf0b05c32c593829",
+        "f92bcbeedd56ad92ef53e20c1f3302f70ec1e1d2f11fbb57775a9eee907ac652"
+      ]
+    },
+    {
+      "name": "pixiv-97325280-16084-16085",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "clothing",
+      "sha256": [
+        "2b5512c60ff0db1b1b55d1f89c449824b08074c70c77f6d712b3e297a03dc6c3",
+        "75db8f8369fd02ba87844c62d28a6c42f49ab287ab0732d30e39ae4f5ad1c0bf"
+      ]
+    },
+    {
+      "name": "pixiv-99627475-16857-16856",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "eye and mouth expression",
+      "sha256": [
+        "45817b1a21818e9bd2be6d30065b535f6d016221c89e671ea09c8f67711e7ff3",
+        "9bf06a51dcb8f5b66b76e00f419b3702c93bbec337393d999bca2bb91b1a8263"
+      ]
+    },
+    {
+      "name": "pixiv-102333539-7643-7645",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "mouth and clothing",
+      "sha256": [
+        "55e784409e6e63272de30f3337a082ee3d370ddbe6e07385911c5386f4568322",
+        "e7aae7d4d08131adb50b97b2fe69645de160790319fd96665ec13cce7dae5cdd"
+      ]
+    },
+    {
+      "name": "pixiv-111626727-32949-32861",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "collar accessory",
+      "sha256": [
+        "82987c2721606ed2c86592ca61abaa3f40691d0bdb8da60de393671f4bf6044a",
+        "f956080288db4322990a0a0f2ed5fba4c0b2b3eb87931e141029dfab3a9e1a19"
+      ]
+    },
+    {
+      "name": "pixiv-113330377-31164-31236",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "face covering and expression",
+      "sha256": [
+        "78b2bd804b07e77d9249976b4e814bcb5090107306af1d2267d6b1938be12e6e",
+        "a67d7e8f4437593bbb34fb98e010ce1b4e2488d2ab7e5e2665a52316c7212089"
+      ]
+    },
+    {
+      "name": "pixiv-115203549-23710-27089",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "text overlay",
+      "sha256": [
+        "54f902a0a672167b3d9a206254c948269c8f732e1286f3f9f2c24d3b7d180d74",
+        "f1f4359d83946839997890941855b1a24d8fa98d5dd04d78f1b38d463e484f18"
+      ]
+    },
+    {
+      "name": "pixiv-119198581-29375-24802",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "face covering",
+      "sha256": [
+        "a74a4f5387ded7e02e97bd699f8c270e390eafc3ad99984fd7402a268d7cd937",
+        "b33eaaacebb355aec0bca4d785db0c5d3d90b8878e858c4b4db5dfe080f20d40"
+      ]
+    },
+    {
+      "name": "pixiv-138921751-23827-29640",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "expression and clothing",
+      "sha256": [
+        "35145c41cd6e7b364990f702e7287099499d77d37bb93df73e902d0389798fa4",
+        "58785c3d012e1f2df47c77fa6367a6df6a25c20f718b7728582d35bad5ffc433"
+      ]
+    },
+    {
+      "name": "pixiv-84889431-12196-12197",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "local painted line/detail",
+      "sha256": [
+        "2738c8df3a3159c28c7ae5dc1c62c5c921788773dd70f2e38935e899f9e1a8ac",
+        "3301f6ef531e61446df969e28f8afd4ddb4f7cf989fa951230dadaea872018d7"
+      ]
+    },
+    {
+      "name": "pixiv-94220639-15031-15032",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "mouth shape",
+      "sha256": [
+        "1b0fa3c0d8ffd21fca289a83db5cd852c722aa60c779c5bb020462924f48c2af",
+        "a760b8d5cb21b980813bf23a6e66b8b980a20b7c377cb4e7b5fc64cca49994d1"
+      ]
+    },
+    {
+      "name": "pixiv-94262242-15047-15048",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "pale floor marking",
+      "sha256": [
+        "01722d67ec3c97efb0329eef3ad04cca854f301ffeb6da63b7b718526e12bce9",
+        "bf317509a5a9ca783f44c31cca6acdcd5dad79b23797785145f8221351a1d613"
+      ]
+    },
+    {
+      "name": "pixiv-98057902-16311-16308",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "mouth shape",
+      "sha256": [
+        "2eacecee489004fe1dbd6b81c34671d4bfa436225ea04ba4916b4cb308c0bf19",
+        "9e2146d555c810bc538ed14825613fb5e300f42b279f9b2556a18ea262f599ce"
+      ]
+    },
+    {
+      "name": "pixiv-111767635-32862-32189",
+      "set": "regression",
+      "expected": "variant",
+      "reason": "background screen detail",
+      "sha256": [
+        "84edc9d7efac7aa3b9ee7bac07fbd2e50d9a05c45063f96f955f9d1c021bf995",
+        "d8dc3fcd8d81fc27606f9186c8dc311b635f8a25ac94de26de587d10b1fcc2dd"
+      ]
+    },
+    {
+      "name": "pixiv-69885760-26362-29679",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "face covering",
+      "sha256": [
+        "1f0e0a20154bf4a0fa2c684ab7c0f9b7b8b348820416c1a4d840a347e50fd74f",
+        "6f9ab71049d2075159d5cc606cae8db8aa41b01592c699d46957275583b74c6f"
+      ]
+    },
+    {
+      "name": "pixiv-84844230-12193-12194",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "eye covering",
+      "sha256": [
+        "9006b2b87a4ea1537d0085bf5028ab448d75b915ab596e3722044d617e0b5c80",
+        "f2e803b9d304d5dc3ef8fee0b9217b9b3f3855d8b189e7468cd3a5d2f7eabd92"
+      ]
+    },
+    {
+      "name": "pixiv-91020015-13598-13599",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "clothing",
+      "sha256": [
+        "0d0e539fd681340e966e20b9ea02b77d41dfd4899ee475127671267df57653e9",
+        "7aa0e07e9db6a6cb86c4d5fc988e75c460ec3db2074e7306ff4abcf7d31d7170"
+      ]
+    },
+    {
+      "name": "pixiv-92047194-14065-14064",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "droplets and annotation",
+      "sha256": [
+        "20842f2c229a13e418efef4e1309a48e4d7cd7666ab8fd6cc1408ae0e66ec7fd",
+        "b2ef693773aeb798e91b1dcc88533cfe83cd8e84937f5d439c2a8f0f0af9ad8f"
+      ]
+    },
+    {
+      "name": "pixiv-92968157-14398-14397",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "text overlay",
+      "sha256": [
+        "c097aebc62bd6895a0968b026c392e0cb9367d3ac72e10b6b0a935ffdca1c781",
+        "d1fbac45e1899d70b489ad1c8a419b5f9810c173ffa52f4ab49e38800cbfa09a"
+      ]
+    },
+    {
+      "name": "pixiv-93336471-14609-14610",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "clothing",
+      "sha256": [
+        "02ef344563f0a070891fb9349ec3ec0f3e9146719a09ead6fb3a10ea82358491",
+        "2854285690ba3201cc9223136e8f2ea37071772e47224848925661eaabff876f"
+      ]
+    },
+    {
+      "name": "pixiv-93854249-14831-14832",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "face accessory",
+      "sha256": [
+        "e376847dcff7fc231792ca278ef431dafa5466f0e1107794e550d9038e3820ad",
+        "e489d6500de40a201fd38da2daa2fb2d51c8aacd7ef49704e996c44f74dd826e"
+      ]
+    },
+    {
+      "name": "pixiv-95154537-15379-15378",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "facial expression",
+      "sha256": [
+        "918be32fc5f706ec5b777024d6e9a0342bfd62c2382214e340396d1ccdad3ee6",
+        "db87d047e8063c61590aaaea6e9b0978295bd56d4b387365fc731d4ad01651c3"
+      ]
+    },
+    {
+      "name": "pixiv-96362061-15754-15755",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "clothing",
+      "sha256": [
+        "420bc53e1502fd2c87cd2551c0bc311c193a06427b0436263eb3464fb19d5923",
+        "6c2c837a116b6aff148c19192cbb3b335ab6926a1cd560e6cf43827c069f7b92"
+      ]
+    },
+    {
+      "name": "pixiv-98030120-16300-16301",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "small droplets",
+      "sha256": [
+        "61afbf7cad2ed31214e6c882017be53e55ee9b26b0b29ba72e00d5c8e3b21203",
+        "be6c93f04afc636d15a8edb6da85ead5fce536ef261d666c351ddf3ae90839cd"
+      ]
+    },
+    {
+      "name": "pixiv-100509827-33335-33334",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "clothing",
+      "sha256": [
+        "e46a3d5d20eca0d1de6bd44be25352948f54d815f7c7c6a54adfabbd053b34a7",
+        "f05a4b77fdb209ab90fb031dd0fb5ba8fe502f3d82c93719364c8dd2fa634016"
+      ]
+    },
+    {
+      "name": "pixiv-102257072-7620-7619",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "eye and mouth expression",
+      "sha256": [
+        "a3c2f534eb0e88aabb10b0804e5008a828ead5493f2c9aa274586ea0cb72898a",
+        "c4959601a2bbb290f941a5eebc2f5e88e1f2e5b4e1a9d3f44e08880dc7ebe284"
+      ]
+    },
+    {
+      "name": "pixiv-104417033-360-361",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "glove",
+      "sha256": [
+        "0117c30534cb7c6c1f91ea16a184c1a25b55c70fbb1c4da50c244199a33c3a66",
+        "1f7c4dc94cb0ce36f2920d718f734ea629d0df087ba9ef2a4cb5bd14a34d3ba4"
+      ]
+    },
+    {
+      "name": "pixiv-109935623-32487-33145",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "color and text",
+      "sha256": [
+        "0031dc58c6f25f9d56f3cc6050785ba6ae0f5430e8a74b16e35d41be001a78ba",
+        "ac824cff6aa163c1b7b518aa46b04ef796176d03b5698fa83082fcde9eec3595"
+      ]
+    },
+    {
+      "name": "pixiv-111859313-1952-1949",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "color variant",
+      "sha256": [
+        "25f9a327435f7808f9e37ad91afbd1edba315bcbb023650c523d10f12e00de24",
+        "e3dca72ff152a01ddb905601733a3d300c99d0e8837e8d555cebf39c170b62cb"
+      ]
+    },
+    {
+      "name": "pixiv-112873703-32253-32971",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "face accessory",
+      "sha256": [
+        "776de674b316e7762357bd36c3385317be185eb92ca6a4dec020aab468224b92",
+        "cbc49c2703f79a740ef87c77eae63b80c54c9a0f78429ff54c395e97a1fd4abd"
+      ]
+    },
+    {
+      "name": "pixiv-114722505-31065-31133",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "face covering",
+      "sha256": [
+        "810feb910f81b48c7aec6fd30c6f6d2f06e65d2f390a47a656af8b12c36fff41",
+        "e00c40efbbeb24fce7d8ebc2789d02689800f85aa4a5c42e50061f796cb7e300"
+      ]
+    },
+    {
+      "name": "pixiv-117678603-23343-26825",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "eye covering",
+      "sha256": [
+        "3889797bbc0dc39cfc552fa938163c95091ce0cc1fc1b2c7bbb1a9e3bbf4bf41",
+        "5a7c038d2431111e51110a35dc12ab7ab985e271c66bb3f03f958a3296d3a447"
+      ]
+    },
+    {
+      "name": "pixiv-128010211-28642-23781",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "facial expression",
+      "sha256": [
+        "ae343fd50a2e33e4ec64352e5b89b278827415c8b871a2810a4d54f27ab4a3ea",
+        "c01030d9f63ee0dc8cdbdadca7009af4d94afae783aca9772516f47c8a841e0f"
+      ]
+    },
+    {
+      "name": "pixiv-140452093-29181-28251",
+      "set": "holdout",
+      "expected": "variant",
+      "reason": "mouth detail",
+      "sha256": [
+        "39e0bad3489809c2c0833bd4a4a0e93e4a16c642163a06e9480753fca917acb6",
+        "ac144a3a0abf6dc224c96319537cf936531c81d8e9179ba9be7cb0d44a080767"
+      ]
+    },
+    {
+      "name": "exif-only",
+      "set": "controls",
+      "expected": "pixels",
+      "reason": "exif-only",
+      "sha256": [
+        "a1c0c242612470306daeef805be22fdba5da4821ec8de7b28afe7176f8eefc26",
+        "e853fb6a9b0ec4dafb7c16a176d1effae1b04131ebf0299e6722deeff611362c"
+      ]
+    },
+    {
+      "name": "low-resolution-and-HD",
+      "set": "controls",
+      "expected": "copy",
+      "reason": "low-resolution-and-HD",
+      "sha256": [
+        "fdf8ebb970605e9c4077047c8b4f43648c083819b4d26abf4f836ee4a9ce9929",
+        "e4490a5e9e1931e8ec88c46a5b40f09505584e49776c0e75dba92cadf33319a8"
+      ]
+    },
+    {
+      "name": "open-and-closed-eyes",
+      "set": "controls",
+      "expected": "variant",
+      "reason": "open-and-closed-eyes",
+      "sha256": [
+        "6e42dfe7db9d051be51ff443078d186e915913a7eda50585efee162e65bc4d79",
+        "c748aaf976e33de4422bc62cb5cade37c2e0466ad820ea470582de27443de736"
+      ]
+    }
+  ]
+}

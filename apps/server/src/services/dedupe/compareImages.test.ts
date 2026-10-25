@@ -3,7 +3,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
 import { sharp } from '../image/sharpConfig.ts';
-import { compareImages } from './compareImages.ts';
+import { compareImages, compatibleDecision } from './compareImages.ts';
 import { ComparisonWorker } from './ComparisonWorker.ts';
 
 let dir: string;
@@ -19,12 +19,12 @@ const art = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="768" hei
   <path d="M100 50L700 950M700 50L100 950" stroke="#b8c8c8" stroke-width="3"/>
 </svg>`);
 
-describe('Pixelmatch candidate verification', () => {
+describe('Pixelmatch and local SSIM candidate verification', () => {
   it('identical decoded pixels despite different encoding or EXIF', async () => {
     const a = path.join(dir, 'a.png'), b = path.join(dir, 'b.png');
     await sharp(art).png({ compressionLevel: 0 }).toFile(a);
     await sharp(art).withExif({ IFD0: { Artist: 'test' } }).png({ compressionLevel: 9 }).toFile(b);
-    expect(await compareImages(a, b)).toEqual({ match: 'pixels', differentFraction: 0, maxLocalDifference: 0 });
+    expect(await compareImages(a, b)).toEqual({ match: 'pixels', differentFraction: 0, localStructure: 1 });
   });
 
   it('recognizes a resized, recompressed copy', async () => {
@@ -41,8 +41,47 @@ describe('Pixelmatch candidate verification', () => {
     await sharp(a).composite([{ input: patch, left: 290, top: 380 }]).png().toFile(b);
     const result = await compareImages(a, b);
     expect(result.differentFraction).toBeLessThan(0.001);
-    expect(result.maxLocalDifference).toBeGreaterThan(28);
     expect(result.match).toBeNull();
+  });
+
+  it('detects low-contrast stripes even when Pixelmatch reports no different pixels', async () => {
+    const a = path.join(dir, 'screen.png'), b = path.join(dir, 'screen-edited.png');
+    const width = 768, height = 512;
+    const raw = Buffer.alloc(width * height * 3, 180);
+    await sharp(raw, { raw: { width, height, channels: 3 } }).png().toFile(a);
+    for (let y = 200; y < 264; y++) for (let x = 320; x < 384; x++) {
+      const value = Math.floor((y - 200) / 4) % 2 ? 195 : 165;
+      raw.fill(value, (y * width + x) * 3, (y * width + x) * 3 + 3);
+    }
+    await sharp(raw, { raw: { width, height, channels: 3 } }).png().toFile(b);
+    const result = await compareImages(a, b);
+    expect(result.differentFraction).toBe(0);
+    expect(result.localStructure).toBeLessThan(0.8);
+    expect(result.match).toBeNull();
+  });
+
+  it('checks color structure separately and does not discard alpha changes', async () => {
+    const a = path.join(dir, 'color.png'), b = path.join(dir, 'color-edit.png'), alpha = path.join(dir, 'alpha-edit.png');
+    const width = 128, height = 128;
+    const raw = Buffer.alloc(width * height * 4, 255);
+    for (let i = 0; i < width * height; i++) raw.set([180, 180, 180, 255], i * 4);
+    await sharp(raw, { raw: { width, height, channels: 4 } }).png().toFile(a);
+    for (let y = 40; y < 72; y++) for (let x = 40; x < 72; x++) {
+      const stripe = Math.floor(y / 4) % 2;
+      raw.set(stripe ? [205, 167, 180, 255] : [155, 193, 180, 255], (y * width + x) * 4);
+    }
+    await sharp(raw, { raw: { width, height, channels: 4 } }).png().toFile(b);
+    expect((await compareImages(a, b)).match).toBeNull();
+    for (let y = 40; y < 72; y++) for (let x = 40; x < 72; x++) raw[(y * width + x) * 4 + 3] = 0;
+    await sharp(raw, { raw: { width, height, channels: 4 } }).png().toFile(alpha);
+    expect((await compareImages(b, alpha)).match).toBeNull();
+  });
+
+  it('never inherits an old visual acceptance or an old local-only rejection', () => {
+    expect(compatibleDecision({ match: 'visual', differentFraction: 0 })).toBeNull();
+    expect(compatibleDecision({ match: null, differentFraction: 0.00001 })).toBeNull();
+    expect(compatibleDecision({ match: null, differentFraction: 0.1 })).toEqual({ match: null, differentFraction: 0.1 });
+    expect(compatibleDecision({ match: 'pixels', differentFraction: 0 })).toEqual({ match: 'pixels', differentFraction: 0, localStructure: 1 });
   });
 
   it('does not compare only an animation cover or stretch a crop into the original', async () => {
