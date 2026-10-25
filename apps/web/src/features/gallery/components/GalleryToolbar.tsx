@@ -77,9 +77,9 @@ function orderLabel(sort: GallerySort, order: SortOrder): string {
 }
 
 /**
- * 头部下方的工具条：左搜索 / 中筛选 chip / 右排序 + 缩放。
+ * 头部下方的工具条：左搜索 / 右筛选 chip。
  * 高度固定一行（chip 多了横向滚动），这样网格的位置不会因为筛选而跳动。
- * 工具条窄于 760px（半屏窗口）时 chip 单独换到第二行，不然中间会被挤成 0 宽；换不换行只看宽度，网格照样不跳。
+ * 收藏、排序、缩放不在这一行，在上面目次那一行的右端（GalleryViewControls），这一行整行留给筛选。
  */
 export function GalleryToolbar({
   filters,
@@ -102,7 +102,7 @@ export function GalleryToolbar({
 
   return (
     <div className="@container/toolbar">
-      <div className="flex items-center gap-x-3 gap-y-2 @max-[760px]/toolbar:flex-wrap">
+      <div className="flex items-center gap-x-3">
         <CustomThemeDialog
           open={editing !== null}
           onOpenChange={(open) => !open && setEditing(null)}
@@ -114,60 +114,65 @@ export function GalleryToolbar({
             if (filters.custom === id) update({ custom: undefined });
           }}
         />
-        <GallerySearch
-          value={filters.q}
-          onCommit={(q) => update({ q })}
-          className="w-[248px] shrink-0 @max-[760px]/toolbar:w-auto @max-[760px]/toolbar:min-w-0 @max-[760px]/toolbar:flex-[1_1_180px]"
-        />
+        <GallerySearch value={filters.q} onCommit={(q) => update({ q })} className="w-[248px] shrink-0 @max-[600px]/toolbar:w-[168px]" />
 
-        {/* 中间的筛选 chip：放不下时横向滚动，左右渐隐；窄时换到第二行，两边伸进页边，「分级」和搜索框对齐 */}
-        <div className="-ml-3 min-w-0 flex-1 overflow-x-auto scrollbar-none fade-x @max-[760px]/toolbar:order-last @max-[760px]/toolbar:-mx-4 @max-[760px]/toolbar:basis-[calc(100%+2rem)]">
-          <div className="flex w-max items-center gap-1.5 py-1 pr-8 pl-4">
-            <GroupLabel>分级</GroupLabel>
-            {RATINGS.map((r) => (
-              <Chip key={r} size="sm" selected={filters.rating.includes(r)} onClick={() => toggleRating(r)}>
-                {RATING_LABEL[r]}
-              </Chip>
-            ))}
+        {/* 筛选 chip：放不下时横向滚动，左右渐隐。「+」和「清除筛选」跟在 chip 后面，但不在滚动区里，放不下时停在右端不会被挤走 */}
+        <div className="-ml-3 flex min-w-0 flex-1 items-center">
+          <div className="min-w-0 overflow-x-auto scrollbar-none fade-x">
+            <div className="flex w-max items-center gap-1.5 py-1 pr-8 pl-4">
+              <GroupLabel>分级</GroupLabel>
+              {RATINGS.map((r) => (
+                <Chip key={r} size="sm" selected={filters.rating.includes(r)} onClick={() => toggleRating(r)}>
+                  {RATING_LABEL[r]}
+                </Chip>
+              ))}
 
-            <Divider />
-            <GroupLabel>方向</GroupLabel>
-            {ORIENTATIONS.map((o) => (
-              <Chip
-                key={o}
-                size="sm"
-                selected={filters.orientation === o}
-                onClick={() => update({ orientation: filters.orientation === o ? undefined : o })}
-              >
-                <span className="inline-flex items-center gap-1.5">
-                  <OrientGlyph orientation={o} />
-                  {ORIENT_LABEL[o]}
-                </span>
-              </Chip>
-            ))}
+              <Divider />
+              <GroupLabel>方向</GroupLabel>
+              {ORIENTATIONS.map((o) => (
+                <Chip
+                  key={o}
+                  size="sm"
+                  selected={filters.orientation === o}
+                  onClick={() => update({ orientation: filters.orientation === o ? undefined : o })}
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <OrientGlyph orientation={o} />
+                    {ORIENT_LABEL[o]}
+                  </span>
+                </Chip>
+              ))}
 
-            <Divider />
-            <GroupLabel>画面</GroupLabel>
-            {BROWSE_THEMES.map((t) => (
-              <Chip key={t} size="sm" selected={filters.theme === t} onClick={() => update({ theme: filters.theme === t ? undefined : t })}>
-                {THEME_META[t].label}
-              </Chip>
-            ))}
-            {customThemes.map((t) => (
-              <CustomChip
-                key={t.id}
-                theme={t}
-                selected={filters.custom === t.id}
-                onClick={() => update({ custom: filters.custom === t.id ? undefined : t.id })}
-                onEdit={() => setEditing({ theme: t })}
-              />
-            ))}
+              <Divider />
+              <GroupLabel>画面</GroupLabel>
+              {BROWSE_THEMES.map((t) => (
+                <Chip
+                  key={t}
+                  size="sm"
+                  selected={filters.theme === t}
+                  onClick={() => update({ theme: filters.theme === t ? undefined : t })}
+                >
+                  {THEME_META[t].label}
+                </Chip>
+              ))}
+              {customThemes.map((t) => (
+                <CustomChip
+                  key={t.id}
+                  theme={t}
+                  selected={filters.custom === t.id}
+                  onClick={() => update({ custom: filters.custom === t.id ? undefined : t.id })}
+                  onEdit={() => setEditing({ theme: t })}
+                />
+              ))}
+            </div>
+          </div>
+          {/* 往回压进滚动区右边留给渐隐的空白里，没溢出时紧跟在最后一个 chip 后面 */}
+          <div className="-ml-6 flex shrink-0 items-center gap-1.5">
             <Tooltip content="用识别标签自己组一个">
               <Chip size="sm" aria-label="新建画面" className="px-2 text-fg-muted" onClick={() => setEditing({})}>
                 <Plus className="size-3.5" />
               </Chip>
             </Tooltip>
-
             {hasFilters && (
               <button
                 type="button"
@@ -180,65 +185,86 @@ export function GalleryToolbar({
             )}
           </div>
         </div>
-
-        <div className="ml-auto flex shrink-0 items-center gap-0.5 @max-[760px]/toolbar:min-w-0 @max-[760px]/toolbar:shrink">
-          {/* 只看收藏：常用的开关，放在不会滚走的右侧，不和上面那排会横向滚动的筛选混在一起 */}
-          <Tooltip content={filters.favorite ? '正在只看收藏，点一下看全部' : '只看收藏的图'}>
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-pressed={filters.favorite}
-              icon={<Heart className={cn(filters.favorite && 'fill-current')} />}
-              onClick={() => update({ favorite: !filters.favorite })}
-              className={cn('text-[12.5px]', filters.favorite && 'bg-shu-soft text-shu-fg hover:bg-shu-soft hover:text-shu-fg')}
-            >
-              收藏
-            </Button>
-          </Tooltip>
-          <div className="mx-1.5 h-4 w-px shrink-0 bg-line-strong" />
-
-          <Menu
-            width={188}
-            trigger={
-              <Button variant="ghost" size="sm" icon={<ArrowDownUp className="size-3.5" />} className="text-[12.5px]">
-                {SORT_LABEL[filters.sort]}
-              </Button>
-            }
-          >
-            <MenuLabel>排序方式</MenuLabel>
-            <MenuRadioGroup value={filters.sort} onValueChange={(sort) => update({ sort })}>
-              {SORTS.map((s) => (
-                <MenuRadioItem key={s} value={s} icon={SORT_ICON[s]}>
-                  {SORT_LABEL[s]}
-                </MenuRadioItem>
-              ))}
-            </MenuRadioGroup>
-          </Menu>
-
-          <IconButton
-            size="sm"
-            label={orderLabel(filters.sort, filters.order)}
-            disabled={filters.sort === 'random'}
-            onClick={() => update({ order: filters.order === 'desc' ? 'asc' : 'desc' })}
-          >
-            {filters.order === 'desc' ? <ArrowDownWideNarrow /> : <ArrowUpNarrowWide />}
-          </IconButton>
-
-          <div className="mx-2.5 h-4 w-px shrink-0 bg-line-strong" />
-          <RowHeightSlider />
-        </div>
       </div>
     </div>
   );
 }
 
+/**
+ * 收藏、排序、缩放：放在目次（全部 · 插画 · 别册…）那一行的右端，不会滚走。
+ * 筛选 chip 那一行会横向滚动，常用的开关放在那里容易被挤到看不见的地方。
+ * 这一行放不下时按顺序让地方（看的是这一行的宽度，容器名 kindbar）：
+ * 窄于 1420 收藏、排序只留图标 → 窄于 1300 缩放滑块变短、目次不显示张数 → 窄于 940 目次每项收窄（后两步见 KindIndex）。
+ */
+export function GalleryViewControls({ filters, update }: { filters: GalleryFilters; update: (patch: Partial<GalleryFilters>) => void }) {
+  return (
+    <div className="flex items-center gap-0.5">
+      {/* 只看收藏：常用的开关，开着时整个按钮变朱色，一眼看得出现在只显示收藏 */}
+      <Tooltip content={filters.favorite ? '正在只看收藏，点一下看全部' : '只看收藏的图'}>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-pressed={filters.favorite}
+          aria-label="只看收藏"
+          icon={<Heart className={cn(filters.favorite && 'fill-current')} />}
+          onClick={() => update({ favorite: !filters.favorite })}
+          className={cn(
+            'text-[12.5px] @max-[1420px]/kindbar:gap-0 @max-[1420px]/kindbar:px-2',
+            filters.favorite && 'bg-shu-soft text-shu-fg hover:bg-shu-soft hover:text-shu-fg',
+          )}
+        >
+          <span className="@max-[1420px]/kindbar:hidden">收藏</span>
+        </Button>
+      </Tooltip>
+      <div className="mx-1.5 h-4 w-px shrink-0 bg-line-strong" />
+
+      <Menu
+        width={188}
+        trigger={
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<ArrowDownUp className="size-3.5" />}
+            aria-label={`排序：${SORT_LABEL[filters.sort]}`}
+            title={`排序：${SORT_LABEL[filters.sort]}`}
+            className="text-[12.5px] @max-[1420px]/kindbar:gap-0 @max-[1420px]/kindbar:px-2"
+          >
+            <span className="@max-[1420px]/kindbar:hidden">{SORT_LABEL[filters.sort]}</span>
+          </Button>
+        }
+      >
+        <MenuLabel>排序方式</MenuLabel>
+        <MenuRadioGroup value={filters.sort} onValueChange={(sort) => update({ sort })}>
+          {SORTS.map((s) => (
+            <MenuRadioItem key={s} value={s} icon={SORT_ICON[s]}>
+              {SORT_LABEL[s]}
+            </MenuRadioItem>
+          ))}
+        </MenuRadioGroup>
+      </Menu>
+
+      <IconButton
+        size="sm"
+        label={orderLabel(filters.sort, filters.order)}
+        disabled={filters.sort === 'random'}
+        onClick={() => update({ order: filters.order === 'desc' ? 'asc' : 'desc' })}
+      >
+        {filters.order === 'desc' ? <ArrowDownWideNarrow /> : <ArrowUpNarrowWide />}
+      </IconButton>
+
+      <div className="mx-2.5 h-4 w-px shrink-0 bg-line-strong @max-[1300px]/kindbar:mx-1.5" />
+      <RowHeightSlider className="@max-[1300px]/kindbar:w-[84px]" />
+    </div>
+  );
+}
+
 /** 行高缩放：左小图标 / 右大图标，中间滑块，存到偏好 */
-function RowHeightSlider() {
+function RowHeightSlider({ className }: { className?: string }) {
   const rowHeight = usePrefs((s) => s.gridRowHeight);
   const setRowHeight = usePrefs((s) => s.setGridRowHeight);
   return (
     <Tooltip content={`行高 ${rowHeight}px`}>
-      <div className="flex w-[128px] min-w-[72px] items-center gap-2 text-fg-subtle">
+      <div className={cn('flex w-[128px] min-w-[72px] items-center gap-2 text-fg-subtle', className)}>
         <button
           type="button"
           aria-label="缩小"

@@ -14,7 +14,7 @@ import { formatBytes, formatCount } from '@/lib/format';
 import { useArtists, useImagesInfinite, useSettings, useStats } from '@/lib/queries';
 import { usePrefs, useSelection } from '@/lib/stores';
 import { ArtistMenu } from './components/ArtistMenu';
-import { GalleryToolbar } from './components/GalleryToolbar';
+import { GalleryToolbar, GalleryViewControls } from './components/GalleryToolbar';
 import { GridFooter } from './components/GridStates';
 import { SelectionBar } from './components/SelectionBar';
 import { useGalleryParams } from './useGalleryParams';
@@ -183,6 +183,7 @@ export function GalleryPage() {
         <KindIndex
           current={filters.kind === 'all' ? 'all' : onlyIllust ? 'illustration' : null}
           onGallery={(k) => update({ kind: k === 'all' ? 'all' : ['illustration'] })}
+          trailing={<GalleryViewControls filters={filters} update={update} />}
         />
         <div className="mt-3">
           <GalleryToolbar
