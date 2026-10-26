@@ -40,7 +40,7 @@ describe('migrate', () => {
     expect(migrate(db)).toEqual({ from: latest, to: latest });
   });
 
-  it('026: upgrades comparison storage and schedules a recheck without changing the search preference', () => {
+  it('029: upgrades comparison storage and schedules a recheck without changing the search preference', () => {
     copyMigrations(dir, 25);
     migrate(db, { dir });
     db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('dedupe', JSON.stringify({ hammingThreshold: 4, lastRunAt: '2026-10-01' }));

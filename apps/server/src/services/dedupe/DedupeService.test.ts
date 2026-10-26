@@ -292,7 +292,7 @@ describe('DedupeService + 接口（:memory:）', () => {
     db.prepare("INSERT INTO characters (id, name, source, created_at) VALUES (2, '莫宁', 'custom', ?)").run(T);
     db.prepare("INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, 2, 'manual', NULL, ?)").run(b, T);
     db.prepare("UPDATE images SET favorite = 1, rating = 'questionable', rating_manual = 1 WHERE id = ?").run(b);
-    ds.dedupe.runOnce();
+    await ds.dedupe.runOnce();
     const [g] = await ds.listDuplicates({});
     const snap = () => [
       db.prepare('SELECT favorite, rating, rating_manual, trashed_at FROM images WHERE id IN (?, ?) ORDER BY id').all(a, b),
