@@ -16,6 +16,15 @@ it('同尺寸同大小：不像副本的文件名胜出', () => {
   expect(pickKeep([c(1, 'a - Copy (2).png'), c(2, 'a.png')]).file_name).toBe('a.png');
 });
 
+it.each(['112593591_p0(1).png', '112593591_p0 (1).png', '112593591_p0(12).png'])(
+  '下载器副本 %s 即使更早入库，也优先保留无编号原名', (fileName) => {
+    const copy = c(32677, fileName, { width: 1200, height: 711, bytes: 773395, added_at: '2026-10-20T11:41:41.510Z' });
+    const original = c(33195, '112593591_p0.png', { width: 1200, height: 711, bytes: 773395, added_at: '2026-10-20T11:42:23.179Z' });
+    expect(pickKeep([copy, original]).id).toBe(original.id);
+    expect(pickKeep([original, copy]).id).toBe(original.id);
+  },
+);
+
 it('分辨率高的优先，其次体积', () => {
   expect(pickKeep([c(1, 'a.png'), c(2, 'a (1).png', { width: 2000 })]).id).toBe(2);
   expect(pickKeep([c(1, 'a.png'), c(2, 'b.png', { bytes: 9000 })]).id).toBe(2);

@@ -40,6 +40,15 @@ describe('migrate', () => {
     expect(migrate(db)).toEqual({ from: latest, to: latest });
   });
 
+  it('029: upgrades comparison storage and schedules a recheck without changing the search preference', () => {
+    copyMigrations(dir, 25);
+    migrate(db, { dir });
+    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('dedupe', JSON.stringify({ hammingThreshold: 4, lastRunAt: '2026-10-01' }));
+    migrate(db);
+    expect(JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'dedupe'").pluck().get() as string)).toEqual({ hammingThreshold: 4, lastRunAt: null });
+    expect(db.prepare('SELECT count(*) FROM duplicate_comparisons').pluck().get()).toBe(0);
+  });
+
   it('坏迁移整体回滚，user_version 不变', () => {
     // 复制一份迁移目录，追加一个会失败的迁移
     copyMigrations(dir);

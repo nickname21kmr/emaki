@@ -12,7 +12,7 @@ import { DedupeService } from '../src/services/dedupe/DedupeService.ts';
 const db = openDatabase(path.join(config.dataDir, 'emaki.sqlite'));
 migrate(db, { backupDir: config.dataDir, log: console.log });
 const t0 = performance.now();
-const r = new DedupeService({ db, clock: Date.now, getThreshold: () => readSettings(db).dedupe.hammingThreshold }).runOnce();
+const r = await new DedupeService({ db, clock: Date.now, getThreshold: () => readSettings(db).dedupe.hammingThreshold }).runOnce();
 console.log(r.message);
 console.log(`对账：新增 ${r.reconcile.inserted}，更新 ${r.reconcile.updated}，删除 ${r.reconcile.deleted}；耗时 ${((performance.now() - t0) / 1000).toFixed(2)} 秒`);
 const name = db.prepare('SELECT rel_path FROM images WHERE id = ?').pluck();
