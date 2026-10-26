@@ -7,7 +7,7 @@ import { sharp } from '../image/sharpConfig.ts';
 import { localStructure } from './localStructure.ts';
 
 // Bump when preprocessing or decision limits change: cached decisions must be recomputed.
-export const COMPARISON_VERSION = 'pixelmatch8-ssim3-v4';
+export const COMPARISON_VERSION = 'pixelmatch8-ssim3-v5';
 export const COMPATIBLE_PIXEL_VERSION = 'pixelmatch-8-v1';
 export const COMPARISON_LIMITS = {
   // Calibrated on resized/recompressed library samples; see docs/duplicate-detection.md.
@@ -28,10 +28,10 @@ export interface ImageComparison {
   maxLocalDifference?: number;
 }
 
-/** Both Pixelmatch gates and full-size equality are unchanged; SSIM only narrows acceptance. */
+/** Both pixel checks are unchanged. Recheck v1's ambiguous aspect/unsupported sentinel. */
 export function compatibleDecision(old: ImageComparison): ImageComparison | null {
   if (old.match === 'pixels') return { match: 'pixels', differentFraction: 0, localStructure: 1 };
-  if (old.match === null) return { match: null, differentFraction: old.differentFraction, ...(old.maxLocalDifference === undefined ? {} : { maxLocalDifference: old.maxLocalDifference }) };
+  if (old.match === null && old.differentFraction < 1) return { match: null, differentFraction: old.differentFraction, ...(old.maxLocalDifference === undefined ? {} : { maxLocalDifference: old.maxLocalDifference }) };
   return null;
 }
 
@@ -55,7 +55,8 @@ export async function compareImages(aFile: string, bFile: string): Promise<Image
   const aw = am.autoOrient.width, ah = am.autoOrient.height;
   const bw = bm.autoOrient.width, bh = bm.autoOrient.height;
   // Allow rounding by one pixel in a resized copy, not stretching or cropping.
-  if (Math.abs(aw / ah - bw / bh) > Math.max(1 / ah, 1 / bh)) return noMatch;
+  // Cross-products express one-pixel rounding in either dimension without aspect-dependent drift.
+  if (Math.abs(aw * bh - bw * ah) > Math.max(aw, ah, bw, bh)) return noMatch;
   const rgba = (s: Sharp) => s.toColourspace('srgb').ensureAlpha().raw();
   if (aw === bw && ah === bh && aw * ah <= MAX_EXACT_PIXELS) {
     const [ap, bp] = await Promise.all([rgba(a.clone()).toBuffer(), rgba(b.clone()).toBuffer()]);

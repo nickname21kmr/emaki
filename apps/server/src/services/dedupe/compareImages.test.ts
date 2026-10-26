@@ -34,6 +34,16 @@ describe('Pixelmatch and local SSIM candidate verification', () => {
     expect((await compareImages(a, b)).match).toBe('visual');
   });
 
+  it.each([[1600, 400, 400, 101], [400, 1600, 101, 400]])(
+    'accepts one pixel of resize rounding for %ix%i -> %ix%i',
+    async (width, height, smallWidth, smallHeight) => {
+      const a = path.join(dir, 'original.png'), b = path.join(dir, 'rounded-size.png');
+      await sharp(art).resize(width, height, { fit: 'fill' }).png().toFile(a);
+      await sharp(a).resize(smallWidth, smallHeight, { fit: 'fill' }).png().toFile(b);
+      expect((await compareImages(a, b)).match).toBe('visual');
+    },
+  );
+
   it('rejects a small concentrated edit even when over 99.9% of the image is unchanged', async () => {
     const a = path.join(dir, 'a.png'), b = path.join(dir, 'closed-eye.png');
     await sharp(art).png().toFile(a);
@@ -95,6 +105,8 @@ describe('Pixelmatch and local SSIM candidate verification', () => {
     expect(compatibleDecision({ match: 'visual', differentFraction: 0 })).toBeNull();
     expect(compatibleDecision({ match: null, differentFraction: 0.00001, maxLocalDifference: 200 })).toEqual({ match: null, differentFraction: 0.00001, maxLocalDifference: 200 });
     expect(compatibleDecision({ match: null, differentFraction: 0.1 })).toEqual({ match: null, differentFraction: 0.1 });
+    // v1 used the same sentinel for aspect rejection and a 100% pixel difference.
+    expect(compatibleDecision({ match: null, differentFraction: 1, maxLocalDifference: 256 })).toBeNull();
     expect(compatibleDecision({ match: 'pixels', differentFraction: 0 })).toEqual({ match: 'pixels', differentFraction: 0, localStructure: 1 });
   });
 
