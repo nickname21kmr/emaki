@@ -617,7 +617,7 @@ export function unrecognizedContract(make: ContractFactory, name: Name) {
       expect((await e.ds.listImages({ workId: original!.id })).items.map((x) => e.back('image', x.id))).toContain('i25');
       const stats = await e.ds.getStats();
       expect([stats.originalWorkId, stats.originalCount]).toEqual([original!.id, 1]);
-      // 识别器认出的作品（i25 挂着 w2）不再算它：原创的图只在「原创」下（029）
+      // 识别器认出的作品（i25 挂着 w2）不再算它：原创的图只在「原创」下（030）
       const w2 = e.id('work', 'w2');
       expect((await e.ds.listImages({ workId: w2 })).items.map((x) => e.back('image', x.id))).not.toContain('i25');
       expect((await e.ds.getImage(i25))?.workIds).toEqual([original!.id]);
