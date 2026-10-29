@@ -617,6 +617,10 @@ export function unrecognizedContract(make: ContractFactory, name: Name) {
       expect((await e.ds.listImages({ workId: original!.id })).items.map((x) => e.back('image', x.id))).toContain('i25');
       const stats = await e.ds.getStats();
       expect([stats.originalWorkId, stats.originalCount]).toEqual([original!.id, 1]);
+      // 识别器认出的作品（i25 挂着 w2）不再算它：原创的图只在「原创」下（029）
+      const w2 = e.id('work', 'w2');
+      expect((await e.ds.listImages({ workId: w2 })).items.map((x) => e.back('image', x.id))).not.toContain('i25');
+      expect((await e.ds.getImage(i25))?.workIds).toEqual([original!.id]);
       expect((await e.ds.listImages({ workId: original!.id, original: true })).items.map((x) => e.back('image', x.id))).toEqual(['i25']);
       expect((await e.ds.listImages({ workId: original!.id, original: false })).items.map((x) => e.back('image', x.id))).not.toContain('i25');
       await e.ds.undo(r.undoToken!);
@@ -625,6 +629,7 @@ export function unrecognizedContract(make: ContractFactory, name: Name) {
       await e.ds.bulkImages({ ids: [i25], action: { type: 'original', value: false } });
       expect((await e.ds.getStats()).unrecognizedCount).toBe(7);
       expect((await e.ds.listImages({ workId: original!.id })).items.map((x) => e.back('image', x.id))).not.toContain('i25');
+      expect((await e.ds.listImages({ workId: w2 })).items.map((x) => e.back('image', x.id))).toContain('i25');
     });
 
     it('重新识别：范围是识别过、没认出的插画（不含没识别过的、放下的、原创），并启动识别任务', async () => {

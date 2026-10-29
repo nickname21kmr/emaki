@@ -250,7 +250,9 @@ export class MockDataSource implements DataSource {
   }
 
   private imageWorkIds(img: ImageRow): ID[] {
-    const ids = new Set<ID>(img.copyrightWorkIds);
+    // 同 sqlite v_image_works（029）：归为原创的图只算在「原创」作品下
+    const original = img.originalAt ? this.originalWorkId() : null;
+    const ids = new Set<ID>(original ? img.copyrightWorkIds.filter((w) => w === original) : img.copyrightWorkIds);
     for (const cid of img.characterIds) for (const wid of this.db.characters.get(cid)?.workIds ?? []) ids.add(wid);
     return [...ids];
   }
