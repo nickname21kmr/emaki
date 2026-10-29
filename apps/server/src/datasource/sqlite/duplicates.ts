@@ -19,6 +19,7 @@ interface GroupRow {
   id: number;
   kind: 'exact' | 'similar';
   similarity: number;
+  comparison: 'pixels' | 'visual' | null;
   suggested_keep_id: number | null;
   resolved_at: string | null;
   ignored: number;
@@ -129,7 +130,7 @@ export class DuplicateQueries {
     const resolved = q.resolved ?? false;
     const groups = this.ctx
       .stmt(
-        `SELECT id, kind, similarity, suggested_keep_id, resolved_at, ignored FROM duplicate_groups
+        `SELECT id, kind, similarity, comparison, suggested_keep_id, resolved_at, ignored FROM duplicate_groups
          WHERE (@resolved = 1 AND resolved_at IS NOT NULL) OR (@resolved = 0 AND resolved_at IS NULL AND ignored = 0)
          -- 未处理的：完全一样的在最前，再按相似度从高到低（越像越该先处理）；已处理的按时间
          ORDER BY CASE WHEN @resolved = 0 THEN (kind = 'exact') END DESC,
@@ -158,6 +159,7 @@ export class DuplicateQueries {
       id: toId(g.id),
       kind: g.kind,
       similarity: g.similarity,
+      ...(g.comparison ? { comparison: g.comparison } : {}),
       images: items.slice(at, (at += rows.length)),
       suggestedKeepId: toId(keep),
       // 书里的页默认都留着，只删合集外的副本

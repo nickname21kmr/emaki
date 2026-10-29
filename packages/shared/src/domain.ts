@@ -287,14 +287,16 @@ export interface UnrecognizedItem {
 export type DuplicateKind =
   /** 字节完全相同 */
   | 'exact'
-  /** 感知哈希接近（缩放 / 转码 / 轻微裁剪） */
+  /** 通过原图复核的画面相同或缩放 / 压缩副本 */
   | 'similar';
 
 export interface DuplicateGroup {
   id: ID;
   kind: DuplicateKind;
-  /** 0~1，组内最低相似度 */
+  /** 内部排序值，不是相似概率；旧版本数据可能来自哈希距离 */
   similarity: number;
+  /** 原尺寸解码像素相等 / Pixelmatch 通过；旧组尚未复核时缺省 */
+  comparison?: 'pixels' | 'visual';
   images: ImageItem[];
   /** 推荐保留的图片（在合集里 / 分辨率最高 / 体积最大 / 最早入库） */
   suggestedKeepId: ID;

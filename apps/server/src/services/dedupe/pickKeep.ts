@@ -13,7 +13,7 @@ export interface KeepCandidate {
   collection_id?: number | null;
 }
 
-const COPY = /(\s\(\d+\)|\s*-\s*(副本|复制|copy)(\s*\(\d+\))?)$/i;
+const COPY = /(\s*\(\d+\)|\s*-\s*(副本|复制|copy)(\s*\(\d+\))?)$/i;
 const looksLikeCopy = (name: string) => COPY.test(name.replace(/\.[^.]+$/, ''));
 
 export function pickKeep<T extends KeepCandidate>(members: T[]): T {

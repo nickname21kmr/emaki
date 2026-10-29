@@ -312,7 +312,7 @@ export class SqliteDataSource implements DataSource {
     // 从没查过重，或查重之后又有新缩略图（重启丢了进程里的标记）→ 下次有机会就查（T26）
     const lastRunAt = readSettings(db).dedupe.lastRunAt;
     const lastThumb = db.prepare('SELECT MAX(thumb_at) FROM images').pluck().get() as string | null;
-    if (lastThumb !== null && (lastRunAt === null || lastThumb > lastRunAt)) ds.pipeline.markDedupeDirty();
+    if (lastThumb !== null && (lastRunAt === null || lastThumb > lastRunAt || ds.dedupe.needsRecheck())) ds.pipeline.markDedupeDirty();
     // 搜索的标签张数（T20）：打标签结束标记过期，下次搜索时刷新
     // register 是覆盖式的：识别结束、扫描结束后的钩子都写在这一处
     ds.pipeline.register({
@@ -436,7 +436,6 @@ export class SqliteDataSource implements DataSource {
       db,
       clock: this.ctx.clock,
       getThreshold: () => readSettings(db).dedupe.hammingThreshold,
-      thumbFile: (sha) => thumbPath(path.join(dataDir, 'thumbs', 'v1'), sha, 240),
       onChanged: () => this.ctx.invalidate('all'),
       onFinished: (at) => patchSettingsInternal(db, 'dedupe', { lastRunAt: at }),
     });

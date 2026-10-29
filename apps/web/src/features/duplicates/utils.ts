@@ -1,5 +1,4 @@
 import type { DuplicateGroup, ID, ImageItem, LibraryRoot } from '@emaki/shared';
-import { formatPercent } from '@/lib/format';
 
 /** 图片行的最大高度（px，TR-5：240 → 360，相似组才看得出哪张清楚）。组内所有图等高，宽度按比例 */
 export const TILE_HEIGHT = 360;
@@ -11,8 +10,8 @@ export const FOLDED_ROWS = 2;
 /** 太窄的长图 / 太宽的全景图限制一下比例，保证下面的对比信息有地方放 */
 export const tileRatio = (img: Pick<ImageItem, 'width' | 'height'>) => Math.min(Math.max(img.width / Math.max(img.height, 1), 0.62), 2.1);
 
-export const kindLabel = (g: Pick<DuplicateGroup, 'kind' | 'similarity'>) =>
-  g.kind === 'exact' ? '完全相同' : `相似 ${formatPercent(g.similarity)}`;
+export const kindLabel = (g: Pick<DuplicateGroup, 'kind' | 'comparison'>) =>
+  g.kind === 'exact' ? '文件相同' : g.comparison === 'pixels' ? '画面相同' : g.comparison === 'visual' ? '疑似缩放 / 压缩副本' : '疑似重复';
 
 /**
  * 当前组要保留的图：用户改过就用用户的，否则用推荐。
