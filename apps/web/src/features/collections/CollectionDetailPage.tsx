@@ -1,3 +1,6 @@
+import { CollectionImagePicker } from './components/CollectionImagePicker';
+import { useSelection } from '@/lib/stores';
+import { useLocation } from 'react-router';
 import type { GetCollectionResponse, ID, ImageItem, Rating } from '@emaki/shared';
 import {
   ArrowDownAZ,
@@ -73,8 +76,33 @@ function Detail({ data }: { data: GetCollectionResponse }) {
   const update = useMutate((body: Parameters<typeof api.updateCollection>[1]) => api.updateCollection(c.id, body));
   const dismiss = useMutate(() => api.deleteCollection(c.id), { onSuccess: () => navigate('/collections') });
   const progress = readProgress.get(c.id);
+  const [adding, setAdding] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [title, setTitle] = useState(c.title ?? '');
   const manualChars = data.cast.filter((x) => x.manual).map((x) => x.character.id);
   const manualWorks = data.works.filter((x) => x.manual).map((x) => x.work.id);
+
+  if (c.kind === 'group') return <div className="flex min-h-full flex-col">
+    <PageHeader kicker={<Link to="/collections?kind=group">合集</Link>} title={displayTitle(c)} subtitle={`${c.pageCount} 张图片`}
+      actions={<>
+        <Button size="sm" onClick={() => { const sel = useSelection.getState(); sel.setScope(`collection:${c.id}`); sel.setMany(data.pages.map(p => p.imageId)); }}>选择整组 {c.pageCount} 张</Button>
+        <Button size="sm" onClick={() => setAdding(true)}>添加图片…</Button>
+        <Menu trigger={<Button size="sm" variant="ghost" aria-label="更多"><Ellipsis className="size-4" /></Button>}>
+          <MenuItem onSelect={() => setRenaming(true)}>改名…</MenuItem>
+          <MenuItem onSelect={() => update.mutate({ kind: 'artbook' })}>作为画集阅读</MenuItem>
+          <MenuItem onSelect={() => update.mutate({ kind: 'doujin' })}>作为漫画阅读</MenuItem>
+          <MenuItem onSelect={() => update.mutate({ organizeFiles: true })}>整理到子文件夹</MenuItem>
+          <MenuSeparator />
+          <MenuItem onSelect={() => dismiss.mutate()}>解散合集（保留图片）</MenuItem>
+        </Menu>
+      </>} />
+    <PageBody className="flex-1"><TableOfContents data={data} /></PageBody>
+    {adding && <CollectionImagePicker id={c.id} memberIds={data.pages.map(p => p.imageId)} open={adding} onOpenChange={setAdding} />}
+    <Dialog open={renaming} onOpenChange={setRenaming} title="合集名称" width={420}>
+      <Input value={title} onChange={e => setTitle(e.target.value)} aria-label="合集名称" />
+      <DialogFooter><Button onClick={() => { update.mutate({ title }); setRenaming(false); }} disabled={!title.trim()}>保存</Button></DialogFooter>
+    </Dialog>
+  </div>;
 
   return (
     <div className="flex min-h-full flex-col">
@@ -111,6 +139,9 @@ function Detail({ data }: { data: GetCollectionResponse }) {
               <MenuItem icon={<m.icon />} onSelect={() => update.mutate({ kind: c.kind === 'doujin' ? 'artbook' : 'doujin' })}>
                 {c.kind === 'doujin' ? '改成画集' : '改成本子'}
               </MenuItem>
+              <MenuItem onSelect={() => update.mutate({ kind: 'group' })}>作为普通合集浏览</MenuItem>
+              <MenuItem onSelect={() => setAdding(true)}>添加图片…</MenuItem>
+              <MenuItem onSelect={() => update.mutate({ organizeFiles: true })}>整理到子文件夹</MenuItem>
               <MenuItem icon={<RotateCcw />} onSelect={() => update.mutate({ kind: 'auto' })}>
                 恢复自动判断类型
               </MenuItem>
@@ -131,12 +162,13 @@ function Detail({ data }: { data: GetCollectionResponse }) {
               </MenuItem>
               <MenuSeparator />
               <MenuItem icon={<CircleOff />} danger onSelect={() => dismiss.mutate()}>
-                不成册
+                解散合集（保留图片）
               </MenuItem>
             </Menu>
           </>
         }
       />
+      {adding && <CollectionImagePicker id={c.id} memberIds={data.pages.map(p => p.imageId)} open={adding} onOpenChange={setAdding} />}
       <PageBody className="flex-1">
         <section className="mt-2 grid grid-cols-[240px_minmax(0,1fr)] gap-10 max-[900px]:grid-cols-1">
           <BookPlate collection={c} size="lg" />
@@ -239,7 +271,7 @@ function Colophon({ data, onReview }: { data: GetCollectionResponse; onReview: (
     ['展会', c.event],
     ['汉化', c.translator],
     ['页数', `${formatCount(c.pageCount)} 页 · ${data.pageOrder === 'name' ? '按文件名排序' : '按文件修改时间排序'}`],
-    ['文件夹', <span className="font-mono text-[12px] break-all">{data.folderPath}</span>],
+    ['文件夹', data.folderPath ? <span className="font-mono text-[12px] break-all">{data.folderPath}</span> : '按图片成员组织'],
     ['判定', [data.evidence, c.origin === 'manual' ? '手动' : null].filter(Boolean).join(' · ')],
     [
       '状态',
@@ -293,9 +325,13 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
   const c = data.collection;
   const navigate = useNavigate();
   // 从未识别「成册待整理」点进来的画集带 ?filter=unrecognized：目次默认只看没认出的页（T38f）
+  const location = useLocation();
+  const matched = (location.state as { collectionMembers?: string[] } | null)?.collectionMembers;
+  const [showAll, setShowAll] = useState(false);
   const [onlyUnknown, setOnlyUnknown] = useState(() => new URLSearchParams(window.location.search).get('filter') === 'unrecognized');
   const list = useImagesInfinite({
     collectionId: c.id,
+    ...(matched && !showAll ? { imageIds: matched } : {}),
     sort: 'page',
     order: 'asc',
     ...(onlyUnknown ? { status: 'unrecognized' as const } : {}),
@@ -316,8 +352,14 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
   });
   const cover = useMutate((imageId: ID) => api.updateCollection(c.id, { coverImageId: imageId }), { onSuccess: selection.clear });
   const [pickerOpen, setPickerOpen] = useState(false);
+  const remove = useMutate((ids: ID[]) => api.updateCollection(c.id, { removeImageIds: ids }), { onSuccess: selection.clear });
+  const favorite = useMutate((ids: ID[]) => api.bulkImages({ ids, action: { type: 'favorite', value: true } }), { onSuccess: selection.clear });
+  const trash = useMutate((ids: ID[]) => api.bulkImages({ ids, action: { type: 'trash' } }), { onSuccess: selection.clear });
 
   const actions: SelectionAction[] = [
+    { key: 'remove', label: '移出合集', icon: <CircleOff />, onClick: () => remove.mutate(selection.ids) },
+    { key: 'favorite', label: '收藏', icon: <Check />, onClick: () => favorite.mutate(selection.ids) },
+    { key: 'trash', label: '移到回收站', icon: <X />, onClick: () => trash.mutate(selection.ids) },
     ...(selection.count === 1
       ? [{ key: 'cover', label: '设为封面', icon: <ImageUp />, loading: cover.isPending, onClick: () => cover.mutate(selection.ids[0]!) }]
       : []),
@@ -332,9 +374,13 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
   ];
 
   return (
-    <section className="mt-14">
+    <section className={c.kind === 'group' ? 'mt-3' : 'mt-14'}>
+      {matched && matched.length < c.pageCount && <div className="mb-3 flex items-center gap-3 text-sm text-fg-muted">
+        <span>{showAll ? `全组 ${c.pageCount} 张` : `当前筛选 ${matched.length} 张 · 全组 ${c.pageCount} 张`}</span>
+        <Button size="sm" variant="ghost" onClick={() => setShowAll(!showAll)}>{showAll ? '只看匹配图片' : '查看整组'}</Button>
+      </div>}
       <SectionTitle
-        hint={`${formatCount(c.pageCount)} 页`}
+        hint={`${formatCount(list.data?.pages[0]?.total ?? c.pageCount)} 张`}
         actions={
           c.kind === 'artbook' && c.unrecognizedPageCount > 0 ? (
             <>
@@ -348,7 +394,7 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
           ) : undefined
         }
       >
-        目次
+        {c.kind === 'group' ? '图片' : '目次'}
       </SectionTitle>
       {list.isPending ? (
         <ImageGridSkeleton rows={3} rowHeight={200} />
@@ -362,7 +408,7 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
           hasMore={list.hasNextPage}
           loadingMore={list.isFetchingNextPage}
           onLoadMore={loadMore}
-          onOpen={(img) => navigate(`/collections/${c.id}/read?p=${pageNo.get(img.id) ?? 1}`)}
+          onOpen={c.kind === 'group' ? undefined : (img) => navigate(`/collections/${c.id}/read?p=${pageNo.get(img.id) ?? 1}`)}
           forceBlur={(img) => c.kind === 'doujin' && !tagged.get(img.id)}
           renderOverlay={(img) => (
             <span className="pointer-events-none absolute bottom-1.5 left-1.5 rounded-[4px] bg-sheet/90 px-1.5 text-[11px] text-fg-muted numeral tabular">

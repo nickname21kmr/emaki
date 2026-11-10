@@ -1,3 +1,5 @@
+import { AddToCollection } from '@/components/media/CollectionControls';
+import { selectionIds } from '@/components/media/CollectionControls';
 import { CONTENT_KINDS, type BulkImageAction, type ID, type ImageItem } from '@emaki/shared';
 import { Ban, ChevronDown, CircleMinus, Ellipsis, FolderInput, Heart, Palette, Shapes, ShieldHalf, Trash2, UserRoundPlus, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
@@ -92,14 +94,14 @@ export function SelectionBar({
     let seen = 0;
     for (const img of images) {
       if (!ids.has(img.id)) continue;
-      if (!img.favorite) return false;
+      if (!(img.collectionGroup?.allFavorite ?? img.favorite)) return false;
       seen++;
     }
     return seen > 0;
   }, [images, ids, count]);
 
   const allLoadedSelected = images.length > 0 && images.every((img) => ids.has(img.id));
-  const selectAll = () => setMany(images.map((i) => i.id));
+  const selectAll = () => setMany(images.flatMap(selectionIds));
 
   useHotkey(
     'esc',
@@ -162,7 +164,7 @@ export function SelectionBar({
             </div>
 
             {!allLoadedSelected && (
-              <Tooltip content={`全选已加载的 ${formatCount(images.length)} 张`} shortcut={`${modKeyLabel} A`} side="top">
+              <Tooltip content={`全选已加载的 ${formatCount(images.flatMap(selectionIds).length)} 张`} shortcut={`${modKeyLabel} A`} side="top">
                 <button
                   type="button"
                   onClick={selectAll}
@@ -265,6 +267,7 @@ export function SelectionBar({
               </BarButton>
             </Tooltip>
 
+            <AddToCollection inverse ids={[...ids]} onDone={clear} />
             <span className="mx-1.5 h-5 w-px bg-fg-inverse/15 @max-[600px]/bar:hidden" />
 
             <Tooltip content="排除：不再出现在图库和统计里，文件不会被删除" shortcut="E" side="top">
@@ -307,7 +310,7 @@ export function SelectionBar({
             >
               {narrow && (
                 <>
-                  {!allLoadedSelected && <MenuItem shortcut={`${modKeyLabel} A`} onSelect={selectAll}>全选已加载的 {formatCount(images.length)} 张</MenuItem>}
+                  {!allLoadedSelected && <MenuItem shortcut={`${modKeyLabel} A`} onSelect={selectAll}>全选已加载的 {formatCount(images.flatMap(selectionIds).length)} 张</MenuItem>}
                   {tiny && <MenuItem icon={<UserRoundPlus />} onSelect={() => { afterMenu.current = () => setCharOpen(true); }}>归到角色…</MenuItem>}
                   <MenuItem icon={<Palette />} onSelect={() => { afterMenu.current = () => setArtistOpen(true); }}>画师…</MenuItem>
                   {artist && <MenuItem icon={<CircleMinus />} onSelect={() => run({ type: 'artist', mode: 'remove', artists: artist.tags })}>移出画师</MenuItem>}

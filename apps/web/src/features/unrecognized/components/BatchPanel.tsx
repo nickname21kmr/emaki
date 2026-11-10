@@ -1,3 +1,4 @@
+import { AddToCollection } from '@/components/media/CollectionControls';
 import { Ban, Shapes, X } from 'lucide-react';
 import { KindMenu } from '@/components/media/KindMenu';
 import type { RefObject } from 'react';
@@ -22,6 +23,7 @@ export function BatchPanel({ triage, searchRef }: { triage: Triage; searchRef: R
     <PanelShell
       footer={
         <>
+          <AddToCollection ids={selectedItems.map(it => it.image.id)} onDone={triage.clearSelection} />
           <div className="grid grid-cols-3 gap-2">
             <KindMenu
               align="start"

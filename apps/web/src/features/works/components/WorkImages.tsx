@@ -1,3 +1,4 @@
+import { CollapseCollectionsToggle } from '@/components/media/CollectionControls';
 import type { ID, ImageItem } from '@emaki/shared';
 import { EyeOff, Heart, HeartOff, Palette } from 'lucide-react';
 import { ArtistBulkPicker } from '@/features/gallery/ArtistPicker';
@@ -60,7 +61,7 @@ export function WorkImages({ workId, gridKey, dialogOpen = false }: { workId: ID
   });
 
   const byId = useMemo(() => new Map(images.map((i) => [i.id, i])), [images]);
-  const allFavorite = selection.ids.length > 0 && selection.ids.every((id) => byId.get(id)?.favorite);
+  const allFavorite = selection.ids.length > 0 && selection.ids.every((id) => images.some(i => (i.collectionGroup?.memberIds ?? [i.id]).includes(id) && (i.collectionGroup?.allFavorite ?? i.favorite)));
   const busy = favorite.isPending || exclude.isPending;
 
   const actions: SelectionAction[] = [
@@ -147,7 +148,7 @@ export function WorkImages({ workId, gridKey, dialogOpen = false }: { workId: ID
           </span>
         </div>
       )}
-      <ImagesToolbar total={total} filters={filters} otherCount={otherCount} />
+      <ImagesToolbar extra={<CollapseCollectionsToggle />} displayTotal={query.data?.pages[0]?.displayTotal} total={total} filters={filters} otherCount={otherCount} />
       {body}
       <ArtistBulkPicker open={artistOpen} onOpenChange={setArtistOpen} ids={selection.ids} onDone={selection.clear} />
       <SelectionBar count={selection.count} actions={actions} onClear={selection.clear} />

@@ -16,6 +16,8 @@ export type CharactersView = 'shelf' | 'list';
 export type Palette = 'washi' | 'mono' | 'mint' | 'sky' | 'lilac';
 
 interface PrefsState {
+  collapseCollections: boolean;
+  setCollapseCollections: (value: boolean) => void;
   /** 模糊 questionable / explicit 的图（顶栏眼睛按钮） */
   blurSensitive: boolean;
   palette: Palette;
@@ -60,6 +62,8 @@ interface PrefsState {
 export const usePrefs = create<PrefsState>()(
   persist(
     (set) => ({
+      collapseCollections: true,
+      setCollapseCollections: (collapseCollections) => set({ collapseCollections }),
       blurSensitive: true,
       palette: 'washi',
       setPalette: (palette) => set({ palette }),
@@ -67,8 +71,8 @@ export const usePrefs = create<PrefsState>()(
       blurPhoto: true,
       blurText: false,
       revealOnHover: false,
-      readerSpread: { doujin: true, artbook: false },
-      readerRtl: { doujin: true, artbook: false },
+      readerSpread: { doujin: true, artbook: false, group: false },
+      readerRtl: { doujin: true, artbook: false, group: false },
       setReaderSpread: (kind, v) => set((st) => ({ readerSpread: { ...st.readerSpread, [kind]: v } })),
       setReaderRtl: (kind, v) => set((st) => ({ readerRtl: { ...st.readerRtl, [kind]: v } })),
       setBlurLevel: (blurLevel) => set({ blurLevel }),

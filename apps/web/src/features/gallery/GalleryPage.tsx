@@ -139,7 +139,7 @@ export function GalleryPage() {
             renderOverlay={showKind ? (img) => <KindBadge kind={img.kind} /> : undefined}
           />
         </div>
-        <GridFooter loadingMore={isFetchingNextPage} done={!hasNextPage} total={total} />
+        <GridFooter displayTotal={list.data?.pages[0]?.displayTotal} loadingMore={isFetchingNextPage} done={!hasNextPage} total={total} />
         {onlyIllust && !hasNextPage && annexTotal(stats?.kindCounts) > 0 && (
           <p className="pb-6 text-center text-[12.5px] text-fg-muted">
             另有 {formatCount(annexTotal(stats?.kindCounts))} 张截图、漫画等在{' '}
@@ -172,12 +172,12 @@ export function GalleryPage() {
         title={filters.artist ? (artistName ?? filters.artist.replace(/_/g, ' ')) : '图库'}
         actions={artist ? <ArtistMenu artist={artist} onMoved={(tag) => update({ artist: tag })} /> : undefined}
         subtitle={
-          <Subtitle
+          <> <Subtitle
             stats={stats}
             kind={filters.kind}
             filtered={hasFilters}
             total={list.isPlaceholderData || list.isPending ? null : total}
-          />
+          />{list.data?.pages[0]?.displayTotal !== undefined && <span className="ml-2">· 展示 {list.data.pages[0].displayTotal.toLocaleString()} 项</span>}</>
         }
       >
         <KindIndex

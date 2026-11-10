@@ -1,3 +1,4 @@
+import { AddToCollection } from '../CollectionControls';
 import type { CollectionKind, ImageDetail } from '@emaki/shared';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
@@ -17,16 +18,16 @@ export function PanelCollection({ detail: d, onNavigate }: { detail: ImageDetail
   if (c) {
     return (
       <span className="inline-flex flex-wrap items-center gap-1.5">
-        <Link to={`/collections/${c.id}/read?p=${c.pageNo}`} onClick={onNavigate} className="text-fg transition-colors hover:text-shu">
-          《{c.title ?? '无题'}》第 {c.pageNo} / {c.pageCount} 页
+        <Link to={c.kind === 'group' ? `/collections/${c.id}` : `/collections/${c.id}/read?p=${c.pageNo}`} onClick={onNavigate} className="text-fg transition-colors hover:text-shu">
+          《{c.title ?? '无题'}》第 {c.pageNo} / {c.pageCount} {c.kind === 'group' ? '张' : '页'}
         </Link>
         <Seal glyph={COLLECTION_META[c.kind].glyph} size={16} />
       </span>
     );
   }
   const slash = d.relPath.lastIndexOf('/');
-  if (slash < 0) return null;
-  return <MakeCollection imageId={d.id} folder={d.relPath.slice(0, slash).split('/').pop()!} onNavigate={onNavigate} />;
+  if (slash < 0) return <AddToCollection ids={[d.id]} />;
+  return <span className="flex flex-wrap items-center gap-2"><AddToCollection ids={[d.id]} /><MakeCollection imageId={d.id} folder={d.relPath.slice(0, slash).split('/').pop()!} onNavigate={onNavigate} /></span>;
 }
 
 function MakeCollection({ imageId, folder, onNavigate }: { imageId: string; folder: string; onNavigate: () => void }) {

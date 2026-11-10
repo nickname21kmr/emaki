@@ -1,3 +1,4 @@
+import { CollapseCollectionsToggle } from '@/components/media/CollectionControls';
 import type { ImageItem, LibraryStats } from '@emaki/shared';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ImageGrid, ImageGridSkeleton } from '@/components/media/ImageGrid';
@@ -47,7 +48,7 @@ export function LatestImages({ stats }: { stats: LibraryStats }) {
     <section>
       <SectionTitle
         hint={latestHint(stats, newest?.addedAt)}
-        actions={<SeeAllLink to="/gallery" />}
+        actions={<><CollapseCollectionsToggle /><SeeAllLink to="/gallery" /></>}
       >
         最新入库
       </SectionTitle>

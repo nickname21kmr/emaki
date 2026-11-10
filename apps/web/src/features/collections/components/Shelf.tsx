@@ -1,3 +1,4 @@
+import { Thumb } from '@/components/media/Thumb';
 import type { CollectionSummary } from '@emaki/shared';
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -22,6 +23,16 @@ export function BookCard({
   size?: 'sm' | 'md';
 }) {
   const m = COLLECTION_META[c.kind];
+  if (c.kind === 'group') {
+    const cover = c.covers[0];
+    return <Link to={`/collections/${c.id}`} className="group/book block rounded-xl focus-visible:ring-2 focus-visible:ring-shu" aria-label={`合集《${displayTitle(c)}》，${c.pageCount} 张`}>
+      <div className="relative aspect-[4/3] overflow-hidden rounded-xl bg-sunken shadow-plate">
+        {cover && <Thumb image={{ id: cover.imageId, rating: cover.rating, dominantColor: cover.color ?? '#333' }} width={480} className="size-full" />}
+        <span className="absolute right-2 bottom-2 rounded-lg bg-black/65 px-2 py-1 text-xs text-white">{c.pageCount} 张</span>
+      </div>
+      <Caption kicker="图片合集" name={displayTitle(c)}>{meta ?? `${formatCount(c.pageCount)} 张`}</Caption>
+    </Link>;
+  }
   return (
     <Link
       to={`/collections/${c.id}`}
@@ -100,8 +111,8 @@ export function CollectionShelf({
   keepOrder?: boolean;
 }) {
   const units = toShelfUnits(list, { keepOrder });
-  const [all, setAll] = useState(false);
-  const shown = all ? units : units.slice(0, PAGE);
+  const [limit, setLimit] = useState(PAGE);
+  const shown = units.slice(0, limit);
   return (
     <>
       <div className="grid grid-cols-2 gap-x-8 gap-y-10 sm:grid-cols-3 lg:grid-cols-4">
@@ -115,8 +126,8 @@ export function CollectionShelf({
       </div>
       {units.length > shown.length && (
         <div className="mt-10 flex justify-center">
-          <Button variant="outline" onClick={() => setAll(true)}>
-            显示全部 {formatCount(units.length)} 本
+          <Button variant="outline" onClick={() => setLimit(n => n + PAGE)}>
+            再显示 {formatCount(Math.min(PAGE, units.length - shown.length))} 项 · 剩余 {formatCount(units.length - shown.length)} 项
           </Button>
         </div>
       )}

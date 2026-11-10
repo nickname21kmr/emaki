@@ -25,7 +25,7 @@ export function CollectionsPage() {
 
 function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: ReturnType<typeof useSearchParams>[1] }) {
   const kindParam = params.get('kind');
-  const kind: CollectionKind | 'artist' | null = kindParam === 'doujin' || kindParam === 'artbook' || kindParam === 'artist' ? kindParam : null;
+  const kind: CollectionKind | 'artist' | null = kindParam === 'group' || kindParam === 'doujin' || kindParam === 'artbook' || kindParam === 'artist' ? kindParam : null;
   const [q, setQ] = useState(params.get('q') ?? '');
   const debounced = useDebounced(q.trim(), 200);
   const list = useCollections({ q: debounced || undefined });
@@ -71,8 +71,8 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
     ) : (
       <EmptyState
         glyph="册"
-        title="还没有成册的文件夹"
-        description="文件名是页码（001.jpg…），或一组同尺寸的扫描页，扫描后会自动成册；也可以在看图器的信息面板里点「成册」。"
+        title="还没有合集"
+        description="在图库选中图片后点「加入合集」。同一投稿的多张图片也会自动收拢。"
       />
     );
   // 只看一类时这一类是空的（搜索只命中了别的类，或这一类本来就没有）：不能留一片空白
@@ -92,7 +92,7 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
   else
     body = (
       <div className="space-y-14">
-        {(['doujin', 'artbook'] as const)
+        {(['group', 'doujin', 'artbook'] as const)
           .filter((k) => !kind || kind === k)
           .map((k) => {
             const xs = by(k);
@@ -122,7 +122,7 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
         subtitle={
           list.data ? (
             <span>
-              {formatCount(unitCount(by('doujin')))} 本本子 · {formatCount(unitCount(by('artbook')))} 册画集 · 按文件夹自动成册，不移动文件
+              {formatCount(by('group').length)} 组图片 · {formatCount(unitCount(by('doujin')))} 本漫画 · {formatCount(unitCount(by('artbook')))} 册画集
             </span>
           ) : (
             <Skeleton className="h-3 w-56 rounded-full" />
@@ -137,6 +137,7 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
             onChange={(v) => set('kind', v === 'all' ? null : v)}
             options={[
               { value: 'all', label: '全部' },
+              { value: 'group', label: '图片合集' },
               { value: 'doujin', label: '本子' },
               { value: 'artbook', label: '画集' },
               { value: 'artist', label: '画师' },

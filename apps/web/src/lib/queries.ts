@@ -1,3 +1,4 @@
+import { usePrefs } from './stores';
 /**
  * 所有数据读取 / 修改的 React hook。页面只用这里的 hook。
  *
@@ -148,14 +149,18 @@ export const useCharactersInfinite = (q: Omit<ListCharactersQuery, 'cursor'>) =>
   });
 
 /** 图片列表（无限滚动），配合 components/media/ImageGrid 使用 */
-export const useImagesInfinite = (q: Omit<ListImagesQuery, 'cursor'>) =>
-  useInfiniteQuery({
-    queryKey: qk.images(q),
-    queryFn: ({ pageParam }) => api.images({ limit: 120, ...q, cursor: pageParam }),
+export const useImagesInfinite = (q: Omit<ListImagesQuery, 'cursor'>) => {
+  const collapse = usePrefs(s => s.collapseCollections);
+  const query = { ...q, collapseCollections: q.collapseCollections ?? (!q.collectionId && collapse) };
+  return useInfiniteQuery({
+    queryKey: qk.images(query),
+    queryFn: ({ pageParam }) => api.images({ limit: 120, ...query, cursor: pageParam }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor ?? undefined,
     placeholderData: keepPreviousData,
   });
+
+}
 
 /** 只要张数（编辑自定义画面时预览能筛出多少张） */
 export const useImageCount = (q: Omit<ListImagesQuery, 'cursor' | 'limit'>, enabled = true) =>
@@ -171,6 +176,7 @@ export const useImage = (id: ID | null | undefined) =>
 
 /** 未识别列表的参数（T34b）：大类、分段、主题、别册类型、插画 / 漫画 */
 export interface UnrecognizedParams {
+  collapseCollections?: boolean;
   area: UnrecognizedArea;
   bucket?: UnrecognizedBucket;
   theme?: UnrecognizedTheme;
@@ -181,7 +187,7 @@ export interface UnrecognizedParams {
 export const useUnrecognizedInfinite = (p: UnrecognizedParams = { area: 'art' }, limit = 60) =>
   useInfiniteQuery({
     // 前缀仍是 'unrecognized'：全局失效照常覆盖
-    queryKey: [...qk.unrecognized, p.area, p.bucket ?? 'all', p.theme ?? 'all', p.kind ?? 'all', p.artKind ?? 'all'],
+    queryKey: [...qk.unrecognized, p.area, p.bucket ?? 'all', p.theme ?? 'all', p.kind ?? 'all', p.artKind ?? 'all', p.collapseCollections ?? false],
     queryFn: ({ pageParam }) => api.unrecognized({ ...p, limit, cursor: pageParam }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor ?? undefined,

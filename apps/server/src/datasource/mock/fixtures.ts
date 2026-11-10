@@ -96,10 +96,11 @@ export interface ImageRow {
 
 /** 合集（T38c）：字段与 collections 表一一对应，外加手动关联 */
 export interface CollectionRow {
+  membership?: 'folder' | 'selection' | 'post';
   id: ID;
   rootId: ID;
   relDir: string;
-  kind: 'doujin' | 'artbook';
+  kind: 'doujin' | 'artbook' | 'group';
   kindSource: 'pages' | 'name' | 'manual';
   kindManual: boolean;
   title: string | null;

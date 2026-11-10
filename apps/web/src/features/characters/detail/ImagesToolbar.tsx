@@ -15,6 +15,7 @@ import { EASE_OUT } from '@/lib/motion';
 export function ImagesToolbar({
   title = '全部插画',
   total,
+  displayTotal,
   filters,
   extra,
   otherCount = 0,
@@ -24,6 +25,7 @@ export function ImagesToolbar({
   otherCount?: number;
   /** 当前筛选下的总张数；还没加载时不显示 */
   total?: number;
+  displayTotal?: number;
   filters: ImageFilters;
   extra?: ReactNode;
 }) {
@@ -46,7 +48,7 @@ export function ImagesToolbar({
             transition={{ duration: 0.35, ease: EASE_OUT }}
             className="text-xs text-fg-subtle tabular"
           >
-            {formatCount(total)} 张
+            {formatCount(total)} 张{displayTotal !== undefined && displayTotal !== total ? ` · 展示 ${formatCount(displayTotal)} 项` : ''}
           </motion.span>
         )}
       </div>

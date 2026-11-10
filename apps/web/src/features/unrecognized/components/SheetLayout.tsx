@@ -1,3 +1,4 @@
+import { CollapseCollectionsToggle } from '@/components/media/CollectionControls';
 import type { Character } from '@emaki/shared';
 import {
   UNRECOGNIZED_ANNEX_KINDS,
@@ -149,6 +150,7 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
           className="mb-3"
           actions={
             <>
+              <CollapseCollectionsToggle />
               <FreshButton stale={query.isStale} onRefresh={() => void query.refetch()} />
               {total > 0 && (
                 <Button variant="ghost" size="sm" onClick={() => void sheet.selectAll()}>
@@ -160,7 +162,7 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
           hint={
             summary && (
               <>
-                {formatCount(total)} 张 · {order}
+                {formatCount(total)} 张{query.data?.pages[0]?.displayTotal !== undefined ? ` · 展示 ${query.data.pages[0].displayTotal} 项` : ''} · {order}
                 {mode === 'annex' && p.kind && (
                   <Link to={`/annex/${p.kind}`} className="ml-2 text-fg-muted hover:text-fg">
                     在别册里看全部 →

@@ -691,7 +691,7 @@ export class SqliteDataSource implements DataSource {
          FROM images i JOIN collections c ON c.id = i.collection_id WHERE i.id = ? AND c.state = 'active'`,
       )
       .get(imageId) as
-      | { id: number; kind: 'doujin' | 'artbook'; title: string | null; volume_no: number | null; rel_dir: string; ord: number; n: number }
+      | { id: number; kind: 'doujin' | 'artbook' | 'group'; title: string | null; volume_no: number | null; rel_dir: string; ord: number; n: number }
       | undefined;
     if (!r) return null;
     return {
@@ -717,10 +717,18 @@ export class SqliteDataSource implements DataSource {
       // 提示文案和 mock 一致：收藏 > 分级 > 角色 > 类型，只报一条
       let message = '';
       if (sourceEdit) {
+        const newKey = sourceEdit.source?.postId ? sourceEdit.source.site + ':' + sourceEdit.source.postId : null;
+        const oldKey = this.ctx.db.prepare("SELECT source_site || ':' || source_post_id FROM images WHERE id = ?").pluck().get(iid) as string | null;
+        const affected = this.ctx.db.prepare(`SELECT id FROM images WHERE id = @iid OR source_site || ':' || source_post_id IN (@old, @next)
+          OR collection_id = (SELECT collection_id FROM images WHERE id = @iid)`).pluck().all({ iid, old: oldKey, next: newKey }) as number[];
+        u.columns('images', ['collection_id', 'page_no', 'collection_detached'], affected);
+        const existingGroups = new Set(this.ctx.db.prepare('SELECT id FROM collections').pluck().all() as number[]);
         u.columns('images', ['source_site', 'source_post_id', 'source_artist', 'source_url', 'source_manual'], [iid]);
         const src = sourceEdit.source;
         this.ctx.stmt('UPDATE images SET source_site=?, source_post_id=?, source_artist=?, source_url=?, source_manual=? WHERE id=?')
           .run(src?.site ?? null, src?.postId ?? null, src?.artist ?? null, src?.url ?? null, sourceEdit.manual ? 1 : 0, iid);
+        this.collections.refreshSources([iid]);
+        for (const id of this.ctx.db.prepare('SELECT id FROM collections').pluck().all() as number[]) if (!existingGroups.has(id)) u.inserted('collections', id);
         message = sourceEdit.manual ? (src ? '已确认来源' : '已清除来源') : '已恢复自动来源';
       }
       if (body.kind !== undefined) {
@@ -830,7 +838,7 @@ export class SqliteDataSource implements DataSource {
     const root = this.requireRoot(body.rootId);
     if (!root.enabled) throw new BadRequestError('这个图库文件夹停用了，先启用再移动');
     const dir = normalizeSubdir(body.dir);
-    const cols = `i.id, i.root_id, i.rel_path, i.file_name, i.collection_id, i.tagged_at, i.retag, ${IN_COMIC('i')} AS in_comic, r.path AS root_path`;
+    const cols = `i.id, i.root_id, i.rel_path, i.file_name, CASE WHEN EXISTS (SELECT 1 FROM collections c WHERE c.id = i.collection_id AND c.membership = 'folder') THEN i.collection_id ELSE NULL END AS collection_id, i.tagged_at, i.retag, ${IN_COMIC('i')} AS in_comic, r.path AS root_path`;
     let rows: (MoveRow & { tagged_at: string | null; retag: number; in_comic: number })[];
     if (body.characterId !== undefined && body.ids === undefined) {
       const c = this.requireCharacterId(body.characterId);
@@ -1006,6 +1014,11 @@ export class SqliteDataSource implements DataSource {
     const db = this.ctx.db;
     const cutoff = iso(this.ctx.clock() - REMOVED_ROOT_KEEP_DAYS * 86_400_000);
     db.transaction(() => {
+      // A cross-folder selection outlives removal of its original anchor root.
+      db.prepare(`UPDATE collections SET root_id = (SELECT i.root_id FROM images i JOIN library_roots r ON r.id = i.root_id
+          WHERE i.collection_id = collections.id AND r.removed_at IS NULL ORDER BY i.id LIMIT 1)
+        WHERE membership <> 'folder' AND root_id IN (SELECT id FROM library_roots WHERE removed_at IS NOT NULL AND removed_at < ?)
+          AND EXISTS (SELECT 1 FROM images i JOIN library_roots r ON r.id = i.root_id WHERE i.collection_id = collections.id AND r.removed_at IS NULL)`).run(cutoff);
       const roots = db.prepare('DELETE FROM library_roots WHERE removed_at IS NOT NULL AND removed_at < ?').run(cutoff).changes;
       const ex = db
         .prepare("DELETE FROM exclusions WHERE kind = 'image' AND CAST(target AS INTEGER) NOT IN (SELECT id FROM images)")

@@ -1,3 +1,4 @@
+import { AddToCollection } from '@/components/media/CollectionControls';
 import type { Character, Rating } from '@emaki/shared';
 import { Archive, Ban, Feather, Shapes, ShieldHalf } from 'lucide-react';
 import type { RefObject } from 'react';
@@ -36,12 +37,13 @@ export function SheetBatchPanel({
   ratingOpen: boolean;
   onRatingOpen: (v: boolean) => void;
 }) {
-  const n = sheet.selectedItems.length;
+  const n = sheet.selectedCount;
   const stack = sheet.selectedItems.slice(0, 3);
   return (
     <PanelShell
       footer={
         <>
+          <AddToCollection ids={sheet.selectedIds} onDone={sheet.clear} />
           <div className="grid grid-cols-2 gap-2">
             {mode !== 'annex' && (
               <ActionKey

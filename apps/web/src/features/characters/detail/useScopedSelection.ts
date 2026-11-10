@@ -1,3 +1,4 @@
+import { selectionIds } from '@/components/media/CollectionControls';
 import type { ID, ImageItem } from '@emaki/shared';
 import { useMemo } from 'react';
 import { useHotkey } from '@/lib/hotkeys';
@@ -22,7 +23,7 @@ export function useScopedSelection(scope: string, images: ImageItem[], blocked =
   const selectAll = () => {
     const s = useSelection.getState();
     s.setScope(scope);
-    s.setMany(images.map((i) => i.id));
+    s.setMany(images.flatMap(selectionIds));
   };
 
   useHotkey('esc', clear, { enabled: ids.length > 0 && !idle, preventDefault: false });

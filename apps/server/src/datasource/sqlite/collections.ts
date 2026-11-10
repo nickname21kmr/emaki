@@ -1,3 +1,5 @@
+import { assertOrganizeReady, organizeCollection } from './organizeCollection.ts';
+import { randomUUID } from 'node:crypto';
 /**
  * 合集的查询与修改（T38c）。摘要统一由 loadSummaries 算（口径在 services/collections/summary.ts，和 mock 共用）。
  * 写操作全部走 ctx.mutate，任何写都把合集转成 origin='manual'（自动判定不会再删它）。
@@ -5,6 +7,7 @@
 import {
   searchKey,
   type BulkCollectionsBody,
+  type CreateCollectionBody,
   type CollectionKind,
   type CollectionPage,
   type CollectionSummary,
@@ -28,12 +31,12 @@ import { toCharacter, toWork } from './library.ts';
 import { DEFAULT_DOMINANT, iso, parseId, toId, VISIBLE } from './sql.ts';
 import type { UndoRecorder } from './undo.ts';
 
-const KIND_LABEL: Record<CollectionKind, string> = { doujin: '本子', artbook: '画集' };
-const isKind = (v: unknown): v is CollectionKind => v === 'doujin' || v === 'artbook';
+const KIND_LABEL: Record<CollectionKind, string> = { doujin: '本子', artbook: '画集', group: '合集' };
+const isKind = (v: unknown): v is CollectionKind => v === 'doujin' || v === 'artbook' || v === 'group';
 /** 可变列（撤销时整行记下这些） */
 const MUTABLE = [
   'kind', 'kind_source', 'kind_manual', 'title', 'title_manual', 'series_key', 'volume_no', 'series_manual', 'page_order',
-  'cover_image_id', 'origin', 'state', 'evidence', 'reviewed_at', 'updated_at',
+  'membership', 'cover_image_id', 'origin', 'state', 'evidence', 'reviewed_at', 'updated_at',
 ];
 
 interface PageRow {
@@ -89,7 +92,7 @@ export class CollectionQueries {
     const rows = db
       .prepare(
         `SELECT c.*, r.path AS root_path FROM collections c JOIN library_roots r ON r.id = c.root_id
-         WHERE c.state = 'active' AND r.enabled = 1 AND r.removed_at IS NULL`,
+         WHERE c.state = 'active' AND ((c.membership = 'folder' AND r.enabled = 1 AND r.removed_at IS NULL) OR (c.membership <> 'folder' AND ((r.enabled = 1 AND r.removed_at IS NULL) OR EXISTS (SELECT 1 FROM v_counted_images i WHERE i.collection_id = c.id))))`,
       )
       .all() as (CollectionRow & { root_path: string; comic: boolean })[];
     const comics = ComicAreas.load(db);
@@ -273,7 +276,7 @@ export class CollectionQueries {
         const rec = data.works.get(w.id);
         return rec ? [{ work: toWork(rec), pageCount: w.pageCount, manual: w.manual }] : [];
       }),
-      folderPath: l.row.rel_dir ? `${l.row.root_path}/${l.row.rel_dir}` : l.row.root_path,
+      folderPath: l.row.membership === 'folder' ? (l.row.rel_dir ? `${l.row.root_path}/${l.row.rel_dir}` : l.row.root_path) : '',
       pageOrder: l.row.page_order,
       evidence: l.row.evidence,
       reviewed: l.row.reviewed_at !== null,
@@ -283,7 +286,7 @@ export class CollectionQueries {
 
   /** getStats 用：页数 > 0 的本数，和待整理条目数（同一系列算一条） */
   stats(): { collectionCounts: Record<CollectionKind, number>; pendingCollectionCount: number } {
-    const counts: Record<CollectionKind, number> = { doujin: 0, artbook: 0 };
+    const counts: Record<CollectionKind, number> = { doujin: 0, artbook: 0, group: 0 };
     const pending = new Set<string>();
     for (const { summary: s } of this.loadAll().values()) {
       if (s.pageCount === 0) continue;
@@ -295,8 +298,10 @@ export class CollectionQueries {
 
   // ---------------------------------------------------------------- 修改
 
-  create(body: { fromImageId: ID; kind: CollectionKind }): MutationResult & { collection: CollectionSummary } {
-    if (!isKind(body.kind)) throw new BadRequestError('类型只能是本子或画集');
+  create(body: CreateCollectionBody): MutationResult & { collection: CollectionSummary } {
+    if (!isKind(body.kind)) throw new BadRequestError('请选择合集类型');
+    if (body.imageIds?.length) return this.createSelected(body);
+    if (!body.fromImageId) throw new BadRequestError('请选择图片');
     const iid = parseId(body.fromImageId);
     const img =
       iid === null
@@ -313,6 +318,7 @@ export class CollectionQueries {
     if (ex?.state === 'active') throw new ConflictError('这个文件夹已经是合集');
     const now = iso(this.ctx.clock());
     const members = this.members(img.root_id, dir);
+    if (body.organizeFiles) assertOrganizeReady(this.ctx, members.map(m => m.page.id));
     let collectionId = 0;
     const result = this.ctx.mutate((u) => {
       if (ex) {
@@ -337,11 +343,58 @@ export class CollectionQueries {
         );
         u.inserted('collections', collectionId);
       }
-      u.columns('images', ['collection_id', 'page_no'], members.map((m) => m.page.id));
+      u.columns('images', ['collection_id', 'page_no', 'collection_detached'], members.map((m) => m.page.id));
+      db.prepare('UPDATE images SET collection_detached = 0 WHERE id IN (SELECT value FROM json_each(?))').run(JSON.stringify(members.map(m => m.page.id)));
       const n = this.service.assignPages(collectionId).length;
       return { message: `已把「${leafOf(dir)}」做成${KIND_LABEL[body.kind]}（${n} 页）` };
     });
+    if (body.organizeFiles) {
+      const detached = this.update(String(collectionId), { organizeFiles: true });
+      const combined = this.ctx.undo.result(detached.message, async () => { if (detached.undoToken) await this.ctx.undo.run(detached.undoToken); if (result.undoToken) await this.ctx.undo.run(result.undoToken); });
+      return { ...combined, collection: this.loadAll().get(collectionId)!.summary };
+    }
     return { ...result, collection: this.loadAll().get(collectionId)!.summary };
+  }
+
+  private memberCollections(ids: number[]): number[] {
+    return this.ctx.db.prepare('SELECT DISTINCT collection_id FROM images WHERE id IN (SELECT value FROM json_each(?)) AND collection_id IS NOT NULL').pluck().all(JSON.stringify(ids)) as number[];
+  }
+
+  private reorderWithUndo(u: UndoRecorder, collections: number[]): void {
+    const run = () => { for (const id of collections) this.service.assignPages(id); };
+    run(); u.onUndoLast(run);
+  }
+
+  private selectedImages(ids: ID[]): number[] {
+    const nums = [...new Set(ids.map(parseId))];
+    if (!nums.length || nums.some(n => n === null)) throw new BadRequestError('请选择有效图片');
+    const found = this.ctx.db.prepare('SELECT id FROM v_counted_images WHERE id IN (SELECT value FROM json_each(?))').pluck().all(JSON.stringify(nums)) as number[];
+    if (found.length !== nums.length) throw new BadRequestError('部分图片已不可用，请刷新后重试');
+    return nums as number[];
+  }
+
+  private createSelected(body: CreateCollectionBody): MutationResult & { collection: CollectionSummary } {
+    const ids = this.selectedImages(body.imageIds!);
+    const db = this.ctx.db;
+    if (body.organizeFiles) assertOrganizeReady(this.ctx, ids);
+    const donors = this.memberCollections(ids);
+    const root = db.prepare('SELECT root_id FROM images WHERE id = ?').pluck().get(ids[0]) as number;
+    const now = iso(this.ctx.clock());
+    let id = 0;
+    const r = this.ctx.mutate(u => {
+      // Record member restoration before insertion so undo restores members after removing the new collection.
+      u.columns('images', ['collection_id', 'page_no', 'collection_detached'], ids);
+      id = Number(db.prepare(`INSERT INTO collections (root_id, rel_dir, kind, kind_source, kind_manual, title, title_manual,
+        page_order, origin, state, created_at, updated_at, membership)
+        VALUES (?, ?, ?, 'manual', 1, ?, 1, 'name', 'manual', 'active', ?, ?, 'selection')`).run(
+          root, '@selection/' + randomUUID(), body.kind, body.title?.trim() || '新合集', now, now).lastInsertRowid);
+      u.inserted('collections', id);
+      db.prepare('UPDATE images SET collection_id = ?, collection_detached = 1 WHERE id IN (SELECT value FROM json_each(?))').run(id, JSON.stringify(ids));
+      this.service.assignPages(id);
+      this.reorderWithUndo(u, donors);
+      return { message: `已创建合集，收录 ${ids.length} 张图片` };
+    });
+    return { ...(body.organizeFiles ? organizeCollection(this.ctx, id, r) : r), collection: this.loadAll().get(id)!.summary };
   }
 
   update(idStr: ID, body: UpdateCollectionBody): MutationResult {
@@ -352,6 +405,11 @@ export class CollectionQueries {
     const set: Record<string, unknown> = {};
     const notes: string[] = [];
     let reorder = false;
+    const add = body.addImageIds ? this.selectedImages(body.addImageIds) : [];
+    const remove = body.removeImageIds ? this.selectedImages(body.removeImageIds) : [];
+    const donors = this.memberCollections([...add, ...remove]);
+    if (add.some(id => remove.includes(id))) throw new BadRequestError('同一张图不能同时添加和移出');
+    if (add.length || remove.length) { set.membership = 'selection'; reorder = true; notes.push(`已更新合集图片`); }
 
     if (body.title !== undefined) {
       if (body.title === null) {
@@ -373,7 +431,7 @@ export class CollectionQueries {
         Object.assign(set, { kind: k.kind, kind_source: k.source, kind_manual: 0 });
         notes.push(`已恢复自动判断（${KIND_LABEL[k.kind]}）`);
       } else {
-        if (!isKind(body.kind)) throw new BadRequestError('类型只能是本子或画集');
+        if (!isKind(body.kind)) throw new BadRequestError('请选择合集类型');
         Object.assign(set, { kind: body.kind, kind_source: 'manual', kind_manual: 1 });
         notes.push(`已改为${KIND_LABEL[body.kind]}`);
       }
@@ -416,10 +474,23 @@ export class CollectionQueries {
     const works = body.manualWorkIds?.map((x) => this.requireRow('works', x, '作品'));
     if (chars) notes.push('已更新出场角色');
     if (works) notes.push('已更新作品');
+    if (body.organizeFiles) {
+      assertOrganizeReady(this.ctx, [...add, ...(db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(c.id) as number[])]);
+      if (c.membership === 'folder') set.membership = 'selection';
+      notes.push('整理合集文件夹');
+    }
     if (!notes.length) throw new BadRequestError('没有要修改的内容');
 
-    return this.ctx.mutate((u) => {
+    const result = this.ctx.mutate((u) => {
       u.columns('collections', MUTABLE, [c.id]);
+      if (add.length || remove.length) {
+        const existing = db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(c.id) as number[];
+        u.columns('images', ['collection_id', 'page_no', 'collection_detached'], [...new Set([...existing, ...add, ...remove])]);
+        db.prepare('UPDATE images SET collection_detached = 1 WHERE collection_id = ?').run(c.id);
+        db.prepare('UPDATE images SET collection_id = ?, collection_detached = 1 WHERE id IN (SELECT value FROM json_each(?))').run(c.id, JSON.stringify(add));
+        db.prepare('UPDATE images SET collection_id = NULL, page_no = NULL, collection_detached = 1 WHERE collection_id = ? AND id IN (SELECT value FROM json_each(?))').run(c.id, JSON.stringify(remove));
+        if (c.source_key) { u.columns('collections', ['source_key'], [c.id]); set.source_key = null; }
+      }
       this.write(c.id, { ...set, origin: 'manual', updated_at: now });
       if (chars) this.replaceLinks(u, 'collection_characters', 'character_id', c.id, chars, now);
       if (works) this.replaceLinks(u, 'collection_works', 'work_id', c.id, works, now);
@@ -427,8 +498,10 @@ export class CollectionQueries {
         u.columns('images', ['collection_id', 'page_no'], db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(c.id) as number[]);
         this.service.assignPages(c.id);
       }
+      if (add.length || remove.length) this.reorderWithUndo(u, [...new Set([...donors, c.id])]);
       return { message: notes.join('，') };
     });
+    return body.organizeFiles ? organizeCollection(this.ctx, c.id, result) : result;
   }
 
   /** 不成册：留一行 dismissed，自动判定不会再建 */
@@ -438,10 +511,10 @@ export class CollectionQueries {
     const now = iso(this.ctx.clock());
     return this.ctx.mutate((u) => {
       u.columns('collections', MUTABLE, [c.id]);
-      u.columns('images', ['collection_id', 'page_no'], db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(c.id) as number[]);
+      u.columns('images', ['collection_id', 'page_no', 'collection_detached'], db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(c.id) as number[]);
       this.write(c.id, { state: 'dismissed', origin: 'manual', updated_at: now });
-      db.prepare('UPDATE images SET collection_id = NULL, page_no = NULL WHERE collection_id = ?').run(c.id);
-      return { message: `已取消成册：${c.title ?? '无题'}` };
+      db.prepare('UPDATE images SET collection_id = NULL, page_no = NULL, collection_detached = 1 WHERE collection_id = ?').run(c.id);
+      return { message: `已解散合集：${c.title ?? '无题'}` };
     });
   }
 
@@ -455,7 +528,7 @@ export class CollectionQueries {
         : a.type === 'addWork'
           ? { id: this.requireRow('works', a.workId, '作品'), table: 'collection_works', col: 'work_id' }
           : null;
-    if (a.type === 'kind' && !isKind(a.value)) throw new BadRequestError('类型只能是本子或画集');
+    if (a.type === 'kind' && !isKind(a.value)) throw new BadRequestError('请选择合集类型');
     const ids = rows.map((r) => r.id);
     return this.ctx.mutate((u) => {
       u.columns('collections', MUTABLE, ids);
@@ -523,7 +596,7 @@ export class CollectionQueries {
         : (this.ctx.db
             .prepare(
               `SELECT c.* FROM collections c JOIN library_roots r ON r.id = c.root_id
-               WHERE c.id = ? AND c.state = 'active' AND r.enabled = 1 AND r.removed_at IS NULL`,
+               WHERE c.id = ? AND c.state = 'active' AND ((c.membership = 'folder' AND r.enabled = 1 AND r.removed_at IS NULL) OR (c.membership <> 'folder' AND ((r.enabled = 1 AND r.removed_at IS NULL) OR EXISTS (SELECT 1 FROM v_counted_images i WHERE i.collection_id = c.id))))`,
             )
             .get(id) as CollectionRow | undefined);
     if (!row) throw new NotFoundError('合集');

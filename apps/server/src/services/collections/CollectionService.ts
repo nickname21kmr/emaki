@@ -6,7 +6,7 @@
  * - assignPages：只重排一本（T38c 的新建和改页序用）。
  *
  * 约定：
- * - 一个文件夹最多一本（UNIQUE(root_id, rel_dir)）；根目录本身不成册。
+ * - 目录合集沿用一个文件夹一本；普通合集按显式成员或站点 + 投稿号组织，不依赖目录。
  * - 用户动过的合集是 origin='manual'，自动判定不会删它，只刷新没被手动改过的字段；
  *   state='dismissed' 的行表示「不成册」，自动判定不会再建。
  * - 手动合集的文件夹改名后跟着搬（≥ 80% 的页落在同一个新目录）。
@@ -44,9 +44,16 @@ interface Row {
   tagged_at: string | null;
   collection_id: number | null;
   page_no: number | null;
+  membership: string;
+  collection_detached: number;
+  source_site: string | null;
+  source_post_id: string | null;
+  collection_origin: string | null;
 }
 
 export interface CollectionRow {
+  membership?: 'folder' | 'selection' | 'post';
+  source_key?: string | null;
   id: number;
   root_id: number;
   rel_dir: string;
@@ -100,8 +107,8 @@ export interface RefreshResult {
 
 /** 条件字面包含 trashed_at IS NULL AND missing = 0（T22 的部分索引） */
 const ROW_SQL = `SELECT i.id, i.root_id, i.rel_path, i.file_name, i.width, i.height, i.modified_at, i.content_kind, i.content_kind_source,
-    i.content_kind_manual, i.tagged_at, i.collection_id, i.page_no
-  FROM images i JOIN library_roots r ON r.id = i.root_id
+    i.content_kind_manual, i.tagged_at, i.collection_id, i.page_no, i.collection_detached, COALESCE(c.membership, 'folder') AS membership, i.source_site, i.source_post_id, c.origin AS collection_origin
+  FROM images i JOIN library_roots r ON r.id = i.root_id LEFT JOIN collections c ON c.id = i.collection_id
   WHERE r.enabled = 1 AND r.removed_at IS NULL AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL`;
 
 const keyOf = (rootId: number, dir: string) => `${rootId}\u0000${dir}`;
@@ -140,11 +147,15 @@ export class CollectionService {
   refreshAll(): RefreshResult {
     const t0 = performance.now();
     const res = transact(this.db, () => {
+      const sourceChanges = this.refreshPosts();
       const groups = this.group(this.db.prepare(ROW_SQL).all() as Row[]);
       const existing = new Map<string, CollectionRow>();
-      for (const c of this.db.prepare('SELECT * FROM collections').all() as CollectionRow[]) existing.set(keyOf(c.root_id, c.rel_dir), c);
+      for (const c of this.db.prepare("SELECT * FROM collections WHERE membership = 'folder'").all() as CollectionRow[]) existing.set(keyOf(c.root_id, c.rel_dir), c);
       this.followRenames(groups, existing);
-      return this.apply(groups, existing, null);
+      const result = this.apply(groups, existing, null);
+      result.created += sourceChanges.created; result.pagesChanged += sourceChanges.changed;
+      result.active = this.db.prepare("SELECT COUNT(*) FROM collections WHERE state = 'active'").pluck().get() as number;
+      return result;
     });
     return { ...res, ms: performance.now() - t0 };
   }
@@ -154,6 +165,7 @@ export class CollectionService {
     const t0 = performance.now();
     if (!imageIds.length) return { active: 0, created: 0, removed: 0, updated: 0, pagesChanged: 0, ms: 0 };
     const res = transact(this.db, () => {
+      const sourceChanges = this.refreshPosts(false, imageIds);
       const dirs = this.db
         .prepare(
           `SELECT DISTINCT root_id AS rootId, substr(rel_path, 1, length(rel_path) - length(file_name) - 1) AS dir
@@ -173,9 +185,12 @@ export class CollectionService {
       const byKey = this.db.prepare('SELECT * FROM collections WHERE root_id = ? AND rel_dir = ?');
       for (const d of dirs) {
         const c = byKey.get(d.rootId, d.dir) as CollectionRow | undefined;
-        if (c) existing.set(keyOf(c.root_id, c.rel_dir), c);
+        if (c && c.membership === 'folder') existing.set(keyOf(c.root_id, c.rel_dir), c);
       }
-      return this.apply(this.group(rows), existing, scope);
+      const result = this.apply(this.group(rows), existing, scope);
+      result.created += sourceChanges.created; result.pagesChanged += sourceChanges.changed;
+      result.active = this.db.prepare("SELECT COUNT(*) FROM collections WHERE state = 'active'").pluck().get() as number;
+      return result;
     });
     return { ...res, ms: performance.now() - t0 };
   }
@@ -184,6 +199,11 @@ export class CollectionService {
   assignPages(collectionId: number): number[] {
     const c = this.db.prepare('SELECT * FROM collections WHERE id = ?').get(collectionId) as CollectionRow | undefined;
     if (!c) return [];
+    if (c.membership && c.membership !== 'folder') {
+      const rows = this.db.prepare(`${ROW_SQL} AND i.collection_id = ?`).all(c.id) as Row[];
+      const pages = rows.map(r => ({ id: r.id, fileName: r.file_name, width: r.width, height: r.height, modifiedAt: r.modified_at, kind: r.content_kind, judged: isJudged(r), row: r }));
+      return this.number(c.id, { rootId: c.root_id, dir: c.rel_dir, pages, comic: null }, c.page_order).ids;
+    }
     return transact(this.db, () => {
       const rows = this.db
         .prepare(
@@ -201,12 +221,67 @@ export class CollectionService {
     });
   }
 
+  refreshSources(imageIds: number[]): void {
+    transact(this.db, () => this.refreshPosts(true, imageIds));
+  }
+
+  /** Source grouping never changes per-image tags or filesystem paths. */
+  private refreshPosts(create = true, imageIds?: number[]): { created: number; changed: number } {
+    let created = 0, changed = 0;
+    const ids = imageIds ? JSON.stringify(imageIds) : null;
+    const scope = ids ? (this.db.prepare(`SELECT i.source_site || ':' || i.source_post_id AS k, c.source_key AS old
+      FROM images i LEFT JOIN collections c ON c.id = i.collection_id WHERE i.id IN (SELECT value FROM json_each(?))`)
+      .all(ids) as { k: string | null; old: string | null }[]).flatMap(r => [r.k, r.old]).filter(Boolean) : null;
+    changed += this.db.prepare(`UPDATE images SET collection_id = NULL, page_no = NULL WHERE collection_id IN (SELECT id FROM collections WHERE membership = 'post')
+      AND COALESCE(source_site || ':' || source_post_id, '') <> (SELECT source_key FROM collections WHERE id = images.collection_id)
+      ${ids ? 'AND id IN (SELECT value FROM json_each(@ids))' : ''}`).run(ids ? { ids } : {}).changes;
+    const rows = this.db.prepare(`${ROW_SQL}
+      AND i.collection_detached = 0 AND i.source_site IS NOT NULL AND i.source_site <> 'other'
+      AND i.source_post_id IS NOT NULL AND i.source_post_id <> ''
+      AND (i.collection_id IS NULL OR c.membership = 'post')
+      ${scope ? "AND i.source_site || ':' || i.source_post_id IN (SELECT value FROM json_each(@scope))" : ''}
+      ORDER BY i.id`).all(scope ? { scope: JSON.stringify(scope) } : {}) as Row[];
+    const groups = new Map<string, Row[]>();
+    const comicAreas = ComicAreas.load(this.db);
+    const release = this.db.prepare('UPDATE images SET collection_id = NULL, page_no = NULL WHERE id = ?');
+    for (const row of rows) {
+      if (comicAreas.of(row.root_id, dirOf(row.rel_path, row.file_name)) && row.collection_origin !== 'manual') {
+        if (row.collection_id !== null) changed += release.run(row.id).changes;
+        continue;
+      }
+      const key = row.source_site + ':' + row.source_post_id;
+      const xs = groups.get(key) ?? []; xs.push(row); groups.set(key, xs);
+    }
+    const find = this.db.prepare('SELECT * FROM collections WHERE source_key = ?');
+    const insert = this.db.prepare(`INSERT INTO collections
+      (root_id, rel_dir, kind, kind_source, title, page_order, origin, state, created_at, updated_at, membership, source_key)
+      VALUES (?, ?, 'group', 'source', ?, 'name', 'auto', 'active', ?, ?, 'post', ?)`);
+    for (const [key, members] of groups) {
+      let c = find.get(key) as CollectionRow | undefined;
+      if ((c && (c.state === 'dismissed' || c.membership !== 'post')) || (!c && (!create || members.length < 2))) continue;
+      if (!c) {
+        created++;
+        const first = members[0]!, now = this.now();
+        const id = Number(insert.run(first.root_id, '@post/' + key,
+          first.source_site + ' #' + first.source_post_id, now, now, key).lastInsertRowid);
+        c = { id, page_order: 'name' } as CollectionRow;
+      }
+      const pages = members.map(r => ({ id: r.id, fileName: r.file_name, width: r.width, height: r.height,
+        modifiedAt: r.modified_at, kind: r.content_kind, judged: isJudged(r), row: r }));
+      changed += this.number(c.id, { rootId: members[0]!.root_id, dir: '', comic: null, pages }, c.page_order).changed;
+    }
+    // Creation can grow this table from one row to thousands. Refresh planner statistics before browsing.
+    if (created) this.db.exec('ANALYZE collections');
+    return { created, changed };
+  }
+
   // ---------------------------------------------------------------- 内部
 
   private group(rows: Row[]): Map<string, Group> {
     const comics = ComicAreas.load(this.db);
     const groups = new Map<string, Group>();
     for (const r of rows) {
+      if (r.membership !== 'folder' || r.collection_detached) continue;
       const dir = dirOf(r.rel_path, r.file_name);
       const comic = comics.of(r.root_id, dir);
       if (!dir && !comic) continue; // 根目录本身不成册（整个按漫画导入的除外）
@@ -341,7 +416,7 @@ export class CollectionService {
       : db
           .prepare(
             `UPDATE images SET collection_id = NULL, page_no = NULL
-             WHERE collection_id IS NOT NULL AND id NOT IN (SELECT value FROM json_each(@keep)) AND root_id NOT IN (SELECT value FROM json_each(@hidden))`,
+             WHERE collection_id IN (SELECT id FROM collections WHERE membership = 'folder') AND id NOT IN (SELECT value FROM json_each(@keep)) AND root_id NOT IN (SELECT value FROM json_each(@hidden))`,
           )
           .run({ keep: keepJson, hidden: JSON.stringify([...hidden]) });
     pagesChanged += clear.changes;

@@ -1,3 +1,4 @@
+import { CollapseCollectionsToggle } from '@/components/media/CollectionControls';
 import type { Character, ID, ImageItem } from '@emaki/shared';
 import { FolderInput, Heart, HeartOff, ImageUp, Palette, UserRoundMinus } from 'lucide-react';
 import { ArtistBulkPicker } from '@/features/gallery/ArtistPicker';
@@ -83,7 +84,7 @@ export function CharacterImages({
   );
 
   const byId = useMemo(() => new Map(images.map((i) => [i.id, i])), [images]);
-  const allFavorite = selection.ids.length > 0 && selection.ids.every((id) => byId.get(id)?.favorite);
+  const allFavorite = selection.ids.length > 0 && selection.ids.every((id) => images.some(i => (i.collectionGroup?.memberIds ?? [i.id]).includes(id) && (i.collectionGroup?.allFavorite ?? i.favorite)));
   const busy = unassign.isPending || setCover.isPending || favorite.isPending;
 
   const actions: SelectionAction[] = [
@@ -203,7 +204,7 @@ export function CharacterImages({
 
   return (
     <section ref={sectionRef} aria-label="全部插画" className="scroll-mt-24">
-      <ImagesToolbar total={total} filters={filters} otherCount={character.otherCount} />
+      <ImagesToolbar extra={<CollapseCollectionsToggle />} displayTotal={query.data?.pages[0]?.displayTotal} total={total} filters={filters} otherCount={character.otherCount} />
       {body}
       <ArtistBulkPicker open={artistOpen} onOpenChange={setArtistOpen} ids={selection.ids} onDone={selection.clear} />
       <SelectionBar count={selection.count} actions={actions} onClear={selection.clear} />

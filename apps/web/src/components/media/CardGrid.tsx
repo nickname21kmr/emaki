@@ -1,3 +1,4 @@
+import { selectionIds, toggleImageSelection } from './CollectionControls';
 import type { ImageItem } from '@emaki/shared';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Heart } from 'lucide-react';
@@ -87,7 +88,7 @@ export function CardGrid({
           >
             {row.map((image, k) => {
               const index = start + k;
-              const selected = selecting && selection.ids.has(image.id);
+              const selected = selecting && selectionIds(image).every(id => selection.ids.has(id));
               return (
                 <Card
                   key={image.id}
@@ -99,7 +100,7 @@ export function CardGrid({
                   selectable={!!selectionScope}
                   selecting={selecting}
                   onClick={(e) => handleClick(e, image, index)}
-                  onToggle={() => selection.toggle(image.id)}
+                  onToggle={() => toggleImageSelection(image)}
                 />
               );
             })}
@@ -171,6 +172,7 @@ function Card({
           <Heart className="pointer-events-none absolute right-2 bottom-2 size-4 fill-white text-white drop-shadow-[0_1px_2px_rgb(0_0_0/0.5)]" />
         )}
         <MountFrame selected={selected} />
+                  {image.collectionGroup && <span className="pointer-events-none absolute right-2 top-2 rounded-lg bg-black/70 px-2 py-1 text-xs text-white">{image.collectionGroup.count} / {image.collectionGroup.total} 张</span>}
         {selectable && <SelectCircle selected={selected} selecting={selecting} onToggle={onToggle} />}
       </div>
       {variant === 'shot' && <figcaption className="mt-1.5 truncate text-[11px] text-fg-subtle tabular">{formatDate(image.modifiedAt)}</figcaption>}

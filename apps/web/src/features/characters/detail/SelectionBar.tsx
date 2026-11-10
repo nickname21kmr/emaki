@@ -1,3 +1,4 @@
+import { AddToCollection } from '@/components/media/CollectionControls';
 import { Ellipsis, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useRef, type ReactNode } from 'react';
@@ -60,7 +61,8 @@ export function SelectionBar({
                 <span className="text-fg-inverse/60 @max-[480px]/bar:hidden">张</span>
               </div>
               <span className="mx-1.5 h-5 w-px bg-fg-inverse/15" aria-hidden />
-              {actions.map((a) => (
+              <AddToCollection inverse />
+            {actions.map((a) => (
                 <button
                   key={a.key}
                   type="button"

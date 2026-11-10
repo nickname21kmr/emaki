@@ -134,6 +134,8 @@ export interface TagScore {
 }
 
 export interface ImageItem {
+  /** Present only on a collapsed collection card; memberIds respect all current filters. */
+  collectionGroup?: { id: ID; title: string | null; kind: CollectionKind; count: number; total: number; allFavorite: boolean; memberIds: ID[] };
   id: ID;
   /** 相对于所属库根目录的路径 */
   relPath: string;
@@ -204,8 +206,8 @@ export interface ImageArtist {
   tags: string[];
 }
 
-/** 合集（T38）：本子 = 漫画为主的同人志 / 单行本；画集 = 插画集。一个文件夹最多一本 */
-export type CollectionKind = 'doujin' | 'artbook';
+/** 合集的打开方式：普通图片浏览、漫画阅读、画集阅读。成员可来自任意目录。 */
+export type CollectionKind = 'doujin' | 'artbook' | 'group';
 
 export interface CollectionSummary {
   id: ID;

@@ -6,6 +6,7 @@ import { BookImage, BookOpen, type LucideIcon } from 'lucide-react';
 import { shouldBlur, type BlurPrefs } from './blur';
 
 export const COLLECTION_META: Record<CollectionKind, { label: string; unit: string; glyph: string; icon: LucideIcon; hint: string }> = {
+  group: { label: '合集', unit: '组', glyph: '集', icon: BookImage, hint: '收在一起的图片' },
   doujin: { label: '本子', unit: '本', glyph: '本', icon: BookOpen, hint: '按页码顺序读' },
   artbook: { label: '画集', unit: '册', glyph: '画', icon: BookImage, hint: '里面的插画照常计入角色' },
 };

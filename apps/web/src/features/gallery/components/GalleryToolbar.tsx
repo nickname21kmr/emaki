@@ -1,3 +1,4 @@
+import { CollapseCollectionsToggle } from '@/components/media/CollectionControls';
 import { BROWSE_THEMES, type CustomTheme } from '@emaki/shared';
 import { THEME_META } from '@/features/unrecognized/themes';
 import {
@@ -199,6 +200,7 @@ export function GalleryToolbar({
 export function GalleryViewControls({ filters, update }: { filters: GalleryFilters; update: (patch: Partial<GalleryFilters>) => void }) {
   return (
     <div className="flex items-center gap-0.5">
+      <CollapseCollectionsToggle />
       {/* 只看收藏：常用的开关，开着时整个按钮变朱色，一眼看得出现在只显示收藏 */}
       <Tooltip content={filters.favorite ? '正在只看收藏，点一下看全部' : '只看收藏的图'}>
         <Button

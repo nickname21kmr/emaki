@@ -1,3 +1,4 @@
+import { NOT_IN_BOOK } from './sql.ts';
 import { performance } from 'node:perf_hooks';
 /**
  * 未识别（T15 → T34a 契约 v3）：两个大类（插画和漫画 / 照片、文字等）、四个分段、「没认出」按主题分组，以及采纳建议。
@@ -35,7 +36,7 @@ const COLS = `i.id, i.added_at AS a, i.tagged_at AS tg, i.shelved_at AS sh, (i.c
     COALESCE((SELECT MAX(s.score) FROM character_suggestions s WHERE s.image_id = i.id), -1) AS t,
     COALESCE(i.art_score, -999) AS s, ${THEME_EXPR} AS th`;
 /** 插画和漫画（漫画页看设置）：没有角色、不在合集里（合集整本处理）、不在按漫画导入的文件夹里，放下的也在这里（由分段区分） */
-const ROW_ART = `SELECT ${COLS} FROM v_counted_images i WHERE ${QUEUE_KINDS_SQL} AND ${UNRECOGNIZED} AND i.collection_id IS NULL AND NOT ${IN_COMIC_I}`;
+const ROW_ART = `SELECT ${COLS} FROM v_counted_images i WHERE ${QUEUE_KINDS_SQL} AND ${UNRECOGNIZED} AND ${NOT_IN_BOOK} AND NOT ${IN_COMIC_I}`;
 /** 照片、文字等：没有角色的别册图 */
 const ROW_ANNEX = `SELECT ${COLS} FROM v_counted_images i WHERE ${ANNEX_KINDS_SQL} AND ${UNRECOGNIZED}`;
 /** 「用主模型重新识别」的范围：队列里识别过、没认出角色的插画（漫画按本处理，放下的是用户自己的决定，都不动） */
@@ -134,7 +135,7 @@ export class UnrecognizedQueries {
             WHEN i.tagged_at IS NULL THEN 'untagged'
             ELSE ${THEME_EXPR} END AS k, COUNT(*) AS n
          FROM v_counted_images i
-         WHERE ${UNRECOGNIZED} AND (${ANNEX_KINDS_SQL} OR (${QUEUE_KINDS_SQL} AND i.collection_id IS NULL AND NOT ${IN_COMIC_I}))
+         WHERE ${UNRECOGNIZED} AND (${ANNEX_KINDS_SQL} OR (${QUEUE_KINDS_SQL} AND ${NOT_IN_BOOK} AND NOT ${IN_COMIC_I}))
          GROUP BY 1, 2`,
       )
       .all() as { ck: string; k: string; n: number }[];
@@ -190,9 +191,21 @@ export class UnrecognizedQueries {
         ? 'i.content_kind = @kind'
         : '1'
       : `${BUCKET_WHERE[bucket ?? 'all']}${theme ? ' AND th = @theme' : ''}`;
-    const sql = annex
+    const flatSql = annex
       ? `SELECT * FROM (${ROW_ANNEX} AND ${where}) WHERE ${m.after} ORDER BY ${m.order} LIMIT @take`
       : `SELECT * FROM (${ROW_ART}${artKind ? ' AND i.content_kind = @artKind' : ''}) WHERE ${where} AND (${m.after}) ORDER BY ${m.order} LIMIT @take`;
+    const base = annex ? `${ROW_ANNEX} AND ${where}` : `SELECT * FROM (${ROW_ART}${artKind ? ' AND i.content_kind = @artKind' : ''}) WHERE ${where}`;
+    const partition = 'COALESCE(-g.id, pool.id)';
+    const rankedOrder = m.order.replace(/\b(c|t|a|id|s|sh)\b/g, 'pool.$1');
+    const grouped = `WITH ranked AS (SELECT pool.*, g.id AS group_id, g.title AS group_title, g.kind AS group_kind,
+      (SELECT COUNT(*) FROM v_counted_images v WHERE v.collection_id = g.id) AS group_total,
+      COUNT(*) OVER (PARTITION BY ${partition}) AS group_count,
+      MIN(meta.favorite) OVER (PARTITION BY ${partition}) AS group_favorite,
+      json_group_array(pool.id) OVER (PARTITION BY ${partition} ORDER BY pool.id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS member_ids,
+      ROW_NUMBER() OVER (PARTITION BY ${partition} ORDER BY ${rankedOrder}) AS rn
+      FROM (${base}) pool JOIN images meta ON meta.id = pool.id LEFT JOIN collections g ON g.id = meta.collection_id AND g.state = 'active')`;
+    const sql = q.collapseCollections ? `${grouped} SELECT * FROM ranked WHERE rn = 1 AND (${m.after}) ORDER BY ${m.order} LIMIT @take` : flatSql;
+    const displayTotal = q.collapseCollections ? (this.ctx.db.prepare(`${grouped} SELECT COUNT(*) n FROM ranked WHERE rn = 1`).get({ kind, artKind, theme }) as { n: number }).n : undefined;
     const rows = this.ctx.stmt(sql).all({
       kind,
       artKind,
@@ -203,7 +216,7 @@ export class UnrecognizedQueries {
       a: c?.a ?? null,
       i: c?.i ?? null,
       take: limit + 1,
-    }) as Row[];
+    }) as (Row & { group_id?: number; group_title: string | null; group_kind: 'group' | 'doujin' | 'artbook'; group_count: number; group_total: number; group_favorite: number; member_ids: string })[];
     const hasMore = rows.length > limit;
     if (hasMore) rows.pop();
 
@@ -229,10 +242,15 @@ export class UnrecognizedQueries {
           : { m: mode, a: mode === 'shelf' ? r.sh : r.a, i: r.id };
     return {
       items: items.map((image, k) => ({
-        image,
+        image: rows[k]!.group_id && rows[k]!.group_total > 1 ? { ...image, collectionGroup: {
+          id: String(rows[k]!.group_id), title: rows[k]!.group_title, kind: rows[k]!.group_kind,
+          count: rows[k]!.group_count, total: rows[k]!.group_total, allFavorite: rows[k]!.group_favorite === 1,
+          memberIds: (JSON.parse(rows[k]!.member_ids) as number[]).map(String),
+        } } : image,
         suggestions: suggestions.get(ids[k]!) ?? [],
         tagged: rows[k]!.tg !== null,
       })),
+      ...(displayTotal !== undefined ? { displayTotal } : {}),
       nextCursor: hasMore && last ? encodeCursor(cursorOf(last)) : null,
       total,
       suggestedCount: sum.art.suggested,

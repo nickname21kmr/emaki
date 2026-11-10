@@ -34,6 +34,8 @@ import type {
 // ---------------------------------------------------------------- 通用
 
 export interface Page<T> {
+  /** Number of visible cards when collections are collapsed; total remains image count. */
+  displayTotal?: number;
   items: T[];
   /** 下一页游标；null 表示没有更多 */
   nextCursor: string | null;
@@ -213,6 +215,10 @@ export interface ListImagesQuery extends PageQuery {
   seed?: number;
   /** 合集：具体 id = 这一本的页；'none' = 不在任何合集里的图（T38c） */
   collectionId?: ID | 'none';
+  imageIds?: ID[];
+  collapseCollections?: boolean;
+  /** Composition candidates for manually extending a collection. */
+  similarTo?: ID;
   /** 画师（合集页「画师」里的 tag）：识别出这位画师的图，同一个人的不同标签一起算 */
   artist?: string;
   sort?: ImageSort;
@@ -417,11 +423,17 @@ export interface GetCollectionResponse {
 
 export interface CreateCollectionBody {
   /** 这张图所在的文件夹做成合集 */
-  fromImageId: ID;
+  fromImageId?: ID;
+  imageIds?: ID[];
+  organizeFiles?: boolean;
+  title?: string;
   kind: CollectionKind;
 }
 
 export interface UpdateCollectionBody {
+  organizeFiles?: boolean;
+  addImageIds?: ID[];
+  removeImageIds?: ID[];
   /** null = 恢复自动名 */
   title?: string | null;
   kind?: CollectionKind | 'auto';
@@ -462,6 +474,7 @@ export type UnrecognizedArtKind = (typeof UNRECOGNIZED_ART_KINDS)[number];
 
 /** GET /api/unrecognized —— 参数和大类不匹配时一律忽略，不报错 */
 export interface ListUnrecognizedQuery extends PageQuery {
+  collapseCollections?: boolean;
   /** 默认 'art' */
   area?: UnrecognizedArea;
   /** 只对 art 有效；不传 = 有建议 + 没认出 + 待识别，不含放下的。total 是所请求分段的数量 */

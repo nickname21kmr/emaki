@@ -1,3 +1,4 @@
+import { NOT_IN_BOOK } from '../../datasource/sqlite/sql.ts';
 import { setTimeout as sleep, setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import type { JobContext } from '../../core/jobs.ts';
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
@@ -15,7 +16,7 @@ import { recordChange, type PixivPayload } from '../../datasource/sqlite/changeL
 // Pixiv 也能认出动图的角色：动图不进未识别，但这里一起查。
 // 漫画页在设置关掉「未识别里也列出漫画页」时不查（QUEUE_KINDS_SQL）
 const ELIGIBLE = `(${QUEUE_KINDS_SQL} OR i.content_kind = 'animated') AND i.shelved_at IS NULL AND i.original_at IS NULL
-  AND i.collection_id IS NULL AND NOT ${IN_COMIC_I} AND i.source_site='pixiv' AND i.source_post_id IS NOT NULL
+  AND ${NOT_IN_BOOK} AND NOT ${IN_COMIC_I} AND i.source_site='pixiv' AND i.source_post_id IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id=i.id)
   AND NOT EXISTS (SELECT 1 FROM character_suggestions cs WHERE cs.image_id=i.id AND cs.source='tagger' AND cs.score>=0.8)
   AND NOT EXISTS (SELECT 1 FROM pixiv_unavailable_posts p WHERE p.post_id=i.source_post_id)`;

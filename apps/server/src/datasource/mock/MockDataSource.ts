@@ -226,7 +226,7 @@ export class MockDataSource implements DataSource {
       !img.shelvedAt &&
       !img.originalAt &&
       !img.characterIds.length &&
-      !img.collectionId &&
+      (!img.collectionId || this.db.collections.get(img.collectionId)?.kind === 'group') &&
       !this.inComicRoot(img)
     );
   }
@@ -548,7 +548,7 @@ export class MockDataSource implements DataSource {
         excluded++;
         continue; // 体积和 7 天新增只算「计入张数」的图
       }
-      if (!img.excludedBy && this.inQueueKind(img) && img.shelvedAt && !img.originalAt && !img.characterIds.length && !img.collectionId) shelved++;
+      if (!img.excludedBy && this.inQueueKind(img) && img.shelvedAt && !img.originalAt && !img.characterIds.length && (!img.collectionId || this.db.collections.get(img.collectionId)?.kind === 'group')) shelved++;
       if (this.inQueue(img)) {
         unrecognized++;
         if (!img.tagged && kindOf(img) !== 'comic') untagged++;
@@ -949,6 +949,8 @@ export class MockDataSource implements DataSource {
     let rows = this.idx.visible.filter((img) => {
       const s = this.status(img);
       if (status ? s !== status : s === 'excluded') return false;
+      if (query.similarTo) return false; // Demo images do not have decoded visual hashes.
+      if (query.imageIds && !query.imageIds.includes(img.id)) return false;
       if (query.characterId && !img.characterIds.includes(query.characterId)) return false;
       if (query.workId && !this.imageWorkIds(img).includes(query.workId)) return false;
       if (query.rating?.length && !query.rating.includes(img.rating)) return false;
@@ -997,6 +999,20 @@ export class MockDataSource implements DataSource {
           return a.addedAt.localeCompare(b.addedAt) * dir;
       }
     });
+    if (query.collapseCollections && !query.collectionId) {
+      const groups = new Map<string, typeof rows>();
+      for (const row of rows) { const c = row.collectionId && this.db.collections.get(row.collectionId); const key = c && c.state === 'active' ? 'c:' + c.id : 'i:' + row.id; const xs = groups.get(key) ?? []; xs.push(row); groups.set(key, xs); }
+      const entries = [...groups.values()];
+      const page = paginate(entries, query.cursor, query.limit);
+      return { ...page, total: rows.length, displayTotal: entries.length, items: page.items.map(xs => {
+        const c = xs[0]!.collectionId ? this.db.collections.get(xs[0]!.collectionId!) : null;
+        const cover = xs.find(i => i.id === c?.coverImageId) ?? xs[0]!;
+        const image = this.toImage(cover);
+        if (!c) return image;
+        const total = [...this.db.images.values()].filter(i => this.isVisible(i) && !i.excludedBy && i.collectionId === c.id).length;
+        return total > 1 ? { ...image, collectionGroup: { id: c.id, title: c.title, kind: c.kind, count: xs.length, total, allFavorite: xs.every(i => i.favorite), memberIds: xs.map(i => i.id) } } : image;
+      }) };
+    }
     const page = paginate(rows, query.cursor, query.limit);
     return { ...page, items: page.items.map((r) => this.toImage(r)) };
   }
@@ -1505,7 +1521,7 @@ export class MockDataSource implements DataSource {
   private unrecRows() {
     const base = this.idx.visible.filter((img) => !img.excludedBy && !img.characterIds.length && !img.originalAt);
     return {
-      art: base.filter((img) => this.inQueueKind(img) && !img.collectionId && !this.inComicRoot(img)).map((img) => this.unrecRow(img)),
+      art: base.filter((img) => this.inQueueKind(img) && (!img.collectionId || this.db.collections.get(img.collectionId)?.kind === 'group') && !this.inComicRoot(img)).map((img) => this.unrecRow(img)),
       annex: base.filter((img) => !isArt(img)).map((img) => this.unrecRow(img)),
     };
   }
@@ -1570,10 +1586,25 @@ export class MockDataSource implements DataSource {
       order = (x, y) => x.c - y.c || y.t - x.t || cmp(y.a, x.a) || byId(x, y);
     }
     rows.sort(order);
-    const page = paginate(rows, query.cursor, query.limit);
+    const groups = new Map<ID, R[]>();
+    if (query.collapseCollections) for (const row of rows) {
+      const key = row.img.collectionId ?? 'image:' + row.img.id;
+      const xs = groups.get(key) ?? []; xs.push(row); groups.set(key, xs);
+    }
+    const entries = query.collapseCollections ? [...groups.values()].map(xs => xs[0]!) : rows;
+    const page = paginate(entries, query.cursor, query.limit);
     return {
-      ...page,
-      items: page.items.map((r) => ({ image: this.toImage(r.img), suggestions: this.suggestionsFor(r.img), tagged: r.img.tagged })),
+      ...page, total: rows.length,
+      ...(query.collapseCollections ? { displayTotal: entries.length } : {}),
+      items: page.items.map(r => {
+        let image = this.toImage(r.img);
+        const group = r.img.collectionId && groups.get(r.img.collectionId), c = r.img.collectionId && this.db.collections.get(r.img.collectionId);
+        if (group && c) {
+          const total = [...this.db.images.values()].filter(i => this.isVisible(i) && !i.excludedBy && i.collectionId === c.id).length;
+          if (total > 1) image = { ...image, collectionGroup: { id: c.id, title: c.title, kind: c.kind, count: group.length, total, allFavorite: group.every(r => r.img.favorite), memberIds: group.map(r => r.img.id) } };
+        }
+        return { image, suggestions: this.suggestionsFor(r.img), tagged: r.img.tagged };
+      }),
       suggestedCount: sum.art.suggested,
       unsureCount: sum.art.unsure,
       untaggedCount: sum.art.untagged,
