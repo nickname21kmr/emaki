@@ -307,6 +307,22 @@ describe('按文件夹成册的本子、画集不受组图影响', () => {
     expect(after).not.toContain(ids[4]);
   });
 
+  it('跟随手动成册文件夹改名时，跳过旧组图已占用的目录', async () => {
+    pages('Book', 1, 20, 'comic', 100);
+    await image(1);
+    ds.collections.refreshAll();
+    const book = (await ds.listCollections({}))[0]!;
+    const group = await create(['1']);
+    const db = ds.ctx.db;
+    db.prepare("UPDATE collections SET origin = 'manual' WHERE id = ?").run(book.id);
+    db.prepare("UPDATE collections SET rel_dir = 'Renamed' WHERE id = ?").run(group.collection.id);
+    db.prepare("UPDATE images SET rel_path = 'Renamed/' || file_name WHERE collection_id = ?").run(book.id);
+
+    expect(() => ds.collections.refreshAll()).not.toThrow();
+    expect(db.prepare('SELECT rel_dir FROM collections WHERE id = ?').pluck().get(book.id)).toBe('Book');
+    expect(await members(group.collection.id)).toEqual(['1']);
+  });
+
   it('不能把别处的图加进文件夹书，也不能整理到子文件夹', async () => {
     pages('Book', 1, 20, 'comic', 100);
     await image(1);

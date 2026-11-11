@@ -215,7 +215,7 @@ export function useLightboxFeed(
  * 看图器打开时，网格加载了更多就同步过去（只同步打开看图器的那个网格）。
  */
 export function useGridInteractions(images: ImageItem[], selectionScope?: string, onOpen?: (image: ImageItem, index: number) => void) {
-  // 收拢的组图展开成成员：看图器左右翻能翻完整组，勾选范围也按成员算
+  // 收拢的组图在看图器里展开当前范围内的成员，勾选也按这些成员算
   const ids = useMemo(() => images.flatMap(selectionIds), [images]);
   const gridId = useId();
   const syncLightbox = useLightbox((s) => s.syncIds);
@@ -242,7 +242,7 @@ export function useGridInteractions(images: ImageItem[], selectionScope?: string
       }
       if (e.ctrlKey || e.metaKey || selecting) return toggleImageSelection(image);
     }
-    // 组图格也照常打开看图器（从这一组的第一张开始，左右翻完整组）；去组图页点右上角的张数
+    // 组图格从封面打开看图器；去组图页点右上角的张数
     if (onOpen) onOpen(image, index);
     else {
       // 从格子里「拿起」（SEL-12）

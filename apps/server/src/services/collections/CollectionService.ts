@@ -151,8 +151,9 @@ export class CollectionService {
       const groups = this.group(this.db.prepare(ROW_SQL).all() as Row[]);
       const existing = new Map<string, CollectionRow>();
       for (const c of this.db.prepare("SELECT * FROM collections WHERE membership = 'folder'").all() as CollectionRow[]) existing.set(keyOf(c.root_id, c.rel_dir), c);
-      this.followRenames(groups, existing);
-      const result = this.apply(groups, existing, null, this.heldDirs());
+      const held = this.heldDirs();
+      this.followRenames(groups, existing, held);
+      const result = this.apply(groups, existing, null, held);
       result.created += sourceChanges.created; result.pagesChanged += sourceChanges.changed;
       result.active = this.db.prepare("SELECT COUNT(*) FROM collections WHERE state = 'active'").pluck().get() as number;
       return result;
@@ -303,7 +304,7 @@ export class CollectionService {
   }
 
   /** (4) 手动合集的文件夹改名后跟着搬：它原来的目录没有页了，≥ 80% 的页落在同一个新目录 */
-  private followRenames(groups: Map<string, Group>, existing: Map<string, CollectionRow>): void {
+  private followRenames(groups: Map<string, Group>, existing: Map<string, CollectionRow>, held: ReadonlySet<string>): void {
     const upd = this.db.prepare('UPDATE collections SET rel_dir = ?, updated_at = ? WHERE id = ?');
     for (const [key, c] of [...existing]) {
       if (c.origin !== 'manual' || c.state !== 'active' || groups.has(key)) continue;
@@ -318,7 +319,7 @@ export class CollectionService {
       }
       const [best, n] = [...count].sort((a, b) => b[1] - a[1])[0] ?? ['', 0];
       const newKey = keyOf(c.root_id, best);
-      if (!best || n / rows.length < 0.8 || existing.has(newKey)) continue;
+      if (!best || n / rows.length < 0.8 || existing.has(newKey) || held.has(newKey)) continue;
       upd.run(best, this.now(), c.id);
       existing.delete(key);
       existing.set(newKey, { ...c, rel_dir: best });
