@@ -189,7 +189,7 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
         && ![...(raw ?? [])].some(compatible)) continue;
       // 精确原文未命中时，才在同一作品内找完整姓名的连接字变体。
       // 不以译名、任意编辑距离或同投稿其他图片的角色替代原文身份依据。
-      if (!raw?.size && workTags.size && !originalTag && isFullName(group[0]!)) {
+      if (!raw?.size && workTags.size && isFullName(group[0]!)) {
         const key = fullKey(group[0]!);
         const variant = nameVariantKey(key);
         const alternatives = new Set([
@@ -250,11 +250,10 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
     }
     // 只有经角色名确认的非原创人物才覆盖原创信号；短名碰撞不能否定原创。
     const original = (originalTag || artwork.isOriginal === true) && !hasNonOriginalCharacter;
-    // 原文「原创」和明确角色同时出现时保留建议。仅有独立字段时，角色按正常条件关联。
-    const allowCatalogLinks = !originalTag && !original;
+    // 两种原创信号都只参与兜底。确认到非原创角色时沿用正常的自动关联条件。
     const automatic = tags.length > 0 && !ambiguous && !unresolved
       && (artwork.pageCount === 1 || tags.length === 1)
-      && tags.every(tag => tag.startsWith(CUSTOM) || (allowCatalogLinks && confirmedCharacters.has(tag)));
+      && tags.every(tag => tag.startsWith(CUSTOM) || (!original && confirmedCharacters.has(tag)));
     return { tags, automatic, ...(original ? { original: true } : {}) };
   };
   return Object.assign(match, {
