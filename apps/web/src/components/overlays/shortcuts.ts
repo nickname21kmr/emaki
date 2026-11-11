@@ -67,6 +67,7 @@ export const SHORTCUT_GROUPS: Record<ShortcutGroupId, ShortcutGroup> = {
       { label: '收藏选中', keys: [['F']] },
       { label: '排除选中', keys: [['E']] },
       { label: '归入…（改类型，再按 1–7）', keys: [['C']] },
+      { label: '收进组图…', keys: [['G']] },
       { label: '取消选择', keys: [['Esc']] },
     ],
   },

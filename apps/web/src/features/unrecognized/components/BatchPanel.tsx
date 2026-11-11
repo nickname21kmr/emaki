@@ -1,4 +1,4 @@
-import { Ban, Shapes, X } from 'lucide-react';
+import { Ban, Layers, Shapes, X } from 'lucide-react';
 import { KindMenu } from '@/components/media/KindMenu';
 import type { RefObject } from 'react';
 import { Thumb } from '@/components/media/Thumb';
@@ -12,7 +12,7 @@ import { ActionKey, PanelSection, SuggestionRow } from './PanelParts';
  * 多选时的决策面板：把选中的图一次归到同一个角色。
  * 「共同建议」= 选中的图里 tagger 建议过的角色，按命中张数排。
  */
-export function BatchPanel({ triage, searchRef }: { triage: Triage; searchRef: RefObject<HTMLInputElement | null> }) {
+export function BatchPanel({ triage, searchRef, onGroup }: { triage: Triage; searchRef: RefObject<HTMLInputElement | null>; onGroup: () => void }) {
   const { selectedItems, aggregated } = triage;
   const n = selectedItems.length;
   // 叠在一起的前三张，像一小叠照片
@@ -22,7 +22,7 @@ export function BatchPanel({ triage, searchRef }: { triage: Triage; searchRef: R
     <PanelShell
       footer={
         <>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             <KindMenu
               align="start"
               label={`把 ${formatCount(n)} 张标为`}
@@ -36,6 +36,7 @@ export function BatchPanel({ triage, searchRef }: { triage: Triage; searchRef: R
                 </div>
               }
             />
+            <ActionKey icon={<Layers />} label="收进组图…" keys={['G']} onClick={onGroup} />
             <ActionKey icon={<Ban />} label={`排除这 ${formatCount(n)} 张`} keys={['E']} onClick={triage.exclude} tone="danger" />
             <ActionKey icon={<X />} label="取消选择" keys={['Esc']} onClick={triage.clearSelection} />
           </div>

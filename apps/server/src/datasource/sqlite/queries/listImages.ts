@@ -1,3 +1,5 @@
+import { collectionCandidates } from './collectionCandidates.ts';
+import { collapsedImages, decideCollapse } from './collapsedImages.ts';
 /**
  * 图片列表：筛选、排序、游标分页。行为对照 MockDataSource.listImages：
  * 不传 status = 除 excluded 以外的全部；orientation 阈值 1.05 / 0.95；默认 desc；random 忽略 order。
@@ -99,6 +101,13 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
       both('+i.excluded_by IS NULL', ART_KINDS_SQL, UNRECOGNIZED);
       break;
   }
+  if (q.similarTo) {
+    const source = parseId(q.similarTo);
+    if (source === null) return EMPTY_PAGE;
+    p.similarIds = JSON.stringify(collectionCandidates(db, source));
+    both('i.id IN (SELECT value FROM json_each(@similarIds))');
+  }
+  if (q.imageIds) { both('i.id IN (SELECT value FROM json_each(@imageIds))'); p.imageIds = JSON.stringify(q.imageIds.map(parseId).filter(n => n !== null)); }
   if (q.characterId) {
     const cid = parseId(q.characterId);
     if (cid === null) return EMPTY_PAGE;
@@ -240,6 +249,8 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
   const limit = Math.min(Math.max(q.limit ?? 60, 1), 200);
   // page 只在看某一本时按页序，否则当入库时间
   const sort = q.sort === 'page' && collection === null ? 'addedAt' : (q.sort ?? 'addedAt');
+
+  if (!q.collectionId && decideCollapse(q.collapseCollections, q.cursor, total)) return collapsedImages(db, q, countWhere.join(' AND '), p, total);
 
   if (sort === 'random') {
     const offset = decodeCursor(q.cursor, isOffset) ?? 0;

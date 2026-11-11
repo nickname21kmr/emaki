@@ -1,8 +1,9 @@
 import type { Character, ID, ImageItem } from '@emaki/shared';
-import { FolderInput, Heart, HeartOff, ImageUp, Palette, UserRoundMinus } from 'lucide-react';
+import { FolderInput, Heart, HeartOff, ImageUp, Layers, Palette, UserRoundMinus } from 'lucide-react';
 import { ArtistBulkPicker } from '@/features/gallery/ArtistPicker';
 import { useCallback, useMemo, useState, type Ref } from 'react';
 import { useNavigate } from 'react-router';
+import { AddToGroupDialog, CollapseGroupsMenu, selectionIds } from '@/components/media/CollectionControls';
 import { ImageGrid, ImageGridSkeleton } from '@/components/media/ImageGrid';
 import { KindBadge } from '@/components/media/KindBadge';
 import { folderNameOf, MoveImagesDialog } from '@/components/media/MoveImagesDialog';
@@ -62,6 +63,7 @@ export function CharacterImages({
   const scope = `character:${character.id}`;
   const [moving, setMoving] = useState(false);
   const [artistOpen, setArtistOpen] = useState(false);
+  const [grouping, setGrouping] = useState(false);
   const selection = useScopedSelection(scope, images, dialogOpen || moving || artistOpen);
 
   // 「新」只在默认视图（最近添加 · 降序 · 不筛分级）下可信：此时最前面的 N 张就是新图
@@ -82,8 +84,9 @@ export function CharacterImages({
     { onSuccess: selection.clear },
   );
 
-  const byId = useMemo(() => new Map(images.map((i) => [i.id, i])), [images]);
-  const allFavorite = selection.ids.length > 0 && selection.ids.every((id) => byId.get(id)?.favorite);
+  // 收拢的组图格按整组算：整组都收藏了才算收藏
+  const starred = useMemo(() => new Map(images.flatMap((i) => selectionIds(i).map((id) => [id, i.collectionGroup?.allFavorite ?? i.favorite] as const))), [images]);
+  const allFavorite = selection.ids.length > 0 && selection.ids.every((id) => starred.get(id));
   const busy = unassign.isPending || setCover.isPending || favorite.isPending;
 
   const actions: SelectionAction[] = [
@@ -108,6 +111,7 @@ export function CharacterImages({
       onClick: () => favorite.mutate({ ids: selection.ids, value: !allFavorite }),
     },
     { key: 'artist', label: '画师…', icon: <Palette />, disabled: busy, onClick: () => setArtistOpen(true) },
+    { key: 'group', label: '组图…', icon: <Layers />, disabled: busy, onClick: () => setGrouping(true) },
     {
       key: 'move',
       label: '移动到文件夹',
@@ -203,9 +207,10 @@ export function CharacterImages({
 
   return (
     <section ref={sectionRef} aria-label="全部插画" className="scroll-mt-24">
-      <ImagesToolbar total={total} filters={filters} otherCount={character.otherCount} />
+      <ImagesToolbar extra={<CollapseGroupsMenu collapsed={query.data?.pages[0]?.collapsed} />} total={total} filters={filters} otherCount={character.otherCount} />
       {body}
       <ArtistBulkPicker open={artistOpen} onOpenChange={setArtistOpen} ids={selection.ids} onDone={selection.clear} />
+      <AddToGroupDialog open={grouping} onOpenChange={setGrouping} ids={selection.ids} onDone={selection.clear} />
       <SelectionBar count={selection.count} actions={actions} onClear={selection.clear} />
       <MoveImagesDialog
         open={moving}

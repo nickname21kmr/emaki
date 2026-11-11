@@ -14,8 +14,12 @@ import { currentPlace } from './undoPlace';
 export type CharactersView = 'shelf' | 'list';
 /** 底色：米纸（默认）/ 黑白 / 薄荷 / 天青 / 雾紫，浅色深色各一套（styles/index.css 的 data-palette） */
 export type Palette = 'washi' | 'mono' | 'mint' | 'sky' | 'lilac';
+export type CollapseMode = 'auto' | 'on' | 'off';
 
 interface PrefsState {
+  /** 收拢组图：auto = 结果超过 AUTO_COLLAPSE_MIN 张才收拢，on = 总是收拢，off = 总是逐张 */
+  collapseMode: CollapseMode;
+  setCollapseMode: (value: CollapseMode) => void;
   /** 模糊 questionable / explicit 的图（顶栏眼睛按钮） */
   blurSensitive: boolean;
   palette: Palette;
@@ -60,6 +64,8 @@ interface PrefsState {
 export const usePrefs = create<PrefsState>()(
   persist(
     (set) => ({
+      collapseMode: 'auto',
+      setCollapseMode: (collapseMode) => set({ collapseMode }),
       blurSensitive: true,
       palette: 'washi',
       setPalette: (palette) => set({ palette }),
@@ -67,8 +73,8 @@ export const usePrefs = create<PrefsState>()(
       blurPhoto: true,
       blurText: false,
       revealOnHover: false,
-      readerSpread: { doujin: true, artbook: false },
-      readerRtl: { doujin: true, artbook: false },
+      readerSpread: { doujin: true, artbook: false, group: false },
+      readerRtl: { doujin: true, artbook: false, group: false },
       setReaderSpread: (kind, v) => set((st) => ({ readerSpread: { ...st.readerSpread, [kind]: v } })),
       setReaderRtl: (kind, v) => set((st) => ({ readerRtl: { ...st.readerRtl, [kind]: v } })),
       setBlurLevel: (blurLevel) => set({ blurLevel }),

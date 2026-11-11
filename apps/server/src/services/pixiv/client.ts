@@ -13,9 +13,9 @@ export const PixivArtworkSchema = z.object({
 export type PixivArtwork = z.infer<typeof PixivArtworkSchema>;
 
 const ORIGINAL_TAGS = new Set(['オリジナル', '原创', '原創', 'original']);
-/** Pixiv 的原创开关与原创标签独立；只认完整原文标签，不匹配包含关系或机器译名。 */
-export function isOriginalArtwork(artwork: PixivArtwork): boolean {
-  return artwork.isOriginal === true || artwork.tags.tags.some(
+/** 只认完整原文原创标签；独立的 isOriginal 字段在角色匹配后参与判断。 */
+export function hasOriginalTag(artwork: PixivArtwork): boolean {
+  return artwork.tags.tags.some(
     ({ tag }) => ORIGINAL_TAGS.has(tag.normalize('NFKC').trim().toLowerCase()),
   );
 }

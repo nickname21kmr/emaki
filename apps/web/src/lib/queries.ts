@@ -39,7 +39,7 @@ import { toast } from 'sonner';
 import { api, ApiRequestError } from './api';
 import { useLiveJobs } from './events';
 import { modKeyLabel } from './hotkeys';
-import { useUndoReveal, useUndoStore, type UndoEntry, type UndoFocus } from './stores';
+import { usePrefs, useUndoReveal, useUndoStore, type CollapseMode, type UndoEntry, type UndoFocus } from './stores';
 import { confirmText, madeHere, needsConfirm } from './undoPlace';
 
 export const qk = {
@@ -147,15 +147,22 @@ export const useCharactersInfinite = (q: Omit<ListCharactersQuery, 'cursor'>) =>
     placeholderData: keepPreviousData,
   });
 
+/** 收拢偏好 → 接口参数 */
+export const collapseParam = (mode: CollapseMode): boolean | 'auto' => (mode === 'auto' ? 'auto' : mode === 'on');
+
 /** 图片列表（无限滚动），配合 components/media/ImageGrid 使用 */
-export const useImagesInfinite = (q: Omit<ListImagesQuery, 'cursor'>) =>
-  useInfiniteQuery({
-    queryKey: qk.images(q),
-    queryFn: ({ pageParam }) => api.images({ limit: 120, ...q, cursor: pageParam }),
+export const useImagesInfinite = (q: Omit<ListImagesQuery, 'cursor'>) => {
+  // 收拢组图（全局偏好）：看一本合集的页时不收拢；auto 交给后端按结果张数决定
+  const mode = usePrefs((s) => s.collapseMode);
+  const query = { ...q, collapseCollections: q.collapseCollections ?? (q.collectionId ? false : collapseParam(mode)) };
+  return useInfiniteQuery({
+    queryKey: qk.images(query),
+    queryFn: ({ pageParam }) => api.images({ limit: 120, ...query, cursor: pageParam }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor ?? undefined,
     placeholderData: keepPreviousData,
   });
+};
 
 /** 只要张数（编辑自定义画面时预览能筛出多少张） */
 export const useImageCount = (q: Omit<ListImagesQuery, 'cursor' | 'limit'>, enabled = true) =>
@@ -171,6 +178,7 @@ export const useImage = (id: ID | null | undefined) =>
 
 /** 未识别列表的参数（T34b）：大类、分段、主题、别册类型、插画 / 漫画 */
 export interface UnrecognizedParams {
+  collapseCollections?: boolean | 'auto';
   area: UnrecognizedArea;
   bucket?: UnrecognizedBucket;
   theme?: UnrecognizedTheme;
@@ -181,7 +189,7 @@ export interface UnrecognizedParams {
 export const useUnrecognizedInfinite = (p: UnrecognizedParams = { area: 'art' }, limit = 60) =>
   useInfiniteQuery({
     // 前缀仍是 'unrecognized'：全局失效照常覆盖
-    queryKey: [...qk.unrecognized, p.area, p.bucket ?? 'all', p.theme ?? 'all', p.kind ?? 'all', p.artKind ?? 'all'],
+    queryKey: [...qk.unrecognized, p.area, p.bucket ?? 'all', p.theme ?? 'all', p.kind ?? 'all', p.artKind ?? 'all', p.collapseCollections ?? false],
     queryFn: ({ pageParam }) => api.unrecognized({ ...p, limit, cursor: pageParam }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor ?? undefined,

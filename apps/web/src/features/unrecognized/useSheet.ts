@@ -1,10 +1,11 @@
+import { selectionIds } from '@/components/media/CollectionControls';
 import type { BulkImageAction, ContentKind, ID, ImageItem, Rating } from '@emaki/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { KIND_LABEL } from '@/lib/kinds';
-import { useMutate, useUnrecognizedInfinite, type UnrecognizedParams } from '@/lib/queries';
-import { useSelection } from '@/lib/stores';
+import { collapseParam, useMutate, useUnrecognizedInfinite, type UnrecognizedParams } from '@/lib/queries';
+import { usePrefs, useSelection } from '@/lib/stores';
 import { useReconcileSelection } from '@/lib/useReconcileSelection';
 import type { AssignTarget, StampEvent } from './types';
 
@@ -18,7 +19,8 @@ const MAX_SELECT = 2000;
  * 乐观隐藏照 useTriage：先藏起来，失败再放回；拿到修改后的新数据再放掉隐藏标记。
  */
 export function useSheet(params: UnrecognizedParams, enabled: boolean) {
-  const query = useUnrecognizedInfinite(params, 120);
+  const mode = usePrefs((s) => s.collapseMode);
+  const query = useUnrecognizedInfinite({ ...params, collapseCollections: collapseParam(mode) }, 120);
   const { data, dataUpdatedAt } = query;
 
   const all = useMemo(() => {
@@ -27,7 +29,7 @@ export function useSheet(params: UnrecognizedParams, enabled: boolean) {
     for (const pg of data?.pages ?? []) for (const x of pg.items) if (!seen.has(x.image.id)) (seen.add(x.image.id), out.push(x.image));
     return out;
   }, [data]);
-  const availableIds = useMemo(() => all.map(it => it.id), [all]);
+  const availableIds = useMemo(() => all.flatMap(selectionIds), [all]);
   useReconcileSelection(SCOPE, availableIds, query.isSuccess && !query.isFetching);
 
   // ---------------------------------------------------------------- 乐观隐藏
@@ -72,8 +74,10 @@ export function useSheet(params: UnrecognizedParams, enabled: boolean) {
     useSelection.getState().setScope(SCOPE);
     useSelection.getState().clear();
   }, [key]);
-  const selectedItems = useMemo(() => (selected.size ? items.filter((i) => selected.has(i.id)) : []), [items, selected]);
-  const batch = selectedItems.length > 0;
+  const selectedItems = useMemo(() => (selected.size ? items.filter((i) => selectionIds(i).some(id => selected.has(id))) : []), [items, selected]);
+  const selectedIds = useMemo(() => [...new Set(selectedItems.flatMap(selectionIds))].filter(id => selected.has(id)), [selectedItems, selected]);
+  const selectedCount = selectedIds.length;
+  const batch = selectedCount > 0;
 
   // ---------------------------------------------------------------- 会话记忆
   const [doneCount, setDoneCount] = useState(0);
@@ -89,7 +93,7 @@ export function useSheet(params: UnrecognizedParams, enabled: boolean) {
   // ---------------------------------------------------------------- 动作
   const bulk = useMutate((v: { ids: ID[]; action: BulkImageAction }) => api.bulkImages(v), { onSuccess: (_r, v) => settle(v.ids) });
   const run = (action: BulkImageAction, opts: { hide: boolean; stamp: [string, string, StampEvent['tone']?] }) => {
-    const ids = selectedItems.map((i) => i.id);
+    const ids = selectedIds;
     if (!ids.length || !enabled) return;
     if (opts.hide) hide(ids);
     useSelection.getState().clear();
@@ -98,17 +102,17 @@ export function useSheet(params: UnrecognizedParams, enabled: boolean) {
   };
 
   const assign = (t: AssignTarget) => {
-    const n = selectedItems.length;
+    const n = selectedCount;
     setRecent((prev) => [t, ...prev.filter((p) => p.id !== t.id)].slice(0, 5));
     run({ type: 'assign', characterId: t.id }, { hide: true, stamp: ['归', `${n} 张 · ${t.name}`] });
   };
   const shelve = (value: boolean) => {
-    const n = selectedItems.length;
+    const n = selectedCount;
     run({ type: 'shelve', value }, { hide: true, stamp: value ? ['放', `放下 ${n} 张`, 'muted'] : ['回', `放回 ${n} 张`] });
   };
   /** 归为原创（true）/ 移出原创（false） */
   const markOriginal = (value: boolean) => {
-    const n = selectedItems.length;
+    const n = selectedCount;
     run({ type: 'original', value }, { hide: true, stamp: value ? ['原', `${n} 张 · 原创`] : ['回', `移出原创 ${n} 张`] });
   };
   const setKind = (k: ContentKind | 'auto') => {
@@ -124,14 +128,14 @@ export function useSheet(params: UnrecognizedParams, enabled: boolean) {
     run({ type: 'kind', value: k }, { hide: leaves, stamp: ['类', k === 'auto' ? '自动' : KIND_LABEL[k], 'muted'] });
   };
   const setRating = (r: Rating) => run({ type: 'rating', value: r }, { hide: false, stamp: ['级', '已改分级', 'muted'] });
-  const exclude = () => run({ type: 'exclude' }, { hide: true, stamp: ['除', `已排除 ${selectedItems.length} 张`, 'muted'] });
+  const exclude = () => run({ type: 'exclude' }, { hide: true, stamp: ['除', `已排除 ${selectedCount} 张`, 'muted'] });
 
-  const selectLoaded = () => useSelection.getState().setMany(items.map((i) => i.id));
+  const selectLoaded = () => useSelection.getState().setMany(items.flatMap(selectionIds));
   /** 全选本组：循环拉页（用 fetchNextPage 的返回值，不用闭包里的旧值，RV-T-3），最多 2,000 张 */
   const selectAll = async () => {
     let d = query.data;
     let more = query.hasNextPage;
-    const flat = (x?: typeof d) => (x?.pages ?? []).flatMap((p) => p.items.map((it) => it.image.id));
+    const flat = (x?: typeof d) => (x?.pages ?? []).flatMap((p) => p.items.flatMap((it) => selectionIds(it.image)));
     for (let k = 0; more && flat(d).length < MAX_SELECT && k < 20; k++) {
       const r = await query.fetchNextPage({ cancelRefetch: false });
       d = r.data;
@@ -143,7 +147,7 @@ export function useSheet(params: UnrecognizedParams, enabled: boolean) {
     if ((d?.pages[0]?.total ?? 0) > MAX_SELECT) toast('这一组太多，先选了前 2,000 张');
   };
 
-  const hiddenCount = useMemo(() => (pending.size ? all.filter((i) => pending.has(i.id)).length : 0), [all, pending]);
+  const hiddenCount = useMemo(() => (pending.size ? all.flatMap(selectionIds).filter(id => pending.has(id)).length : 0), [all, pending]);
   const total = Math.max(0, (data?.pages[0]?.total ?? 0) - hiddenCount);
 
   return {
@@ -151,6 +155,8 @@ export function useSheet(params: UnrecognizedParams, enabled: boolean) {
     items,
     total,
     selectedItems,
+    selectedIds,
+    selectedCount,
     batch,
     stamp,
     recent,

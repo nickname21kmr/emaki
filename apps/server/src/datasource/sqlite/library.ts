@@ -21,7 +21,7 @@ import type { SqliteContext } from './context.ts';
 import { readSettings } from './settings.ts';
 import { COVER_CANDIDATE_COLS, loadCoverTags, scoreCoverCandidates, type CharacterRec, type CoverCandidate, type Derived, type WorkRec } from './derived.ts';
 import { loadImageItems } from './hydrate.ts';
-import { IN_COMIC_I, DAY, LIVE_IMAGES, DEFAULT_DOMINANT, iso, paginateOffset, parseId, QUEUE, QUEUE_KINDS_SQL, RECENT_DAYS, toId, UNRECOGNIZED, UNTAGGED_UNRECOGNIZED } from './sql.ts';
+import { IN_COMIC_I, DAY, LIVE_IMAGES, DEFAULT_DOMINANT, iso, paginateOffset, parseId, QUEUE, QUEUE_KINDS_SQL, RECENT_DAYS, toId, UNRECOGNIZED, UNTAGGED_UNRECOGNIZED, NOT_IN_BOOK } from './sql.ts';
 
 const zhCollator = new Intl.Collator('zh');
 
@@ -77,7 +77,7 @@ export class LibraryQueries {
     private readonly derived: Derived,
     /** 合集的本数和待整理条目数（T38c，由 CollectionQueries 提供） */
     private readonly collectionStats: () => Pick<LibraryStats, 'collectionCounts' | 'pendingCollectionCount'> = () => ({
-      collectionCounts: { doujin: 0, artbook: 0 },
+      collectionCounts: { doujin: 0, artbook: 0, group: 0 },
       pendingCollectionCount: 0,
     }),
   ) {}
@@ -106,7 +106,7 @@ export class LibraryQueries {
           COALESCE(SUM(CASE WHEN i.excluded_by IS NULL AND i.tagged_at IS NULL AND NOT ${IN_COMIC_I}
              THEN CASE WHEN @skipCamera = 1 AND i.content_kind = 'photo' THEN COALESCE(i.camera, '') = '' ELSE 1 END
              ELSE 0 END), 0) AS pending_tag_count,
-          COALESCE(SUM(i.excluded_by IS NULL AND ${QUEUE_KINDS_SQL} AND ${UNRECOGNIZED} AND i.collection_id IS NULL
+          COALESCE(SUM(i.excluded_by IS NULL AND ${QUEUE_KINDS_SQL} AND ${UNRECOGNIZED} AND ${NOT_IN_BOOK}
              AND i.shelved_at IS NOT NULL), 0) AS shelved_count,
           COALESCE(SUM(i.excluded_by IS NULL AND i.original_at IS NOT NULL), 0) AS original_count,
           ${kindSums}

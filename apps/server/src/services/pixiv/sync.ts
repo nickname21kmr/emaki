@@ -1,3 +1,4 @@
+import { NOT_IN_BOOK } from '../../datasource/sqlite/sql.ts';
 import { setTimeout as sleep, setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import type { JobContext } from '../../core/jobs.ts';
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
@@ -6,7 +7,7 @@ import { applyExclusionRules } from '../../datasource/sqlite/exclusions.ts';
 import type { CharacterCatalog } from '../catalog/characterCatalog.ts';
 import type { CopyrightSource } from '../catalog/copyrights.ts';
 import { DanbooruError } from '../danbooru/client.ts';
-import { isOriginalArtwork, PixivAccessError, PixivClient, PixivPostError } from './client.ts';
+import { hasOriginalTag, PixivAccessError, PixivClient, PixivPostError } from './client.ts';
 import { createPixivMatcher, type PixivMatcher } from './match.ts';
 import type { PixivDiscover } from './discovery.ts';
 import { cachedArtwork, cacheArtwork } from './cache.ts';
@@ -15,7 +16,7 @@ import { recordChange, type PixivPayload } from '../../datasource/sqlite/changeL
 // Pixiv 也能认出动图的角色：动图不进未识别，但这里一起查。
 // 漫画页在设置关掉「未识别里也列出漫画页」时不查（QUEUE_KINDS_SQL）
 const ELIGIBLE = `(${QUEUE_KINDS_SQL} OR i.content_kind = 'animated') AND i.shelved_at IS NULL AND i.original_at IS NULL
-  AND i.collection_id IS NULL AND NOT ${IN_COMIC_I} AND i.source_site='pixiv' AND i.source_post_id IS NOT NULL
+  AND ${NOT_IN_BOOK} AND NOT ${IN_COMIC_I} AND i.source_site='pixiv' AND i.source_post_id IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id=i.id)
   AND NOT EXISTS (SELECT 1 FROM character_suggestions cs WHERE cs.image_id=i.id AND cs.source='tagger' AND cs.score>=0.8)
   AND NOT EXISTS (SELECT 1 FROM pixiv_unavailable_posts p WHERE p.post_id=i.source_post_id)`;
@@ -141,7 +142,7 @@ export async function syncPixivCharacters(
         }
         artwork = fetched ?? undefined;
       } else cached++;
-      if (artwork && discover && !isOriginalArtwork(artwork)) {
+      if (artwork && discover && !hasOriginalTag(artwork)) {
         try {
           // 写进目录的新角色马上补进索引；后面的请求失败了这部分也不丢
           await discover(artwork, job.signal, (tags) => match?.refresh(tags));
@@ -193,7 +194,7 @@ export async function syncPixivCharacters(
       match = createPixivMatcher(db, fresh.catalog, fresh.copyrights);
       result = match(artwork);
     }
-    const isOriginal = isOriginalArtwork(artwork);
+    const isOriginal = result.original;
     const noMatch = !result.tags.length && !isOriginal;
     const outcome = isOriginal ? 'original' : noMatch ? 'unmatched' : result.automatic ? 'linked' : 'suggested';
     const ids: number[] = [];

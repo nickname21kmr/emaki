@@ -273,7 +273,7 @@ export function statsContract(make: ContractFactory, name: Name) {
         lastAddedAt: new Date(NOW - 60_000).toISOString(),
         kindCounts: { illustration: 32, comic: 0, screenshot: 0, text: 0, photo: 0, meme: 0, animated: 0 },
         pendingTagCount: 1,
-        collectionCounts: { doujin: 0, artbook: 0 },
+        collectionCounts: { doujin: 0, artbook: 0, group: 0 },
         pendingCollectionCount: 0,
         originalWorkId: null,
         originalCount: 0,
@@ -1426,7 +1426,7 @@ export function collectionsContract(make: ContractFactory, name: Name) {
       const e = env();
       expect(await e.ds.listCollections({})).toEqual([]);
       const st = await e.ds.getStats();
-      expect([st.collectionCounts, st.pendingCollectionCount]).toEqual([{ doujin: 0, artbook: 0 }, 0]);
+      expect([st.collectionCounts, st.pendingCollectionCount]).toEqual([{ doujin: 0, artbook: 0, group: 0 }, 0]);
     });
 
     it('② 把「未整理」做成画集：页退出逐张队列，成为一条待整理；撤销后恢复', async () => {
