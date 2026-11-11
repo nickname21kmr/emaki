@@ -1,10 +1,10 @@
-import { NOT_IN_BOOK } from './sql.ts';
 import { performance } from 'node:perf_hooks';
 /**
  * 未识别（T15 → T34a 契约 v3）：两个大类（插画和漫画 / 照片、文字等）、四个分段、「没认出」按主题分组，以及采纳建议。
  * 用键集分页：用户一边翻一边处理，偏移分页会跳过同样数量的图。计数全部来自缓存的汇总（summary），不每页重算（RV-T-9）。
  */
 import {
+  AUTO_COLLAPSE_MIN,
   UNRECOGNIZED_ANNEX_KINDS,
   UNRECOGNIZED_ART_KINDS,
   UNRECOGNIZED_THEMES,
@@ -25,7 +25,7 @@ import { insertDanbooruCharacter } from './characters.ts';
 import type { SqliteContext } from './context.ts';
 import { applyExclusionRules } from './exclusions.ts';
 import { loadImageItems } from './hydrate.ts';
-import { ANNEX_KINDS_SQL, QUEUE_KINDS_SQL, IN_COMIC_I, decodeCursor, encodeCursor, iso, parseId, QUEUE, THEME_EXPR, UNRECOGNIZED } from './sql.ts';
+import { ANNEX_KINDS_SQL, QUEUE_KINDS_SQL, IN_COMIC_I, NOT_IN_BOOK, decodeCursor, encodeCursor, iso, parseId, QUEUE, THEME_EXPR, UNRECOGNIZED } from './sql.ts';
 import { loadSuggestions } from './suggestions.ts';
 
 /**
@@ -186,6 +186,19 @@ export class UnrecognizedQueries {
       return typeof x === 'object' && x !== null && v.m === mode && Number.isInteger(v.i) && (v.i as number) > 0 && m.ok(v);
     });
 
+    const total = annex
+      ? kind
+        ? sum.annex.kinds[kind]
+        : sum.annex.total
+      : theme
+        ? sum.art.themes[theme]
+        : bucket
+          ? sum.art[bucket]
+          : sum.art.total;
+
+    // 'auto'：第一页看张数，翻页沿用第一页的决定（游标里的 g）
+    const collapse =
+      q.collapseCollections === 'auto' ? (c ? c.g === 1 : total > AUTO_COLLAPSE_MIN) : !!q.collapseCollections;
     const where = annex
       ? kind
         ? 'i.content_kind = @kind'
@@ -203,9 +216,10 @@ export class UnrecognizedQueries {
       MIN(meta.favorite) OVER (PARTITION BY ${partition}) AS group_favorite,
       json_group_array(pool.id) OVER (PARTITION BY ${partition} ORDER BY pool.id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS member_ids,
       ROW_NUMBER() OVER (PARTITION BY ${partition} ORDER BY ${rankedOrder}) AS rn
-      FROM (${base}) pool JOIN images meta ON meta.id = pool.id LEFT JOIN collections g ON g.id = meta.collection_id AND g.state = 'active')`;
-    const sql = q.collapseCollections ? `${grouped} SELECT * FROM ranked WHERE rn = 1 AND (${m.after}) ORDER BY ${m.order} LIMIT @take` : flatSql;
-    const displayTotal = q.collapseCollections ? (this.ctx.db.prepare(`${grouped} SELECT COUNT(*) n FROM ranked WHERE rn = 1`).get({ kind, artKind, theme }) as { n: number }).n : undefined;
+      FROM (${base}) pool JOIN images meta ON meta.id = pool.id
+      LEFT JOIN collections g ON g.id = meta.collection_id AND g.state = 'active' AND g.kind = 'group')`;
+    const sql = collapse ? `${grouped} SELECT * FROM ranked WHERE rn = 1 AND (${m.after}) ORDER BY ${m.order} LIMIT @take` : flatSql;
+    const displayTotal = collapse ? (this.ctx.db.prepare(`${grouped} SELECT COUNT(*) n FROM ranked WHERE rn = 1`).get({ kind, artKind, theme }) as { n: number }).n : undefined;
     const rows = this.ctx.stmt(sql).all({
       kind,
       artKind,
@@ -220,26 +234,17 @@ export class UnrecognizedQueries {
     const hasMore = rows.length > limit;
     if (hasMore) rows.pop();
 
-    const total = annex
-      ? kind
-        ? sum.annex.kinds[kind]
-        : sum.annex.total
-      : theme
-        ? sum.art.themes[theme]
-        : bucket
-          ? sum.art[bucket]
-          : sum.art.total;
-
     const ids = rows.map((r) => r.id);
     const items = loadImageItems(this.ctx.db, ids);
     const suggestions = loadSuggestions(this.ctx, ids, this.catalog());
     const last = rows.at(-1);
+    const g = collapse ? { g: 1 } : {};
     const cursorOf = (r: Row) =>
       mode === 'triage'
-        ? { m: mode, c: r.c, t: r.t, a: r.a, i: r.id }
+        ? { m: mode, c: r.c, t: r.t, a: r.a, i: r.id, ...g }
         : mode === 'art'
-          ? { m: mode, c: r.c, s: r.s, i: r.id }
-          : { m: mode, a: mode === 'shelf' ? r.sh : r.a, i: r.id };
+          ? { m: mode, c: r.c, s: r.s, i: r.id, ...g }
+          : { m: mode, a: mode === 'shelf' ? r.sh : r.a, i: r.id, ...g };
     return {
       items: items.map((image, k) => ({
         image: rows[k]!.group_id && rows[k]!.group_total > 1 ? { ...image, collectionGroup: {
@@ -250,7 +255,7 @@ export class UnrecognizedQueries {
         suggestions: suggestions.get(ids[k]!) ?? [],
         tagged: rows[k]!.tg !== null,
       })),
-      ...(displayTotal !== undefined ? { displayTotal } : {}),
+      ...(collapse ? { displayTotal, collapsed: true } : {}),
       nextCursor: hasMore && last ? encodeCursor(cursorOf(last)) : null,
       total,
       suggestedCount: sum.art.suggested,

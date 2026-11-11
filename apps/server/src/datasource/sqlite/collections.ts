@@ -31,7 +31,7 @@ import { toCharacter, toWork } from './library.ts';
 import { DEFAULT_DOMINANT, iso, parseId, toId, VISIBLE } from './sql.ts';
 import type { UndoRecorder } from './undo.ts';
 
-const KIND_LABEL: Record<CollectionKind, string> = { doujin: '本子', artbook: '画集', group: '合集' };
+const KIND_LABEL: Record<CollectionKind, string> = { doujin: '本子', artbook: '画集', group: '组图' };
 const isKind = (v: unknown): v is CollectionKind => v === 'doujin' || v === 'artbook' || v === 'group';
 /** 可变列（撤销时整行记下这些） */
 const MUTABLE = [
@@ -204,6 +204,7 @@ export class CollectionQueries {
           covers: s.covers.map((c) => ({ imageId: toId(c.imageId), rating: c.rating, color: c.color ?? DEFAULT_DOMINANT, focus: null })),
           coverTagged: s.coverTagged,
           origin: row.origin,
+          membership: row.membership ?? 'folder',
           pending: s.pending,
           unrecognizedPageCount: s.unrecognizedPageCount,
           lastAddedAt: s.lastAddedAt,
@@ -387,12 +388,12 @@ export class CollectionQueries {
       id = Number(db.prepare(`INSERT INTO collections (root_id, rel_dir, kind, kind_source, kind_manual, title, title_manual,
         page_order, origin, state, created_at, updated_at, membership)
         VALUES (?, ?, ?, 'manual', 1, ?, 1, 'name', 'manual', 'active', ?, ?, 'selection')`).run(
-          root, '@selection/' + randomUUID(), body.kind, body.title?.trim() || '新合集', now, now).lastInsertRowid);
+          root, '@selection/' + randomUUID(), body.kind, body.title?.trim() || '新组图', now, now).lastInsertRowid);
       u.inserted('collections', id);
       db.prepare('UPDATE images SET collection_id = ?, collection_detached = 1 WHERE id IN (SELECT value FROM json_each(?))').run(id, JSON.stringify(ids));
       this.service.assignPages(id);
       this.reorderWithUndo(u, donors);
-      return { message: `已创建合集，收录 ${ids.length} 张图片` };
+      return { message: `已新建${KIND_LABEL[body.kind]}「${body.title?.trim() || '新组图'}」，收进 ${ids.length} 张` };
     });
     return { ...(body.organizeFiles ? organizeCollection(this.ctx, id, r) : r), collection: this.loadAll().get(id)!.summary };
   }
@@ -409,7 +410,17 @@ export class CollectionQueries {
     const remove = body.removeImageIds ? this.selectedImages(body.removeImageIds) : [];
     const donors = this.memberCollections([...add, ...remove]);
     if (add.some(id => remove.includes(id))) throw new BadRequestError('同一张图不能同时添加和移出');
-    if (add.length || remove.length) { set.membership = 'selection'; reorder = true; notes.push(`已更新合集图片`); }
+    // 按文件夹成册的本子 / 画集跟着文件夹走：只能移出页（记成 detached），不能收别处的图、不能整理到子文件夹。
+    // 改成 selection 会让这一行继续占着 (root_id, rel_dir)，之后这个文件夹再成册时撞 UNIQUE（启动时全量重算会失败）。
+    const folder = c.membership === 'folder';
+    if (folder && (add.length || body.organizeFiles)) {
+      throw new BadRequestError('按文件夹成册的本子和画集跟着文件夹走，不能收进别处的图；可以选图另建组图');
+    }
+    if (add.length || remove.length) {
+      if (!folder) set.membership = 'selection';
+      reorder = true;
+      notes.push(add.length && remove.length ? '已更新组图' : add.length ? `已加入 ${add.length} 张` : `已移出 ${remove.length} 张`);
+    }
 
     if (body.title !== undefined) {
       if (body.title === null) {
@@ -476,8 +487,7 @@ export class CollectionQueries {
     if (works) notes.push('已更新作品');
     if (body.organizeFiles) {
       assertOrganizeReady(this.ctx, [...add, ...(db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(c.id) as number[])]);
-      if (c.membership === 'folder') set.membership = 'selection';
-      notes.push('整理合集文件夹');
+      notes.push('整理到子文件夹');
     }
     if (!notes.length) throw new BadRequestError('没有要修改的内容');
 
@@ -486,7 +496,8 @@ export class CollectionQueries {
       if (add.length || remove.length) {
         const existing = db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(c.id) as number[];
         u.columns('images', ['collection_id', 'page_no', 'collection_detached'], [...new Set([...existing, ...add, ...remove])]);
-        db.prepare('UPDATE images SET collection_detached = 1 WHERE collection_id = ?').run(c.id);
+        // 手选 / 同投稿的组：成员都记成手动，扫描和同投稿聚合不再动它们。文件夹书的其余页照常跟着文件夹
+        if (!folder) db.prepare('UPDATE images SET collection_detached = 1 WHERE collection_id = ?').run(c.id);
         db.prepare('UPDATE images SET collection_id = ?, collection_detached = 1 WHERE id IN (SELECT value FROM json_each(?))').run(c.id, JSON.stringify(add));
         db.prepare('UPDATE images SET collection_id = NULL, page_no = NULL, collection_detached = 1 WHERE collection_id = ? AND id IN (SELECT value FROM json_each(?))').run(c.id, JSON.stringify(remove));
         if (c.source_key) { u.columns('collections', ['source_key'], [c.id]); set.source_key = null; }
@@ -514,7 +525,7 @@ export class CollectionQueries {
       u.columns('images', ['collection_id', 'page_no', 'collection_detached'], db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(c.id) as number[]);
       this.write(c.id, { state: 'dismissed', origin: 'manual', updated_at: now });
       db.prepare('UPDATE images SET collection_id = NULL, page_no = NULL, collection_detached = 1 WHERE collection_id = ?').run(c.id);
-      return { message: `已解散合集：${c.title ?? '无题'}` };
+      return { message: c.membership === 'folder' ? `已取消成册：${c.title ?? '无题'}` : `已解散${KIND_LABEL[c.kind as CollectionKind] ?? '组图'}：${c.title ?? '无题'}（图片都还在）` };
     });
   }
 

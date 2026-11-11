@@ -134,7 +134,7 @@ export interface TagScore {
 }
 
 export interface ImageItem {
-  /** Present only on a collapsed collection card; memberIds respect all current filters. */
+  /** 只在收拢后的组图卡片上有：memberIds 是当前筛选命中的成员（首页带 includeWholeCollections 时是整组） */
   collectionGroup?: { id: ID; title: string | null; kind: CollectionKind; count: number; total: number; allFavorite: boolean; memberIds: ID[] };
   id: ID;
   /** 相对于所属库根目录的路径 */
@@ -206,8 +206,12 @@ export interface ImageArtist {
   tags: string[];
 }
 
-/** 合集的打开方式：普通图片浏览、漫画阅读、画集阅读。成员可来自任意目录。 */
+/**
+ * 合集（T38）：本子 = 漫画为主的同人志 / 单行本；画集 = 插画集；组图 = 收在一起的散图（手动挑的，或同一投稿的多张）。
+ * 本子、画集按文件夹成册，一个文件夹最多一本；组图的成员可以来自任意目录，页照常逐张识别。
+ */
 export type CollectionKind = 'doujin' | 'artbook' | 'group';
+export type CollectionMembership = 'folder' | 'selection' | 'post';
 
 export interface CollectionSummary {
   id: ID;
@@ -229,6 +233,8 @@ export interface CollectionSummary {
   /** 封面页识别过没有（没识别过的封面分级不可信，开模糊时显示布面） */
   coverTagged: boolean;
   origin: 'auto' | 'manual';
+  /** 成员怎么来的：folder = 按文件夹成册（跟着文件夹走）；selection = 手动挑的图；post = 同一投稿自动收拢 */
+  membership: CollectionMembership;
   /** 待整理：本子没有出场角色；画集还有没认出的插画页（RV-C-10） */
   pending: boolean;
   /** 画集：没认出角色的插画页数；本子恒为 0 */

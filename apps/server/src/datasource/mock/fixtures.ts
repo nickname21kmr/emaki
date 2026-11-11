@@ -88,6 +88,8 @@ export interface ImageRow {
   /** 所在合集和页码（T38c） */
   collectionId?: ID | null;
   pageNo?: number | null;
+  /** 手动移出过文件夹书 / 收进过组图：按文件夹自动成册时不再收它（同 images.collection_detached） */
+  collectionDetached?: boolean;
   /** 画师（识别的或手动改的，对应 image_artists）；手动加的 score 为 1 */
   artists?: { tag: string; score: number }[];
   /** 手动改过画师（images.artist_manual） */

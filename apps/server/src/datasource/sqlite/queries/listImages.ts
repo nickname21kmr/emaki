@@ -1,5 +1,5 @@
 import { collectionCandidates } from './collectionCandidates.ts';
-import { collapsedImages } from './collapsedImages.ts';
+import { collapsedImages, decideCollapse } from './collapsedImages.ts';
 /**
  * 图片列表：筛选、排序、游标分页。行为对照 MockDataSource.listImages：
  * 不传 status = 除 excluded 以外的全部；orientation 阈值 1.05 / 0.95；默认 desc；random 忽略 order。
@@ -250,7 +250,7 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
   // page 只在看某一本时按页序，否则当入库时间
   const sort = q.sort === 'page' && collection === null ? 'addedAt' : (q.sort ?? 'addedAt');
 
-  if (q.collapseCollections && !q.collectionId) return collapsedImages(db, q, countWhere.join(' AND '), p, total);
+  if (!q.collectionId && decideCollapse(q.collapseCollections, q.cursor, total)) return collapsedImages(db, q, countWhere.join(' AND '), p, total);
 
   if (sort === 'random') {
     const offset = decodeCursor(q.cursor, isOffset) ?? 0;

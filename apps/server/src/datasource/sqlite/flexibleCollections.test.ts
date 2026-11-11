@@ -4,7 +4,7 @@ import path from 'node:path';
 import { EventBus } from '../../core/events.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
 import { SqliteDataSource } from './SqliteDataSource.ts';
-import type { ListImagesQuery } from '@emaki/shared';
+import { AUTO_COLLAPSE_MIN, type ListImagesQuery } from '@emaki/shared';
 
 let ds: SqliteDataSource, dir: string;
 beforeEach(async () => {
@@ -196,7 +196,7 @@ describe('ordinary collections', () => {
     const r = await ds.createCollection({ imageIds: ['1', '2', '3', '4'], title: '测试', kind: 'group', organizeFiles: true });
     for (const id of ['1', '2', '3', '4']) {
       const img = (await ds.getImage(id))!;
-      expect(img.relPath).toContain(`[合集 ${r.collection.id}]/image_${id}.png`);
+      expect(img.relPath).toBe(`${Number(id) <= 2 ? 'a' : 'b'}/测试/image_${id}.png`);
       expect(await readFile(img.absPath, 'utf8')).toBe('original-' + id);
     }
     expect((await readdir(path.join(dir, 'root1/a'))).length).toBe(1);
@@ -279,5 +279,109 @@ describe('collapsed browsing', () => {
         expect(['1', '4']).toContain(group.id);
         expect(group.collectionGroup).toMatchObject({ count: 2, total: 3, memberIds: ['1', '4'] });
       }
+  });
+});
+
+describe('按文件夹成册的本子、画集不受组图影响', () => {
+  /** 一个文件夹里一串编号页（按页码命名、识别过），能自动成册 */
+  function pages(folder: string, from: number, n: number, kind: 'comic' | 'illustration', startId: number) {
+    const ins = ds.ctx.db.prepare(`INSERT INTO images (id,root_id,rel_path,file_name,width,height,bytes,format,sha256,added_at,modified_at,
+      content_kind,content_kind_source,tagged_at) VALUES (?,1,?,?,1200,1700,1000,'jpeg',?,'2026-01-01','2026-01-01',?,'tags','2026-01-01')`);
+    return Array.from({ length: n }, (_, k) => {
+      const id = startId + k, file = String(from + k).padStart(3, '0') + '.jpg';
+      ins.run(id, `${folder}/${file}`, file, 'sha' + id, kind);
+      return String(id);
+    });
+  }
+
+  it('移出一页后仍跟着文件夹：同目录再进新页时接着编进这一本，全量重算不撞 UNIQUE', async () => {
+    const ids = pages('Book', 1, 20, 'comic', 100);
+    ds.collections.refreshAll();
+    const book = (await ds.listCollections({}))[0]!;
+    await ds.updateCollection(book.id, { removeImageIds: [ids[4]!] });
+    expect(ds.ctx.db.prepare('SELECT membership FROM collections WHERE id = ?').pluck().get(Number(book.id))).toBe('folder');
+    pages('Book', 21, 10, 'comic', 200);
+    expect(() => ds.collections.refreshAll()).not.toThrow();
+    const after = (await ds.getCollection(book.id))!.pages.map((p) => p.imageId);
+    expect(after).toHaveLength(29);
+    expect(after).not.toContain(ids[4]);
+  });
+
+  it('不能把别处的图加进文件夹书，也不能整理到子文件夹', async () => {
+    pages('Book', 1, 20, 'comic', 100);
+    await image(1);
+    ds.collections.refreshAll();
+    const book = (await ds.listCollections({})).find((c) => c.membership === 'folder')!;
+    await expect(ds.updateCollection(book.id, { addImageIds: ['1'] })).rejects.toThrow(/另建组图/);
+    await expect(ds.updateCollection(book.id, { organizeFiles: true })).rejects.toThrow(/另建组图/);
+  });
+
+  it('收拢只收组图：画集在图库里照常逐张平铺', async () => {
+    pages('Artbook', 1, 20, 'illustration', 100);
+    ds.collections.refreshAll();
+    expect((await ds.listCollections({}))[0]!.kind).toBe('artbook');
+    const flat = await ds.listImages({ kind: ['illustration'] });
+    const collapsed = await ds.listImages({ kind: ['illustration'], collapseCollections: true });
+    expect(collapsed.items.map((i) => i.id)).toEqual(flat.items.map((i) => i.id));
+    expect(collapsed.items.some((i) => i.collectionGroup)).toBe(false);
+  });
+});
+
+it('移出过页的文件夹书，同目录再进新页后重启：启动时的全量重算正常', async () => {
+  const home = makeTmpDir('flexible-collections-reopen');
+  const data = path.join(home, 'data');
+  let db = await SqliteDataSource.open(new EventBus(), data, { autoJobs: false, importDict: false });
+  try {
+    await mkdir(path.join(home, 'root1'));
+    db.ctx.db.prepare('INSERT INTO library_roots (id,path) VALUES (1,?)').run(path.join(home, 'root1'));
+    const ins = db.ctx.db.prepare(`INSERT INTO images (id,root_id,rel_path,file_name,width,height,bytes,format,sha256,added_at,modified_at,
+      content_kind,content_kind_source,tagged_at) VALUES (?,1,?,?,1200,1700,1000,'jpeg',?,'2026-01-01','2026-01-01','comic','tags','2026-01-01')`);
+    const add = (from: number, to: number) => {
+      for (let i = from; i <= to; i++) ins.run(i, `Book/${String(i).padStart(3, '0')}.jpg`, `${String(i).padStart(3, '0')}.jpg`, 's' + i);
+    };
+    add(1, 20);
+    db.collections.refreshAll();
+    await db.updateCollection((await db.listCollections({}))[0]!.id, { removeImageIds: ['5'] });
+    add(21, 30);
+    await db.close();
+    db = await SqliteDataSource.open(new EventBus(), data, { autoJobs: false, importDict: false });
+    expect((await db.listCollections({}))[0]!.pageCount).toBe(29);
+  } finally {
+    await db.close();
+    await rm(home, { recursive: true, force: true, maxRetries: 3 });
+  }
+});
+
+describe('自动收拢：结果多才收拢，少就逐张', () => {
+  const insert = () =>
+    ds.ctx.db.prepare(`INSERT INTO images (id,root_id,rel_path,file_name,width,height,bytes,format,sha256,added_at,modified_at,tagged_at)
+      VALUES (?,1,?,?,1000,1400,100,'png',?,?,'2026-01-01','2026-01-01')`);
+  const add = (from: number, to: number) => {
+    const ins = insert();
+    for (let i = from; i <= to; i++) ins.run(i, `x/${i}.png`, `${i}.png`, 's' + i, new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString());
+    ds.ctx.invalidate(); // 直接写库绕过了计数缓存（扫描时会自己失效）
+  };
+
+  it('不超过门槛时逐张；超过时收拢，翻页一直沿用第一页的决定', async () => {
+    add(1, 10);
+    await create(['1', '2', '3']);
+    const few = await ds.listImages({ collapseCollections: 'auto' });
+    expect(few.collapsed).toBeUndefined();
+    expect(few.items).toHaveLength(10);
+    expect((await ds.listUnrecognized({ area: 'art', bucket: 'unsure', collapseCollections: 'auto' })).collapsed).toBeUndefined();
+
+    add(11, AUTO_COLLAPSE_MIN + 5);
+    const pages = [await ds.listImages({ collapseCollections: 'auto', limit: 100 })];
+    expect(pages[0]).toMatchObject({ collapsed: true, total: AUTO_COLLAPSE_MIN + 5, displayTotal: AUTO_COLLAPSE_MIN + 3 });
+    while (pages.at(-1)!.nextCursor) pages.push(await ds.listImages({ collapseCollections: 'auto', limit: 100, cursor: pages.at(-1)!.nextCursor! }));
+    expect(pages.every((p) => p.collapsed)).toBe(true);
+    const ids = pages.flatMap((p) => p.items.map((i) => i.id));
+    expect(new Set(ids).size).toBe(AUTO_COLLAPSE_MIN + 3);
+
+    // 逐张列表的游标翻页时仍是逐张，不会因为结果数变了而换成收拢的游标格式
+    const flat = await ds.listImages({ collapseCollections: false, limit: 100 });
+    const next = await ds.listImages({ collapseCollections: 'auto', limit: 100, cursor: flat.nextCursor! });
+    expect(next.collapsed).toBeUndefined();
+    expect(next.items).toHaveLength(100);
   });
 });

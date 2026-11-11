@@ -1,6 +1,7 @@
 import { editedSource } from '../../services/source/editSource.ts';
 import { inferCoverFocus } from '../../services/covers/focus.ts';
 import {
+  AUTO_COLLAPSE_MIN,
   CONTENT_KINDS,
   REMOVED_ROOT_KEEP_DAYS,
   type PromotableSuggestions,
@@ -999,16 +1000,22 @@ export class MockDataSource implements DataSource {
           return a.addedAt.localeCompare(b.addedAt) * dir;
       }
     });
-    if (query.collapseCollections && !query.collectionId) {
+    if (!query.collectionId && decideCollapse(query.collapseCollections, query.cursor, rows.length)) {
       const groups = new Map<string, typeof rows>();
-      for (const row of rows) { const c = row.collectionId && this.db.collections.get(row.collectionId); const key = c && c.state === 'active' ? 'c:' + c.id : 'i:' + row.id; const xs = groups.get(key) ?? []; xs.push(row); groups.set(key, xs); }
+      for (const row of rows) {
+        const c = row.collectionId && this.db.collections.get(row.collectionId);
+        const key = c && c.state === 'active' && c.kind === 'group' ? 'c:' + c.id : 'i:' + row.id;
+        const xs = groups.get(key) ?? [];
+        xs.push(row);
+        groups.set(key, xs);
+      }
       const entries = [...groups.values()];
-      const page = paginate(entries, query.cursor, query.limit);
-      return { ...page, total: rows.length, displayTotal: entries.length, items: page.items.map(xs => {
+      const page = groupPage(entries, query.cursor, query.limit);
+      return { ...page, total: rows.length, displayTotal: entries.length, collapsed: true, items: page.items.map(xs => {
         const c = xs[0]!.collectionId ? this.db.collections.get(xs[0]!.collectionId!) : null;
         const cover = xs.find(i => i.id === c?.coverImageId) ?? xs[0]!;
         const image = this.toImage(cover);
-        if (!c || c.state !== 'active') return image;
+        if (!c || c.state !== 'active' || c.kind !== 'group') return image;
         const visibleMembers = this.idx.visible.filter(i => !i.excludedBy && i.collectionId === c.id);
         if (visibleMembers.length <= 1) return image;
         const members = query.includeWholeCollections
@@ -1601,16 +1608,22 @@ export class MockDataSource implements DataSource {
       order = (x, y) => x.c - y.c || y.t - x.t || cmp(y.a, x.a) || byId(x, y);
     }
     rows.sort(order);
+    const collapse = decideCollapse(query.collapseCollections, query.cursor, rows.length);
     const groups = new Map<ID, R[]>();
-    if (query.collapseCollections) for (const row of rows) {
-      const key = row.img.collectionId ?? 'image:' + row.img.id;
-      const xs = groups.get(key) ?? []; xs.push(row); groups.set(key, xs);
-    }
-    const entries = query.collapseCollections ? [...groups.values()].map(xs => xs[0]!) : rows;
-    const page = paginate(entries, query.cursor, query.limit);
+    if (collapse)
+      for (const row of rows) {
+        const c = row.img.collectionId ? this.db.collections.get(row.img.collectionId) : undefined;
+        const key = c?.kind === 'group' ? c.id : 'image:' + row.img.id;
+        const xs = groups.get(key) ?? [];
+        xs.push(row);
+        groups.set(key, xs);
+      }
+    const entries = collapse ? [...groups.values()].map((xs) => xs[0]!) : rows;
+    const page = collapse ? groupPage(entries, query.cursor, query.limit) : paginate(entries, query.cursor, query.limit);
     return {
-      ...page, total: rows.length,
-      ...(query.collapseCollections ? { displayTotal: entries.length } : {}),
+      ...page,
+      total: rows.length,
+      ...(collapse ? { displayTotal: entries.length, collapsed: true } : {}),
       items: page.items.map(r => {
         let image = this.toImage(r.img);
         const group = r.img.collectionId && groups.get(r.img.collectionId), c = r.img.collectionId && this.db.collections.get(r.img.collectionId);
@@ -2211,6 +2224,18 @@ function paginate<T>(all: T[], cursor: string | undefined, limit: number | undef
   const items = all.slice(start, start + size);
   const next = start + size;
   return { items, nextCursor: next < all.length ? String(next) : null, total: all.length };
+}
+
+/** 同 sqlite 的 decideCollapse：'auto' 第一页看张数，翻页看游标（收拢列表的游标带 g 前缀） */
+function decideCollapse(mode: boolean | 'auto' | undefined, cursor: string | undefined, total: number): boolean {
+  if (mode !== 'auto') return !!mode;
+  return cursor ? cursor.startsWith('g') : total > AUTO_COLLAPSE_MIN;
+}
+
+/** 收拢后的分页：游标加 g 前缀，和逐张列表的游标区分开 */
+function groupPage<T>(all: T[], cursor: string | undefined, limit: number | undefined): Page<T> {
+  const page = paginate(all, cursor?.replace(/^g/, ''), limit);
+  return { ...page, nextCursor: page.nextCursor === null ? null : 'g' + page.nextCursor };
 }
 
 /** mika_(blue_archive) → Mika */

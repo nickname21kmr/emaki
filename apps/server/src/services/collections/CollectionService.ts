@@ -152,7 +152,7 @@ export class CollectionService {
       const existing = new Map<string, CollectionRow>();
       for (const c of this.db.prepare("SELECT * FROM collections WHERE membership = 'folder'").all() as CollectionRow[]) existing.set(keyOf(c.root_id, c.rel_dir), c);
       this.followRenames(groups, existing);
-      const result = this.apply(groups, existing, null);
+      const result = this.apply(groups, existing, null, this.heldDirs());
       result.created += sourceChanges.created; result.pagesChanged += sourceChanges.changed;
       result.active = this.db.prepare("SELECT COUNT(*) FROM collections WHERE state = 'active'").pluck().get() as number;
       return result;
@@ -187,7 +187,7 @@ export class CollectionService {
         const c = byKey.get(d.rootId, d.dir) as CollectionRow | undefined;
         if (c && c.membership === 'folder') existing.set(keyOf(c.root_id, c.rel_dir), c);
       }
-      const result = this.apply(this.group(rows), existing, scope);
+      const result = this.apply(this.group(rows), existing, scope, this.heldDirs());
       result.created += sourceChanges.created; result.pagesChanged += sourceChanges.changed;
       result.active = this.db.prepare("SELECT COUNT(*) FROM collections WHERE state = 'active'").pluck().get() as number;
       return result;
@@ -328,7 +328,18 @@ export class CollectionService {
   /**
    * (5) 逐组决定 + (5b) 清掉孤行 + (6) 编页码。scope 为 null 时是全量；否则只处理 scope 里的目录。
    */
-  private apply(groups: Map<string, Group>, existing: Map<string, CollectionRow>, scope: Set<string> | null): Omit<RefreshResult, 'ms'> {
+  /** 非文件夹合集占着的 (root_id, rel_dir)：旧数据里手选组可能还挂在真实目录上，这些目录不再自动成册，免得撞 UNIQUE */
+  private heldDirs(): Set<string> {
+    const rows = this.db.prepare("SELECT root_id, rel_dir FROM collections WHERE membership <> 'folder'").all() as { root_id: number; rel_dir: string }[];
+    return new Set(rows.map((c) => keyOf(c.root_id, c.rel_dir)));
+  }
+
+  private apply(
+    groups: Map<string, Group>,
+    existing: Map<string, CollectionRow>,
+    scope: Set<string> | null,
+    held: Set<string> = new Set(),
+  ): Omit<RefreshResult, 'ms'> {
     const now = this.now();
     const db = this.db;
     let created = 0;
@@ -347,7 +358,7 @@ export class CollectionService {
     const hidden = new Set(db.prepare('SELECT id FROM library_roots WHERE enabled = 0 OR removed_at IS NOT NULL').pluck().all() as number[]);
 
     for (const [key, g] of groups) {
-      if (scope && !scope.has(key)) continue;
+      if ((scope && !scope.has(key)) || held.has(key)) continue;
       const ex = existing.get(key);
       if (ex?.state === 'dismissed') continue;
       const leaf = leafOf(g.dir);

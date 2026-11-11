@@ -1,9 +1,31 @@
-import type { CollectionKind, ImageItem, ListImagesQuery, Page } from '@emaki/shared';
+import { AUTO_COLLAPSE_MIN, type CollectionKind, type ImageItem, type ListImagesQuery, type Page } from '@emaki/shared';
 import type { Db } from '../../../db/connection.ts';
 import { loadImageItems } from '../hydrate.ts';
 import { decodeCursor, encodeCursor } from '../sql.ts';
 
-/** Group the complete filtered result before pagination. Only hydrate the final page. */
+/** 收拢后的游标带 'g' 标记：和逐张列表的 [值, id] 游标区分开 */
+type GroupCursor = ['g', string | number, number];
+const isGroupCursor = (x: unknown): x is GroupCursor =>
+  Array.isArray(x) && x.length === 3 && x[0] === 'g' && (typeof x[1] === 'string' || typeof x[1] === 'number') && typeof x[2] === 'number';
+
+/**
+ * 这一页要不要收拢。'auto'：第一页看结果张数（超过 AUTO_COLLAPSE_MIN 才收拢）；翻页时看游标，沿用第一页的决定，
+ * 免得滚动途中结果数跨过门槛，游标对不上。
+ */
+export function decideCollapse(mode: boolean | 'auto' | undefined, cursor: string | undefined, total: number): boolean {
+  if (mode !== 'auto') return !!mode;
+  if (!cursor) return total > AUTO_COLLAPSE_MIN;
+  try {
+    return isGroupCursor(JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 收拢组图：先按当前筛选分组再分页，只给最后一页补全字段。
+ * 只收拢 kind='group'：本子、画集的页在图库里照常逐张平铺（TASKS「第二轮的默认决定」）。
+ */
 export function collapsedImages(
   db: Db,
   q: ListImagesQuery,
@@ -26,7 +48,7 @@ export function collapsedImages(
     SELECT i.id, i.page_no, i.favorite, c.id AS group_id, c.title AS group_title, c.kind AS group_kind,
       CASE WHEN c.id IS NOT NULL THEN -c.id ELSE i.id END AS group_key,
       ${expr} AS sort_value, CASE WHEN i.id = c.cover_image_id THEN 0 ELSE 1 END AS cover_priority
-    FROM images i LEFT JOIN collections c ON c.id = i.collection_id AND c.state = 'active'
+    FROM images i LEFT JOIN collections c ON c.id = i.collection_id AND c.state = 'active' AND c.kind = 'group'
     WHERE ${where}
   )`;
   const cte = `${matched}, grouped AS (
@@ -41,11 +63,7 @@ export function collapsedImages(
   )`;
   const p = { ...params, ...(sort === 'random' ? { groupSeed: q.seed ?? 0 } : {}) };
   const displayTotal = (db.prepare(`${matched} SELECT COUNT(DISTINCT group_key) n FROM matched`).get(p) as { n: number }).n;
-  const cursor = decodeCursor(
-    q.cursor,
-    (x): x is [string | number, number] =>
-      Array.isArray(x) && x.length === 2 && (typeof x[0] === 'string' || typeof x[0] === 'number') && typeof x[1] === 'number',
-  );
+  const cursor = decodeCursor(q.cursor, isGroupCursor);
   const after = cursor ? `AND (g.group_sort${collate} ${cmp} @value OR (g.group_sort${collate} = @value AND r.group_key ${cmp} @key))` : '';
   const limit = Math.min(Math.max(q.limit ?? 60, 1), 200);
   const rows = db
@@ -54,7 +72,7 @@ export function collapsedImages(
     FROM ranked r JOIN grouped g ON g.group_key = r.group_key WHERE r.rn = 1 ${after}
     ORDER BY g.group_sort${collate} ${dir}, r.group_key ${dir} LIMIT @lim`,
     )
-    .all({ ...p, ...(cursor ? { value: cursor[0], key: cursor[1] } : {}), lim: limit + 1 }) as {
+    .all({ ...p, ...(cursor ? { value: cursor[1], key: cursor[2] } : {}), lim: limit + 1 }) as {
     id: number;
     group_id: number | null;
     group_key: number;
@@ -108,5 +126,5 @@ export function collapsedImages(
     };
   });
   const last = rows.at(-1);
-  return { items, total, displayTotal, nextCursor: more && last ? encodeCursor([last.group_sort, last.group_key]) : null };
+  return { items, total, displayTotal, collapsed: true, nextCursor: more && last ? encodeCursor(['g', last.group_sort, last.group_key]) : null };
 }

@@ -33,9 +33,14 @@ import type {
 
 // ---------------------------------------------------------------- 通用
 
+/** 收拢组图选「自动」时的门槛：当前筛选结果超过这么多张才收拢，少的时候逐张展开 */
+export const AUTO_COLLAPSE_MIN = 300;
+
 export interface Page<T> {
-  /** Number of visible cards when collections are collapsed; total remains image count. */
+  /** 收拢组图时的格数；total 仍是图片张数 */
   displayTotal?: number;
+  /** 这一列表收拢了组图（collapseCollections='auto' 时由结果张数决定，翻页沿用第一页的决定） */
+  collapsed?: boolean;
   items: T[];
   /** 下一页游标；null 表示没有更多 */
   nextCursor: string | null;
@@ -215,11 +220,13 @@ export interface ListImagesQuery extends PageQuery {
   seed?: number;
   /** 合集：具体 id = 这一本的页；'none' = 不在任何合集里的图（T38c） */
   collectionId?: ID | 'none';
+  /** 只看这些图（组图详情从筛选结果点进来时用） */
   imageIds?: ID[];
-  collapseCollections?: boolean;
-  /** Include all visible members of collections that matched a collapsed list query. */
+  /** 收拢组图：同一组只占一格。'auto' = 结果超过 AUTO_COLLAPSE_MIN 张才收拢 */
+  collapseCollections?: boolean | 'auto';
+  /** 收拢时 memberIds 给整组可见成员，而不是只给命中筛选的（首页「最新入库」） */
   includeWholeCollections?: boolean;
-  /** Composition candidates for manually extending a collection. */
+  /** 构图相近的候选（给组图手动加图用，复用查重的 dHash 范围） */
   similarTo?: ID;
   /** 画师（合集页「画师」里的 tag）：识别出这位画师的图，同一个人的不同标签一起算 */
   artist?: string;
@@ -476,7 +483,8 @@ export type UnrecognizedArtKind = (typeof UNRECOGNIZED_ART_KINDS)[number];
 
 /** GET /api/unrecognized —— 参数和大类不匹配时一律忽略，不报错 */
 export interface ListUnrecognizedQuery extends PageQuery {
-  collapseCollections?: boolean;
+  /** 同 ListImagesQuery.collapseCollections */
+  collapseCollections?: boolean | 'auto';
   /** 默认 'art' */
   area?: UnrecognizedArea;
   /** 只对 art 有效；不传 = 有建议 + 没认出 + 待识别，不含放下的。total 是所请求分段的数量 */
