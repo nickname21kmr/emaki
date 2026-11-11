@@ -7,7 +7,7 @@ import { applyExclusionRules } from '../../datasource/sqlite/exclusions.ts';
 import type { CharacterCatalog } from '../catalog/characterCatalog.ts';
 import type { CopyrightSource } from '../catalog/copyrights.ts';
 import { DanbooruError } from '../danbooru/client.ts';
-import { isOriginalArtwork, PixivAccessError, PixivClient, PixivPostError } from './client.ts';
+import { hasOriginalTag, PixivAccessError, PixivClient, PixivPostError } from './client.ts';
 import { createPixivMatcher, type PixivMatcher } from './match.ts';
 import type { PixivDiscover } from './discovery.ts';
 import { cachedArtwork, cacheArtwork } from './cache.ts';
@@ -142,7 +142,7 @@ export async function syncPixivCharacters(
         }
         artwork = fetched ?? undefined;
       } else cached++;
-      if (artwork && discover && !isOriginalArtwork(artwork)) {
+      if (artwork && discover && !hasOriginalTag(artwork)) {
         try {
           // 写进目录的新角色马上补进索引；后面的请求失败了这部分也不丢
           await discover(artwork, job.signal, (tags) => match?.refresh(tags));
@@ -194,7 +194,7 @@ export async function syncPixivCharacters(
       match = createPixivMatcher(db, fresh.catalog, fresh.copyrights);
       result = match(artwork);
     }
-    const isOriginal = isOriginalArtwork(artwork);
+    const isOriginal = result.original;
     const noMatch = !result.tags.length && !isOriginal;
     const outcome = isOriginal ? 'original' : noMatch ? 'unmatched' : result.automatic ? 'linked' : 'suggested';
     const ids: number[] = [];

@@ -2,7 +2,7 @@ import { searchKey, katakanaToHiragana } from '@emaki/shared';
 import type { Db, Statement } from '../../db/connection.ts';
 import type { CharacterCatalog } from '../catalog/characterCatalog.ts';
 import type { CopyrightSource } from '../catalog/copyrights.ts';
-import { isOriginalArtwork, type PixivArtwork } from './client.ts';
+import { hasOriginalTag, type PixivArtwork } from './client.ts';
 
 type Index = Map<string, Set<string>>;
 const fullKey = (name: string) => katakanaToHiragana(name.normalize('NFKC').toLowerCase().replace(/[\s_\-·・]+/g, ''));
@@ -61,7 +61,9 @@ const RAW_WORK_NAMES_SQL = `
       WHERE d.category=3 AND d.not_found=0 AND j.type='text'
   `;
 type Row = { name: string; tag: string; category: number };
-export type PixivMatcher = ((artwork: PixivArtwork) => { tags: string[]; automatic: boolean }) & {
+type PixivMatch = { tags: string[]; automatic: boolean; original?: true };
+
+export type PixivMatcher = ((artwork: PixivArtwork) => PixivMatch) & {
   /** discovery 新写入的标签：只按这些标签补进索引，不全量重建（全量一次一两秒，卡住主线程） */
   refresh(tags: string[]): void;
 };
@@ -151,7 +153,8 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
     }
     return out;
   };
-  const match = (artwork: PixivArtwork): { tags: string[]; automatic: boolean } => {
+  const match = (artwork: PixivArtwork): PixivMatch => {
+    const originalTag = hasOriginalTag(artwork);
     const names = artwork.tags.tags.map((t) => [t.tag, ...Object.values(t.translation ?? {})]);
     const workTags = expandWorks(names.flatMap(group => {
       const raw = group[0]!;
@@ -162,6 +165,7 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
       // 译名同时是角色短名时，不把它凭空变成作品上下文。
       return group.slice(1).filter(n => !characters.has(searchKey(n))).flatMap(n => [...(works.get(fullKey(n)) ?? [])]);
     }));
+    workTags.delete('original');
     const matched = new Set<string>();
     const exactNames = new Set<string>();
     const qualifiedNames = new Set<string>();
@@ -185,7 +189,7 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
         && ![...(raw ?? [])].some(compatible)) continue;
       // 精确原文未命中时，才在同一作品内找完整姓名的连接字变体。
       // 不以译名、任意编辑距离或同投稿其他图片的角色替代原文身份依据。
-      if (!raw?.size && workTags.size && !isOriginalArtwork(artwork) && isFullName(group[0]!)) {
+      if (!raw?.size && workTags.size && !originalTag && isFullName(group[0]!)) {
         const key = fullKey(group[0]!);
         const variant = nameVariantKey(key);
         const alternatives = new Set([
@@ -228,17 +232,30 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
       for (const tag of candidates) matched.add(tag);
     }
     // 短名仍需作品确认；完整姓名须原文唯一命中，且角色已有作品资料、页面未标其他作品。
-    // 自建角色是用户自己起的名字，不用作品确认；Pixiv 标了原创的投稿不自动挂 Danbooru 角色。
-    const confirmed = (tag: string) => {
-      if (tag.startsWith(CUSTOM)) return true;
-      if (isOriginalArtwork(artwork)) return false;
+    // 自建角色是用户自己起的名字，不用作品确认。
+    const confirmed = (tag: string, knownWorks: string[]) =>
+      knownWorks.some(w => workTags.has(w))
+      || (knownWorks.length > 0 && qualifiedNames.has(tag))
+      || (!workTags.size && knownWorks.length > 0 && exactNames.has(tag));
+
+    const tags = [...matched];
+    const confirmedCharacters = new Set<string>();
+    let hasNonOriginalCharacter = false;
+    for (const tag of tags) {
+      if (tag.startsWith(CUSTOM)) continue;
       const knownWorks = copyrights.copyrights(tag);
-      return knownWorks.some(w => workTags.has(w))
-        || (knownWorks.length > 0 && qualifiedNames.has(tag))
-        || (!workTags.size && knownWorks.length > 0 && exactNames.has(tag));
-    };
-    // 多个别名命中同一角色，按一个角色计；投稿页数不以本地下载的页数代替。
-    return { tags: [...matched], automatic: matched.size > 0 && !ambiguous && !unresolved && (artwork.pageCount === 1 || matched.size === 1) && [...matched].every(confirmed) };
+      if (!confirmed(tag, knownWorks)) continue;
+      confirmedCharacters.add(tag);
+      if (knownWorks.some(work => work !== 'original')) hasNonOriginalCharacter = true;
+    }
+    // 只有经角色名确认的非原创人物才覆盖原创信号；短名碰撞不能否定原创。
+    const original = (originalTag || artwork.isOriginal === true) && !hasNonOriginalCharacter;
+    // 原文「原创」和明确角色同时出现时保留建议。仅有独立字段时，角色按正常条件关联。
+    const allowCatalogLinks = !originalTag && !original;
+    const automatic = tags.length > 0 && !ambiguous && !unresolved
+      && (artwork.pageCount === 1 || tags.length === 1)
+      && tags.every(tag => tag.startsWith(CUSTOM) || (allowCatalogLinks && confirmedCharacters.has(tag)));
+    return { tags, automatic, ...(original ? { original: true } : {}) };
   };
   return Object.assign(match, {
     refresh(tags: string[]) {

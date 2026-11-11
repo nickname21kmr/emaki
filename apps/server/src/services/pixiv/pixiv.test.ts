@@ -540,10 +540,10 @@ it('短名仍由投稿里的作品标签确认；自建角色不用确认', () =
   expect(match(art(1,['アリス'],'1',['ゲームA']))).toEqual({tags:[A],automatic:true});
   // 一个确认了、一个没确认：整篇只给建议
   expect(match(art(1,['アリス','ボブ'],'1',['ゲームA'])).automatic).toBe(false);
-  // Pixiv 标了原创：Danbooru 角色只建议，自建角色照样关联
-  expect(match({...art(1,['アリス'],'1',['ゲームA']),isOriginal:true}).automatic).toBe(false);
+  // 独立字段允许确认过的角色关联，明确的原创标签与角色冲突时只给建议。
+  expect(match({...art(1,['アリス'],'1',['ゲームA']),isOriginal:true})).toEqual({tags:[A],automatic:true});
   expect(match({...art(1,['アリス','オリジナル'],'1',['ゲームA']),isOriginal:false}).automatic).toBe(false);
-  expect(match({...art(1,['ミドリ'],'1',[]),isOriginal:true})).toEqual({tags:[`emaki:character:${custom}`],automatic:true});
+  expect(match({...art(1,['ミドリ'],'1',[]),isOriginal:true})).toEqual({tags:[`emaki:character:${custom}`],automatic:true,original:true});
 });
 
 function takina() {
@@ -566,8 +566,8 @@ it('完整姓名仍保留短名、译名、限定词、作品冲突、原创和�
   expect(match({id:'123',pageCount:1,tags:{tags:[{tag:'別の人物',translation:{en:'Inoue Takina'}}]}}).automatic).toBe(false);
   expect(match(art(1,['井ノ上たきな(別作品)'],'123',[])).automatic).toBe(false);
   expect(match(art(1,['井ノ上たきな'],'123',['ゲームB'])).automatic).toBe(false);
-  expect(match({...art(1,['井ノ上たきな'],'123',[]),isOriginal:true}).automatic).toBe(false);
-  expect(match(art(1,['井ノ上たきな','オリジナル'],'123',[])).automatic).toBe(false);
+  expect(match({...art(1,['井ノ上たきな'],'123',[]),isOriginal:true}).automatic).toBe(true);
+  expect(match(art(1,['井ノ上たきな','オリジナル'],'123',[]))).toEqual({tags:[tag],automatic:false});
   expect(match(art(6,['井ノ上たきな'],'123',[])).automatic).toBe(true);
   expect(match(art(6,['井ノ上たきな','ボブ'],'123',['ゲームB'])).automatic).toBe(false);
 });
@@ -650,7 +650,7 @@ it('姓名变体不能绕过作品、原创、限定词和多图多角色规则�
   const tag=takina(); const {catalog,copyrights}=makeCatalog(); const match=createPixivMatcher(db,catalog,copyrights);
   expect(match(art(5,['井上たきな'],'123',[])).tags).toEqual([]);
   expect(match(art(5,['井上たきな'],'123',['ゲームB'])).tags).toEqual([]);
-  expect(match({...art(5,['井上たきな']),isOriginal:true}).tags).toEqual([]);
+  expect(match({...art(5,['井上たきな']),isOriginal:true})).toEqual({tags:[tag],automatic:true});
   expect(match(art(5,['井上たきな(別作品)'])).tags).toEqual([]);
   expect(match(art(5,['井上たきな(コスプレ)'])).tags).toEqual([]);
   expect(match(art(5,['井下たきな'])).tags).toEqual([]);
@@ -703,13 +703,37 @@ it('历史未匹配的多页单角色投稿可按姓名变体补充，已有角�
   expect(db.prepare("SELECT score FROM character_suggestions WHERE image_id=4 AND danbooru_tag=?").pluck().get(B)).toBe(0.9);
 });
 
-it('原创投稿撞上 Danbooru 角色名：归为原创、只给建议，不新建角色', async () => {
-  const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>({...art(1,['アリス']),isOriginal:true})},0);
+it('只有原创字段和同名短标签时，仍归为原创', async () => {
+  const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>({...art(1,['アリス'],'123',[]),isOriginal:true})},0);
   expect(summary).toContain('原创 2 张');
   expect(links()).toHaveLength(0);
   expect(db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0);
   expect(db.prepare("SELECT danbooru_tag,character_id FROM character_suggestions WHERE source='pixiv' AND image_id=1").all())
     .toEqual([{danbooru_tag:A,character_id:null}]);
+});
+
+it.each([false, true])('角色标签自带作品限定时可判断原创冲突（另有原创标签：%s）', async originalTag => {
+  name(A, 'アリス(ゲームA)');
+  const tags = ['アリス(ゲームA)', ...(originalTag ? ['オリジナル'] : [])];
+  const artwork = { ...art(2, tags, '123', []), isOriginal: true };
+  await syncPixivCharacters(ctx, job, makeCatalog, { artwork: async () => artwork }, 0);
+
+  expect(db.prepare('SELECT COUNT(*) FROM images WHERE original_at IS NOT NULL').pluck().get()).toBe(0);
+  expect(links()).toHaveLength(originalTag ? 0 : 2);
+  const suggestions = db.prepare("SELECT danbooru_tag FROM character_suggestions WHERE source='pixiv'").pluck().all();
+  expect(suggestions).toEqual(originalTag ? [A, A] : []);
+  expect(db.prepare('SELECT DISTINCT result FROM pixiv_character_checks').pluck().all()).toEqual([originalTag ? 'suggested' : 'linked']);
+});
+
+it('多个非原创角色的多图投稿留在建议中，即使原创字段为 true', async () => {
+  const artwork = { ...art(2, ['アリス', 'ボブ']), isOriginal: true };
+  await syncPixivCharacters(ctx, job, makeCatalog, { artwork: async () => artwork }, 0);
+
+  expect(db.prepare('SELECT COUNT(*) FROM images WHERE original_at IS NOT NULL').pluck().get()).toBe(0);
+  expect(links()).toHaveLength(0);
+  expect(db.prepare("SELECT DISTINCT danbooru_tag FROM character_suggestions WHERE source='pixiv' ORDER BY danbooru_tag").pluck().all())
+    .toEqual([A, B]);
+  expect(db.prepare('SELECT DISTINCT result FROM pixiv_character_checks').pluck().all()).toEqual(['suggested']);
 });
 
 it('用户撤掉的 Pixiv 关联和原创不再写回；未匹配的投稿复用缓存重算', async () => {
@@ -953,7 +977,7 @@ it('已知普通译名沿用本地跳过，不为每个普通标签增加联网�
   expect(client.autocomplete).not.toHaveBeenCalled();
 });
 
-it.each(['correct','wrong','missing','original'] as const)('姓名逆序候选补齐作品元数据，投稿作品为 %s 时的处理', async state => {
+it.each(['correct','wrong','missing','original-field','original-tag'] as const)('姓名逆序候选补齐作品元数据，投稿作品为 %s 时的处理', async state => {
   const {createPixivDiscovery}=await import('./discovery.ts'); const {DanbooruCatalog}=await import('../danbooru/catalog.ts');
   const dc=new DanbooruCatalog(db,makeCatalog().copyrights);
   const mk=()=>({catalog:new CharacterCatalog(db,{copyrights:dc}),copyrights:dc});
@@ -965,10 +989,12 @@ it.each(['correct','wrong','missing','original'] as const)('姓名逆序候选�
     wikiByTitles:async tags=>tags.map(t=>({title:t,other_names:t==='new_work'?['新作品']:[],is_deleted:false})),
     relatedCopyrights:async()=>({query:tag,post_count:30,tag:{name:tag,category:4,post_count:30},related_tags:[{tag:{name:'new_work',category:3,post_count:300},frequency:1}]}),
   });
-  const artwork={...art(4,['Given Family'],'123',state==='missing'?[]:[state==='wrong'?'ゲームB':'新作品']),isOriginal:state==='original'};
+  const names = state === 'original-tag' ? ['Given Family', 'オリジナル'] : ['Given Family'];
+  const works = state === 'missing' ? [] : [state === 'wrong' ? 'ゲームB' : '新作品'];
+  const artwork = { ...art(4, names, '123', works), isOriginal: state === 'original-field' };
   await syncPixivCharacters(ctx,job,mk,{artwork:async()=>artwork},0,discover);
-  expect(links()).toHaveLength(state==='correct'?2:0);
-  if(state!=='original')expect(dc.copyrights(tag)).toEqual(['new_work']);
+  expect(links()).toHaveLength(state === 'correct' || state === 'original-field' ? 2 : 0);
+  if (state !== 'original-tag') expect(dc.copyrights(tag)).toEqual(['new_work']);
   if(state==='wrong') {
     // A contextual rejection must not suppress a later artwork with the right work.
     await discover(art(4,['Given Family'],'456',['新作品']),controller.signal);
