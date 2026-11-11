@@ -210,6 +210,25 @@ describe('ordinary collections', () => {
 });
 
 describe('collapsed browsing', () => {
+  it('shows the whole post in the home feed when an illustration qualifies it', async () => {
+    for (const id of [1, 2, 3]) await image(id, { post: '151010338', favorite: id === 1 });
+    await image(4);
+    ds.collections.refreshAll();
+    ds.ctx.db.prepare("UPDATE images SET content_kind = 'comic' WHERE id IN (2, 3, 4)").run();
+    await ds.bulkImages({ ids: ['3'], action: { type: 'exclude' } });
+
+    const illustrationFeed: ListImagesQuery = { kind: ['illustration'], collapseCollections: true };
+    const filtered = await ds.listImages(illustrationFeed);
+    expect(filtered.items[0]?.collectionGroup).toMatchObject({ count: 1, total: 2, memberIds: ['1'], allFavorite: true });
+
+    const home = await ds.listImages({ ...illustrationFeed, includeWholeCollections: true });
+    expect(home).toMatchObject({ displayTotal: 1, items: [{ id: '1' }] });
+    expect(home.items[0]?.collectionGroup).toMatchObject({ count: 2, total: 2, memberIds: ['1', '2'], allFavorite: false });
+
+    const flat = await ds.listImages({ ...illustrationFeed, collapseCollections: false, includeWholeCollections: true });
+    expect(flat.items.map(i => i.id)).toEqual(['1']);
+  });
+
   it('groups before pagination, counts images separately, and preserves a filtered-out cover boundary', async () => {
     await image(1, { favorite: true });
     await image(2);

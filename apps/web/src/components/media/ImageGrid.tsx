@@ -239,7 +239,9 @@ export function useGridInteractions(images: ImageItem[], selectionScope?: string
       if (e.ctrlKey || e.metaKey || selecting) return toggleImageSelection(image);
     }
     if (image.collectionGroup) {
-      navigate(`/collections/${image.collectionGroup.id}`, { state: { collectionMembers: image.collectionGroup.memberIds } });
+      const group = image.collectionGroup;
+      const state = group.count < group.total ? { collectionMembers: group.memberIds } : undefined;
+      navigate(`/collections/${group.id}`, { state });
       return;
     }
     if (onOpen) onOpen(image, index);

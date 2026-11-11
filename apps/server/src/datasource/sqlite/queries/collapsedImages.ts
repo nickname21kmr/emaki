@@ -31,7 +31,7 @@ export function collapsedImages(
   )`;
   const cte = `${matched}, grouped AS (
     SELECT group_key, ${dir === 'ASC' ? 'MIN' : 'MAX'}(sort_value${collate}) AS group_sort,
-      COUNT(*) AS group_count, MIN(favorite) AS group_favorite,
+      MIN(favorite) AS group_favorite,
       json_group_array(id ORDER BY page_no, id) AS member_ids
     FROM matched GROUP BY group_key
   ), ranked AS (
@@ -50,7 +50,7 @@ export function collapsedImages(
   const limit = Math.min(Math.max(q.limit ?? 60, 1), 200);
   const rows = db
     .prepare(
-      `${cte} SELECT r.*, g.group_sort, g.group_count, g.group_favorite, g.member_ids
+      `${cte} SELECT r.*, g.group_sort, g.group_favorite, g.member_ids
     FROM ranked r JOIN grouped g ON g.group_key = r.group_key WHERE r.rn = 1 ${after}
     ORDER BY g.group_sort${collate} ${dir}, r.group_key ${dir} LIMIT @lim`,
     )
@@ -61,42 +61,51 @@ export function collapsedImages(
     group_sort: string | number;
     group_title: string | null;
     group_kind: CollectionKind;
-    group_count: number;
     group_favorite: number;
     member_ids: string;
   }[];
   const more = rows.length > limit;
   if (more) rows.pop();
-  const totals = new Map(
+  const groupIds = rows.flatMap((row) => (row.group_id === null ? [] : [row.group_id]));
+  const wholeMembers = q.includeWholeCollections
+    ? ', json_group_array(id ORDER BY page_no, id) AS member_ids, MIN(favorite) AS all_favorite'
+    : '';
+  const collections = new Map(
     (
       db
         .prepare(
-          `SELECT collection_id, COUNT(*) n FROM v_counted_images
+          `SELECT collection_id, COUNT(*) AS total${wholeMembers} FROM v_counted_images
     WHERE collection_id IN (SELECT value FROM json_each(?)) GROUP BY collection_id`,
         )
-        .all(JSON.stringify(rows.flatMap((r) => (r.group_id === null ? [] : [r.group_id])))) as { collection_id: number; n: number }[]
-    ).map((r) => [r.collection_id, r.n]),
+        .all(JSON.stringify(groupIds)) as {
+        collection_id: number;
+        total: number;
+        member_ids?: string;
+        all_favorite?: number;
+      }[]
+    ).map((row) => [row.collection_id, row]),
   );
   const items = loadImageItems(
     db,
     rows.map((r) => r.id),
   ).map((image, n) => {
-    const r = rows[n]!,
-      count = r.group_id === null ? 1 : (totals.get(r.group_id) ?? 1);
-    return r.group_id !== null && count > 1
-      ? {
-          ...image,
-          collectionGroup: {
-            id: String(r.group_id),
-            title: r.group_title,
-            kind: r.group_kind,
-            count: r.group_count,
-            total: count,
-            allFavorite: r.group_favorite === 1,
-            memberIds: (JSON.parse(r.member_ids) as number[]).map(String),
-          },
-        }
-      : image;
+    const row = rows[n]!;
+    if (row.group_id === null) return image;
+    const collection = collections.get(row.group_id);
+    if (!collection || collection.total <= 1) return image;
+    const memberIds = (JSON.parse(collection.member_ids ?? row.member_ids) as number[]).map(String);
+    return {
+      ...image,
+      collectionGroup: {
+        id: String(row.group_id),
+        title: row.group_title,
+        kind: row.group_kind,
+        count: memberIds.length,
+        total: collection.total,
+        allFavorite: (collection.all_favorite ?? row.group_favorite) === 1,
+        memberIds,
+      },
+    };
   });
   const last = rows.at(-1);
   return { items, total, displayTotal, nextCursor: more && last ? encodeCursor([last.group_sort, last.group_key]) : null };

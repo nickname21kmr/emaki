@@ -38,6 +38,7 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
         sort: z.enum(['addedAt', 'modifiedAt', 'fileName', 'bytes', 'random', 'page']).optional(),
         collectionId: z.string().min(1).optional(),
         collapseCollections: qBool.optional(),
+        includeWholeCollections: qBool.optional(),
         imageIds: qList(z.string()).optional(),
         similarTo: z.string().optional(),
         artist: z.string().min(1).max(200).optional(),

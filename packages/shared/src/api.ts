@@ -217,6 +217,8 @@ export interface ListImagesQuery extends PageQuery {
   collectionId?: ID | 'none';
   imageIds?: ID[];
   collapseCollections?: boolean;
+  /** Include all visible members of collections that matched a collapsed list query. */
+  includeWholeCollections?: boolean;
   /** Composition candidates for manually extending a collection. */
   similarTo?: ID;
   /** 画师（合集页「画师」里的 tag）：识别出这位画师的图，同一个人的不同标签一起算 */

@@ -1008,9 +1008,24 @@ export class MockDataSource implements DataSource {
         const c = xs[0]!.collectionId ? this.db.collections.get(xs[0]!.collectionId!) : null;
         const cover = xs.find(i => i.id === c?.coverImageId) ?? xs[0]!;
         const image = this.toImage(cover);
-        if (!c) return image;
-        const total = [...this.db.images.values()].filter(i => this.isVisible(i) && !i.excludedBy && i.collectionId === c.id).length;
-        return total > 1 ? { ...image, collectionGroup: { id: c.id, title: c.title, kind: c.kind, count: xs.length, total, allFavorite: xs.every(i => i.favorite), memberIds: xs.map(i => i.id) } } : image;
+        if (!c || c.state !== 'active') return image;
+        const visibleMembers = this.idx.visible.filter(i => !i.excludedBy && i.collectionId === c.id);
+        if (visibleMembers.length <= 1) return image;
+        const members = query.includeWholeCollections
+          ? visibleMembers.sort((a, b) => (a.pageNo ?? 0) - (b.pageNo ?? 0) || a.id.localeCompare(b.id, undefined, { numeric: true }))
+          : xs;
+        return {
+          ...image,
+          collectionGroup: {
+            id: c.id,
+            title: c.title,
+            kind: c.kind,
+            count: members.length,
+            total: visibleMembers.length,
+            allFavorite: members.every(i => i.favorite),
+            memberIds: members.map(i => i.id),
+          },
+        };
       }) };
     }
     const page = paginate(rows, query.cursor, query.limit);

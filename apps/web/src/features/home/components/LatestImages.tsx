@@ -18,8 +18,8 @@ const MAX_ROWS = 4;
  * 避免首页底部出现一行参差不齐的「半行」。
  */
 export function LatestImages({ stats }: { stats: LibraryStats }) {
-  // 最新入库只取插画（T27 CL 七）
-  const query = useImagesInfinite({ sort: 'addedAt', kind: ['illustration'] });
+  // 插画决定哪些合集进入最新入库，收拢时卡片代表整组。
+  const query = useImagesInfinite({ sort: 'addedAt', kind: ['illustration'], includeWholeCollections: true });
   const all = query.data?.pages[0]?.items;
 
   // 量出和 ImageGrid 一样的容器宽度，用同一个 justify 算行
