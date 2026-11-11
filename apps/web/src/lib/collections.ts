@@ -1,12 +1,13 @@
 /**
  * 合集（T38d）的文案、书架分组、阅读进度。
+ * 合集是总称：本子、画集按文件夹成册；组图是收在一起的散图（手动挑的，或同一投稿自动收拢）。
  */
 import type { CollectionKind, CollectionSummary } from '@emaki/shared';
-import { BookImage, BookOpen, type LucideIcon } from 'lucide-react';
+import { BookImage, BookOpen, Layers, type LucideIcon } from 'lucide-react';
 import { shouldBlur, type BlurPrefs } from './blur';
 
 export const COLLECTION_META: Record<CollectionKind, { label: string; unit: string; glyph: string; icon: LucideIcon; hint: string }> = {
-  group: { label: '合集', unit: '组', glyph: '集', icon: BookImage, hint: '收在一起的图片' },
+  group: { label: '组图', unit: '组', glyph: '组', icon: Layers, hint: '收在一起的散图，逐张照常识别' },
   doujin: { label: '本子', unit: '本', glyph: '本', icon: BookOpen, hint: '按页码顺序读' },
   artbook: { label: '画集', unit: '册', glyph: '画', icon: BookImage, hint: '里面的插画照常计入角色' },
 };
@@ -83,3 +84,6 @@ export function shouldCloth(c: Pick<CollectionSummary, 'covers' | 'kind' | 'cove
   if (!cover) return true;
   return shouldBlur({ rating: cover.rating }, prefs) || (c.kind === 'doujin' && !c.coverTagged);
 }
+
+/** 组图的来历，写在书卡、详情页的小字里 */
+export const groupOrigin = (c: Pick<CollectionSummary, 'membership'>) => (c.membership === 'post' ? '同一投稿' : '手动收集');

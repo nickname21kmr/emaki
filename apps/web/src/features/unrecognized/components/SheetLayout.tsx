@@ -1,4 +1,4 @@
-import { CollapseCollectionsToggle } from '@/components/media/CollectionControls';
+import { AddToGroupDialog, CollapseGroupsMenu } from '@/components/media/CollectionControls';
 import type { Character } from '@emaki/shared';
 import {
   UNRECOGNIZED_ANNEX_KINDS,
@@ -65,7 +65,8 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
   const [ratingOpen, setRatingOpen] = useState(false);
   const [createName, setCreateName] = useState<string | null>(null);
   const [createdCharacter, setCreatedCharacter] = useState<Character | null>(null);
-  const keysOn = useTriageKeysEnabled() && !kindOpen && !ratingOpen && createName === null;
+  const [grouping, setGrouping] = useState(false);
+  const keysOn = useTriageKeysEnabled() && !kindOpen && !ratingOpen && !grouping && createName === null;
   const edit = keysOn && sheet.batch;
   const once = (fn: () => void) => (e: KeyboardEvent) => !e.repeat && fn();
   useHotkey('mod+a', () => sheet.selectLoaded(), { enabled: keysOn && items.length > 0 });
@@ -73,6 +74,7 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
   useHotkey('o', once(() => sheet.markOriginal(true)), { enabled: edit && mode !== 'annex' });
   useHotkey('c', once(() => setKindOpen(true)), { enabled: edit });
   useHotkey('r', once(() => setRatingOpen(true)), { enabled: edit });
+  useHotkey('g', once(() => setGrouping(true)), { enabled: edit });
   useHotkey('e', once(() => sheet.exclude()), { enabled: edit });
   useHotkey('esc', () => sheet.clear(), { enabled: keysOn && sheet.batch });
   const stepGroup = (d: 1 | -1) => {
@@ -150,7 +152,7 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
           className="mb-3"
           actions={
             <>
-              <CollapseCollectionsToggle />
+              <CollapseGroupsMenu collapsed={query.data?.pages[0]?.collapsed} />
               <FreshButton stale={query.isStale} onRefresh={() => void query.refetch()} />
               {total > 0 && (
                 <Button variant="ghost" size="sm" onClick={() => void sheet.selectAll()}>
@@ -162,7 +164,7 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
           hint={
             summary && (
               <>
-                {formatCount(total)} 张{query.data?.pages[0]?.displayTotal !== undefined ? ` · 展示 ${query.data.pages[0].displayTotal} 项` : ''} · {order}
+                {formatCount(total)} 张 · {order}
                 {mode === 'annex' && p.kind && (
                   <Link to={`/annex/${p.kind}`} className="ml-2 text-fg-muted hover:text-fg">
                     在别册里看全部 →
@@ -181,6 +183,7 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
       </section>
       {sheet.batch ? (
         <SheetBatchPanel
+          onGroup={() => setGrouping(true)}
           sheet={sheet}
           label={label}
           mode={mode}
@@ -202,6 +205,7 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
         onAnnex={() => p.kind && navigate(`/annex/${p.kind}`)}
       />
       )}
+      <AddToGroupDialog open={grouping} onOpenChange={setGrouping} ids={sheet.selectedIds} onDone={sheet.clear} />
       <NewCharacterDialog
         open={createName !== null}
         onOpenChange={(o) => !o && setCreateName(null)}

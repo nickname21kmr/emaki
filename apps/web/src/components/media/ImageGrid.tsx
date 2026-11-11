@@ -1,5 +1,3 @@
-import { useNavigate } from 'react-router';
-import { selectionIds, toggleImageSelection } from './CollectionControls';
 import type { ID, ImageItem } from '@emaki/shared';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Check, Heart } from 'lucide-react';
@@ -10,6 +8,7 @@ import { api } from '@/lib/api';
 import { useMutate } from '@/lib/queries';
 import { useLightbox, useSelection } from '@/lib/stores';
 import { pickRevealed } from '@/lib/undoPlace';
+import { GroupBadge, selectionIds, toggleImageSelection } from './CollectionControls';
 import { useUndoRevealTarget } from '@/lib/useUndoReveal';
 import { justify } from './justify';
 
@@ -216,8 +215,8 @@ export function useLightboxFeed(
  * 看图器打开时，网格加载了更多就同步过去（只同步打开看图器的那个网格）。
  */
 export function useGridInteractions(images: ImageItem[], selectionScope?: string, onOpen?: (image: ImageItem, index: number) => void) {
+  // 收拢的组图展开成成员：看图器左右翻能翻完整组，勾选范围也按成员算
   const ids = useMemo(() => images.flatMap(selectionIds), [images]);
-  const navigate = useNavigate();
   const gridId = useId();
   const syncLightbox = useLightbox((s) => s.syncIds);
   useEffect(() => syncLightbox(ids, gridId), [ids, gridId, syncLightbox]);
@@ -232,18 +231,18 @@ export function useGridInteractions(images: ImageItem[], selectionScope?: string
 
   const handleClick = (e: React.MouseEvent, image: ImageItem, index: number) => {
     if (selectionScope) {
-      if (e.shiftKey) { selection.selectRange(ids, image.id);
-        const selected = useSelection.getState().ids; const next = new Set(selected);
-        for (const i of images) if (selected.has(i.id)) selectionIds(i).forEach(id => next.add(id));
-        selection.setMany([...next]); return; }
+      if (e.shiftKey) {
+        // 区间选到的格子里有组图：补齐整组
+        selection.selectRange(ids, image.id);
+        const selected = useSelection.getState().ids;
+        const next = new Set(selected);
+        for (const i of images) if (selected.has(i.id)) selectionIds(i).forEach((id) => next.add(id));
+        selection.setMany([...next]);
+        return;
+      }
       if (e.ctrlKey || e.metaKey || selecting) return toggleImageSelection(image);
     }
-    if (image.collectionGroup) {
-      const group = image.collectionGroup;
-      const state = group.count < group.total ? { collectionMembers: group.memberIds } : undefined;
-      navigate(`/collections/${group.id}`, { state });
-      return;
-    }
+    // 组图格也照常打开看图器（从这一组的第一张开始，左右翻完整组）；去组图页点右上角的张数
     if (onOpen) onOpen(image, index);
     else {
       // 从格子里「拿起」（SEL-12）
@@ -367,9 +366,7 @@ function Tile({
         />
       </button>
 
-      {image.collectionGroup && <span className="pointer-events-none absolute right-2 top-2 rounded-lg bg-black/70 px-2 py-1 text-xs text-white">
-        {image.collectionGroup.count === image.collectionGroup.total ? `${image.collectionGroup.total} 张` : `本页 ${image.collectionGroup.count} 张 · 全组 ${image.collectionGroup.total} 张`}
-      </span>}
+      <GroupBadge image={image} forceBlur={forceBlur} />
       {/* 悬停：底部渐变 + 这是谁（BR-5）；多选时和窄格子不显示 */}
       {!selecting && width >= 120 && height >= 120 && (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-linear-to-t from-black/55 via-black/20 to-transparent opacity-0 transition-opacity duration-300 group-hover/tile:opacity-100">

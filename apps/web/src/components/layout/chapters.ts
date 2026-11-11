@@ -26,7 +26,7 @@ export function getChapter(pathname: string, now: Date = new Date()): Chapter {
     case 'works':
       return { mark: '第三册', sub: '作品' };
     case 'collections':
-      return { mark: '合集', sub: '本子与画集' };
+      return { mark: '合集', sub: '本子 · 画集 · 组图' };
     case 'annex':
       return { mark: '别册', sub: ANNEX_SUB[b ?? ''] ?? '截图 · 漫画 · 文字 · 照片 · 表情 · 动图' };
     case 'unrecognized':

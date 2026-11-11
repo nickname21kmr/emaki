@@ -1,4 +1,3 @@
-import { selectionIds, toggleImageSelection } from './CollectionControls';
 import type { ImageItem } from '@emaki/shared';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Heart } from 'lucide-react';
@@ -7,6 +6,7 @@ import { useReducedMotion } from 'motion/react';
 import { cn } from '@/lib/cn';
 import { formatDate } from '@/lib/format';
 import { MountFrame, SelectCircle, useGridBox, useGridInteractions, useLightboxFeed } from './ImageGrid';
+import { GroupBadge, selectionIds, toggleImageSelection } from './CollectionControls';
 import { Thumb } from './Thumb';
 
 /**
@@ -172,7 +172,7 @@ function Card({
           <Heart className="pointer-events-none absolute right-2 bottom-2 size-4 fill-white text-white drop-shadow-[0_1px_2px_rgb(0_0_0/0.5)]" />
         )}
         <MountFrame selected={selected} />
-                  {image.collectionGroup && <span className="pointer-events-none absolute right-2 top-2 rounded-lg bg-black/70 px-2 py-1 text-xs text-white">{image.collectionGroup.count} / {image.collectionGroup.total} 张</span>}
+        <GroupBadge image={image} />
         {selectable && <SelectCircle selected={selected} selecting={selecting} onToggle={onToggle} />}
       </div>
       {variant === 'shot' && <figcaption className="mt-1.5 truncate text-[11px] text-fg-subtle tabular">{formatDate(image.modifiedAt)}</figcaption>}

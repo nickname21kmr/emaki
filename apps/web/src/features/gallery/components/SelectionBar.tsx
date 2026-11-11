@@ -1,7 +1,5 @@
-import { AddToCollection } from '@/components/media/CollectionControls';
-import { selectionIds } from '@/components/media/CollectionControls';
 import { CONTENT_KINDS, type BulkImageAction, type ID, type ImageItem } from '@emaki/shared';
-import { Ban, ChevronDown, CircleMinus, Ellipsis, FolderInput, Heart, Palette, Shapes, ShieldHalf, Trash2, UserRoundPlus, X } from 'lucide-react';
+import { Ban, ChevronDown, CircleMinus, Ellipsis, FolderInput, Heart, Layers, Palette, Shapes, ShieldHalf, Trash2, UserRoundPlus, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useSonner } from 'sonner';
 import {
@@ -21,6 +19,7 @@ import { KIND_ICON, KIND_LABEL } from '@/lib/kinds';
 import { modKeyLabel, useHotkey } from '@/lib/hotkeys';
 import { TRASH_HINT, useMutate } from '@/lib/queries';
 import { useLightbox, useOverlays, useSelection } from '@/lib/stores';
+import { AddToGroupDialog, selectionIds } from '@/components/media/CollectionControls';
 import { KindMenu } from '@/components/media/KindMenu';
 import { MoveImagesDialog } from '@/components/media/MoveImagesDialog';
 import { ArtistPicker } from '../ArtistPicker';
@@ -37,7 +36,7 @@ const CLEARS_SELECTION: BulkImageAction['type'][] = ['assign', 'exclude', 'trash
  * 多选后底部浮起的墨色胶囊工具栏。
  * 用 sticky 贴在滚动区底部（而不是 fixed 贴窗口），这样它永远居中在「纸」上，不受侧边栏宽度影响。
  *
- * 快捷键：Esc 取消选择 · Ctrl+A 全选已加载 · E 排除 · F 收藏 · C 归入…（改类型，再按 1–7）
+ * 快捷键：Esc 取消选择 · Ctrl+A 全选已加载 · E 排除 · F 收藏 · C 归入…（改类型，再按 1–7）· G 收进组图…
  * 按画师看时（artist）多一个「移出画师」：认错了的图从这位画师里拿掉。
  */
 export function SelectionBar({
@@ -58,6 +57,7 @@ export function SelectionBar({
   const pickerOpen = charOpen || artistOpen;
   const [kindOpen, setKindOpen] = useState(false);
   const [moving, setMoving] = useState(false);
+  const [grouping, setGrouping] = useState(false);
   // 露出的纸窄于 400（助手覆盖在纸上）时，全选、画师、移出画师、收藏也收进「更多」；窄于 190 时连归到角色也收进去
   // 菜单在 portal 里用不了容器查询：打开「更多」时量一下外层，和 @max-[400px]/bar、@max-[190px]/bar 对上
   const shell = useRef<HTMLDivElement>(null);
@@ -67,7 +67,7 @@ export function SelectionBar({
   const afterMenu = useRef<(() => void) | null>(null);
 
   const count = ids.size;
-  const active = count > 0 && !lightboxOpen && !moving;
+  const active = count > 0 && !lightboxOpen && !moving && !grouping;
 
   // toast 也弹在底部居中 —— 不管是谁弹的（这里的收藏、助手的撤销…），有 toast 时工具栏就抬高给它让位
   const lifted = useSonner().toasts.length > 0;
@@ -100,7 +100,7 @@ export function SelectionBar({
     return seen > 0;
   }, [images, ids, count]);
 
-  const allLoadedSelected = images.length > 0 && images.every((img) => ids.has(img.id));
+  const allLoadedSelected = images.length > 0 && images.every((img) => selectionIds(img).every((id) => ids.has(id)));
   const selectAll = () => setMany(images.flatMap(selectionIds));
 
   useHotkey(
@@ -128,6 +128,7 @@ export function SelectionBar({
   useHotkey('e', (e) => !fromOverlay(e) && run({ type: 'exclude' }), { enabled: active && !pickerOpen && !kindOpen });
   useHotkey('c', (e) => !fromOverlay(e) && setKindOpen(true), { enabled: active && !pickerOpen });
   useHotkey('f', (e) => !fromOverlay(e) && run({ type: 'favorite', value: !allFavorite }), { enabled: active && !pickerOpen });
+  useHotkey('g', (e) => !fromOverlay(e) && setGrouping(true), { enabled: active && !pickerOpen && !kindOpen });
 
   const pendingType = bulk.isPending ? bulk.variables?.action.type : undefined;
 
@@ -267,7 +268,11 @@ export function SelectionBar({
               </BarButton>
             </Tooltip>
 
-            <AddToCollection inverse ids={[...ids]} onDone={clear} />
+            <Tooltip content="收进一个组图：只改整理信息，不移动文件" shortcut="G" side="top">
+              <BarButton icon={<Layers />} aria-haspopup="dialog" onClick={() => setGrouping(true)} className="@max-[600px]/bar:hidden">
+                组图…
+              </BarButton>
+            </Tooltip>
             <span className="mx-1.5 h-5 w-px bg-fg-inverse/15 @max-[600px]/bar:hidden" />
 
             <Tooltip content="排除：不再出现在图库和统计里，文件不会被删除" shortcut="E" side="top">
@@ -343,6 +348,7 @@ export function SelectionBar({
               </MenuSub>
               <MenuSeparator />
               <MenuItem icon={<FolderInput />} onSelect={() => setMoving(true)}>移动…</MenuItem>
+              <MenuItem icon={<Layers />} shortcut="G" onSelect={() => { afterMenu.current = () => setGrouping(true); }}>组图…</MenuItem>
               <MenuItem icon={<Ban />} shortcut="E" onSelect={() => run({ type: 'exclude' })}>排除</MenuItem>
               <MenuItem icon={<Trash2 />} danger onSelect={() => run({ type: 'trash' })}>回收站</MenuItem>
             </Menu>
@@ -350,6 +356,7 @@ export function SelectionBar({
         )}
       </AnimatePresence>
       <MoveImagesDialog open={moving} onOpenChange={setMoving} target={{ ids: [...ids] }} count={count} what="选中的" onMoved={clear} />
+      <AddToGroupDialog open={grouping} onOpenChange={setGrouping} ids={[...ids]} onDone={clear} />
     </div>
   );
 }

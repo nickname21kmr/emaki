@@ -1,4 +1,4 @@
-import { CollapseCollectionsToggle } from '@/components/media/CollectionControls';
+import { CollapseGroupsMenu } from '@/components/media/CollectionControls';
 import { BROWSE_THEMES, type CustomTheme } from '@emaki/shared';
 import { THEME_META } from '@/features/unrecognized/themes';
 import {
@@ -197,10 +197,18 @@ export function GalleryToolbar({
  * 这一行放不下时按顺序让地方（看的是这一行的宽度，容器名 kindbar）：
  * 窄于 1420 收藏、排序只留图标 → 窄于 1300 缩放滑块变短、目次不显示张数 → 窄于 940 目次每项收窄（后两步见 KindIndex）。
  */
-export function GalleryViewControls({ filters, update }: { filters: GalleryFilters; update: (patch: Partial<GalleryFilters>) => void }) {
+export function GalleryViewControls({
+  filters,
+  update,
+  collapsed,
+}: {
+  filters: GalleryFilters;
+  update: (patch: Partial<GalleryFilters>) => void;
+  /** 当前列表收拢着组图（接口返回的 collapsed） */
+  collapsed?: boolean;
+}) {
   return (
     <div className="flex items-center gap-0.5">
-      <CollapseCollectionsToggle />
       {/* 只看收藏：常用的开关，开着时整个按钮变朱色，一眼看得出现在只显示收藏 */}
       <Tooltip content={filters.favorite ? '正在只看收藏，点一下看全部' : '只看收藏的图'}>
         <Button
@@ -253,6 +261,7 @@ export function GalleryViewControls({ filters, update }: { filters: GalleryFilte
       >
         {filters.order === 'desc' ? <ArrowDownWideNarrow /> : <ArrowUpNarrowWide />}
       </IconButton>
+      <CollapseGroupsMenu collapsed={collapsed} />
 
       <div className="mx-2.5 h-4 w-px shrink-0 bg-line-strong @max-[1300px]/kindbar:mx-1.5" />
       <RowHeightSlider className="@max-[1300px]/kindbar:w-[84px]" />

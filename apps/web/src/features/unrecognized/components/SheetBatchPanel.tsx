@@ -1,6 +1,5 @@
-import { AddToCollection } from '@/components/media/CollectionControls';
 import type { Character, Rating } from '@emaki/shared';
-import { Archive, Ban, Feather, Shapes, ShieldHalf } from 'lucide-react';
+import { Archive, Ban, Feather, Layers, Shapes, ShieldHalf } from 'lucide-react';
 import type { RefObject } from 'react';
 import { KindMenu } from '@/components/media/KindMenu';
 import { Thumb } from '@/components/media/Thumb';
@@ -25,6 +24,7 @@ export function SheetBatchPanel({
   onKindOpen,
   ratingOpen,
   onRatingOpen,
+  onGroup,
 }: {
   sheet: Sheet;
   label: string;
@@ -36,6 +36,8 @@ export function SheetBatchPanel({
   onKindOpen: (v: boolean) => void;
   ratingOpen: boolean;
   onRatingOpen: (v: boolean) => void;
+  /** 收进组图…（G） */
+  onGroup: () => void;
 }) {
   const n = sheet.selectedCount;
   const stack = sheet.selectedItems.slice(0, 3);
@@ -43,7 +45,6 @@ export function SheetBatchPanel({
     <PanelShell
       footer={
         <>
-          <AddToCollection ids={sheet.selectedIds} onDone={sheet.clear} />
           <div className="grid grid-cols-2 gap-2">
             {mode !== 'annex' && (
               <ActionKey
@@ -97,6 +98,7 @@ export function SheetBatchPanel({
                 ))}
               </MenuRadioGroup>
             </Menu>
+            <ActionKey icon={<Layers />} label="收进组图…" keys={['G']} onClick={onGroup} />
             <ActionKey icon={<Ban />} label={`排除这 ${formatCount(n)} 张`} keys={['E']} tone="danger" onClick={sheet.exclude} />
           </div>
           <button type="button" onClick={sheet.clear} className="mt-2 w-full text-center text-[12px] text-fg-subtle transition-colors hover:text-fg">

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { KIND_LABEL } from '@/lib/kinds';
-import { useMutate, useUnrecognizedInfinite, type UnrecognizedParams } from '@/lib/queries';
+import { collapseParam, useMutate, useUnrecognizedInfinite, type UnrecognizedParams } from '@/lib/queries';
 import { usePrefs, useSelection } from '@/lib/stores';
 import { useReconcileSelection } from '@/lib/useReconcileSelection';
 import type { AssignTarget, StampEvent } from './types';
@@ -19,8 +19,8 @@ const MAX_SELECT = 2000;
  * 乐观隐藏照 useTriage：先藏起来，失败再放回；拿到修改后的新数据再放掉隐藏标记。
  */
 export function useSheet(params: UnrecognizedParams, enabled: boolean) {
-  const collapse = usePrefs(s => s.collapseCollections);
-  const query = useUnrecognizedInfinite({ ...params, collapseCollections: collapse }, 120);
+  const mode = usePrefs((s) => s.collapseMode);
+  const query = useUnrecognizedInfinite({ ...params, collapseCollections: collapseParam(mode) }, 120);
   const { data, dataUpdatedAt } = query;
 
   const all = useMemo(() => {

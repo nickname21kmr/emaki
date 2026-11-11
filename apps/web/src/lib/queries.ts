@@ -1,4 +1,3 @@
-import { usePrefs } from './stores';
 /**
  * 所有数据读取 / 修改的 React hook。页面只用这里的 hook。
  *
@@ -40,7 +39,7 @@ import { toast } from 'sonner';
 import { api, ApiRequestError } from './api';
 import { useLiveJobs } from './events';
 import { modKeyLabel } from './hotkeys';
-import { useUndoReveal, useUndoStore, type UndoEntry, type UndoFocus } from './stores';
+import { usePrefs, useUndoReveal, useUndoStore, type CollapseMode, type UndoEntry, type UndoFocus } from './stores';
 import { confirmText, madeHere, needsConfirm } from './undoPlace';
 
 export const qk = {
@@ -148,10 +147,14 @@ export const useCharactersInfinite = (q: Omit<ListCharactersQuery, 'cursor'>) =>
     placeholderData: keepPreviousData,
   });
 
+/** 收拢偏好 → 接口参数 */
+export const collapseParam = (mode: CollapseMode): boolean | 'auto' => (mode === 'auto' ? 'auto' : mode === 'on');
+
 /** 图片列表（无限滚动），配合 components/media/ImageGrid 使用 */
 export const useImagesInfinite = (q: Omit<ListImagesQuery, 'cursor'>) => {
-  const collapse = usePrefs(s => s.collapseCollections);
-  const query = { ...q, collapseCollections: q.collapseCollections ?? (!q.collectionId && collapse) };
+  // 收拢组图（全局偏好）：看一本合集的页时不收拢；auto 交给后端按结果张数决定
+  const mode = usePrefs((s) => s.collapseMode);
+  const query = { ...q, collapseCollections: q.collapseCollections ?? (q.collectionId ? false : collapseParam(mode)) };
   return useInfiniteQuery({
     queryKey: qk.images(query),
     queryFn: ({ pageParam }) => api.images({ limit: 120, ...query, cursor: pageParam }),
@@ -159,8 +162,7 @@ export const useImagesInfinite = (q: Omit<ListImagesQuery, 'cursor'>) => {
     getNextPageParam: (last) => last.nextCursor ?? undefined,
     placeholderData: keepPreviousData,
   });
-
-}
+};
 
 /** 只要张数（编辑自定义画面时预览能筛出多少张） */
 export const useImageCount = (q: Omit<ListImagesQuery, 'cursor' | 'limit'>, enabled = true) =>
@@ -176,7 +178,7 @@ export const useImage = (id: ID | null | undefined) =>
 
 /** 未识别列表的参数（T34b）：大类、分段、主题、别册类型、插画 / 漫画 */
 export interface UnrecognizedParams {
-  collapseCollections?: boolean;
+  collapseCollections?: boolean | 'auto';
   area: UnrecognizedArea;
   bucket?: UnrecognizedBucket;
   theme?: UnrecognizedTheme;

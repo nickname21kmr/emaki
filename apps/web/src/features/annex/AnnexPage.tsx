@@ -107,7 +107,7 @@ function AnnexView({ kind, count }: { kind: ContentKind | null; count: number | 
         <div className={cn('transition-opacity duration-300', list.isPlaceholderData && 'pointer-events-none opacity-45')}>
           {typeof layout === 'string' ? <CardGrid {...common} variant={layout} /> : <ImageGrid {...common} rowHeight={layout.rowHeight} />}
         </div>
-        <GridFooter displayTotal={list.data?.pages[0]?.displayTotal} loadingMore={isFetchingNextPage} done={!hasNextPage} total={list.data?.pages[0]?.total ?? 0} />
+        <GridFooter loadingMore={isFetchingNextPage} done={!hasNextPage} total={list.data?.pages[0]?.total ?? 0} />
       </>
     );
   }

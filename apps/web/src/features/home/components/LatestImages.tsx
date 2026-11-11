@@ -1,4 +1,3 @@
-import { CollapseCollectionsToggle } from '@/components/media/CollectionControls';
 import type { ImageItem, LibraryStats } from '@emaki/shared';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ImageGrid, ImageGridSkeleton } from '@/components/media/ImageGrid';
@@ -18,7 +17,7 @@ const MAX_ROWS = 4;
  * 避免首页底部出现一行参差不齐的「半行」。
  */
 export function LatestImages({ stats }: { stats: LibraryStats }) {
-  // 插画决定哪些合集进入最新入库，收拢时卡片代表整组。
+  // 最新入库只取插画（T27 CL 七）；收拢时由插画决定哪些组图上首页，格子代表整组
   const query = useImagesInfinite({ sort: 'addedAt', kind: ['illustration'], includeWholeCollections: true });
   const all = query.data?.pages[0]?.items;
 
@@ -48,7 +47,7 @@ export function LatestImages({ stats }: { stats: LibraryStats }) {
     <section>
       <SectionTitle
         hint={latestHint(stats, newest?.addedAt)}
-        actions={<><CollapseCollectionsToggle /><SeeAllLink to="/gallery" /></>}
+        actions={<SeeAllLink to="/gallery" />}
       >
         最新入库
       </SectionTitle>

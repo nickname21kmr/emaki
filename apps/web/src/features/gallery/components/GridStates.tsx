@@ -7,7 +7,7 @@ import { EASE_OUT } from '@/lib/motion';
  * 网格底部：还在加载 →「正在展开…」；全部加载完 → 一枚小小的「终」字朱印，
  * 像画卷的卷尾（絵巻的「卷終」），告诉用户已经到底了。
  */
-export function GridFooter({ loadingMore, done, total, displayTotal }: { loadingMore: boolean; done: boolean; total: number; displayTotal?: number }) {
+export function GridFooter({ loadingMore, done, total }: { loadingMore: boolean; done: boolean; total: number }) {
   if (loadingMore) {
     return (
       <div className="flex h-24 items-center justify-center gap-2 text-xs text-fg-subtle">
@@ -32,7 +32,7 @@ export function GridFooter({ loadingMore, done, total, displayTotal }: { loading
         </span>
         <span className="h-px w-16 bg-linear-to-l from-transparent to-line-strong" />
       </div>
-      <div className="text-xs text-fg-subtle tabular">卷终 · 共 {formatCount(total)} 张{displayTotal !== undefined && displayTotal !== total ? ` · 展示 ${formatCount(displayTotal)} 项` : ''}</div>
+      <div className="text-xs text-fg-subtle tabular">卷终 · 共 {formatCount(total)} 张</div>
     </motion.div>
   );
 }
