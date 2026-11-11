@@ -19,6 +19,8 @@ describe('parseSource', () => {
     ['144506494_キス魔な山賊に襲われたミミちゃん４_3.jpg', pixiv('144506494')],
     ['downloads/144506494_标题_包含_下划线_12 (1).png', pixiv('144506494')],
     ['144506494_A summer day_0.jpg', pixiv('144506494')],
+    ['downloads/151522860___01.png', pixiv('151522860')],
+    ['151522860___10 (1).png', pixiv('151522860')],
     ['144506494_标题里有98765432_p0_3.jpg', pixiv('144506494')],
     ['104714967_３人で奉仕.jpg', pixiv('104714967')],
     ['108301050_ヘルモルト姉妹丼　その３.jpg', pixiv('108301050')],
@@ -75,6 +77,10 @@ describe('parseSource', () => {
     '20250618_001222_3.jpg',
     '1280_1024_1(CUnet)(noise_scale)(Level2)(height 1440).png',
     '144506494__3.jpg',
+    '151522860__01.png',
+    '151522860____01.png',
+    '151522860___.png',
+    '151522860___00001.png',
     '1234567890123_标题_3.jpg',
     '1234567890123_标题.jpg',
     '104714967_12345.jpg',
@@ -97,6 +103,7 @@ describe('parseSource', () => {
     '104714967_标题里有98765432_p0.jpg',
     '104714967_Abcde.jpg',
     '102298332_master1200.jpg',
+    '151522860___01.png',
   ])('strict mode skips downloader title %s by default', (name) => {
     expect(parseSource(name)).toBeNull();
     expect(parseSource(name, 'broad')?.postId).toBe(name.split('_')[0]);

@@ -6,6 +6,7 @@ import { backfillSources } from './backfill.ts';
 it.each([
   [2, '144506494_キス魔な山賊に襲われたミミちゃん４_3.jpg', '144506494'],
   [3, '104714967_３人で奉仕.jpg', '104714967'],
+  [5, '151522860___01.png', '151522860'],
 ])('upgrades downloader titles from version %s without replacing manually confirmed sources', (version, name, postId) => {
   const db = openDatabase(':memory:');
   migrate(db);
