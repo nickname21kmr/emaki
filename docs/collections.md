@@ -12,7 +12,7 @@
 
 ## 浏览
 
-首页、图库、角色、作品、别册和未识别印样提供收拢／展开切换。收拢按完整筛选结果在后端分页前完成，卡片封面和勾选范围均限定在当前筛选中。例如只收藏两张，收藏页只展示这两张；同一合集在角色页显示该角色的图片。
+首页、图库、角色、作品、别册和未识别印样提供收拢／展开切换。首页「最新入库」按插画挑选卡片，收拢时显示整组。图库等筛选页面在分页前收拢，卡片封面和勾选范围取当前筛选命中的图片。例如只收藏两张，收藏页只展示这两张；同一合集在角色页显示该角色的图片。
 
 图片总张数和展示项数分开显示。卡片标记组内张数；部分命中时显示「本页 N 张 · 全组 M 张」。从卡片打开时保留命中范围，可切换查看整组。逐张识别队列仍保留每张图各自的建议和采纳操作；普通合集不会让图片离开识别或 Pixiv 补标签流程。
 
@@ -28,5 +28,5 @@
 - 图片继续通过 `images.collection_id` 和 `page_no` 关联；`collection_detached` 保存手动调整，避免扫描重新归组。`source_key` 为站点与投稿号的唯一组合。
 - `POST /api/collections` 接收 `imageIds`、`title`、`kind`；兼容旧 `fromImageId` 目录成册入口。
 - `PATCH /api/collections/:id` 可用 `addImageIds`／`removeImageIds` 修改成员，`organizeFiles` 选择整理目录。
-- `GET /api/images?collapseCollections=true` 在原筛选内收拢。`total` 为图片数，`displayTotal` 为卡片数，`collectionGroup.memberIds` 为匹配成员。
+- `GET /api/images?collapseCollections=true` 在原筛选内收拢。`total` 为图片数，`displayTotal` 为卡片数，`collectionGroup.memberIds` 默认列出匹配成员。首页使用 `includeWholeCollections=true` 取得卡片代表的整组成员。
 - MCP 的 `read_library` 可读合集；`edit_collection` 提供创建、更新和解散，复用业务接口、撤销和幂等操作。
