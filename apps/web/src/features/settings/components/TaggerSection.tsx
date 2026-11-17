@@ -138,7 +138,7 @@ export function TaggerSection({
 
         <Field
           label="未识别里也列出漫画页"
-          hint="关掉后漫画页不用找角色：它们离开「未识别」和它的计数，也不查 Pixiv，在「别册 · 漫画」里照样能看。"
+          hint="关掉后漫画页离开「未识别」和它的计数，在「别册 · 漫画」里照样能看；识别、自动归类和 Pixiv 补充照常。"
         >
           <Switch
             checked={tagger.comicInUnrecognized !== false}

@@ -1,6 +1,6 @@
 # Emaki 核心架构设计（v2 草案）
 
-> 状态：D1、D2、D3、D4、D5、D7、D8 已批准（2026-11-17）；D6 和插件挪到下一阶段（第 13 节）。P0、P1、P2 已完成，P3 进行中（P3a 已完成，2026-11-17），见第 12 节。依据的代码快照：fork 的起点（`codex/flexible-collections` @ 13c677d 加上当时未提交的改动，2026-11-17）。
+> 状态：D1、D2、D3、D4、D5、D7、D8 已批准（2026-11-17）；D6 和插件挪到下一阶段（第 13 节）。P0、P1、P2、P3 已完成（P3 完成于 2026-11-17），见第 12 节。依据的代码快照：fork 的起点（`codex/flexible-collections` @ 13c677d 加上当时未提交的改动，2026-11-17）。
 > 现状盘点和已知的不一致见 [core-architecture-inventory.md](core-architecture-inventory.md)。本文里「附录 #n」指那里的第 n 条。
 
 ## 0. 要解决什么
@@ -76,13 +76,25 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
 | `added_at` | 就是 `at`（沿用原来的列名：索引和「最近在收」都按它） |
 
 - 旧数据的转法见迁移文件的说明：`manual` → 手动；`tagger` 有分数 → 自动 / 模型；`tagger` 分数为空 → 能对上 Pixiv（检查记录是 linked 或 `change_log` 里有）的算 Pixiv，能对上模型证据（`image_tags` 里有解析到这个角色的标签）的算模型，其余记 `legacy`。迁移里校验条数和逐条对应，不对就回滚。
-- 手动 / 自动类型、原创、放下、画师等其他决定的来历还是原来的存法（`*_manual`、时间戳），P3b 起按需要补。
+- 手动 / 自动类型、放下、画师等其他决定的来历还是原来的存法（`*_manual`、时间戳）；原创在 P3b 补上了来历（见下）。
+
+**P3b 的实现（2026-11-17，迁移 035）**：
+
+- **原创**（`images`）：`original_at` 仍是生效的标记，另加 `original_decision`（`manual` / `auto`）、`original_actor`、`original_rule`（`auto-original@1`；迁移认出来的 Pixiv 原创是 `legacy:pixiv`）、
+  `original_evidence_provider`。`manual` 且 `original_at` 为空 = 用户取消过原创，自动不再标回来（D8）。迁移：能从 `change_log` 的 pixiv-sync 记录或
+  Pixiv 检查记录（结果 original、时间相同）认出来的记成 Pixiv 的自动决定，其余标了原创的都记手动；Pixiv 判过原创、现在没标的（用户移出或撤回了那轮）记成手动取消。
+- **图 ↔ 作品**：`image_copyrights` 只放手动指定的作品（去掉了分数列）；原创图属于「原创」作品由 `original_at` 派生，不再存行。
+- 自动关联的规则统一成 `auto-accept@2`（decideAuto，第 4.2 节），依据哪个来源看 `evidence_provider`；P3a 的 `auto-accept@1`、`promote@1`、`pixiv@1` 只在那之前写的数据里。
 
 ### 2.3 需要拆开的几个概念
 
 - **「状态」拆成三个独立的事实**：识别过没有（对当前文件版本有没有模型证据）、有几个角色、在不在某个待处理队列（队列成员是派生出来的，取决于类型、放下、合集、漫画区、设置）。现在一个 `recognized/unrecognized` 同时承担了这几种含义，前端又各自推了一遍（附录 #27）。
 - **建议不再是一张单独写入的表**，而是一个派生视图：证据里分数够、还没关联、也没被否决的候选。现在写「建议」的有 7 处，模型和 Pixiv 还会互相覆盖（附录 #9）。
+  P3b 实现：视图 `v_character_suggestions`。证据只记达到建议阈值的候选（识别器记全部达到建议阈值或自动阈值的候选，Pixiv 记匹配器给的全部候选），所以「分数够」在写证据时已经成立；
+  视图按标签（或自建角色的 `character_id`）找角色，滤掉已经关联、被否决的。看的时候（`loadSuggestions`）再按角色目录规范化、去重，每张最多列 5 条。
 - **作品关联分成证据和决定两部分**。模型给出的作品是证据；只有经过关联角色或手动指定得到的，才算图的作品（附录 #8）。
+  P3b 实现：模型给的作品记在 `work_evidence`（按作品标签，不要求作品已建档）；`v_image_works` = 关联角色的作品 ∪ `image_copyrights`（手动指定）∪ 原创图 →「原创」作品，
+  侧栏的作品数、作品筛选、合集的作品统计按同一口径。
 - **内容类型 = 手动类型 ?? 自动类型**，两部分分开存。自动类型是派生的，手动类型是决定。只要最终类型变了，就发出一条变化，不管是谁改的。（「动图」能不能和「插画」同时成立，见第 13 节 D5。）
 - **来源（站点、投稿号）= 手动来源 ?? 解析来源**。解析来源是证据（来自文件名），手动来源是决定。
 
@@ -132,9 +144,9 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
 | --- | --- | --- | --- |
 | 图库与文件 | `domain/library/` | `library_roots`、`comic_folders`、`scan_errors`、`pending_trash`、`pending_trash_items` | 新增、删除整行；`root_id`、`rel_path`、`file_name`、尺寸、`bytes`、`format`、`sha256`、`added_at`、`modified_at`、`missing`、`trashed_at` |
 | 分析 | `domain/analysis/` | `image_fingerprints` | `dhash`、`dominant_color`、`thumb_at`、`decode_error`、`content_kind*`（手动标记除外）、`camera`、`kind_signals`、`theme`、`art_score`、`frame_count` |
-| 证据 | `domain/evidence/` | `tags`、`image_tags`、`character_suggestions`（P3 改成派生视图）、`pixiv_artwork_cache`、`pixiv_character_checks`、`pixiv_unavailable_posts`、`danbooru_tags`、`danbooru_artists` | `tagged_at`、`tagger_model`、`retag`、`artist_checked_at`、`source_site` / `source_post_id` / `source_artist` / `source_url` |
+| 证据 | `domain/evidence/` | `tags`、`image_tags`、`image_evidence`、`character_evidence`、`work_evidence`（P3b；建议是它们派生的视图 `v_character_suggestions`）、`pixiv_artwork_cache`、`pixiv_character_checks`、`pixiv_unavailable_posts`、`danbooru_tags`、`danbooru_artists` | `tagged_at`、`tagger_model`、`retag`、`artist_checked_at`、`source_site` / `source_post_id` / `source_artist` / `source_url` |
 | 编目 | `domain/catalog/` | `characters`、`works`、`character_works`、`aliases`、`danbooru_tag_redirects`、`custom_character_matches`、`character_verified_forms`、`character_verified_names`、`artist_links`、`tag_i18n`、`tag_name_keys`、`tag_renames` | |
-| 归类 | `domain/curation/`（P3a 建立） | `image_characters`、`image_copyrights`、`image_artists`、`character_vetoes` | `rating`、`rating_manual`、`favorite`、`shelved_at`、`original_at`、`content_kind_manual`、`artist_manual`、`source_manual` |
+| 归类 | `domain/curation/`（P3a 建立） | `image_characters`、`image_copyrights`（手动指定的作品）、`image_artists`、`character_vetoes` | `rating`、`rating_manual`、`favorite`、`shelved_at`、`original_at` 和原创的来历列、`content_kind_manual`、`artist_manual`、`source_manual` |
 | 可见性 | `domain/visibility/` | `exclusions` | `excluded_by`、`exclude_exempt` |
 | 合集 | `domain/collections/` | `collections`、`collection_characters`、`collection_works` | `collection_id`、`page_no`、`collection_detached` |
 | 查重 | `domain/duplicates/` | `duplicate_groups`、`duplicate_members`、`duplicate_comparisons` | |
@@ -144,8 +156,10 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
 
 - 永久例外只有 `demo/`：演示数据直接灌进空的一次性库，不经过命令。
 - P2 已搬进主人目录的：合集（原 `services/collections/` → `domain/collections/`）、可见性（原 `datasource/sqlite/exclusions.ts` → `domain/visibility/`）；
-  P3a 新建了归类（`domain/curation/`），`image_characters`、`character_vetoes` 只有它写；`image_copyrights` 里的「原创」作品手动关联也经它（`marks.ts`），
-  其余 `image_copyrights`（识别器写的作品、Pixiv 的原创）、`image_artists`、`content_kind_manual`、`artist_manual`、`source_manual` 还在允许清单里，留给 P3b / P4；
+  P3a 新建了归类（`domain/curation/`），`image_characters`、`character_vetoes` 只有它写；
+  P3b 把其余归类、证据、编目的写入都收进了主人目录：画师（`curation/artists.ts`）、手动来源（`curation/source.ts`，来源的值由 `evidence/source.ts` 写）、手动类型标记（`curation/kinds.ts`）、
+  原创和自动分级（`curation/marks.ts`）、手动指定的作品（`curation/works.ts`）；识别器、Pixiv 的证据和待查记录（`evidence/tagger.ts`、`evidence/pixiv.ts`、`evidence/store.ts`）、
+  识别进度（`evidence/retag.ts`）、Danbooru 元数据（`evidence/danbooru.ts`）；编目表全部在 `domain/catalog/`。允许清单里已经没有这三个模块的表；
   各模块的反应放在 `domain/<模块>/reactions.ts`，变更传播层本身在 `propagation/`（第 5 节）。
 - 识别方式：扫描源码里所有字符串（含多行模板），找 `INSERT` / `REPLACE` / `UPDATE … SET` / `DELETE`；撤销记录器的 `u.columns` / `u.set` / `u.inserted` 也算写入。`images` 看 `SET` 的列名；看不出列（列名拼出来、整行快照）的记成 `images#?`，表名拼出来的记成 `<dynamic>`，这两种只能进允许清单或放进命令层。
 
@@ -189,9 +203,21 @@ decideAuto(image: ImageFacts, evidence: Evidence[], current: Decisions, settings
 - **只有一个地方调用它**：反应 `reevaluateAuto(ids)`。下面任何一种变化都会触发它：证据变化（首次识别、重识别、Pixiv 补充、插件来源）、最终类型变化、放下或原创变化、合集是否整本处理变化、漫画区变化、否决变化、编目的合并或绑定变化。现在「首次识别」「补采纳旧建议」「改类型」「Pixiv 补充」是四条路各算一遍；以后是同一个函数，结果天然一致。
 - **「按当前阈值补采纳」**（现在设置页的按钮）变成一个命令：对所选范围跑一遍 `reevaluateAuto`，作为一次可撤销的操作。
 - Pixiv 现在自带一套「自动」判断（附录 #2）。以后它只负责把投稿标签解释成「候选 + 置信度」证据，采不采纳交给这条规则。
-- **P3a 的过渡**：三个入口（识别写入、补采纳、Pixiv）各自现有的判断原样搬进 `domain/curation/auto.ts` 的 `judgeAutoLink`（同一个函数，按入口分支），
-  达标的由各入口交给 `link` 带 `auto` 来历写入。P3b 把它换成唯一的 `decideAuto` 和反应 `reevaluateAuto`，写入一侧不用动。
-- 自动决定只增不减，还是在证据不再支持时也撤回，见第 13 节 D2。
+- **P3b 的实现（2026-11-17）**：`decideAuto` 在 `domain/curation/auto.ts`，只有反应 `reevaluateAuto`（`curation/reevaluate.ts`）调用它并写入结果。
+  - 输入照上面：图片事实（最终类型、放下、原创和它的来历、是否整本处理、是否在漫画区、是否被排除或不可见）、各来源的证据（候选、置信度、原创信号，
+    以及「这个来源的证据刚换过」）、当前决定（关联和来历、否决）、每个来源的自动阈值、编目解析（标签 → 角色，能不能建档，同一轮里别的图会不会建）。
+  - 规则：可以加关联的图（没放下、没归原创、不在漫画区、没被排除）上，分数达到这个来源自动阈值的候选都关联，否决过的不加；还没有角色的候选只在插画、漫画、动图上建档，
+    别的类型复用同一轮里别的图建的角色。一轮先跑一遍收集要建档的标签，再跑一遍得出结果，和图在批次里的先后无关（附录 #1）。
+    整本处理的合集现在不影响决定（本子的页照样按证据关联，角色在本子里出现的页数靠它），只影响要不要去查 Pixiv；类型变了照样重新评估。
+  - 阈值按来源取自设置 `tagger.autoAcceptBySource`（`tagger` / `pixiv` / `plugin:<id>`），没设的来源用 `autoAcceptThreshold`。
+    Pixiv 的证据只有两档置信度：匹配器确认对上（1）和只是候选（0），所以默认阈值下确认对上的自动关联，候选只作建议。
+  - `reevaluateAuto` 订阅 `evidence.changed`、`image.kindChanged`、`curation.shelvedChanged`、`curation.originalChanged`、`curation.vetoesChanged`、`collections.changed`、
+    `root.modeChanged`、`catalog.merged`、`catalog.bindingChanged` 和补采纳命令声明的 `curation.autoRequested`；编目变了时评估证据里提到这些角色的图。
+    自动标原创声明的是 `curation.autoOriginalChanged`（同一个事实，单独一个类型，免得它订阅到自己的输出成环）。
+  - 撤销重放时不做决定（不然会把刚撤销的自动决定又做一遍），只把这些图的角色、原创声明成变化，让排除结果、合集按还原后的事实重算。
+  - 补采纳是命令：`promoteSuggestions` 先用同一轮评估算出会加多少，再声明 `curation.autoRequested`，由反应写，作为一次可撤销的操作；没有新证据，所以只新增。
+    设置页的预览数（`promotableSuggestions`）也是这同一轮评估，只是不写。
+- 自动决定只增不减，还是在证据不再支持时也撤回，见第 13 节 D2（P3b 已实现：撤回）。
 
 ## 5. 变更传播
 
@@ -225,8 +251,9 @@ decideAuto(image: ImageFacts, evidence: Evidence[], current: Decisions, settings
 | 反应 | 订阅 | 阶段 | 取代现在的 |
 | --- | --- | --- | --- |
 | `reparseSource` | `image.moved`（来源未手动锁定时） | 事务内 | 只有扫描时的移动会重新解析（附录 #13）。三条移动路径和撤回移动都发 `image.moved` |
+| `reevaluateAuto`（P3b） | 证据、最终类型、放下 / 原创、否决、合集、漫画区、编目合并 / 绑定、补采纳命令（见第 4.2 节） | 事务内 | 识别写入、补采纳、改类型、Pixiv 补充四条路各自的判断（附录 #1–#3）；证据不再支持时撤回（D2），Pixiv 原创（D8） |
 | `reclassifyByPath`（`analyze` 里便宜的部分） | `image.moved`、`root.modeChanged` | 事务内 | 路径相关的分类、漫画文件夹的类型和分级、去掉识别器的角色；声明 `image.kindChanged`、`curation.charactersChanged` |
-| `dropStalePixivEvidence` | `image.sourceChanged` | 事务内 | 来源变了，按旧投稿号查的 Pixiv 建议和检查记录去掉（附录 #13）；以前只有改识别方式会做 |
+| `dropStalePixivEvidence` | `image.sourceChanged` | 事务内 | 来源变了，按旧投稿号查的 Pixiv 证据和检查记录去掉（附录 #13）；以前只有改识别方式会做。P3b 起去掉证据声明 `evidence.changed`，依据它的自动关联由 `reevaluateAuto` 撤回 |
 | `reevaluateExclusions` | `visibility.rulesChanged`、`curation.charactersChanged`、`evidence.changed`（标签）、`image.added`、`image.moved`、`library.opened` | 事务内，同时负责排除和解除排除 | 现在 6 处会套用排除规则、4 处没套，而且从来不解除（附录 #14、#15） |
 | `queuePixivCheck` | `image.sourceChanged`、`image.kindChanged`、放下、原创、角色、`visibility.changed`、`evidence.changed`、`root.modeChanged`、`collections.changed` | 事务内登记（持久化的队列） | 现在只在识别批次结束时登记（附录 #19） |
 | `refreshPostGroups` | `image.sourceChanged` | 事务内（后台任务延后到结束） | 只有部分来源修改的路径会刷新 |
@@ -239,7 +266,7 @@ decideAuto(image: ImageFacts, evidence: Evidence[], current: Decisions, settings
 | `notifySettings`、`notifyRoots` | `settings.changed`；`root.*` | 提交后 | 设置和文件夹监听的手工通知 |
 | `invalidateCaches` + 推送事件 | 任何写入 | 提交后 | 现在 `touch` 有 21 处调用，强刷新 / 弱刷新约定被后台路径破坏（附录 #20、#21） |
 
-和最初设计的出入：`reevaluateAuto`（第 4.2 节）是 P3 的事，P2 的改类型、补采纳仍在命令里直接评估；`recomputeCustomMatches` 只订阅 `catalog.*`（它只看自建角色和标签，图上的角色变化不影响它）；
+和最初设计的出入：`reevaluateAuto`（第 4.2 节）P3b 才加上（在 `dropStalePixivEvidence` 之后、`reevaluateExclusions` 之前）；`recomputeCustomMatches` 只订阅 `catalog.*`（它只看自建角色和标签，图上的角色变化不影响它）；
 `analyze` 只把路径相关的分类放在事务内，统一「文件内容变化」的语义和唯一入口留给 P4（D1）。
 
 三个阶段的含义：
@@ -388,7 +415,10 @@ AI 助手已经能读写图库，还可以让它直接写新页面（比如各�
 | **P0 护栏**（已完成 2026-11-17） | 确认本文和第 13 节的决定。加两类架构测试：① 单一写入者检查：扫描源码，找出在主人模块之外写某张表的地方，现有违例列入允许清单，之后只许减少；② 跨入口一致性测试的骨架。 | 两类测试进 CI；允许清单如实记录现状。已完成：`apps/server/test/architecture/` 的 `singleWriter.test.ts`（主人映射见第 3.1 节，允许清单 `writers.allowlist.ts`）和 `crossEntry.test.ts`（附录 #1、#2、#3、#5、#14 现状不一致的用例用 `it.fails` 标出） | S |
 | **P1 一个实现**（已完成 2026-11-17） | 演示模式改跑真实引擎 + 假部件（第 8 节）；补全灌数据；删除 MockDataSource；契约测试改成对单一实现的接口测试 | `dev:mock` 不再依赖 MockDataSource；README 截图流程照常可用；附录 #31 关闭。已完成：可替换部件在 `infra/ports.ts`，演示模式在 `demo/`（`engine.ts`、`ports.ts`、`seed.ts`） | M |
 | **P2 变更传播骨架**（已完成 2026-11-17） | 变化集、反应注册表、三个阶段；把现有的连带处理逐个搬成反应；撤销改为「还原 + 重跑反应」；同时补上盘点出来的漏处理（移动、替换、解除排除、恢复后重新识别、查重标记） | 主人模块之外不再直接调用 `collectionsHook` / `touch` / `invalidate`；附录 #13–#22 关闭。已完成：`propagation/`（变化、注册表、actor、排队状态 `pending_work`），反应在 `domain/<模块>/reactions.ts` 和 `propagation/engine.ts`；`test/architecture/sideEffects.test.ts` 检查连带处理只在主人模块和变更传播层，`changes.closure.test.ts` 逐条证明附录 #13–#22 已关闭 | L |
-| **P3 归类收口**（进行中，P3a 已完成 2026-11-17） | 证据表和统一的来历字段（含旧数据迁移）；`decideAuto` 和 `reevaluateAuto`；13 个写入点全部改走 `curation.link` / `unlink`；建议改成派生视图；Pixiv 只产出证据；否决语义按 D3 | 对 `image_characters` 和证据表的允许清单清零；跨入口一致性测试全部通过；附录 #1–#9、#12、#37、#39 关闭。**P3a 已完成**：统一来历（迁移 034）；`domain/curation/`（`link` / `unlink` / `replaceCharacters` / `moveCharacterLinks` / `carryLinks`，收藏、分级、放下、原创在 `marks.ts`），13 个写入点全部改走它，`image_characters`、`character_vetoes` 的允许清单清零；查重合并按来历搬并带上放下；D3；附录 #4、#5、#6、#12、#39 关闭（`crossEntry.test.ts`、`db/linkProvenance.migration.test.ts`）。**P3b**：证据表和建议改派生视图、`decideAuto` / `reevaluateAuto`、Pixiv 只产出证据和原创（D8）、编目的 `resolve`（#37），附录 #1–#3、#7–#9 | L |
+| **P3 归类收口**（已完成 2026-11-17） | 证据表和统一的来历字段（含旧数据迁移）；`decideAuto` 和 `reevaluateAuto`；13 个写入点全部改走 `curation.link` / `unlink`；建议改成派生视图；Pixiv 只产出证据；否决语义按 D3 | 对 `image_characters` 和证据表的允许清单清零；跨入口一致性测试全部通过；附录 #1–#9、#12、#37、#39 关闭。**P3a 已完成**：统一来历（迁移 034）；`domain/curation/`（`link` / `unlink` / `replaceCharacters` / `moveCharacterLinks` / `carryLinks`，收藏、分级、放下、原创在 `marks.ts`），13 个写入点全部改走它，`image_characters`、`character_vetoes` 的允许清单清零；查重合并按来历搬并带上放下；D3；附录 #4、#5、#6、#12、#39 关闭（`crossEntry.test.ts`、`db/linkProvenance.migration.test.ts`）。**P3b 已完成**：证据表（迁移 035：`image_evidence`、`character_evidence`、`work_evidence`）和派生视图 `v_character_suggestions`；`decideAuto` / `reevaluateAuto`（第 4.2 节），补采纳是可撤销的命令；
+Pixiv 只产出证据和原创信号，原创是带来历的决定（D8）；证据不再支持时撤回（D2，记 `change_log` 的 auto-retract）；编目唯一的 `resolve`、规范化、别名来历、解绑语义（#37，迁移 036）；
+归类、证据、编目的表都只由主人写，允许清单里没有它们了；附录 #1、#2、#3、#7、#8、#9、#37 关闭（`crossEntry.test.ts`、`evidence.closure.test.ts`、`catalog.closure.test.ts`、
+`domain/curation/auto.test.ts`、`db/evidence.migration.test.ts`、`db/catalogOrigins.migration.test.ts`） | L |
 | **P4 入库与分析收口** | 统一文件内容变化的语义（按 D1）；`analyze` 唯一入口；三条移动路径合一；合集判定版本号真正生效；派生数据都带版本 | 附录 #10、#11、#23 关闭 | M |
 | **P5 读模型与前端** | 命名口径唯一；状态拆成三个事实；汇总接口；共用的展示规则移进 `packages/shared`；前端删掉自带的业务规则；设置只有一份 | 附录 #24–#30、#32、#38 关闭 | M |
 | **P6 命令注册表与接口** | 命令 / 查询注册表；HTTP 和 MCP 从注册表生成；记录 actor；带类型的事件；合并重复的接口 | `DataSource` 接口删除；附录 #33–#36 关闭 | M |
@@ -405,10 +435,10 @@ AI 助手已经能读写图库，还可以让它直接写新页面（比如各�
 | # | 问题 | 决定 |
 | --- | --- | --- |
 | D1 | 文件内容变化的语义。扫描发现外部改了文件，和用户主动替换高清版，现在一个会重置识别、一个全部保留 | **已批准**：统一成一种：发出 `image.fileChanged`；派生数据重算；这份文件版本的模型证据标记为过期并排队重新识别；手动决定保留；自动决定等新证据到了再按 D2 重算。`reason` 只记录在案，不改变处理方式 |
-| D2 | 证据不再支持某个自动关联时（重新识别没再认出、来源插件被停用），要不要撤回 | **已批准**：只撤回「自动 + 依据的就是这个来源」的关联；手动的永远不动；撤回会记入审计，可以撤销。现在是只增不减，也就是旧模型的错误永远留着 |
+| D2 | 证据不再支持某个自动关联时（重新识别没再认出、来源插件被停用），要不要撤回 | **已批准**：只撤回「自动 + 依据的就是这个来源」的关联；手动的永远不动；撤回会记入审计，可以撤销。现在是只增不减，也就是旧模型的错误永远留着。**P3b 已实现**：只在这个来源的证据刚换过（重新识别、来源失效）时撤回，新证据里没有这个候选或分数低于这个来源的自动阈值；阈值调高、补采纳、改类型不撤回；来历不明的（rule `legacy`）和手动的不动；别的来源仍然支持时只改来历。撤回记 `change_log`（auto-retract），在「最近的自动改动」里撤回会把关联加回来并记成手动，这次撤回本身也能撤销；用户操作里连带的撤回随操作一起撤销 |
 | D3 | 用户手动加回一个被自己否决过的角色 | **已批准**：加回时清掉否决。现在不清，导致以后的自动规则仍然认为「用户不要」（附录 #39） |
 | D4 | 删掉 MockDataSource，演示改跑真实引擎 | **已批准**，P1 已完成（2026-11-17）。来龙去脉见第 8 节：只删第二套业务逻辑，演示能力和演示数据保留。`ARCHITECTURE.md` 的「设计决策 2」已改写 |
 | D5 | 「动图」和「插画 / 漫画」是同一个互斥类型里的值，但一张图可以既是动图又是插画 | **已批准**：拆成「类型」（插画 / 漫画 / 截图 / 照片 / 文字 / 表情）+「是否动图」两个维度。别册里的「动图」变成按维度筛选。要改界面和统计，放在 P4 一起做 |
 | D6 | 插件的信任模型 | 挪到下一阶段，和个性化页面一起设计（第 10 节） |
 | D7 | fork 之后和上游的关系 | 已定：独立演进。P2 之后结构差异会大到没法再直接合并上游，上游的修复按需手工移植；本文作为 fork 的架构基线 |
-| D8 | Pixiv 的「原创」标记 | **已批准**：当作自动决定，由 `decideAuto` 根据 Pixiv 证据给出，可以被手动覆盖。现在 Pixiv 用的是和手动原创相同的存法（附录 #7） |
+| D8 | Pixiv 的「原创」标记 | **已批准**：当作自动决定，由 `decideAuto` 根据 Pixiv 证据给出，可以被手动覆盖。现在 Pixiv 用的是和手动原创相同的存法（附录 #7）。**P3b 已实现**：证据里有原创信号、图还没有原创的决定也还没有角色时标成自动原创（`auto-original@1`）；手动标、手动取消（包括撤回那一轮 Pixiv）都是手动的决定，自动不再改；自动标的在 Pixiv 新证据没有原创信号时按 D2 撤回 |

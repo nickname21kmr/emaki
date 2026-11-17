@@ -48,7 +48,7 @@ emaki/
 │  │  ├─ DataSource.ts          接口（P6 换成命令 / 查询注册表后删掉）
 │  │  └─ sqlite/                唯一的实现（context.ts：写入的唯一入口 ctx.mutate / ctx.apply）
 │  ├─ domain/<模块>/   领域模块：表的主人（test/architecture/owners.ts）和它们的反应（P2 起逐步搬进来）；
-│  │                   domain/curation/ 是图 ↔ 角色和否决的唯一写入者（P3a）
+│  │                   domain/evidence/ 证据、domain/curation/ 归类（含唯一的自动决定规则 decideAuto）、domain/catalog/ 编目（P3）
 │  ├─ propagation/     变更传播：变化（changes.ts）、反应注册表和三个阶段（registry.ts）、actor、引擎层的反应、排队状态
 │  ├─ infra/ports.ts   可替换部件：时钟、回收站、图片文件、图库文件夹、后台任务（扫描 / 模型 / 联网）
 │  ├─ demo/            演示数据（fixtures、种子、占位图）、灌数据、演示用的假部件
@@ -116,8 +116,28 @@ return this.ctx.mutate((u) => {
 **图 ↔ 角色只经归类模块写**（P3a，[core-architecture.md](core-architecture.md) 第 2.2、2.4 节）：`image_characters` 和 `character_vetoes`
 只有 `domain/curation/` 写（单一写入者测试检查）。要加、去掉、整组替换、搬关联，调 `link` / `linkEach` / `unlink` / `replaceCharacters` /
 `moveCharacterLinks` / `carryLinks`，每条关联带来历（`provenance.ts`：`manual(at, 证据)` 或 `auto(规则@版本, at, 证据)`）；
-它们负责写来历、清对应的建议、记否决（用户去掉的）或清否决（用户手动加回的，D3）、记撤销、声明 `curation.charactersChanged`。
-自动关联能不能加由 `curation/auto.ts` 的 `judgeAutoLink` 判断（P3b 换成 `decideAuto`）。收藏、分级、放下、原创在 `curation/marks.ts`。
+它们负责写来历、记否决（用户去掉的）或清否决（用户手动加回的，D3）、记撤销、声明 `curation.charactersChanged`。
+收藏、分级（含识别给的自动分级）、放下、原创（带来历，D8）在 `curation/marks.ts`；画师、手动来源、手动类型标记、手动指定的作品分别在 `artists.ts`、`source.ts`、`kinds.ts`、`works.ts`。
+
+**证据模块**（P3b，第 2.1、2.3 节）：某个来源（`tagger` 识别模型、`pixiv` 投稿标签，以后的插件来源 `plugin:<id>`）对一张图给出的角色候选、作品候选、原创信号，
+存在 `image_evidence` / `character_evidence` / `work_evidence`，只由 `domain/evidence/store.ts` 按「图片 × 来源」整体替换（`replaceEvidence`、来源失效时 `dropEvidence`），
+替换时声明 `evidence.changed { provider }`。证据不改变图库：
+- 识别写入（`evidence/tagger.ts`）把达到建议阈值或自动阈值的候选全部记成证据（包括会变成关联的），候选角色的主作品记成作品证据；
+- Pixiv 补充（`services/pixiv/sync.ts` + `evidence/pixiv.ts`）只把投稿标签解释成候选和置信度（确认对上 1、只是候选 0）和原创信号；
+- 建议是派生视图 `v_character_suggestions`：证据里还没关联、没被否决的候选。不要再写「建议」，关联上、否决了自然就不是建议；
+- 图的作品（`v_image_works`）只来自关联的角色、手动指定的作品和原创标记，作品证据不算。
+
+**唯一的自动决定规则 `decideAuto`**（P3b，第 4.2 节，`curation/auto.ts`）：纯函数，输入图片事实、各来源的证据（带「刚换过」）、当前决定、每个来源的阈值、编目解析，
+输出要加的关联、要撤回的关联（D2）、要建档的角色、原创的自动决定（D8）。**只有反应 `reevaluateAuto`（`curation/reevaluate.ts`）调用它并写入结果**；
+任何会影响自动决定的变化（证据、最终类型、放下 / 原创、否决、合集、漫画区、编目合并 / 绑定）都会触发它，所以首次识别、重新识别、补采纳、改类型、Pixiv 补充得到同样的结果。
+- 写新的证据来源：在 `domain/evidence/` 里调 `replaceEvidence`，不要自己写关联；阈值在设置 `tagger.autoAcceptBySource` 里按来源配（没配就用 `autoAcceptThreshold`）。
+- 要「按当前规则重新评估」这些图（例如补采纳），在命令里声明 `curation.autoRequested`，不要直接调 `decideAuto`。
+- 撤回（D2）只在某个来源的证据刚换过时发生，记进 `change_log`（auto-retract），在「最近的自动改动」里可以撤回（加回来的记成手动）。
+- 撤销重放时 `reevaluateAuto` 不做决定，只把涉及的图声明成「角色、原创变了」，派生数据按还原后的事实重算。
+
+**编目模块**（P3b，附录 #37）：角色、作品、别名、重定向、Danbooru 绑定、名字索引只由 `domain/catalog/` 写。「标签 → 角色」只有 `CharacterCatalog.resolveCharacterId`；
+规范化经 `CharacterCatalog.normalizeTag` / `normalizeWorkTag`（生产环境由 `createCatalog` 建）；建角色、建作品要可撤销时用 `insertDanbooruCharacter` / `insertWork`；
+「原创」作品只用 `ensureOriginalWork`；绑定、解绑 Danbooru 经 `bindings.ts`。
 
 **写一个新的反应**：放在主人模块（`domain/<模块>/reactions.ts`）或 `propagation/engine.ts`，在 `SqliteDataSource.registerReactions` 里注册（同一阶段按注册顺序执行）：
 
@@ -151,7 +171,7 @@ export const reevaluateExclusionsReaction: Reaction = {
 
 ### 8. 角色识别（真实实现）
 WD14 tagger（ONNX，`onnxruntime-node`，Windows 上用 DirectML 走显卡）给每张图打 Danbooru 标签：
-- character 标签分数 ≥ 自动采纳阈值 → 直接归类；介于建议阈值和自动阈值之间 → 进「未识别」等人确认。
+- character 标签都记成证据；分数 ≥ 自动采纳阈值的由 `decideAuto` 直接归类，介于建议阈值和自动阈值之间的作为建议进「未识别」等人确认。
 - Danbooru API 把角色标签映射到作品（copyright），并提供日文名等别名；另有中文名字典（T12）。
 - 用户也可以建「自建角色」（原创 / OC）。创建、编辑名称/别名/作品、启动、Pixiv 补充和 Danbooru 同步后，会用本地词库检查可关联的标签。
 - 自动关联使用名称/别名的精确匹配，要求排除作品冲突、规范化服装变体后只有一个身份；仅昵称或标签简写匹配时还要求作品一致。投稿量和建议分差不用于自动选择。标签已有所属角色（含合并重定向）、多个自建角色争用同一标签、或已忽略的匹配均不自动绑定。
