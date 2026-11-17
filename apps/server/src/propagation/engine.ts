@@ -153,6 +153,7 @@ export function engineReactions(hooks: EngineHooks, events: ChangeEvents): { que
         'curation.charactersChanged',
         'visibility.changed',
         'root.modeChanged',
+        'collections.changed',
       ],
       phase: 'queue',
       run({ actor }) {

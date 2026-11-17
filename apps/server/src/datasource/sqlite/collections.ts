@@ -350,6 +350,7 @@ export class CollectionQueries {
       u.columns('images', ['collection_id', 'page_no', 'collection_detached'], members.map((m) => m.page.id));
       db.prepare('UPDATE images SET collection_detached = 0 WHERE id IN (SELECT value FROM json_each(?))').run(JSON.stringify(members.map(m => m.page.id)));
       const n = this.service.assignPages(collectionId).length;
+      this.membersChanged(members.map((m) => m.page.id));
       return { message: `已把「${leafOf(dir)}」做成${KIND_LABEL[body.kind]}（${n} 页）` };
     });
     if (body.organizeFiles) {
@@ -367,6 +368,11 @@ export class CollectionQueries {
   /** 成员变了的合集（包括成员被挪走的那几本）：声明变化，由反应按页序重新编号；撤销时重放，还原后再编一次 */
   private renumber(collections: number[]): void {
     this.ctx.changed({ type: 'collections.changed', ids: [], collectionIds: collections });
+  }
+
+  /** 这些图进出了本子 / 画集、或者所在合集的类型变了：「整本处理」变了，Pixiv 补充资格由反应重新登记（附录 #19） */
+  private membersChanged(ids: number[]): void {
+    this.ctx.changed({ type: 'collections.changed', ids, collectionIds: [] });
   }
 
   private selectedImages(ids: ID[]): number[] {
@@ -396,6 +402,7 @@ export class CollectionQueries {
       db.prepare('UPDATE images SET collection_id = ?, collection_detached = 1 WHERE id IN (SELECT value FROM json_each(?))').run(id, JSON.stringify(ids));
       this.service.assignPages(id);
       this.renumber(donors);
+      this.membersChanged(ids);
       return { message: `已新建${KIND_LABEL[body.kind]}「${body.title?.trim() || '新组图'}」，收进 ${ids.length} 张` };
     });
     return { ...(body.organizeFiles ? organizeCollection(this.ctx, id, r) : r), collection: this.loadAll().get(id)!.summary };
@@ -513,6 +520,9 @@ export class CollectionQueries {
         this.service.assignPages(c.id);
       }
       if (add.length || remove.length) this.renumber([...new Set([...donors, c.id])]);
+      if (add.length || remove.length || set.kind !== undefined) {
+        this.membersChanged([...new Set([...(db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(c.id) as number[]), ...add, ...remove])]);
+      }
       return { message: notes.join('，') };
     });
     return body.organizeFiles ? organizeCollection(this.ctx, c.id, result) : result;
@@ -524,9 +534,11 @@ export class CollectionQueries {
     const db = this.ctx.db;
     const now = iso(this.ctx.clock());
     return this.ctx.mutate((u) => {
+      const members = db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(c.id) as number[];
       u.columns('collections', MUTABLE, [c.id]);
-      u.columns('images', ['collection_id', 'page_no', 'collection_detached'], db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(c.id) as number[]);
+      u.columns('images', ['collection_id', 'page_no', 'collection_detached'], members);
       this.write(c.id, { state: 'dismissed', origin: 'manual', updated_at: now });
+      this.membersChanged(members);
       db.prepare('UPDATE images SET collection_id = NULL, page_no = NULL, collection_detached = 1 WHERE collection_id = ?').run(c.id);
       return { message: c.membership === 'folder' ? `已取消成册：${c.title ?? '无题'}` : `已解散${KIND_LABEL[c.kind as CollectionKind] ?? '组图'}：${c.title ?? '无题'}（图片都还在）` };
     });
@@ -549,7 +561,10 @@ export class CollectionQueries {
       u.columns('collections', MUTABLE, ids);
       for (const r of rows) {
         if (a.type === 'review') this.write(r.id, { reviewed_at: now, origin: 'manual', updated_at: now });
-        else if (a.type === 'kind') this.write(r.id, { kind: a.value, kind_source: 'manual', kind_manual: 1, origin: 'manual', updated_at: now });
+        else if (a.type === 'kind') {
+          this.write(r.id, { kind: a.value, kind_source: 'manual', kind_manual: 1, origin: 'manual', updated_at: now });
+          this.membersChanged(this.ctx.db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(r.id) as number[]);
+        }
         else this.write(r.id, { origin: 'manual', updated_at: now });
       }
       if (target) {

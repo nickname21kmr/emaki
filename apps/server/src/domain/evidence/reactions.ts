@@ -95,6 +95,7 @@ export const queuePixivCheckReaction: Reaction = {
     'visibility.changed',
     'evidence.changed',
     'root.modeChanged',
+    'collections.changed',
   ],
   phase: 'tx',
   run({ ctx, changes, undo }) {

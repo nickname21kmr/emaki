@@ -105,6 +105,13 @@ const ROW_SQL = `SELECT i.id, i.root_id, i.rel_path, i.file_name, i.width, i.hei
   FROM images i JOIN library_roots r ON r.id = i.root_id LEFT JOIN collections c ON c.id = i.collection_id
   WHERE r.enabled = 1 AND r.removed_at IS NULL AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL`;
 
+/**
+ * 某个目录里直接放的页（@rootId、@prefix = 目录 + '/'，根目录是 ''）。rel_path 的范围条件让查询走 (root_id, rel_path) 唯一索引：
+ * 只用 substr 的话每个目录都要扫一遍整张 images，一次重算上千个目录（新建排除规则）要十几秒
+ */
+const IN_DIR = `i.root_id = @rootId AND i.rel_path >= @prefix AND i.rel_path < @prefix || char(1114111)
+  AND substr(i.rel_path, 1, length(@prefix)) = @prefix AND instr(substr(i.rel_path, length(@prefix) + 1), '/') = 0`;
+
 const keyOf = (rootId: number, dir: string) => `${rootId}\u0000${dir}`;
 const dirOf = (relPath: string, fileName: string) =>
   relPath.length > fileName.length ? relPath.slice(0, relPath.length - fileName.length - 1) : '';
@@ -177,7 +184,7 @@ export class CollectionService {
       const scope = new Set(books.map((d) => keyOf(d.rootId, d.dir)));
       const rows: Row[] = [];
       const stmt = this.db.prepare(
-        `${ROW_SQL} AND i.root_id = @rootId AND substr(i.rel_path, 1, length(@prefix)) = @prefix AND instr(substr(i.rel_path, length(@prefix) + 1), '/') = 0`,
+        `${ROW_SQL} AND ${IN_DIR}`,
       );
       for (const d of books) rows.push(...(stmt.all({ rootId: d.rootId, prefix: d.dir ? `${d.dir}/` : '' }) as Row[]));
       const existing = new Map<string, CollectionRow>();
@@ -206,7 +213,7 @@ export class CollectionService {
     return transact(this.db, () => {
       const rows = this.db
         .prepare(
-          `${ROW_SQL} AND i.root_id = @rootId AND substr(i.rel_path, 1, length(@prefix)) = @prefix AND instr(substr(i.rel_path, length(@prefix) + 1), '/') = 0`,
+          `${ROW_SQL} AND ${IN_DIR}`,
         )
         .all({ rootId: c.root_id, prefix: c.rel_dir ? `${c.rel_dir}/` : '' }) as Row[];
       const g = this.group(rows).get(keyOf(c.root_id, c.rel_dir));

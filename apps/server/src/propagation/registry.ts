@@ -182,7 +182,9 @@ export class Propagation {
         seen.set(r, frame.set.size);
         if (!mine.length) continue;
         ran = true;
+        const t0 = performance.now();
         r.run(this.input(frame, new ChangeSet(mine), r));
+        if (process.env.EMAKI_PROFILE_REACTIONS) console.log(`[反应] ${r.name} ${(performance.now() - t0).toFixed(1)} ms`);
       }
       if (!ran) return;
       if (round >= MAX_ROUNDS) {
@@ -200,7 +202,9 @@ export class Propagation {
         const mine = new ChangeSet(frame.set.list.filter((c) => r.on.includes(c.type)));
         if (!mine.size && !r.always) continue;
         try {
+          const t0 = performance.now();
           const out = r.run(this.input(frame, mine, r));
+          if (process.env.EMAKI_PROFILE_REACTIONS) console.log(`[反应] ${r.name} ${(performance.now() - t0).toFixed(1)} ms`);
           if (out instanceof Promise) this.track(out, r.name);
         } catch (err) {
           console.warn(`[变更传播] 提交后的反应 ${r.name} 失败：${err instanceof Error ? err.message : String(err)}`);
