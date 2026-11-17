@@ -378,6 +378,17 @@ export class SqliteDataSource implements DataSource {
   /**
    * 现在的角色目录：启动早期（Danbooru 缓存、词库还没接上，启动修补就可能触发 reevaluateAuto）用只带打包作品表的基本目录
    */
+  /**
+   * reevaluateAuto 用的角色目录：每个事务都要评估一次（识别任务一批一次），每次新建要重新准备十来条语句。
+   * 启动完成后复用同一个，每次用之前清掉标签 → 角色的缓存（期间角色可能被合并、建档、撤销）
+   */
+  private cachedAutoCatalog: CharacterCatalog | null = null;
+  private autoCatalog(): CharacterCatalog {
+    if (!this.makeCatalog) return this.catalogNow();
+    this.cachedAutoCatalog ??= this.makeCatalog().catalog;
+    this.cachedAutoCatalog.clearCache();
+    return this.cachedAutoCatalog;
+  }
   private catalogNow(): CharacterCatalog {
     if (this.makeCatalog) return this.makeCatalog().catalog;
     return new CharacterCatalog(this.ctx.db, { copyrights: CopyrightResolver.fromAsset(this.ctx.db) });
@@ -529,7 +540,7 @@ export class SqliteDataSource implements DataSource {
       reclassifyByPathReaction,
       dropStalePixivEvidenceReaction,
       // 唯一的自动决定规则（decideAuto）：证据、类型、放下、原创、否决、合集、漫画区、编目变了都重新评估（第 4.2 节）
-      reevaluateAutoReaction({ catalog: () => this.catalogNow() }),
+      reevaluateAutoReaction({ catalog: () => this.autoCatalog() }),
       reevaluateExclusionsReaction,
       queuePixivCheckReaction,
       ...collectionReactions(this.collections, p),

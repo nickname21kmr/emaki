@@ -16,7 +16,7 @@ import type { Db } from '../../db/connection.ts';
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import { insertDanbooruCharacter } from '../catalog/characterCatalog.ts';
 import { recordChange, type RetractPayload } from '../../datasource/sqlite/changeLog.ts';
-import { readSettings } from '../../datasource/sqlite/settings.ts';
+import { DEFAULT_SETTINGS, readSettings } from '../../datasource/sqlite/settings.ts';
 import { iso, NOT_IN_BOOK, UNRECOGNIZED } from '../../datasource/sqlite/sql.ts';
 import type { UndoRecorder } from '../../datasource/sqlite/undo.ts';
 import { isInteractive, type Actor } from '../../propagation/actor.ts';
@@ -40,6 +40,21 @@ export interface AutoDeps {
 /** 来源的自动阈值：设置里按来源配的（tagger.autoAcceptBySource），没有就用 autoAcceptThreshold（Pixiv 不再写死 0.8，附录 #2） */
 export function autoSettings(tagger: Pick<Settings['tagger'], 'autoAcceptThreshold' | 'autoAcceptBySource'>): AutoSettings {
   return { threshold: (provider) => tagger.autoAcceptBySource?.[provider] ?? tagger.autoAcceptThreshold };
+}
+
+/** 设置里的自动阈值（只读 tagger 这一节，每批识别都要读一次） */
+function taggerThresholds(db: Db): Pick<Settings['tagger'], 'autoAcceptThreshold' | 'autoAcceptBySource'> {
+  const raw = stmt(db, "SELECT value FROM settings WHERE key = 'tagger'").pluck().get() as string | undefined;
+  let t: Partial<Settings['tagger']> = {};
+  try {
+    t = raw ? (JSON.parse(raw) as Partial<Settings['tagger']>) : {};
+  } catch {
+    /* 坏了按默认 */
+  }
+  return {
+    autoAcceptThreshold: typeof t.autoAcceptThreshold === 'number' ? t.autoAcceptThreshold : DEFAULT_SETTINGS.tagger.autoAcceptThreshold,
+    autoAcceptBySource: t.autoAcceptBySource ?? {},
+  };
 }
 
 /** 一轮评估的结果（还没写） */
@@ -95,7 +110,7 @@ export function evaluateAuto(db: Db, ids: number[], fresh: ReadonlyMap<number, R
     set.add(ch);
     vetoes.set(img, set);
   }
-  const settings = autoSettings(readSettings(db).tagger);
+  const settings = autoSettings(taggerThresholds(db));
   // 自建角色的候选按 character_id 认（编号还在才算）；其余按标签找角色（规范化、合并重定向、核验过的变体）
   const customIds = new Set<number>();
   for (const list of evidence.values()) for (const e of list) for (const c of e.candidates) if (c.characterId !== null) customIds.add(c.characterId);
@@ -104,7 +119,22 @@ export function evaluateAuto(db: Db, ids: number[], fresh: ReadonlyMap<number, R
       ? (stmt(db, 'SELECT id FROM characters WHERE id IN (SELECT value FROM json_each(?))').pluck().all(JSON.stringify([...customIds])) as number[])
       : [],
   );
+  // 证据里的标签已经规范化过：先一条语句按标签找角色（角色自己的标签、合并重定向），找不到的再交给角色目录（规范化、核验过的变体）。
+  // 识别任务每批都要评估一次，逐个走角色目录的规范化要慢上一截
   const resolved = new Map<string, number | null>();
+  const tags = new Set<string>();
+  for (const list of evidence.values()) for (const e of list) for (const c of e.candidates) if (c.characterId === null) tags.add(c.tag);
+  if (tags.size) {
+    for (const [tag, id] of stmt(
+      db,
+      `SELECT j.value, COALESCE((SELECT c.id FROM characters c WHERE c.danbooru_tag = j.value),
+         (SELECT r.character_id FROM danbooru_tag_redirects r WHERE r.tag = j.value)) FROM json_each(?) j`,
+    )
+      .raw()
+      .all(JSON.stringify([...tags])) as [string, number | null][]) {
+      if (id !== null) resolved.set(tag, id);
+    }
+  }
   const resolve = (c: { tag: string; characterId: number | null }) => {
     if (c.characterId !== null) return alive.has(c.characterId) ? c.characterId : null;
     if (!resolved.has(c.tag)) resolved.set(c.tag, catalog.resolveCharacterId(c.tag));
@@ -239,6 +269,28 @@ function scope(db: Db, changes: ChangeSet): number[] {
   return [...ids];
 }
 
+/**
+ * 只有这些图的自动决定可能变：证据刚换过的（可能要撤回），或者有达到最低自动阈值、还没关联也没被否决的候选（可能要加），
+ * 或者证据里有原创信号（可能要标原创）。别的图评估了也是什么都不做——批量改类型、批量移出角色这类一千张的操作不用逐张评估
+ */
+function worthEvaluating(db: Db, ids: number[], fresh: ReadonlyMap<number, ReadonlySet<string>>): number[] {
+  const rest = ids.filter((id) => !fresh.has(id));
+  if (!rest.length) return ids;
+  const t = taggerThresholds(db);
+  const min = Math.min(t.autoAcceptThreshold, ...Object.values(t.autoAcceptBySource ?? {}).filter((x): x is number => typeof x === 'number'));
+  const keep = new Set(
+    stmt(
+      db,
+      `SELECT j.value FROM json_each(@ids) j
+       WHERE EXISTS (SELECT 1 FROM v_character_suggestions s WHERE s.image_id = j.value AND s.score >= @min)
+          OR EXISTS (SELECT 1 FROM image_evidence e WHERE e.image_id = j.value AND e.original = 1)`,
+    )
+      .pluck()
+      .all({ ids: JSON.stringify(rest), min }) as number[],
+  );
+  return ids.filter((id) => fresh.has(id) || keep.has(id));
+}
+
 /** 证据刚换过的来源（按图）；画师的证据不是角色证据 */
 function freshProviders(changes: ChangeSet): Map<number, Set<string>> {
   const out = new Map<number, Set<string>>();
@@ -260,7 +312,8 @@ export function reevaluateAutoReaction(deps: AutoDeps): Reaction {
     phase: 'tx',
     emits: ['curation.charactersChanged', 'curation.autoOriginalChanged'],
     run({ ctx, changes, emit, undo, replay, actor }) {
-      const ids = scope(ctx.db, changes);
+      const fresh = freshProviders(changes);
+      const ids = worthEvaluating(ctx.db, scope(ctx.db, changes), fresh);
       if (!ids.length) return;
       // 撤销重放：决定已经按撤销记录还原了，不再评估（否则会把刚撤销的自动决定又做一遍）；
       // 只把这些图「角色、原创可能变了」交给后面的反应，按还原后的事实重算排除结果、合集等
@@ -270,7 +323,7 @@ export function reevaluateAutoReaction(deps: AutoDeps): Reaction {
         return;
       }
       const catalog = deps.catalog();
-      const plan = evaluateAuto(ctx.db, ids, freshProviders(changes), catalog);
+      const plan = evaluateAuto(ctx.db, ids, fresh, catalog);
       const now = iso(ctx.clock());
       const res = applyAutoPlan({ db: ctx.db, changed: emit }, undo, plan, catalog, now);
       if (res.retracted.length || res.clearedOriginals.length) recordRetraction(ctx, undo, res, actor);
