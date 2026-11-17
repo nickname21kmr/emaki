@@ -114,25 +114,6 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'datasource/sqlite/roots.ts', table: 'library_roots' },
   // datasource/sqlite/search.ts
   { file: 'datasource/sqlite/search.ts', table: 'tags' },
-  // datasource/sqlite/seed.ts
-  { file: 'datasource/sqlite/seed.ts', table: 'aliases' },
-  { file: 'datasource/sqlite/seed.ts', table: 'character_suggestions' },
-  { file: 'datasource/sqlite/seed.ts', table: 'character_works' },
-  { file: 'datasource/sqlite/seed.ts', table: 'characters' },
-  { file: 'datasource/sqlite/seed.ts', table: 'duplicate_groups' },
-  { file: 'datasource/sqlite/seed.ts', table: 'duplicate_members' },
-  { file: 'datasource/sqlite/seed.ts', table: 'exclusions' },
-  { file: 'datasource/sqlite/seed.ts', table: 'image_artists' },
-  { file: 'datasource/sqlite/seed.ts', table: 'image_characters' },
-  { file: 'datasource/sqlite/seed.ts', table: 'image_copyrights' },
-  { file: 'datasource/sqlite/seed.ts', table: 'image_tags' },
-  { file: 'datasource/sqlite/seed.ts', table: 'images#analysis' },
-  { file: 'datasource/sqlite/seed.ts', table: 'images#curation' },
-  { file: 'datasource/sqlite/seed.ts', table: 'images#evidence' },
-  { file: 'datasource/sqlite/seed.ts', table: 'images#library' },
-  { file: 'datasource/sqlite/seed.ts', table: 'library_roots' },
-  { file: 'datasource/sqlite/seed.ts', table: 'tags' },
-  { file: 'datasource/sqlite/seed.ts', table: 'works' },
   // datasource/sqlite/settings.ts
   { file: 'datasource/sqlite/settings.ts', table: 'settings' },
   // datasource/sqlite/undo.ts

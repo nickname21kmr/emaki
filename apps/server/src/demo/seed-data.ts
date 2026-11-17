@@ -1,5 +1,5 @@
 /**
- * Mock 模式用的种子数据：真实存在的作品 / 角色名和 Danbooru 标签，
+ * 演示数据用的种子：真实存在的作品 / 角色名和 Danbooru 标签，
  * 让前端开发时看到的界面和真实使用时尽量一致。
  *
  * weight 决定这个作品 / 角色分到多少张图（大致按 Zipf 分布）。
@@ -206,7 +206,7 @@ export const SEED_WORKS: SeedWork[] = [
     aliases: ['オリジナル', 'original', 'OC'],
     hue: 30,
     characters: [
-      // 自建角色：tag 为 null。第一个在 mock 里被当作「能对上 Danbooru」的那个。
+      // 自建角色：tag 为 null。第一个在演示数据里被当作「能对上 Danbooru」的那个。
       c('雪见（自设）', null, ['yukimi', '雪见'], 4),
       c('猫耳女仆 A', null, ['maid'], 3),
       c('画师 OC · 柚', null, ['yuzu', '柚'], 3),

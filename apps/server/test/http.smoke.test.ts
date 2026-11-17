@@ -1,6 +1,8 @@
 /**
- * T24 第 9 步：HTTP 冒烟。buildApp(MockDataSource) + app.inject，每个路由请求一次，断言状态码与 JSON 结构，
- * 确认路由、zod 校验、错误处理接线正确。数据用契约夹具（固定 NOW，id 是 i1 / c1 / w1 这种 mock id）。
+ * T24 第 9 步：HTTP 冒烟。buildApp(真实引擎) + app.inject，每个路由请求一次，断言状态码与 JSON 结构，
+ * 确认路由、zod 校验、错误处理接线正确。
+ * 引擎用演示模式的部件（demo/engine.ts：占位图、不碰文件、假任务）+ 契约夹具（固定 NOW）。用例里照旧写夹具 id
+ * （i1 / c1 / w1 …），call() 负责把请求里的夹具 id 换成库里的 id、把响应里的 id 换回夹具 id。
  * 最后一条用例从 src/app.ts、src/routes/*.ts 里扫出全部路由，确保这里每个都测到了（新增路由忘了补冒烟会失败）。
  */
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
@@ -9,8 +11,9 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { EventBus } from '../src/core/events.ts';
-import { MockDataSource } from '../src/datasource/mock/MockDataSource.ts';
 import { SqliteDataSource } from '../src/datasource/sqlite/SqliteDataSource.ts';
+import { openDemoEngine } from '../src/demo/engine.ts';
+import type { IdMap } from '../src/demo/seed.ts';
 import { NOW } from './contract/harness.ts';
 import { buildContractDb } from './fixtures/contract-db.ts';
 
@@ -28,7 +31,7 @@ vi.mock('../src/config.ts', async (importOriginal) => {
   const { join } = await import('node:path');
   const { config } = await importOriginal<typeof import('../src/config.ts')>();
   dataState.dir = mkdtempSync(join(tmpdir(), 'emaki-smoke-'));
-  return { config: { ...config, dataDir: dataState.dir } };
+  return { config: { ...config, dataDir: dataState.dir, libraryDir: dataState.dir } };
 });
 
 const SRC = path.resolve(import.meta.dirname, '../src');
@@ -41,25 +44,69 @@ afterAll(() => {
 });
 
 let app: FastifyInstance;
-let ds: MockDataSource;
+let ds: SqliteDataSource;
 let bus: EventBus;
+let map: IdMap;
 beforeEach(async () => {
   bus = new EventBus();
-  ds = new MockDataSource(bus, { db: buildContractDb(NOW), now: NOW });
+  ({ ds, map } = await openDemoEngine(bus, { dir: path.join(dataState.dir, 'library'), memory: true, data: buildContractDb(NOW), now: NOW, clock: () => NOW }));
   app = await buildApp(ds, bus);
 });
 afterEach(async () => {
   // 别让模拟的后台任务在用例之间继续跑
   for (const job of await ds.listJobs()) if (job.status === 'queued' || job.status === 'running') await ds.cancelJob(job.id);
   await app.close();
+  await ds.close();
 });
+
+/** 夹具 id 的前缀 → 映射表 */
+const KINDS: Record<string, keyof IdMap> = { i: 'images', c: 'characters', w: 'works', x: 'exclusions', d: 'duplicates', root: 'roots' };
+const FIXTURE_ID = /^(i|c|w|x|d|root)\d+$/;
+/** 夹具 id → 库里的 id；夹具里没有的（i999 这种）原样返回，引擎会当成不存在 */
+const id = (fixtureId: string): string => {
+  const m = FIXTURE_ID.exec(fixtureId);
+  const n = m ? map[KINDS[m[1]!]!].get(fixtureId) : undefined;
+  return n === undefined ? fixtureId : String(n);
+};
+const reverse = () => {
+  const out = new Map<string, Map<string, string>>();
+  for (const key of Object.values(KINDS)) out.set(key, new Map([...map[key]].map(([f, n]) => [String(n), f])));
+  return out;
+};
+/** 请求体里的夹具 id 换成库里的 id */
+const toEngine = (v: unknown): unknown =>
+  typeof v === 'string' ? id(v) : Array.isArray(v) ? v.map(toEngine) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, toEngine(x)])) : v;
+/** 响应里的 id 换回夹具 id（按对象形状认是哪种 id，同 contract/harness.ts 的 canon） */
+function toFixture(v: unknown, back = reverse()): unknown {
+  if (Array.isArray(v)) return v.map((x) => toFixture(x, back));
+  if (!v || typeof v !== 'object') return v;
+  const o = v as Record<string, unknown>;
+  const fields: Record<string, keyof IdMap> =
+    'relPath' in o ? { id: 'images', libraryRootId: 'roots', characterIds: 'characters', workIds: 'works' }
+    : 'characterCount' in o ? { id: 'works', coverImageId: 'images' }
+    : 'source' in o && 'danbooruTag' in o && 'workIds' in o ? { id: 'characters', workIds: 'works', coverImageId: 'images' }
+    : 'path' in o && 'enabled' in o ? { id: 'roots' }
+    : 'label' in o && 'target' in o ? { id: 'exclusions', previewImageIds: 'images' }
+    : 'suggestedKeepId' in o ? { id: 'duplicates', suggestedKeepId: 'images' }
+    : 'characterId' in o && 'danbooruTag' in o ? { characterId: 'characters' }
+    : {};
+  const one = (key: keyof IdMap, x: unknown) => (typeof x === 'string' ? (back.get(key)!.get(x) ?? x) : x);
+  return Object.fromEntries(
+    Object.entries(o).map(([k, x]) => {
+      const key = fields[k];
+      if (key) return [k, Array.isArray(x) ? x.map((y) => one(key, y)) : one(key, x)];
+      return [k, toFixture(x, back)];
+    }),
+  );
+}
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 async function call(method: Method, url: string, payload?: unknown) {
   // 和前端 api.ts 一样：POST 没有参数时也发 {}（T23：POST 必须是 JSON）
   if (payload === undefined && method === 'POST') payload = {};
-  const res = await app.inject({ method, url, ...(payload === undefined ? {} : { payload: payload as object }) });
-  const json = res.headers['content-type']?.toString().startsWith('application/json') ? res.json() : undefined;
+  const target = url.replace(/([/=,])((?:i|c|w|x|d|root)\d+)(?=$|[/?&,])/g, (_m, sep: string, x: string) => sep + id(x));
+  const res = await app.inject({ method, url: target, ...(payload === undefined ? {} : { payload: toEngine(payload) as object }) });
+  const json = res.headers['content-type']?.toString().startsWith('application/json') ? toFixture(res.json()) as any : undefined;
   return { status: res.statusCode, json, res };
 }
 
@@ -79,18 +126,18 @@ describe('统计、作品、角色、搜索（routes/library.ts）', () => {
   route('POST /api/images/:id/replace', async () => {
     expect((await call('POST','/api/images/img1/replace',{})).status).toBe(400);
     const response=await call('POST','/api/images/img1/replace',{path:'D:/download.png'});
-    expect(response.status).toBe(400);expect(response.json.error).toContain('演示图库');
+    expect(response.status).toBe(400);expect(response.json.error).toContain('演示数据不支持');
   });
   route('POST /api/images/import', async () => {
     expect((await call('POST','/api/images/import',{rootId:'root1',files:[]})).status).toBe(400);
     const response=await call('POST','/api/images/import',{rootId:'root1',files:[{path:'D:/download.png'}]});
     expect(response.status).toBe(400);
-    expect(response.json.error).toContain('演示图库');
+    expect(response.json.error).toContain('演示数据不支持');
   });
 
   route('GET /api/library-roots', async () => {
     const {status,json}=await call('GET','/api/library-roots');
-    expect(status).toBe(200);expect(json).toEqual((await ds.getSettings()).libraryRoots);
+    expect(status).toBe(200);expect(json).toEqual(toFixture((await ds.getSettings()).libraryRoots));
   });
   route('GET /api/stats', async () => {
     const { status, json } = await call('GET', '/api/stats');
@@ -282,10 +329,10 @@ describe('图片、未识别、重复、排除（routes/images.ts）', () => {
   });
 
   route('POST /api/images/move', async () => {
-    // mock 只改记录，不碰文件
+    // 演示部件不碰文件：参数校验通过后拒绝
     const { status, json } = await call('POST', '/api/images/move', { characterId: 'c1', rootId: 'root1', dir: '角色/未花' });
-    expect([status, json]).toEqual([200, withUndo]);
-    expect(json.message).toMatch(/^已移动 \d+ 张到 D:\/Pics\/角色\/未花/);
+    expect([status, json]).toEqual([400, apiError('bad_request')]);
+    expect(json.error).toBe('演示数据不支持移动文件');
     expect((await call('POST', '/api/images/move', { ids: ['i1'], characterId: 'c1', rootId: 'root1', dir: '' })).status).toBe(400);
     expect((await call('POST', '/api/images/move', { ids: ['i1'], rootId: 'root1', dir: 'a:b' })).status).toBe(400);
   });
@@ -331,7 +378,9 @@ describe('图片、未识别、重复、排除（routes/images.ts）', () => {
 
   route('POST /api/images/:id/reveal', async () => {
     const { status, json } = await call('POST', '/api/images/i1/reveal');
-    expect([status, json]).toEqual([200, { ok: true }]);
+    expect([status, json]).toEqual([400, apiError('bad_request')]);
+    expect(json.error).toBe('演示数据不支持在资源管理器中显示文件');
+    expect((await call('POST', '/api/images/i999/reveal')).status).toBe(404);
   });
 
   route('GET /api/unrecognized', async () => {
@@ -426,6 +475,8 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     });
     // 助手的会话和设置写在临时目录里，不是仓库的 data/
     expect(json.dataDir).toBe(dataState.dir);
+    // 引擎是真实的；配置里没开演示模式（是测试直接用了演示部件）
+    expect(json.dataSource).toBe('sqlite');
     // 助手关着时启动不建目录、不写文件
     expect(existsSync(path.join(dataState.dir, 'assistant'))).toBe(false);
   });
@@ -444,9 +495,19 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     expect((await call('POST', '/api/settings/source-mode', { mode: 'nope' })).status).toBe(400);
   });
 
+  /** 记一条「移到文件夹」的改动，库里的路径也改成移动之后的（演示部件不让真的移动，直接写记录） */
+  const recordMove = () => {
+    const i1 = Number(id('i1'));
+    const at = new Date(NOW).toISOString();
+    const item = { id: i1, from: { rootId: Number(id('root1')), rootPath: 'D:/Pics', rel: '角色/i1.png' }, to: { rootId: Number(id('root1')), rootPath: 'D:/Pics', rel: '别处/i1.png' } };
+    const payload = { where: 'D:/Pics/别处', items: [item], charSnap: [], retagSnap: [], excluded: [] };
+    ds.ctx.db.prepare("INSERT INTO change_log (kind, summary, payload, created_at) VALUES ('move', '1 张移到 D:/Pics/别处', ?, ?)").run(JSON.stringify(payload), at);
+    ds.ctx.db.prepare("UPDATE images SET rel_path = '别处/i1.png' WHERE id = ?").run(i1);
+  };
+
   route('GET /api/changes', async () => {
     expect(await call('GET', '/api/changes?group=auto')).toMatchObject({ status: 200, json: [] });
-    await call('POST', '/api/images/move', { ids: ['i1'], rootId: 'root1', dir: '别处' });
+    recordMove();
     const { status, json } = await call('GET', '/api/changes?group=move');
     expect(status).toBe(200);
     expect(json).toEqual([expect.objectContaining({ kind: 'move', count: 1, revertable: true })]);
@@ -454,11 +515,12 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
   });
 
   route('POST /api/changes/:id/revert', async () => {
-    await call('POST', '/api/images/move', { ids: ['i1'], rootId: 'root1', dir: '别处' });
+    recordMove();
     const [entry] = (await call('GET', '/api/changes?group=move')).json;
+    // 移回原处要动文件：演示部件拒绝
     const r = await call('POST', `/api/changes/${entry.id}/revert`);
-    expect([r.status, r.json]).toEqual([200, { ok: true, message: '已把 1 张移回原处', undoToken: null }]);
-    expect((await call('POST', `/api/changes/${entry.id}/revert`)).status).toBe(409);
+    expect([r.status, r.json]).toEqual([400, apiError('bad_request')]);
+    expect(r.json.error).toBe('演示数据不支持移回文件');
     expect((await call('POST', '/api/changes/nope/revert')).status).toBe(404);
   });
 
@@ -536,12 +598,14 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
   });
 
   route('POST /api/library-roots', async () => {
+    // 演示部件不碰用户的文件夹：参数校验通过后拒绝
     const { status, json } = await call('POST', '/api/library-roots', { path: 'F:/NewPics' });
-    expect([status, json]).toMatchObject([200, mutation]);
+    expect([status, json]).toEqual([400, apiError('bad_request')]);
+    expect(json.error).toBe('演示数据不支持添加图库文件夹');
     expect((await call('POST', '/api/library-roots', { path: '' })).status).toBe(400);
     const comic = await call('POST', '/api/library-roots', { path: 'F:/Manga', mode: 'comic', comicRating: 'questionable' });
-    expect(comic.status).toBe(200);
-    expect((await call('GET', '/api/settings')).json.libraryRoots.find((r: { path: string }) => r.path === 'F:/Manga')).toMatchObject({ mode: 'comic', comicRating: 'questionable' });
+    expect(comic.json.error).toBe('演示数据不支持添加图库文件夹');
+    expect((await call('GET', '/api/settings')).json.libraryRoots).toHaveLength(2);
     expect((await call('POST', '/api/library-roots', { path: 'F:/Manga2', mode: 'manga' })).status).toBe(400);
   });
 
@@ -619,7 +683,7 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
       let text = '';
       // 先读到 retry 行，确认订阅已建立，再发一个事件
       while (!text.includes('retry:')) text += decoder.decode((await reader.read()).value);
-      await ds.updateImage('i4', { favorite: true });
+      await ds.updateImage(id('i4'), { favorite: true });
       while (!text.includes('"type":"library-changed"')) text += decoder.decode((await reader.read()).value);
       expect(text).toMatch(/^retry: 3000\n\n/);
     } finally {
@@ -642,7 +706,7 @@ describe('本机安全（T23）', () => {
   });
 
   it('POST 不是 JSON → 415（防跨站表单 / text/plain）', async () => {
-    const bare = await app.inject({ method: 'POST', url: '/api/characters/c1/seen' });
+    const bare = await app.inject({ method: 'POST', url: `/api/characters/${id('c1')}/seen` });
     expect([bare.statusCode, bare.json()]).toEqual([415, apiError('bad_request')]);
     const text = await app.inject({ method: 'POST', url: '/api/undo/x', headers: { 'content-type': 'text/plain' }, payload: 'x' });
     expect(text.statusCode).toBe(415);
@@ -663,7 +727,7 @@ describe('本机安全（T23）', () => {
   it('自己的页面：Origin 和 Host 一致 → 放行', async () => {
     for (const { host, origin } of own) {
       const headers = { host, origin, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' };
-      const res = await app.inject({ method: 'POST', url: '/api/characters/c1/seen', headers, payload: '{}' });
+      const res = await app.inject({ method: 'POST', url: `/api/characters/${id('c1')}/seen`, headers, payload: '{}' });
       expect([host, res.statusCode]).toEqual([host, 200]);
       const get = await app.inject({ method: 'GET', url: '/api/health', headers: { host, 'sec-fetch-site': 'same-origin' } });
       expect(get.statusCode).toBe(200);
@@ -676,7 +740,7 @@ describe('本机安全（T23）', () => {
       method: 'POST',
       url: '/api/images/bulk',
       headers: { ...evil, 'sec-fetch-site': 'same-site', 'content-type': 'application/json' },
-      payload: { ids: ['i1'], action: { type: 'trash' } },
+      payload: { ids: [id('i1')], action: { type: 'trash' } },
     });
     expect([bulk.statusCode, bulk.json()]).toEqual([403, apiError('bad_request')]);
     expect(bulk.headers['access-control-allow-origin']).toBeUndefined();
@@ -693,7 +757,7 @@ describe('本机安全（T23）', () => {
     // 不带 Origin、只有 sec-fetch-site 的写请求也拦
     const noOrigin = await app.inject({
       method: 'POST',
-      url: '/api/characters/c1/seen',
+      url: `/api/characters/${id('c1')}/seen`,
       headers: { host: '127.0.0.1:5174', 'sec-fetch-site': 'cross-site', 'content-type': 'application/json' },
       payload: '{}',
     });
@@ -701,7 +765,7 @@ describe('本机安全（T23）', () => {
   });
 
   it('跨站的图片 GET（<img>、CSS 背景，不带 Origin）照常放行', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/images/i1/thumb?w=300', headers: { host: '127.0.0.1:5174', 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'no-cors' } });
+    const res = await app.inject({ method: 'GET', url: `/api/images/${id('i1')}/thumb?w=300`, headers: { host: '127.0.0.1:5174', 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'no-cors' } });
     expect(res.statusCode).toBe(200);
     expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });

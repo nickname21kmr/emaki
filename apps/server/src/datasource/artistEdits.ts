@@ -1,5 +1,5 @@
 /**
- * 手动改画师（BulkImageAction 'artist' / 'artist-auto'）的输入规范化和提示文案，mock 和 sqlite 共用，
+ * 手动改画师（BulkImageAction 'artist' / 'artist-auto'）的输入规范化和提示文案，
  * 两边的提示必须一字不差（契约测试比对）。
  */
 import { BadRequestError } from '../http/errors.ts';
@@ -46,7 +46,7 @@ export function linkTags(tags: string[], into?: string): string[] {
 }
 
 /**
- * 这次手动拆开 / 合并实际要写的标签（mock 和 sqlite 共用，groups = 标签 → 现在所在的人的代表标签）：
+ * 这次手动拆开 / 合并实际要写的标签（groups = 标签 → 现在所在的人的代表标签）：
  * - split：只拆给的标签；给的是一个多标签的人的代表标签（这个人本身）会拆不开，报错让用户选被并进来的；
  * - merge：把这个人的全部标签都并过去（有的标签只在漫画页上，画师列表里看不到）；已经是同一个人就报错（也防止绕成环）；
  * - auto：这个人身上所有手动设置都去掉。

@@ -241,7 +241,7 @@ export const useTaggerModels = () => useQuery({ queryKey: qk.taggerModels, query
 
 export const useJobs = () => useQuery({ queryKey: qk.jobs, queryFn: api.jobs });
 
-/** 后端版本、数据源（mock / sqlite）、数据目录；进程内不会变 */
+/** 后端版本、数据源（demo / sqlite）、数据目录；进程内不会变 */
 export const useHealth = () => useQuery({ queryKey: qk.health, queryFn: api.health, staleTime: Infinity });
 
 /** 移到回收站最近 5 次可以撤销，更早的已经放进系统回收站，要去那里还原 */

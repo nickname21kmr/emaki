@@ -29,7 +29,7 @@ interface NavItem {
 export function Sidebar() {
   const { data: stats } = useStats();
   const jobs = useRunningJobs();
-  const demo = useHealth().data?.dataSource === 'mock';
+  const demo = useHealth().data?.dataSource === 'demo';
 
   const main: NavItem[] = [
     {

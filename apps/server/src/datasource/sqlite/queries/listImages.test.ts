@@ -111,7 +111,7 @@ beforeAll(() => {
   insert(500);
 });
 
-/** 按 mock 的规则在 JS 里过滤 */
+/** 用 JS 写一遍的参照规则（来自以前 mock 的实现）：和 SQL 的结果对照 */
 function expected(q: ListImagesQuery): Ref[] {
   return refs.filter((x) => {
     if (x.missing || x.trashed || x.root !== 1) return false;
@@ -147,7 +147,7 @@ function pageAll(q: ListImagesQuery): number[] {
   throw new Error('分页没有结束');
 }
 
-describe('listImages 筛选与 mock 规则一致', () => {
+describe('listImages 筛选与参照规则一致', () => {
   it.each<[string, ListImagesQuery]>([
     ['默认', {}],
     ['excluded', { status: 'excluded' }],
@@ -239,7 +239,7 @@ describe('按角色翻页', () => {
     ['角色 + 作品', { characterId: '1', workId: '1' }],
     ['角色 + 标签搜索', { characterId: '2', q: 'blue' }],
     ['角色 + 文件名升序', { characterId: '3', sort: 'fileName', order: 'asc' }],
-  ])('%s：翻完所有页和 mock 规则一致', (_name, q) => {
+  ])('%s：翻完所有页和参照规则一致', (_name, q) => {
     const want = expected(q).map((x) => x.id);
     const got = pageAll(q);
     expect([...got].sort((a, b) => a - b)).toEqual([...want].sort((a, b) => a - b));

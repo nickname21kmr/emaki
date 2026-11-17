@@ -1,6 +1,6 @@
 /**
  * 演示数据里的合集（T38c 第 8 节，按 RV-C-4 修正）：一本本子、一个两话的连载、一本画集。
- * 在 buildMockDb 的 return 之前（文件名去重之后）调用；用独立的随机序列，不打乱原来的数据。
+ * 在 buildDemoDb 的 return 之前（文件名去重之后）调用；用独立的随机序列，不打乱原来的数据。
  */
 import type { ContentKind, ID } from '@emaki/shared';
 import type { CharacterRow, CollectionRow, ImageRow, WorkRow } from './fixtures.ts';

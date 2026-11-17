@@ -16,7 +16,10 @@ import { seedCollections } from './collections-seed.ts';
 import { hashString, seededRandom } from './placeholder.ts';
 import { ARTISTS, GENERAL_TAGS, LONG_TAIL_WORKS, SEED_WORKS, type SeedWork } from './seed-data.ts';
 
-/** mock 数据库里的行：只存「原始」字段，计数等派生字段由 MockDataSource 现算。 */
+/**
+ * 演示数据的行：只存「原始」字段，灌进 SQLite 之后计数等派生字段由真实引擎现算（seed.ts）。
+ * 契约测试的夹具（test/fixtures/contract-db.ts）也用这套类型。
+ */
 export interface WorkRow {
   id: ID;
   name: string;
@@ -144,7 +147,7 @@ export interface ExclusionRow {
   createdAt: string;
 }
 
-export interface MockDb {
+export interface DemoDb {
   works: Map<ID, WorkRow>;
   characters: Map<ID, CharacterRow>;
   images: Map<ID, ImageRow>;
@@ -156,10 +159,16 @@ export interface MockDb {
   artistLinks?: Map<string, string | null>;
 }
 
+/**
+ * 演示用的图库文件夹路径前缀：不可能是真实存在的文件夹（Windows 上 < > 是非法字符），
+ * 万一哪里漏了拦截，也扫不到、动不了用户真实的图片
+ */
+export const DEMO_ROOT_PREFIX = '<演示图库>';
+
 const IMAGE_COUNT = 9000;
 const DAY = 86_400_000;
 
-export function buildMockDb(now = Date.now()): MockDb {
+export function buildDemoDb(now = Date.now()): DemoDb {
   const r = seededRandom(20260927);
   const pick = <T>(arr: readonly T[]): T => arr[Math.floor(r() * arr.length)]!;
 
@@ -411,7 +420,7 @@ export function buildMockDb(now = Date.now()): MockDb {
     exclusions.push(row);
     for (const img of images.values()) if (!img.excludedBy && predicate(img)) img.excludedBy = row.id;
   };
-  addExclusion('folder', 'D:/Pictures/twitter/表情包', '文件夹 · 推特/表情包', 40, (img) => img.source?.site === 'twitter' && r() < 0.04);
+  addExclusion('folder', `${DEMO_ROOT_PREFIX}/插画/twitter/表情包`, '文件夹 · 推特/表情包', 40, (img) => img.source?.site === 'twitter' && r() < 0.04);
   addExclusion('tag', 'comic', '标签 · comic（漫画分镜）', 22, (img) => r() < 0.006);
   addExclusion('tag', 'ai-generated', '标签 · ai-generated', 9, (img) => r() < 0.005);
   const excludedImages = [...images.values()].filter((img) => !img.excludedBy).slice(40, 46);
@@ -459,8 +468,8 @@ export function buildMockDb(now = Date.now()): MockDb {
 
   const settings: Settings = {
     libraryRoots: [
-      { id: 'root1', path: 'D:/Pictures/插画', enabled: true, imageCount: 0, lastScanAt: new Date(now - 2 * 3600_000).toISOString(), importedAt: new Date(now - 200 * DAY).toISOString(), mode: 'auto', comicRating: 'general', comicFolders: [] },
-      { id: 'root2', path: 'E:/下载/pixiv', enabled: true, imageCount: 0, lastScanAt: new Date(now - 26 * 3600_000).toISOString(), importedAt: new Date(now - 200 * DAY).toISOString(), mode: 'auto', comicRating: 'general', comicFolders: [] },
+      { id: 'root1', path: `${DEMO_ROOT_PREFIX}/插画`, enabled: true, imageCount: 0, lastScanAt: new Date(now - 2 * 3600_000).toISOString(), importedAt: new Date(now - 200 * DAY).toISOString(), mode: 'auto', comicRating: 'general', comicFolders: [] },
+      { id: 'root2', path: `${DEMO_ROOT_PREFIX}/下载/pixiv`, enabled: true, imageCount: 0, lastScanAt: new Date(now - 26 * 3600_000).toISOString(), importedAt: new Date(now - 200 * DAY).toISOString(), mode: 'auto', comicRating: 'general', comicFolders: [] },
     ],
     tagger: {
       model: 'A1yCE/pixai-tagger-v1.0-onnx-fp16',

@@ -1,27 +1,28 @@
+/**
+ * 移动预览、切换 Pixiv 识别方式、最近的改动。
+ * 移动预览以前拿 mock 和 sqlite 互相对照，现在写成固定的期望值（推算见 test/fixtures/contract-db.ts）。
+ */
 import { describe, expect, it } from 'vitest';
-import { canon, mockFactory, sqliteFactory, type ContractEnv } from './harness.ts';
+import { canon, sqliteFactory, type ContractEnv } from './harness.ts';
 
-/** 移动预览、切换 Pixiv 识别方式、最近的改动：两种数据源结果一致 */
-const both = async (fn: (env: ContractEnv) => Promise<unknown>) => {
-  const out: unknown[] = [];
-  for (const factory of [mockFactory, sqliteFactory]) {
-    const env = await factory();
-    try {
-      out.push(await fn(env));
-    } finally {
-      await env.close();
-    }
+const run = async <T>(fn: (env: ContractEnv) => Promise<T>): Promise<T> => {
+  const env = await sqliteFactory();
+  try {
+    return await fn(env);
+  } finally {
+    await env.close();
   }
-  return out;
 };
 
-describe('移动预览（mock / sqlite）', () => {
+describe('移动预览', () => {
   it.each([
-    ['按角色，目标是它们现在的文件夹', { characterId: 'c1', dir: '角色' }],
-    ['按角色，移到新文件夹', { characterId: 'c6', dir: '联动' }],
-    ['选中的图', { ids: ['i1', 'i21', 'i24', 'i32'], dir: 'memes' }],
-  ])('%s', async (_t, q) => {
-    const [mock, sqlite] = await both(async (env) => {
+    // c1 计入的 8 张都在「角色/」下
+    ['按角色，目标是它们现在的文件夹', { characterId: 'c1', dir: '角色' }, { ids: [], alreadyThere: 8, inCollection: 0, otherCharacters: 0 }],
+    ['按角色，移到新文件夹', { characterId: 'c6', dir: '联动' }, { ids: ['i21', 'i22'], alreadyThere: 0, inCollection: 0, otherCharacters: 0 }],
+    // i32 本来就在 memes/
+    ['选中的图', { ids: ['i1', 'i21', 'i24', 'i32'], dir: 'memes' }, { ids: ['i1', 'i21', 'i24'], alreadyThere: 1, inCollection: 0, otherCharacters: 0 }],
+  ])('%s', async (_t, q, expected) => {
+    const got = await run(async (env) => {
       const body = {
         rootId: env.id('root', 'root1'),
         dir: q.dir,
@@ -30,19 +31,19 @@ describe('移动预览（mock / sqlite）', () => {
       const p = await env.ds.previewMove(body);
       return { ...p, ids: p.ids.map((id) => env.back('image', id)).sort() };
     });
-    expect(sqlite).toEqual(mock);
-    expect((mock as { ids: string[] }).ids.length + (mock as { alreadyThere: number }).alreadyThere).toBeGreaterThan(0);
+    expect(got).toEqual(expected);
   });
 
   it('联动角色的图都还属于别的角色时如实报出来', async () => {
-    const [mock, sqlite] = await both(async (env) =>
+    // c1 的 i7 还有 c2、i8 还有 c3
+    const n = await run(async (env) =>
       canon(env, await env.ds.previewMove({ characterId: env.id('character', 'c1'), rootId: env.id('root', 'root1'), dir: '别处' })).otherCharacters,
     );
-    expect(sqlite).toBe(mock);
+    expect(n).toBe(2);
   });
 });
 
-for (const [name, factory] of [['mock', mockFactory], ['sqlite', sqliteFactory]] as const) {
+for (const [name, factory] of [['sqlite', sqliteFactory]] as const) {
   describe(`${name} 切换 Pixiv 识别方式、最近的改动`, () => {
     it('先数影响，切换报告张数、可撤销；切到同一个不动', async () => {
       const env = await factory();

@@ -1,25 +1,27 @@
 import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import Database from 'better-sqlite3';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createServer } from 'node:http';
 import type { FastifyInstance } from 'fastify';
 
-// 业务数据走 MockDataSource，SQL 工具读这里自带的 emaki.sqlite；source 可切成 'mock' 检查演示模式
-const state = vi.hoisted(() => ({ dir: '', source: 'sqlite' }));
+// 业务数据走真实引擎（演示部件 + 契约夹具，文件数据库），SQL 工具读的就是这个引擎的库文件
+const state = vi.hoisted(() => ({ dir: '' }));
 vi.mock('../config.ts', async importOriginal => {
   const { config } = await importOriginal<typeof import('../config.ts')>();
-  return { config: { ...config, get dataDir() { return state.dir; }, get dataSource() { return state.source; }, webDist: '/nonexistent' } };
+  return { config: { ...config, get dataDir() { return state.dir; }, get libraryDir() { return path.join(state.dir, 'library'); }, webDist: '/nonexistent' } };
 });
 import { buildApp } from '../app.ts';
 import { EventBus } from '../core/events.ts';
-import { MockDataSource } from '../datasource/mock/MockDataSource.ts';
+import type { SqliteDataSource } from '../datasource/sqlite/SqliteDataSource.ts';
+import { openDemoEngine } from '../demo/engine.ts';
 import { sharp } from '../services/image/sharpConfig.ts';
+import { buildContractDb } from '../../test/fixtures/contract-db.ts';
 
-let app: FastifyInstance, base: string, token: string, imageId: string, ds: MockDataSource;
+const NOW = Date.parse('2026-09-27T12:00:00.000Z');
+let app: FastifyInstance, base: string, token: string, imageId: string, ds: SqliteDataSource;
 let piSession: string, holdResponse = false;
 const providerRequests: any[] = [];
 const provider = createServer(async (req, res) => {
@@ -46,12 +48,13 @@ const call = async (method: any, url: string, payload?: unknown) => app.inject({
 const del = (url: string) => app.inject({ method: 'DELETE', url: '/api/assistant' + url, headers: { host: 'localhost' } });
 beforeAll(async () => {
   state.dir = mkdtempSync(path.join(tmpdir(), 'emaki-route-test-'));
-  const db = new Database(path.join(state.dir, 'emaki.sqlite')); db.exec('CREATE TABLE images(id INTEGER PRIMARY KEY); INSERT INTO images VALUES(1),(2);'); db.close();
-  const bus = new EventBus(); ds = new MockDataSource(bus); imageId = (await ds.listImages({ limit: 1 })).items[0]!.id;
+  const bus = new EventBus();
+  ({ ds } = await openDemoEngine(bus, { dir: path.join(state.dir, 'library'), data: buildContractDb(NOW), now: NOW, clock: () => NOW }));
+  imageId = (await ds.listImages({ limit: 1 })).items[0]!.id;
   app = await buildApp(ds, bus); base = await app.listen({ host: '127.0.0.1', port: 0 });
   await new Promise<void>(resolve => provider.listen(0, '127.0.0.1', resolve));
 });
-afterAll(async () => { await app.close(); await new Promise<void>(resolve => provider.close(() => resolve())); rmSync(state.dir, { recursive: true, force: true, maxRetries: 4 }); });
+afterAll(async () => { await app.close(); await ds.close(); await new Promise<void>(resolve => provider.close(() => resolve())); rmSync(state.dir, { recursive: true, force: true, maxRetries: 4 }); });
 describe('assistant HTTP and MCP', () => {
   it('does not expose sessions or tools while disabled', async () => {
     expect((await call('GET', '/settings')).json().enabled).toBe(false);
@@ -76,7 +79,8 @@ describe('assistant HTTP and MCP', () => {
     expect((await client.listTools()).tools.map(t => t.name)).toContain('query_database');
     expect((await client.listTools()).tools.map(t => t.name)).not.toContain('ask_user');
     const result: any = await client.callTool({ name: 'query_database', arguments: { sql: 'SELECT count(*) AS n FROM images' } });
-    expect(JSON.parse(result.content[0].text).rows).toEqual([{ n: 2 }]);
+    // 契约夹具有 41 张图（i1–i41）
+    expect(JSON.parse(result.content[0].text).rows).toEqual([{ n: 41 }]);
     const media: any = await client.callTool({ name: 'read_media', arguments: { imageId } });
     expect(media.content[0].type).toBe('image');
     expect(Buffer.from(media.content[0].data, 'base64').subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));
@@ -200,16 +204,23 @@ describe('assistant HTTP and MCP', () => {
       }
     } finally { spy.mockRestore(); await client.close(); }
   });
-  it('offers no SQL tools on mock data instead of reading a library file', async () => {
-    state.source = 'mock';
+  it('SQL tools read the database file the engine is using (the demo database in demo mode)', async () => {
+    expect(ds.databaseFile).toBe(path.join(state.dir, 'library', 'emaki.sqlite'));
     const client = await connect();
     try {
       const names = (await client.listTools()).tools.map(t => t.name);
-      expect(names).not.toContain('query_database'); expect(names).not.toContain('describe_database');
-      expect(client.getInstructions()).toContain('read_library');
-      const stats: any = await client.callTool({ name: 'read_library', arguments: { path: '/api/stats' } });
-      expect(stats.isError).not.toBe(true);
-    } finally { state.source = 'sqlite'; await client.close(); }
+      expect(names).toContain('query_database'); expect(names).toContain('describe_database');
+      const favorites = async () => {
+        const r: any = await client.callTool({ name: 'query_database', arguments: { sql: 'SELECT count(*) AS n FROM images WHERE favorite = 1' } });
+        return JSON.parse(r.content[0].text).rows[0].n as number;
+      };
+      const before = await favorites();
+      const other = (await ds.listImages({ limit: 3 })).items.find(i => !i.favorite)!;
+      const r = await ds.updateImage(other.id, { favorite: true });
+      expect(await favorites()).toBe(before + 1);
+      await ds.undo(r.undoToken!);
+      expect(await favorites()).toBe(before);
+    } finally { await client.close(); }
   });
   it('edits sources through MCP with validation, retry deduplication and undo', async () => {
     const client = new Client({ name: 'source-test', version: '1' });
@@ -284,7 +295,7 @@ describe('assistant HTTP and MCP', () => {
     const query = finished.messages.find((m: any) => m.tool && m.text.endsWith('query_database'));
     expect(query.tool).toMatchObject({ status: 'succeeded', input: expect.stringContaining('SELECT count(*)') });
     expect(query.tool.output).toContain('n'); expect(query.tool.finishedAt).toBeGreaterThanOrEqual(query.tool.startedAt);
-    expect(providerRequests.some(r => r.messages.some((m: any) => m.role === 'tool' && String(m.content).includes('"n":2')))).toBe(true);
+    expect(providerRequests.some(r => r.messages.some((m: any) => m.role === 'tool' && String(m.content).includes('"n":41')))).toBe(true);
     const system = providerRequests.flatMap(r => r.messages).filter((m: any) => m.role === 'system').map((m: any) => JSON.stringify(m.content)).join('\n');
     // The real Pi process must advertise both skills without eagerly loading their bodies.
     expect(system).toContain('<name>emaki-library</name>');

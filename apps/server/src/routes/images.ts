@@ -234,7 +234,7 @@ function nearestThumbWidth(w: number): ThumbWidth {
   return THUMB_WIDTHS.find((t) => t >= w) ?? THUMB_WIDTHS[THUMB_WIDTHS.length - 1]!;
 }
 
-/** 数据源可以给 etag（sqlite：内容 sha）和自己的缓存策略；mock 不带 etag，走默认的 immutable */
+/** 数据源可以给 etag（内容 sha）和自己的缓存策略；不带 etag 的（演示模式的占位图）走默认的 immutable */
 function sendFile(req: FastifyRequest, reply: FastifyReply, file: FileResponse, defaultCache: string) {
   reply.header('Cache-Control', file.cacheControl ?? defaultCache);
   if (file.etag) {

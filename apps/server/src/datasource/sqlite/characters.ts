@@ -233,7 +233,7 @@ export class CharacterMutations {
 
   markSeen(idStr: ID): void {
     const { id } = this.requireCharacter(idStr);
-    if ((this.derived.get().characters.get(id)?.newCount ?? 0) === 0) return; // mock 不发事件
+    if ((this.derived.get().characters.get(id)?.newCount ?? 0) === 0) return; // 没有新图：不发事件
     this.db.prepare('UPDATE characters SET last_seen_at = ? WHERE id = ?').run(iso(this.ctx.clock()), id);
     this.ctx.touch();
   }

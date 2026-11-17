@@ -17,7 +17,7 @@ beforeEach(async () => {
 });
 afterEach(() => env.close());
 
-const id = (kind: Kind, mockId: string) => env.id(kind, mockId);
+const id = (kind: Kind, fixtureId: string) => env.id(kind, fixtureId);
 const img = (...xs: string[]) => xs.map((x) => id('image', x));
 
 interface Op {

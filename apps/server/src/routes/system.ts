@@ -28,10 +28,10 @@ const themeTags = z.array(z.string().trim().min(1).max(100)).max(CUSTOM_THEME_LI
 export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus): void {
   // ---------------------------------------------------------- 设置
 
-  // 不经过 DataSource，mock 与 sqlite 通用
+  // 不经过 DataSource（演示模式也会弹窗，但添加文件夹会被拒绝）
   app.post('/api/system/pick-folder', async (): Promise<PickFolderResponse> => ({ path: await pickFolder() }));
 
-  // 真的会联网（mock 下也是），用来排查连不上 Danbooru
+  // 真的会联网（演示模式下也是，用户自己点的），用来排查连不上 Danbooru
   app.post('/api/system/network-check', (): Promise<NetworkCheckResponse> => checkNetwork());
 
   app.get('/api/settings', () => ds.getSettings());

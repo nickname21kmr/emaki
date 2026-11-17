@@ -67,7 +67,7 @@ export async function buildApp(ds: DataSource, bus: EventBus) {
       ok: true,
       dataSource: config.dataSource,
       version: config.appVersion,
-      dataDir: config.dataDir,
+      dataDir: config.libraryDir,
       bootId,
       ...(config.dataSource === 'sqlite' ? { keepAwake: keepAwakeStatus() } : {}),
     }),

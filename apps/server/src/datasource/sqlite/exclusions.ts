@@ -209,7 +209,7 @@ export class ExclusionQueries {
       u.set('exclusions', 'id = ?', [row.id]);
       this.ctx.stmt('UPDATE images SET excluded_by = NULL WHERE excluded_by = ?').run(row.id);
       this.ctx.stmt('DELETE FROM exclusions WHERE id = ?').run(row.id);
-      // 同时被其他规则覆盖的图继续保持排除（与 mock 的有意差异：mock 全部恢复）
+      // 同时被其他规则覆盖的图继续保持排除
       applyExclusionRules(this.ctx, { imageIds: affected });
       this.collections(u, 'all');
       return { message: `已恢复：${row.label}（${affected.length} 张）` };

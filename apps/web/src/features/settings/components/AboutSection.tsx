@@ -21,7 +21,7 @@ export function AboutSection({ stats }: { stats?: LibraryStats }) {
               <span className="text-lg font-semibold tracking-tight">Emaki</span>
               <span className="font-display text-xl text-fg-muted">絵巻</span>
               {health && <Badge className="self-center">v{health.version}</Badge>}
-              {health?.dataSource === 'mock' && (
+              {health?.dataSource === 'demo' && (
                 <Badge tone="warn" className="self-center">
                   演示数据
                 </Badge>

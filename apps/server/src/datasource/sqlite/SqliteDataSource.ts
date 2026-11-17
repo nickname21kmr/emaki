@@ -82,7 +82,7 @@ import { BadRequestError, ConflictError, NeedsConfirmError, NotFoundError, NotIm
 import type { DataSource, FileResponse } from '../DataSource.ts';
 import { parentRel, toAbs } from '../../services/fs/paths.ts';
 import { revealInFileManager } from '../../services/fs/reveal.ts';
-import { ThumbnailService, type ThumbRow } from '../../services/image/ThumbnailService.ts';
+import { ThumbnailService } from '../../services/image/ThumbnailService.ts';
 import { thumbPath } from '../../services/image/pixels.ts';
 import { Pipeline } from '../../services/pipeline.ts';
 import { Scanner } from '../../services/scan/Scanner.ts';
@@ -129,8 +129,8 @@ import { describeKindReason } from './hydrate.ts';
 import { DuplicateQueries } from './duplicates.ts';
 import { SearchQueries } from './search.ts';
 import { DedupeService } from '../../services/dedupe/DedupeService.ts';
-import type { TrashImpl } from '../../services/trash/recycleBin.ts';
 import { PendingTrash } from './pendingTrash.ts';
+import { resolvePorts, type EnginePorts, type ImageFileRow } from '../../infra/ports.ts';
 import { CharacterMutations } from './characters.ts';
 import { UnrecognizedQueries } from './unrecognized.ts';
 import { createContext } from './context.ts';
@@ -150,47 +150,56 @@ import { iso, MIME, parseId, toId, VISIBLE } from './sql.ts';
 const ROOT_MODE_COLS = ['content_kind', 'content_kind_source', 'content_kind_evidence', 'content_kind_version', 'theme', 'art_score', 'rating'];
 type RootImageSnap = { id: number; tagged_at: string | null } & Record<string, unknown>;
 
-export interface SqliteOpenOptions {
-  /** 内存库（测试用） */
+/**
+ * 打开引擎的选项：可替换部件（infra/ports.ts，没给的用真实实现），加上存储和灌数据。
+ * 测试一般给 { memory: true, autoJobs: false, importDict: false }；演示模式见 demo/engine.ts。
+ */
+export interface SqliteOpenOptions extends Partial<EnginePorts> {
+  /** 内存库（测试用）；否则是 `${dataDir}/emaki.sqlite` */
   memory?: boolean;
-  clock?: () => number;
-  /** 启动时是否自动组装任务链并扫描（T07），测试里关掉 */
-  autoJobs?: boolean;
-  /** 启动时导入中文词库（T12，约 0.7 秒）；契约测试里关掉 */
-  importDict?: boolean;
-  /** 替换系统回收站（测试用） */
-  trashImpl?: TrashImpl;
-  /** 替换「这个盘有没有回收站」的检查（测试用：夹具里的 D:/Pics 不一定存在） */
-  checkRecyclable?: (rootPath: string) => Promise<void>;
+  /**
+   * 往刚迁移完的库里灌数据（演示数据、契约测试夹具）。在迁移之后、启动修补（来源和类型回填、合集重算、
+   * 角色收拢、自动关联）之前执行，所以灌进来的数据和真实图库一样经过这些启动步骤
+   */
+  seed?: (db: Db) => void;
 }
 
 /**
  * 真实数据源：SQLite（better-sqlite3）+ 文件系统。
  *
  * 实现顺序和每个方法的验收标准见 docs/TASKS.md，方法上的 T 编号就是任务编号。
- * 参考实现：datasource/mock/MockDataSource.ts —— 行为（排序、过滤、撤销、事件）要和它一致，
- * 这样前端不用改就能切过来。
+ * 这是业务逻辑唯一的实现：演示模式和测试也跑它，只是换掉会产生副作用的部件（infra/ports.ts，docs/core-architecture.md 第 8 节）。
  *
  * 依赖按 TASKS.md「关键技术决策」安装：T01 better-sqlite3、T03 sharp、T09 onnxruntime-node（精确锁定版本）；
  * 文件监听用 Node 自带的 fs.watch（不装 chokidar），相似查重用 MIH（不用 BK-tree）。
  */
 export class SqliteDataSource implements DataSource {
   async replaceImage(id: ID, body: ReplaceImageBody): Promise<ReplaceImageResult> {
+    this.requireLibraryFiles('替换图库里的文件');
     return replaceImage(this.ctx,id,body,ids=>{
       this.collectionsHook(null,ids);
       this.pipeline.afterImport();
     });
   }
   async importImages(body: ImportImagesBody): Promise<ImportImagesResult> {
+    this.requireLibraryFiles('导入文件');
     return importImages(this.ctx, body, {
-      trashImpl: this.importTrashImpl,
+      trashImpl: this.ports.trashImpl,
       afterImport: (ids) => {
         this.collectionsHook(null, ids.length ? ids : 'all');
         if (ids.length) this.pipeline.afterImport();
       },
     });
   }
-  private readonly importTrashImpl?: TrashImpl;
+  /** 可替换部件（infra/ports.ts） */
+  readonly ports: EnginePorts;
+  /** 数据库文件；内存库是 null。AI 助手的只读 SQL 直接读它 */
+  readonly databaseFile: string | null;
+
+  /** 演示模式（libraryFiles = false）下拒绝会改动用户图库文件夹的操作 */
+  private requireLibraryFiles(action: string): void {
+    if (!this.ports.libraryFiles) throw new BadRequestError(`演示数据不支持${action}`);
+  }
   /**
    * T01：打开 / 创建 `${dataDir}/emaki.sqlite`，开启 WAL 和外键，跑迁移（db/migrate.ts），
    * 创建 UndoStack 和 JobQueue（runner 由 T07 接上 services/*）。
@@ -199,6 +208,7 @@ export class SqliteDataSource implements DataSource {
     await mkdir(dataDir, { recursive: true });
     const db = openDatabase(opts.memory ? ':memory:' : path.join(dataDir, 'emaki.sqlite'));
     migrate(db, { backupDir: opts.memory ? undefined : dataDir, log: (m) => console.log(m) });
+    if (opts.seed) opts.seed(db);
     db.pragma('optimize = 0x10002'); // 长连接：打开时一次，之后每小时一次
     // 启动时不精确数 image_tags（冷缓存下 2 秒多）；识别跑完、每小时那次照常数
     if (refreshPlannerStats(db, { skipImageTags: true })) console.log('[db] 行数变化较大，已重新采样查询统计');
@@ -216,15 +226,15 @@ export class SqliteDataSource implements DataSource {
       const r = ds.collections.refreshAll();
       console.log(`合集：${r.active} 本（新建 ${r.created} · 删除 ${r.removed} · 更新 ${r.updated}）· ${Math.round(r.ms)} ms`);
     }
-    if (opts.autoJobs !== false) ds.startWatching();
-    ds.autoTag = opts.autoJobs !== false;
+    if (ds.ports.autoJobs) ds.startWatching();
+    ds.autoTag = ds.ports.autoJobs;
     // 识别角色（T10）。T11 / T20 之后在这里继续 register
     // 角色 → 作品的完整回退链 + 标签规范化（改名、服装变体归本体）来自 Danbooru 缓存（T11）
     const offlineCharacters = opts.memory ? undefined : OfflineCharacterIndex.open(dataDir);
     const danbooru = new DanbooruCatalog(db, CopyrightResolver.fromAsset(db), offlineCharacters);
     if (offlineCharacters) console.log('[character-index] 已加载离线角色索引');
     // 中文名（T12）：随仓库分发的词库，版本变了才重新导入；导入后全库重算显示名
-    const dict = opts.importDict === false ? { imported: false } : importDictIfNeeded(db);
+    const dict = ds.ports.importDict ? importDictIfNeeded(db) : { imported: false };
     const localizer: Localizer = new SqliteLocalizer(db, danbooru);
     ds.localizer = localizer;
     if (dict.imported) db.transaction(() => relocalizeAll(db, localizer))();
@@ -338,7 +348,7 @@ export class SqliteDataSource implements DataSource {
     // the user's Pixiv setting and the normal pipeline.
     queueUnseenPixivAnimations(ds.ctx);
     const roots = db.prepare('SELECT COUNT(*) FROM library_roots WHERE enabled = 1 AND removed_at IS NULL').pluck().get() as number;
-    if (opts.autoJobs !== false && !process.env.EMAKI_NO_AUTOSCAN && roots > 0) {
+    if (ds.ports.autoJobs && !process.env.EMAKI_NO_AUTOSCAN && roots > 0) {
       ds.requests.requestFull();
       ds.ctx.jobs.enqueue('scan');
     }
@@ -393,9 +403,11 @@ export class SqliteDataSource implements DataSource {
   private readonly changes: ChangeLog;
 
   protected constructor(db: Db, bus: EventBus, dataDir: string, opts: SqliteOpenOptions) {
-    this.importTrashImpl = opts.trashImpl;
-    const jobs = new JobQueue(bus, (kind) => this.pipeline.runner(kind));
-    this.ctx = createContext({ db, bus, dataDir, clock: opts.clock ?? Date.now, undo: new UndoStack(), jobs });
+    this.ports = resolvePorts(opts);
+    this.databaseFile = opts.memory ? null : path.join(dataDir, 'emaki.sqlite');
+    const jobRunner = this.ports.jobRunner;
+    const jobs = new JobQueue(bus, (kind) => (jobRunner ? jobRunner(kind) : this.pipeline.runner(kind)));
+    this.ctx = createContext({ db, bus, dataDir, clock: this.ports.clock, undo: new UndoStack(), jobs });
     this.thumbs = new ThumbnailService({
       db,
       thumbsRoot: path.join(dataDir, 'thumbs', 'v1'),
@@ -428,7 +440,7 @@ export class SqliteDataSource implements DataSource {
     this.collectionQueries = new CollectionQueries(this.ctx, this.collections, this.derived, () => this.makeCatalog().catalog);
     this.library = new LibraryQueries(this.ctx, this.derived, () => this.collectionQueries.stats());
     this.kindDeps = { catalog: () => this.makeCatalog().catalog, autoAcceptThreshold: () => readSettings(db).tagger.autoAcceptThreshold };
-    this.pendingTrash = new PendingTrash(this.ctx, { trashImpl: opts.trashImpl, checkRoot: opts.checkRecyclable });
+    this.pendingTrash = new PendingTrash(this.ctx, { trashImpl: this.ports.trashImpl, checkRoot: this.ports.checkRecyclable });
     this.bulk = new BulkOps(this.ctx, (ids) => this.requireVisibleImages(ids), this.kindDeps, this.pendingTrash, this.collectionsHook);
     this.unrecognized = new UnrecognizedQueries(this.ctx, () => this.makeCatalog().catalog, softMs);
     this.characters = new CharacterMutations(this.ctx, this.derived, () => this.danbooru, () => this.makeCatalog().catalog);
@@ -569,9 +581,11 @@ export class SqliteDataSource implements DataSource {
     return this.collectionQueries.get(id);
   }
   async createCollection(body: CreateCollectionBody): Promise<MutationResult & { collection: CollectionSummary }> {
+    if (body.organizeFiles) this.requireLibraryFiles('整理到子文件夹');
     return this.collectionQueries.create(body);
   }
   async updateCollection(id: ID, body: UpdateCollectionBody): Promise<MutationResult> {
+    if (body.organizeFiles) this.requireLibraryFiles('整理到子文件夹');
     return this.collectionQueries.update(id, body);
   }
   async deleteCollection(id: ID): Promise<MutationResult> {
@@ -725,7 +739,7 @@ export class SqliteDataSource implements DataSource {
       readSettings(this.ctx.db).tagger.pixivFilenameMode);
     // 类型、收藏、分级、角色放进同一次 mutate：一起传时一个 token 撤销全部
     return this.ctx.mutate((u) => {
-      // 提示文案和 mock 一致：收藏 > 分级 > 角色 > 类型，只报一条
+      // 提示文案：收藏 > 分级 > 角色 > 类型，只报一条
       let message = '';
       if (sourceEdit) {
         const newKey = sourceEdit.source?.postId ? sourceEdit.source.site + ':' + sourceEdit.source.postId : null;
@@ -782,14 +796,24 @@ export class SqliteDataSource implements DataSource {
       return { message: message || '已更新' };
     });
   }
-  async getThumbnail(id: ID, width: ThumbWidth): Promise<FileResponse | null> {
+  /** 读图片文件用的行；不要求「可见」（排除页、已处理的重复组也要显示被排除或已删除图片的缩略图） */
+  private fileRow(id: ID): ImageFileRow | null {
     const n = parseId(id);
     if (n === null) return null;
-    // 不要求「可见」：排除页和已处理的重复组都要显示被排除或已删除图片的缩略图（mock 也是这样）
-    const row = this.ctx
-      .stmt('SELECT i.id, i.sha256, i.format, i.rel_path, r.path AS root_path FROM images i JOIN library_roots r ON r.id = i.root_id WHERE i.id = ?')
-      .get(n) as ThumbRow | undefined;
+    return (
+      (this.ctx
+        .stmt(
+          `SELECT i.id, i.sha256, i.format, i.width, i.height, i.file_name, i.rel_path, i.dominant_color, r.path AS root_path
+           FROM images i JOIN library_roots r ON r.id = i.root_id WHERE i.id = ?`,
+        )
+        .get(n) as ImageFileRow | undefined) ?? null
+    );
+  }
+
+  async getThumbnail(id: ID, width: ThumbWidth): Promise<FileResponse | null> {
+    const row = this.fileRow(id);
     if (!row) return null;
+    if (this.ports.imageFiles) return this.ports.imageFiles.thumbnail(row, width);
     const file = await this.thumbs.ensure(row, width);
     if (!file) return null;
     // 图片 id 稳定（内容变了 id 不变），所以不能用 immutable，按内容 sha 做 ETag
@@ -802,14 +826,11 @@ export class SqliteDataSource implements DataSource {
     };
   }
 
-  /** 不要求可见（和 mock 一样）；文件不在了返回 null → 404 */
+  /** 不要求可见；文件不在了返回 null → 404 */
   async getOriginal(id: ID): Promise<FileResponse | null> {
-    const n = parseId(id);
-    if (n === null) return null;
-    const row = this.ctx
-      .stmt('SELECT i.sha256, i.format, i.rel_path, r.path AS root_path FROM images i JOIN library_roots r ON r.id = i.root_id WHERE i.id = ?')
-      .get(n) as { sha256: string; format: ImageFormat; rel_path: string; root_path: string } | undefined;
+    const row = this.fileRow(id);
     if (!row) return null;
+    if (this.ports.imageFiles) return this.ports.imageFiles.original(row);
     const abs = toAbs(row.root_path, row.rel_path);
     try {
       await access(abs);
@@ -824,6 +845,7 @@ export class SqliteDataSource implements DataSource {
 
   async revealImage(id: ID): Promise<void> {
     const n = this.requireVisibleImages([id])[0]!;
+    this.requireLibraryFiles('在资源管理器中显示文件');
     const row = this.ctx
       .stmt('SELECT i.rel_path, r.path AS root_path FROM images i JOIN library_roots r ON r.id = i.root_id WHERE i.id = ?')
       .get(n) as { rel_path: string; root_path: string };
@@ -891,6 +913,7 @@ export class SqliteDataSource implements DataSource {
 
   async moveImages(body: MoveImagesBody): Promise<MutationResult> {
     const { root, dir, rows } = this.moveRows(body);
+    this.requireLibraryFiles('移动文件');
     if (!rows.length) throw new BadRequestError('没有可以移动的图');
 
     // 扫描、识别正在读这些文件时不能移（扫描会把移走的图当成丢失）
@@ -942,6 +965,8 @@ export class SqliteDataSource implements DataSource {
     return this.changes.list(group);
   }
   async revertChange(id: ID): Promise<MutationResult> {
+    // 移回原处要动文件
+    if (this.ctx.stmt('SELECT kind FROM change_log WHERE id = ?').pluck().get(parseId(id)) === 'move') this.requireLibraryFiles('移回文件');
     return this.changes.revert(id);
   }
 
@@ -1255,6 +1280,7 @@ export class SqliteDataSource implements DataSource {
   }
 
   async addLibraryRoot(body: AddLibraryRootBody): Promise<MutationResult> {
+    this.requireLibraryFiles('添加图库文件夹');
     const input = normalizeRootPath(body.path);
     try {
       const st = await stat(input);

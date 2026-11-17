@@ -5,14 +5,17 @@ import { EventBus } from './core/events.ts';
 import type { DataSource } from './datasource/DataSource.ts';
 import { KeepAwake } from './services/system/keepAwake.ts';
 
+/** 演示模式也跑真实引擎（docs/core-architecture.md 第 8 节）：换成演示数据和假部件，数据库在 data/demo（每次启动重建） */
 async function createDataSource(bus: EventBus): Promise<DataSource> {
-  if (config.dataSource === 'sqlite') {
-    // 动态 import：mock 模式下不需要装 better-sqlite3 / sharp 这些原生依赖
-    const { SqliteDataSource } = await import('./datasource/sqlite/SqliteDataSource.ts');
-    return SqliteDataSource.open(bus, config.dataDir);
+  if (config.dataSource === 'demo') {
+    const started = performance.now();
+    const { openDemoEngine } = await import('./demo/engine.ts');
+    const { ds } = await openDemoEngine(bus, { dir: config.libraryDir });
+    console.log(`演示数据已就绪：${config.libraryDir}（${Math.round(performance.now() - started)} ms）`);
+    return ds;
   }
-  const { MockDataSource } = await import('./datasource/mock/MockDataSource.ts');
-  return new MockDataSource(bus);
+  const { SqliteDataSource } = await import('./datasource/sqlite/SqliteDataSource.ts');
+  return SqliteDataSource.open(bus, config.libraryDir);
 }
 
 const bus = new EventBus();

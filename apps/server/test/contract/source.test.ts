@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { mockFactory, sqliteFactory } from './harness.ts';
+import { sqliteFactory } from './harness.ts';
 import { parseSource } from '../../src/services/source/parseSource.ts';
 
-for (const [name, factory] of [['mock', mockFactory], ['sqlite', sqliteFactory]] as const) {
+for (const [name, factory] of [['sqlite', sqliteFactory]] as const) {
   describe(`${name} source editing`, () => {
     it('persists, clears, resets and undoes without changing character or artist associations', async () => {
       const env = await factory();

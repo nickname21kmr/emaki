@@ -1,7 +1,7 @@
 import { collectionCandidates } from './collectionCandidates.ts';
 import { collapsedImages, decideCollapse } from './collapsedImages.ts';
 /**
- * 图片列表：筛选、排序、游标分页。行为对照 MockDataSource.listImages：
+ * 图片列表：筛选、排序、游标分页：
  * 不传 status = 除 excluded 以外的全部；orientation 阈值 1.05 / 0.95；默认 desc；random 忽略 order。
  *
  * 用 keyset 游标而不是 offset：扫描期间不断插入新图，offset 分页会让无限滚动出现重复或漏图。
@@ -19,7 +19,7 @@ const SORT_EXPR: Record<Exclude<ImageSort, 'random'>, string> = {
   page: 'i.page_no',
   addedAt: 'i.added_at',
   modifiedAt: 'i.modified_at',
-  fileName: 'i.file_name COLLATE NOCASE', // better-sqlite3 不支持自定义 collation；和 mock 的 localeCompare 有差异（有意）
+  fileName: 'i.file_name COLLATE NOCASE', // better-sqlite3 不支持自定义 collation，按 NOCASE 排
   bytes: 'i.bytes',
 };
 const SORT_FIELD: Record<Exclude<ImageSort, 'random'>, keyof ImageRow> = {
@@ -215,7 +215,7 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
         countWhere.push(c.count.replace('i.id IN', 'i.id NOT IN'));
       }
     }
-    // 只看识别过的图：文件内容变了等重新识别的图还留着旧标签，不能拿旧标签算（和 mock 一致）
+    // 只看识别过的图：文件内容变了等重新识别的图还留着旧标签，不能拿旧标签算
     both('i.tagged_at IS NOT NULL');
   }
   if (q.orientation === 'landscape') both('i.width > i.height * 1.05');

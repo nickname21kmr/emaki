@@ -10,11 +10,16 @@ try {
   if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
 }
 
-export type DataSourceKind = 'mock' | 'sqlite';
+/** sqlite：真实图库；demo：演示数据（真实引擎 + 演示数据 + 假部件，见 demo/engine.ts） */
+export type DataSourceKind = 'demo' | 'sqlite';
 export type ModelSourceId = 'huggingface' | 'hf-mirror' | 'modelscope';
 
 // 相对路径一律按仓库根目录解析：npm -w 运行时 cwd 是 apps/server，按 cwd 解析会落到 apps/server/data
 const dataDir = path.resolve(repoRoot, process.env.EMAKI_DATA_DIR ?? 'data');
+
+/** 命令行 --mock（或 --demo）> 环境变量 EMAKI_DATA_SOURCE（demo，旧写法 mock 也认）> 默认 sqlite */
+const demo =
+  process.argv.includes('--mock') || process.argv.includes('--demo') || ['demo', 'mock'].includes(process.env.EMAKI_DATA_SOURCE ?? '');
 
 /**
  * 所有配置都来自环境变量（或仓库根目录的 .env），`npm run dev:mock` 切到演示数据。
@@ -33,12 +38,15 @@ export const config = {
     .filter(Boolean),
   port: Number(process.env.EMAKI_PORT ?? 5174),
   /**
-   * sqlite：真实实现，读写 dataDir 下的数据库和缩略图缓存（默认）。
-   * mock：内存假数据 + SVG 占位图，前端开发用。优先级：命令行 --mock > 环境变量 > 默认 sqlite。
+   * sqlite：真实图库，读写 dataDir 下的数据库和缩略图缓存（默认）。
+   * demo：演示数据，跑的也是真实引擎，只是换成演示数据和假部件，绝不碰用户的图库文件夹。
+   * 优先级：命令行 --mock / --demo > 环境变量（demo，旧写法 mock）> 默认 sqlite。
    */
-  dataSource: (process.argv.includes('--mock') ? 'mock' : (process.env.EMAKI_DATA_SOURCE ?? 'sqlite')) as DataSourceKind,
-  /** 数据库、缩略图缓存、模型文件都放这里；已被 .gitignore 忽略 */
+  dataSource: (demo ? 'demo' : 'sqlite') as DataSourceKind,
+  /** 数据库、缩略图缓存、模型文件、AI 助手的设置都放这里；已被 .gitignore 忽略 */
   dataDir,
+  /** 图库数据库所在的目录：演示模式是 <dataDir>/demo（每次启动清空重建），否则就是 dataDir */
+  libraryDir: demo ? path.join(dataDir, 'demo') : dataDir,
   /** 生产模式下由后端直接托管前端构建产物 */
   webDist: path.join(repoRoot, 'apps/web/dist'),
   /** 随仓库分发的数据文件（离线对照表、词库） */

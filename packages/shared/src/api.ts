@@ -759,10 +759,11 @@ export interface KeepAwakeStatus {
 /** GET /api/health */
 export interface HealthResponse {
   ok: true;
-  dataSource: 'mock' | 'sqlite';
+  /** sqlite：真实图库；demo：演示数据（真实引擎 + 演示数据，界面上显示「演示数据」角标） */
+  dataSource: 'demo' | 'sqlite';
   /** 根 package.json 的 version */
   version: string;
-  /** 数据目录的绝对路径（只监听本机，返回路径没有问题） */
+  /** 图库数据库所在目录的绝对路径（演示模式是数据目录下的 demo；只监听本机，返回路径没有问题） */
   dataDir: string;
   /** 这次启动的随机 id，重启就变：前端据此丢掉旧的撤销记录（撤销栈只在后端内存里） */
   bootId: string;

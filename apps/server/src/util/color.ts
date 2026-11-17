@@ -1,5 +1,5 @@
 /**
- * 颜色小工具。mock 和 sqlite 共用，保证两边算出的作品色 / 占位主色一致。
+ * 颜色小工具：作品色、演示数据的占位主色。
  * （T10 会在这里加 colorFromTag。）
  */
 
@@ -27,12 +27,12 @@ export function hslToHex(h: number, s: number, l: number): string {
   return `#${toHex(f(0))}${toHex(f(8))}${toHex(f(4))}`;
 }
 
-/** 作品主题色（mock 的 hue → hex） */
+/** 作品主题色（演示数据的 hue → hex） */
 export const workColorFromHue = (hue: number) => hslToHex(hue, 62, 58);
 
-/** mock 图片的占位主色 */
+/** 演示数据图片的占位主色 */
 export const mockDominantColor = (hue: number, imageId: string) =>
   hslToHex(hue + ((hashString(imageId) % 30) - 15), 45, 82);
 
-/** 作品色点：按 tag 哈希取色相，和 mock 一样用 hsl(h,62%,58%) */
+/** 作品色点：按 tag 哈希取色相，hsl(h,62%,58%) */
 export const colorFromTag = (tag: string) => hslToHex(hashString(tag) % 360, 62, 58);

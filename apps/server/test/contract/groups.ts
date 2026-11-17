@@ -1,14 +1,12 @@
 /**
- * 契约用例：同一套断言分别跑在 mock 和 sqlite 上。期望值见 test/fixtures/contract-db.ts 顶部注释。
- * 每组对应一个任务；sqlite 那边只有任务在 SQLITE_READY 里才跑。
+ * 契约用例：对唯一的实现（真实引擎 + 契约夹具）做接口测试。期望值见 test/fixtures/contract-db.ts 顶部注释。
+ * 每组对应 docs/TASKS.md 的一个任务。
  */
 import { mkdirSync, rmSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { makeTmpDir } from '../helpers/tmp.ts';
 import type { BulkImagesBody } from '@emaki/shared';
 import { canon, contract, NOW, type ContractEnv, type ContractFactory } from './harness.ts';
-
-type Name = 'mock' | 'sqlite';
 
 function useEnv(make: ContractFactory): () => ContractEnv {
   let env: ContractEnv;
@@ -21,13 +19,13 @@ function useEnv(make: ContractFactory): () => ContractEnv {
   return () => env;
 }
 
-/** 一个肯定不存在的 id（sqlite 是整数，mock 是字符串） */
-const missing = (env: ContractEnv, prefix: string) => (env.name === 'sqlite' ? '999999' : `${prefix}999`);
+/** 一个肯定不存在的 id */
+const missing = (_env: ContractEnv, _prefix: string) => '999999';
 
 // ---------------------------------------------------------------- T02 设置
 
-export function settingsContract(make: ContractFactory, name: Name) {
-  contract('T02', '设置', name, () => {
+export function settingsContract(make: ContractFactory) {
+  contract('T02', '设置', () => {
     const env = useEnv(make);
 
     it('读取设置：文件夹、张数、默认值', async () => {
@@ -251,8 +249,8 @@ export function settingsContract(make: ContractFactory, name: Name) {
 
 // ---------------------------------------------------------------- T13 统计 / 作品 / 角色
 
-export function statsContract(make: ContractFactory, name: Name) {
-  contract('T13', '统计', name, () => {
+export function statsContract(make: ContractFactory) {
+  contract('T13', '统计', () => {
     const env = useEnv(make);
 
     it('getStats 口径', async () => {
@@ -282,8 +280,8 @@ export function statsContract(make: ContractFactory, name: Name) {
   });
 }
 
-export function worksContract(make: ContractFactory, name: Name) {
-  contract('T13', '作品', name, () => {
+export function worksContract(make: ContractFactory) {
+  contract('T13', '作品', () => {
     const env = useEnv(make);
 
     it('covers：最多 3 张、互不重复，第一张就是 coverImageId（T26 / T28）', async () => {
@@ -325,8 +323,8 @@ export function worksContract(make: ContractFactory, name: Name) {
   });
 }
 
-export function charactersContract(make: ContractFactory, name: Name) {
-  contract('T13', '角色', name, () => {
+export function charactersContract(make: ContractFactory) {
+  contract('T13', '角色', () => {
     const env = useEnv(make);
     const ids = (e: ContractEnv, list: { id: string }[]) => list.map((c) => e.back('character', c.id));
 
@@ -447,8 +445,8 @@ export function charactersContract(make: ContractFactory, name: Name) {
   });
 }
 
-export function characterMutationsContract(make: ContractFactory, name: Name) {
-  contract('T14', '角色编辑', name, () => {
+export function characterMutationsContract(make: ContractFactory) {
+  contract('T14', '角色编辑', () => {
     const env = useEnv(make);
 
     it('新建自建角色；空名 400、作品不存在 404、标签重复 409；可撤销', async () => {
@@ -514,9 +512,9 @@ export function characterMutationsContract(make: ContractFactory, name: Name) {
   });
 }
 
-const missingWork = (e: ContractEnv) => (e.name === 'sqlite' ? '999999' : 'w999');
-export function unrecognizedContract(make: ContractFactory, name: Name) {
-  contract('T15', '未识别', name, () => {
+const missingWork = (_e: ContractEnv) => '999999';
+export function unrecognizedContract(make: ContractFactory) {
+  contract('T15', '未识别', () => {
     const env = useEnv(make);
     const ids = (e: ContractEnv, items: { image: { id: string } }[]) => items.map((x) => e.back('image', x.image.id));
 
@@ -812,8 +810,8 @@ export function unrecognizedContract(make: ContractFactory, name: Name) {
 }
 // ---------------------------------------------------------------- T17 排除
 
-export function exclusionsContract(make: ContractFactory, name: Name) {
-  contract('T17', '排除', name, () => {
+export function exclusionsContract(make: ContractFactory) {
+  contract('T17', '排除', () => {
     const env = useEnv(make);
 
     it('列出规则与张数（新的在前）', async () => {
@@ -880,8 +878,8 @@ export function exclusionsContract(make: ContractFactory, name: Name) {
     });
   });
 }
-export function searchContract(make: ContractFactory, name: Name) {
-  contract('T20', '搜索', name, () => {
+export function searchContract(make: ContractFactory) {
+  contract('T20', '搜索', () => {
     const env = useEnv(make);
     const run = async (q: string, limit?: number) => {
       const e = env();
@@ -928,8 +926,8 @@ export function searchContract(make: ContractFactory, name: Name) {
     });
   });
 }
-export function imagesContract(make: ContractFactory, name: Name) {
-  contract('T05', '图片', name, () => {
+export function imagesContract(make: ContractFactory) {
+  contract('T05', '图片', () => {
     const env = useEnv(make);
     const ids = (e: ContractEnv, list: { id: string }[]) => list.map((i) => e.back('image', i.id));
 
@@ -1026,8 +1024,8 @@ export function imagesContract(make: ContractFactory, name: Name) {
     });
   });
 }
-export function duplicatesContract(make: ContractFactory, name: Name) {
-  contract('T16', '重复', name, () => {
+export function duplicatesContract(make: ContractFactory) {
+  contract('T16', '重复', () => {
     const env = useEnv(make);
     const brief = (e: ContractEnv, gs: Awaited<ReturnType<ContractEnv['ds']['listDuplicates']>>) =>
       gs.map((g) => ({
@@ -1109,8 +1107,8 @@ export function duplicatesContract(make: ContractFactory, name: Name) {
     });
   });
 }
-export function bulkContract(make: ContractFactory, name: Name) {
-  contract('T18', '批量操作', name, () => {
+export function bulkContract(make: ContractFactory) {
+  contract('T18', '批量操作', () => {
     const env = useEnv(make);
     const snapshot = async (e: ContractEnv, ids: string[]) =>
       Promise.all(ids.map(async (id) => canon(e, await e.ds.getImage(id))));
@@ -1244,7 +1242,7 @@ export function bulkContract(make: ContractFactory, name: Name) {
       const e = env();
       const id = e.id('image', 'i1');
       const before = await snapshot(e, [id]);
-      await expect(e.ds.bulkImages({ ids: [id, e.name === 'sqlite' ? '999999' : 'i999'], action: { type: 'favorite', value: true } })).rejects.toMatchObject({
+      await expect(e.ds.bulkImages({ ids: [id, '999999'], action: { type: 'favorite', value: true } })).rejects.toMatchObject({
         statusCode: 404,
       });
       expect(await snapshot(e, [id])).toEqual(before);
@@ -1288,8 +1286,8 @@ export function bulkContract(make: ContractFactory, name: Name) {
 }
 // ---------------------------------------------------------------- T19 撤销
 
-export function undoContract(make: ContractFactory, name: Name) {
-  contract('T19', '撤销', name, () => {
+export function undoContract(make: ContractFactory) {
+  contract('T19', '撤销', () => {
     const env = useEnv(make);
 
     it('撤销后状态与之前一致，并通知前端刷新', async () => {
@@ -1338,8 +1336,8 @@ export function undoContract(make: ContractFactory, name: Name) {
 
 // ---------------------------------------------------------------- T27 内容类型
 
-export function kindsContract(make: ContractFactory, name: Name) {
-  contract('T27', '内容类型', name, () => {
+export function kindsContract(make: ContractFactory) {
+  contract('T27', '内容类型', () => {
     const env = useEnv(make);
     const ids = (e: ContractEnv, list: { id: string }[]) => list.map((i) => e.back('image', i.id));
 
@@ -1416,8 +1414,8 @@ export function kindsContract(make: ContractFactory, name: Name) {
 
 // ---------------------------------------------------------------- T38 合集（每条都是独立的 it，从夹具初始状态开始，RV-C-16）
 
-export function collectionsContract(make: ContractFactory, name: Name) {
-  contract('T38', '合集', name, () => {
+export function collectionsContract(make: ContractFactory) {
+  contract('T38', '合集', () => {
     const env = useEnv(make);
     const img = (e: ContractEnv, x: string) => e.id('image', x);
     const ids = (e: ContractEnv, list: { id: string }[]) => list.map((i) => e.back('image', i.id));

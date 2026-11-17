@@ -65,7 +65,7 @@ import type {
 } from '@emaki/shared';
 import type { CharacterVerification } from '../services/catalog/characterVerification.ts';
 
-/** 图片文件响应：要么直接给内容（mock 的 SVG），要么给磁盘路径让 fastify 流式发送。 */
+/** 图片文件响应：要么直接给内容（演示模式的 SVG 占位图），要么给磁盘路径让 fastify 流式发送。 */
 export type FileResponse =
   | { kind: 'buffer'; contentType: string; body: Buffer | string; etag?: string; cacheControl?: string }
   | { kind: 'path'; contentType: string; filePath: string; etag?: string; cacheControl?: string };
@@ -73,9 +73,9 @@ export type FileResponse =
 /**
  * 数据层接口 —— 后端架构的核心接缝。
  *
- * routes/ 只依赖这个接口，不关心数据从哪来：
- * - MockDataSource（datasource/mock）：内存假数据，前端开发和演示用，已完整实现。
- * - SqliteDataSource（datasource/sqlite）：真实实现，读写 SQLite + 文件系统，逐项实现见 docs/TASKS.md。
+ * routes/ 只依赖这个接口。实现只有一个：SqliteDataSource（datasource/sqlite），读写 SQLite + 文件系统。
+ * 演示模式和测试也用它，只是换掉会产生副作用的部件（infra/ports.ts、demo/engine.ts）。
+ * 迁移过程中这个接口逐步退化成「命令 + 查询注册表」的外壳，P6 删掉（docs/core-architecture.md 第 3 节）。
  *
  * 约定：
  * - 找不到资源时 get* 返回 null，其余方法抛 NotFoundError。
@@ -83,6 +83,8 @@ export type FileResponse =
  * - 修改后要 emit `library-changed`，让前端刷新。
  */
 export interface DataSource {
+  /** 数据库文件的路径（内存库为 null）：AI 助手的只读 SQL 工具直接读它 */
+  readonly databaseFile?: string | null;
   importImages(body: ImportImagesBody): Promise<ImportImagesResult>;
   replaceImage(id: ID, body: ReplaceImageBody): Promise<ReplaceImageResult>;
   // 统计

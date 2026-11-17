@@ -1,5 +1,5 @@
 /**
- * ⌘K 搜索（T20）：角色、作品、标签三类，规则与 mock 一致（searchKey 子串匹配，名额也一样）。
+ * ⌘K 搜索（T20）：角色、作品、标签三类，规则：searchKey 子串匹配，每类有名额。
  * 角色 / 作品来自 Derived 缓存；标签用 tags.image_count 缓存（图库有变化只标记过期，下次搜索时再刷新）。
  */
 import { searchKey, TAG_FILTER_MIN_SCORE, type SearchHit, type SearchQuery, type TagSuggestion, type TagSuggestionsQuery } from '@emaki/shared';

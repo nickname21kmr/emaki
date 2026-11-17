@@ -1,5 +1,5 @@
 /**
- * 契约测试夹具：小而全、完全确定（不用随机数）。mock 直接用它，sqlite 通过 seedFromMockDb 导入它。
+ * 契约测试夹具：小而全、完全确定（不用随机数）。通过 demo/seed.ts 的 seedDemoDb 灌进真实引擎。
  *
  * NOW = 2026-09-27T12:00:00Z（本地时间是下午 / 晚上，离午夜足够远，7 天分桶不受时区影响）
  *
@@ -41,7 +41,7 @@
  *   设置里文件夹张数（未进回收站、未排除）：root1 32，root2 3
  */
 import type { ImageFormat, Rating, Settings, TagScore } from '@emaki/shared';
-import type { CharacterRow, DuplicateRow, ExclusionRow, ImageRow, MockDb, WorkRow } from '../../src/datasource/mock/fixtures.ts';
+import type { CharacterRow, DuplicateRow, ExclusionRow, ImageRow, DemoDb, WorkRow } from '../../src/demo/fixtures.ts';
 
 const DAY = 86_400_000;
 const MIN = 60_000;
@@ -149,7 +149,7 @@ const SIZE: Record<'portrait' | 'landscape' | 'square', [number, number]> = {
   square: [1500, 1500],
 };
 
-export function buildContractDb(now: number): MockDb {
+export function buildContractDb(now: number): DemoDb {
   const works = new Map(WORKS.map((w) => [w.id, structuredClone(w)]));
   const characters = new Map(CHARACTERS.map((c) => [c.id, structuredClone(c)]));
   const images = new Map<string, ImageRow>();
