@@ -5,6 +5,9 @@
 import { searchKey } from '@emaki/shared';
 import type { Db, Statement } from '../../db/connection.ts';
 import type { CopyrightResolver, CopyrightSource } from '../catalog/copyrights.ts';
+import type { OfflineCharacterIndex } from '../catalog/offlineCharacters.ts';
+import { verifiedCharacterWorks } from '../catalog/verifiedNames.ts';
+import { CharacterVerifications } from '../catalog/characterVerification.ts';
 import { guessCopyrightFromQualifier } from './copyright.ts';
 import type { DbTag } from './types.ts';
 
@@ -63,11 +66,14 @@ export function sameLineage(variant: string, base: string): boolean {
 
 export class DanbooruCatalog implements CopyrightSource {
   private readonly s: Record<string, Statement>;
+  readonly verifications: CharacterVerifications;
 
   constructor(
     private readonly db: Db,
     private readonly offline: CopyrightResolver,
+    readonly offlineCharacters?: OfflineCharacterIndex,
   ) {
+    this.verifications = new CharacterVerifications(db);
     this.s = {
       get: db.prepare('SELECT * FROM danbooru_tags WHERE name = ?'),
       upsertBase: db.prepare(`INSERT INTO danbooru_tags (name, category, post_count, fetched_at, implies, is_deprecated, not_found, alias_of)
@@ -224,7 +230,7 @@ export class DanbooruCatalog implements CopyrightSource {
   }
 
   /** 给 T10 CharacterCatalog 的 normalizeTag */
-  normalizeTag(tag: string): string {
+  normalizeDanbooruTag(tag: string): string {
     // 改名、变体归本体交替做到不再变化为止（本体本身也可能改过名，归完还能再归）：
     // 结果必须幂等，调用方可能对已经规范化的标签再规范化一次（2026-09-28 的 UNIQUE 冲突）
     let t = tag;
@@ -236,6 +242,20 @@ export class DanbooruCatalog implements CopyrightSource {
     return t;
   }
 
+  normalizeTag(tag: string): string {
+    const canonical = this.canonicalize(tag);
+    const verified = this.verifications.base(canonical) ?? this.verifications.base(tag);
+    if (verified) return this.normalizeDanbooruTag(verified);
+    const base = this.normalizeDanbooruTag(canonical);
+    const verifiedBase = this.verifications.base(base);
+    return verifiedBase ? this.normalizeDanbooruTag(verifiedBase) : base;
+  }
+
+  knowsCharacterTag(tag: string): boolean {
+    return !!(this.s.isCharacter!.get({ t: tag }) || this.s.libraryCharacter!.get(tag) ||
+      Object.hasOwn(this.offline.offline, tag) || this.offlineCharacters?.character(tag));
+  }
+
   /** 角色所属的作品标签，按改名表换成现在的名字（旧名建出来的作品会和新名的重复） */
   copyrights(characterTag: string): string[] {
     return [...new Set(this.rawCopyrights(characterTag).map((c) => this.canonicalize(c)))];
@@ -245,6 +265,8 @@ export class DanbooruCatalog implements CopyrightSource {
     const t = this.canonicalize(characterTag);
     const cached = this.get(t);
     if (cached?.relatedFetchedAt && cached.copyrights?.length) return cached.copyrights;
+    const verified = verifiedCharacterWorks[t];
+    if (verified?.length) return [...verified];
     const off = this.offline.offline[t];
     if (off?.length) return off;
     const guess = this.s.i18nGuess!.get(t) as string | null | undefined;
@@ -257,6 +279,6 @@ export class DanbooruCatalog implements CopyrightSource {
         null
       );
     });
-    return q ? [q] : [];
+    return q ? [q] : this.offlineCharacters?.character(t)?.works ?? [];
   }
 }

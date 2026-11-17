@@ -6,9 +6,10 @@
  *   IO（文件暂时读不了）也不写，下次识别再试。
  * 重打标签时 image_tags / suggestions / image_copyrights 先删后写，image_characters 只增不删。
  * 用户从图上去掉过的角色（character_vetoes）不再加回，也不再作为建议。
- * T27：写完标签后按标签重算内容类型、主题和 art_score（manual 只保护类型）；截图、文字、照片、表情、动图上的
+ * T27：写完标签后按标签重算内容类型、主题和 art_score（manual 只保护类型）；截图、文字、照片、表情上的
  * 未知角色不新建，只进建议（BI-15），已有角色照常关联。
  */
+import type { ContentKind } from '@emaki/shared';
 import type { Db, Statement } from '../../db/connection.ts';
 import { writeArtists } from './artists.ts';
 import type { CharacterCatalog } from '../catalog/characterCatalog.ts';
@@ -16,6 +17,7 @@ import type { CopyrightSource } from '../catalog/copyrights.ts';
 import { CLASS_COLS, classificationStatements, computeClassification, writeClassification, type ClassRow } from '../classify/backfill.ts';
 import { pickRating } from './postprocess.ts';
 import type { HostItemResult } from './protocol.ts';
+import { canAutoAcceptCharacter } from './characterAcceptance.ts';
 
 export interface WriterOptions {
   repo: string;
@@ -71,13 +73,8 @@ export class TagResultWriter {
         VALUES (@imageId, @characterId, 'tagger', @score, @now) ON CONFLICT(image_id, character_id) DO NOTHING`),
       updRating: db.prepare('UPDATE images SET rating = ? WHERE id = ? AND rating_manual = 0'),
       markTagged: db.prepare('UPDATE images SET tagged_at = ?, tagger_model = ?, retag = 0 WHERE id = ?'),
-      // 只提升插画和漫画上的建议：别册里的未知角色永远只是建议（BI-15 ①）
-      promotable: db.prepare(`SELECT cs.image_id AS imageId, cs.danbooru_tag AS tag, cs.score AS score
-        FROM character_suggestions cs JOIN images i ON i.id = cs.image_id
-        WHERE cs.source='tagger' AND cs.score >= ? AND i.trashed_at IS NULL AND i.content_kind IN ('illustration','comic')`),
       classRow: db.prepare(`SELECT ${CLASS_COLS} FROM images WHERE id = ?`),
-      kindOf: db.prepare('SELECT content_kind FROM images WHERE id = ?').pluck(),
-      delSuggestion: db.prepare('DELETE FROM character_suggestions WHERE image_id = ? AND danbooru_tag = ?'),
+      acceptance: db.prepare('SELECT content_kind AS kind, shelved_at IS NULL AND original_at IS NULL AS allowed FROM images WHERE id = ?'),
       // 用户从这张图上去掉过这个角色：不再加回，也不再作为建议
       vetoed: db.prepare('SELECT 1 FROM character_vetoes WHERE image_id = ? AND character_id = ?').pluck(),
     };
@@ -135,26 +132,26 @@ export class TagResultWriter {
     // 按新标签重判类型、主题、质量分（同一事务）
     const row = s.classRow!.get(r.id) as ClassRow | undefined;
     if (row) writeClassification(this.cls, row, computeClassification({ ...row, tagged_at: now }, r.general));
-    const art = ['illustration', 'comic'].includes(s.kindOf!.get(r.id) as string);
+    const { kind, allowed } = s.acceptance!.get(r.id) as { kind: ContentKind; allowed: number };
 
-    // 角色标签规范化 + 去重（取最高分）
-    const chars = new Map<string, number>();
+    // 角色标签按图库身份去重，保留得分最高的一条。
+    const chars = new Map<string | number, { tag: string; score: number }>();
     for (const [raw, score] of r.character) {
-      const t = catalog.normalizeTag(raw);
-      chars.set(t, Math.max(chars.get(t) ?? 0, score));
+      const tag = catalog.normalizeTag(raw);
+      const id = catalog.resolveCharacterId(raw);
+      const key = id ?? tag;
+      if (score > (chars.get(key)?.score ?? -1)) chars.set(key, { tag: id === null ? tag : raw, score });
     }
-    const sorted = [...chars].sort((a, b) => b[1] - a[1]);
+    const sorted = [...chars.values()].sort((a, b) => b.score - a.score);
     s.delSuggestions!.run(r.id);
     s.delImageCopyrights!.run(r.id);
 
-    const pending = new Set<string>(); // 别册图上的未知高分角色：留作建议
-    const vetoed = (tag: string) => {
-      const cid = catalog.resolveCharacterId(tag);
-      return cid !== null && s.vetoed!.get(r.id, cid) !== undefined;
-    };
-    for (const [tag, score] of sorted) {
-      if (score < o.autoAcceptThreshold || vetoed(tag)) continue;
-      if (!art && catalog.resolveCharacterId(tag) === null) {
+    const pending = new Set<string>();
+    for (const { tag, score } of sorted) {
+      if (score < o.autoAcceptThreshold) continue;
+      const known = catalog.resolveCharacterId(tag);
+      if (known !== null && s.vetoed!.get(r.id, known) !== undefined) continue;
+      if (!allowed || !canAutoAcceptCharacter(kind, known)) {
         pending.add(tag);
         continue;
       }
@@ -165,8 +162,8 @@ export class TagResultWriter {
 
     const linked = new Set(s.linkedIds!.all(r.id) as number[]);
     let n = 0;
-    for (const [tag, score] of sorted) {
-      if ((score >= o.autoAcceptThreshold && !pending.has(tag)) || score < o.characterThreshold || n >= (o.maxSuggestions ?? 5)) continue;
+    for (const { tag, score } of sorted) {
+      if ((score >= o.autoAcceptThreshold ? !pending.has(tag) : score < o.characterThreshold) || n >= (o.maxSuggestions ?? 5)) continue;
       const cid = catalog.resolveCharacterId(tag);
       if (cid !== null && linked.has(cid)) continue; // 已经归到这个角色了（包括手动归的、合并后的重定向）
       if (cid !== null && s.vetoed!.get(r.id, cid) !== undefined) continue; // 用户去掉过的不再建议
@@ -184,30 +181,5 @@ export class TagResultWriter {
     s.markTagged!.run(now, o.repo, r.id);
     stats.tagged++;
     return r.id;
-  }
-
-  /**
-   * 分数已达到（可能被调低的）自动采纳阈值的建议，直接提升为角色关联；用户去掉过的角色只删建议、不加回。
-   * 不可撤销，识别任务已经不再自动调用；设置页的按钮走 datasource/sqlite/kinds.ts 的 promoteSuggestionsInTx（可撤销）
-   */
-  promoteSuggestions(): number {
-    const now = this.nowIso();
-    this.catalog.clearCache();
-    return this.db.transaction(() => {
-      let n = 0;
-      for (const row of this.s.promotable!.all(this.o.autoAcceptThreshold) as { imageId: number; tag: string; score: number }[]) {
-        const known = this.catalog.resolveCharacterId(row.tag);
-        if (known !== null && this.s.vetoed!.get(row.imageId, known) !== undefined) {
-          this.s.delSuggestion!.run(row.imageId, row.tag);
-          continue;
-        }
-        const { id, created } = this.catalog.ensureCharacter(row.tag, now);
-        if (created) this.stats.createdCharacters++;
-        this.s.insImageChar!.run({ imageId: row.imageId, characterId: id, score: row.score, now });
-        this.s.delSuggestion!.run(row.imageId, row.tag);
-        n++;
-      }
-      return n;
-    })();
   }
 }

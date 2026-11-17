@@ -5,8 +5,10 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { config } from '../../config.ts';
 import type { Db, Statement } from '../../db/connection.ts';
+import type { OfflineCharacterIndex } from './offlineCharacters.ts';
 
 export interface CopyrightSource {
+  readonly offlineCharacters?: OfflineCharacterIndex;
   copyrights(tag: string): string[];
   impliesClosure?(tag: string): string[];
 }

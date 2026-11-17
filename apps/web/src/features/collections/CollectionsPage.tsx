@@ -202,7 +202,9 @@ function SeriesView({ seriesKey }: { seriesKey: string }) {
               <Button variant="ghost" size="sm" icon={<Check className="size-3.5" />} onClick={() => bulk.mutate({ type: 'review' })}>
                 整套标为已整理
               </Button>
-              <CharacterPicker title="整套关联角色" meta={`${items.length} ${word}`} onPick={(c) => bulk.mutate({ type: 'addCharacter', characterId: c.id })}>
+              <CharacterPicker title="整套关联角色" meta={`${items.length} ${word}`}
+                onPick={(c) => bulk.mutate({ type: 'addCharacter', characterId: c.id })}
+                onCandidate={(danbooruTag) => bulk.mutate({ type: 'addCharacterTag', danbooruTag })}>
                 <Button variant="ghost" size="sm" icon={<UserRoundPlus className="size-3.5" />}>
                   整套关联角色…
                 </Button>

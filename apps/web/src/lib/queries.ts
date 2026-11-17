@@ -208,10 +208,10 @@ export const useDuplicates = (resolved = false) =>
 
 export const useExclusions = () => useQuery({ queryKey: qk.exclusions, queryFn: api.exclusions });
 
-export const useSearch = (q: string) =>
+export const useSearch = (q: string, forAssignment = false) =>
   useQuery({
-    queryKey: qk.search(q),
-    queryFn: () => api.search(q),
+    queryKey: forAssignment ? [...qk.search(q), 'assignment'] : qk.search(q),
+    queryFn: () => api.search(q, 20, forAssignment),
     enabled: q.trim().length > 0,
     placeholderData: keepPreviousData,
     staleTime: 10_000,

@@ -1,6 +1,7 @@
 import { Link } from 'react-router';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Skeleton } from '@/components/ui';
+import { PromoteSuggestionsButton } from '@/components/media/PromoteSuggestionsButton';
 import { formatCount } from '@/lib/format';
 import { useSettings, useStats, useUnrecognizedSummary } from '@/lib/queries';
 import { AreaTabs } from './components/AreaTabs';
@@ -41,9 +42,9 @@ export function UnrecognizedPage() {
   return (
     <div className="flex h-full min-h-[620px] flex-col">
       <PageHeader title="未识别" subtitle={<Subtitle />} actions={
-          // 三个按钮一组：同样的描边样式，悬停有一句说明
           <div className="flex items-center gap-2">
             {p.area === 'art' && <PixivTagsButton />}
+            {p.kind && <PromoteSuggestionsButton kind={p.kind} />}
             <RetagButton />
             <RunTaggerButton variant="outline" tip="给还没识别过的图认角色：认得出的直接归入，拿不准的进「有建议」。" />
           </div>
@@ -84,7 +85,6 @@ function Subtitle() {
           <Link to="/annex" className="mx-0.5 text-fg-muted hover:text-fg hover:underline">
             别册
           </Link>
-          ，不需要识别
         </span>
       )}
     </>

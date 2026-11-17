@@ -251,6 +251,7 @@ export interface UpdateImageBody {
 
 export type BulkImageAction =
   | { type: 'assign'; characterId: ID }
+  | { type: 'assignTag'; danbooruTag: string }
   | { type: 'unassign'; characterId: ID }
   | { type: 'exclude' }
   | { type: 'restore' }
@@ -459,6 +460,7 @@ export interface UpdateCollectionBody {
 export type BulkCollectionAction =
   | { type: 'review' }
   | { type: 'addCharacter'; characterId: ID }
+  | { type: 'addCharacterTag'; danbooruTag: string }
   | { type: 'addWork'; workId: ID }
   | { type: 'kind'; value: CollectionKind };
 export interface BulkCollectionsBody {
@@ -601,6 +603,7 @@ export interface CreateExclusionBody {
 
 export type SearchHit =
   | { type: 'character'; character: Character; workName: string | null }
+  | { type: 'characterCandidate'; danbooruTag: string; name: string; workName: string | null; matchedName?: string }
   | { type: 'work'; work: Work }
   | { type: 'tag'; tag: string; imageCount: number };
 
@@ -608,6 +611,8 @@ export type SearchHit =
 export interface SearchQuery {
   q: string;
   limit?: number;
+  /** 角色选择器也需要能选中尚未建档的建议。 */
+  forAssignment?: boolean;
 }
 export type SearchResponse = SearchHit[];
 
@@ -636,7 +641,7 @@ export const CUSTOM_THEME_LIMITS = { themes: 30, name: 12, tags: 20 } as const;
 /** 移除的图库文件夹保留整理结果的天数：这期间重新添加同一个文件夹能找回 */
 export const REMOVED_ROOT_KEEP_DAYS = 30;
 
-/** GET /api/tagger/promotable —— 已有建议里分数已达自动采纳阈值的（调低阈值后才会有） */
+/** GET /api/tagger/promotable —— 当前可补采纳的模型建议 */
 export interface PromotableSuggestions {
   /** 涉及的图片张数 */
   images: number;

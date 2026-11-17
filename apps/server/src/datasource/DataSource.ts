@@ -12,6 +12,7 @@ import type {
   ListCollectionsQuery,
   UpdateCollectionBody,
   Character,
+  ContentKind,
   ContentKindSummary,
   CoverCandidatesResponse,
   CreateCharacterBody,
@@ -62,6 +63,7 @@ import type {
   MovePreview,
   SourceModePreview,
 } from '@emaki/shared';
+import type { CharacterVerification } from '../services/catalog/characterVerification.ts';
 
 /** 图片文件响应：要么直接给内容（mock 的 SVG），要么给磁盘路径让 fastify 流式发送。 */
 export type FileResponse =
@@ -101,6 +103,7 @@ export interface DataSource {
   updateCharacter(id: ID, body: UpdateCharacterBody): Promise<MutationResult>;
   markCharacterSeen(id: ID): Promise<void>;
   mergeCharacter(id: ID, targetId: ID): Promise<MutationResult>;
+  verifyCharacter?(body: CharacterVerification): Promise<MutationResult>;
   /** 「换封面」候选（CB-7）：自动封面的排序，前 limit 张；角色不存在抛 NotFoundError */
   listCoverCandidates(id: ID, limit: number): Promise<CoverCandidatesResponse>;
 
@@ -162,10 +165,10 @@ export interface DataSource {
   previewSourceMode(mode: 'strict' | 'broad'): Promise<SourceModePreview>;
   /** 切换 Pixiv 投稿号识别方式：报告影响了多少张，可撤销 */
   setSourceMode(mode: 'strict' | 'broad'): Promise<MutationResult>;
-  /** 已有建议里分数达到自动采纳阈值的（调低阈值后才会有；保存设置时不自动归） */
-  promotableSuggestions(): Promise<PromotableSuggestions>;
+  /** 预览当前可以补采纳的模型建议 */
+  promotableSuggestions(kind?: ContentKind): Promise<PromotableSuggestions>;
   /** 把达标的建议归到角色，可撤销 */
-  promoteSuggestions(): Promise<MutationResult>;
+  promoteSuggestions(kind?: ContentKind): Promise<MutationResult>;
   addLibraryRoot(body: AddLibraryRootBody): Promise<MutationResult>;
   updateLibraryRoot(id: ID, body: UpdateLibraryRootBody): Promise<MutationResult>;
   removeLibraryRoot(id: ID): Promise<MutationResult>;

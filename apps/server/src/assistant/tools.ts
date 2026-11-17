@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import type { AssistantCard, AssistantContext, ImportImagesResult, ReplaceImageResult } from '@emaki/shared';
 import type { DataSource } from '../datasource/DataSource.ts';
 import { queryLibrary } from './query.ts';
+import { characterVerificationSchema } from '../services/catalog/characterVerification.ts';
 
 export interface ToolHost {
   assertEnabled(): void;
@@ -19,7 +20,7 @@ export interface ToolHost {
 }
 const ids = z.array(z.string().min(1).max(100)).min(1).max(5000);
 const json = (data: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data) }] });
-const readablePath = /^\/api\/(images(?:\/[^/]+)?|characters(?:\/[^/]+)?|works(?:\/[^/]+)?|collections(?:\/[^/]+)?|library-roots|stats|jobs|unrecognized(?:\/summary)?)$/;
+const readablePath = /^\/api\/(images(?:\/[^/]+)?|characters(?:\/[^/]+)?|works(?:\/[^/]+)?|collections(?:\/[^/]+)?|library-roots|stats|jobs|search|unrecognized(?:\/summary)?)$/;
 
 /** app.inject 按 WHATWG URL 解析：\ 当作 /，.. 和 %2e 会被消掉。所以按解析后的结果判断，且解析不能改写路径 */
 function libraryReadPath(path: string) {
@@ -52,7 +53,7 @@ export function createLibraryMcp(app: FastifyInstance, ds: DataSource, file: str
       host.assertEnabled(); return json(await queryLibrary(db, sql, params, limit));
     });
   }
-  server.registerTool('read_library', { description: '按应用现有口径读取图库信息。path 为 /api/images、/api/images/:id、/api/characters、/api/characters/:id、/api/works、/api/works/:id、/api/collections、/api/collections/:id、/api/library-roots（可用的入库目标）、/api/stats、/api/jobs、/api/unrecognized 或 /api/unrecognized/summary，可附查询参数。',
+  server.registerTool('read_library', { description: '按应用现有口径读取图库信息。path 为 /api/images、/api/images/:id、/api/characters、/api/characters/:id、/api/works、/api/works/:id、/api/collections、/api/collections/:id、/api/library-roots（可用的入库目标）、/api/stats、/api/jobs、/api/search 或 /api/unrecognized（含 /summary），可附查询参数。角色归入搜索可用 /api/search?forAssignment=true&q=角色名，同时查找现有角色和未建档建议。',
     inputSchema: { path: z.string().max(4000) }, annotations: read }, async ({ path }) => json(await invoke('GET', libraryReadPath(path))));
   server.registerTool('read_media', { description: '实际查看图库图片。按需使用，可指定原图的像素裁剪区域检查局部。输出缩放到最多 1600px。',
     inputSchema: { imageId: z.string().min(1), crop: z.object({ left: z.number().int().nonnegative(), top: z.number().int().nonnegative(), width: z.number().int().positive(), height: z.number().int().positive() }).optional() }, annotations: read }, async ({ imageId, crop }) => {
@@ -138,6 +139,26 @@ export function createLibraryMcp(app: FastifyInstance, ds: DataSource, file: str
   server.registerTool('edit_character', { description: '创建或编辑角色。id 为空时创建，payload 为 {name, aliases?, workIds: string[], danbooruTag?: string|null}，返回 character.id。编辑还支持 coverImageId、coverFocus、pinned。先查询名字、别名和作品避免重复创建；未核实的 Danbooru 标签留空。',
     inputSchema: { operationId: z.string().min(1).max(100), id: z.string().optional(), payload: z.record(z.string(), z.unknown()) } }, async ({ operationId, id, payload }) => {
     host.assertEnabled(); const result = await host.operation(scope, operationId, JSON.stringify(['edit_character', { id, payload }]), () => invoke(id ? 'PATCH' : 'POST', id ? `/api/characters/${encodeURIComponent(id)}` : '/api/characters', payload));
+    host.recordMutation(sessionId, result); return json(result);
+  });
+  if (ds.verifyCharacter) {
+    server.registerTool('record_character_verification', {
+      description: '保存已查证的角色身份关系或中文常用名，供后续识别、搜索和展示复用。identity 将形态或同一人物的 tag 指向 characterTag；name 为 tag 提供常用名。sources 填原始出处链接，evidence 说明能核实什么。人工锁定的名称优先。已有的两个图库条目可用 merge_characters 合并。返回撤销 token，重试复用 operationId。',
+      inputSchema: { operationId: z.string().min(1).max(100), verification: characterVerificationSchema },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    }, async ({ operationId, verification }) => {
+      const result = await host.operation(scope, operationId, JSON.stringify(['record_character_verification', verification]),
+        () => invoke('POST', '/api/characters/verification', verification));
+      host.recordMutation(sessionId, result); return json(result);
+    });
+  }
+  server.registerTool('merge_characters', {
+    description: '把 fromId 的图库角色合并到保留的 targetId，迁移图库关联并返回撤销 token。已获得合并指令时直接执行，发现重复条目而用户还未决定时使用 ask_user。重试复用 operationId。',
+    inputSchema: { operationId: z.string().min(1).max(100), fromId: z.string().min(1), targetId: z.string().min(1) },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  }, async ({ operationId, fromId, targetId }) => {
+    const result = await host.operation(scope, operationId, JSON.stringify(['merge_characters', fromId, targetId]),
+      () => invoke('POST', `/api/characters/${encodeURIComponent(fromId)}/merge`, { targetId }));
     host.recordMutation(sessionId, result); return json(result);
   });
   server.registerTool('manage_job', { description: '列出、取消或启动 Emaki 已有后台任务。start 使用应用现有任务范围，可能覆盖全库，只有用户要求该范围时使用。停止 agent 不会自动取消这些任务。',

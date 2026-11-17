@@ -29,6 +29,28 @@ const sugs = async (image: string) =>
   (await ds.getImage(img(image)))!.characterSuggestions.map((s) => [s.name, s.characterId === null ? null : env.back('character', s.characterId)]);
 const custom = async (name: string) => (await ds.createCharacter({ name, workIds: [] })).character.id;
 
+it('按显示名、完整别名和片段都能找到未建档建议，批量归入只建一次且可撤销', async () => {
+  const tag = 'new_character_(fiction)';
+  db().prepare("INSERT INTO tag_i18n(tag,category,zh,aliases) VALUES (?,4,'图鉴显示名',?)").run(tag, '["古都吹寿子"]');
+  db().prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (?,?,0,'pixiv')").run(Number(img('i27')), tag);
+  for (const q of ['古都吹寿子', '寿', '图鉴显示名']) {
+    expect(await ds.search({q, forAssignment:true})).toContainEqual(expect.objectContaining({
+      type:'characterCandidate', danbooruTag:tag, name:'图鉴显示名',
+    }));
+  }
+  const before = dumpCore(db());
+  const result = await ds.bulkImages({ids:[img('i27'), img('i28')],action:{type:'assignTag',danbooruTag:tag}});
+  const id = String(db().prepare('SELECT id FROM characters WHERE danbooru_tag=?').pluck().get(tag));
+  expect((await ds.getImage(img('i27')))!.characterIds).toContain(id);
+  expect((await ds.getImage(img('i28')))!.characterIds).toContain(id);
+  expect((await ds.getImage(img('i27')))!.characterSuggestions.some(s => s.danbooruTag === tag)).toBe(false);
+  expect(await ds.search({q:'古都吹寿子',forAssignment:true})).toEqual([expect.objectContaining({
+    type:'character', character:expect.objectContaining({id}),
+  })]);
+  await ds.undo(result.undoToken!);
+  expect(dumpCore(db())).toEqual(before);
+});
+
 it('按 character_id 显示真名；没有 character_id 的占位行不显示', async () => {
   const x = await custom('小雪');
   pixiv('i27', x);

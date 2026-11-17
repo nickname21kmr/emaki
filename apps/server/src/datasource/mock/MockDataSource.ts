@@ -181,6 +181,7 @@ export class MockDataSource implements DataSource {
       toCharacter: (row) => this.toCharacter(row),
       toWork: (row) => this.toWork(row),
       withUndo: (message, revert) => this.withUndo(message, revert),
+      materializeCandidate: (tag) => this.materializeCandidate(tag),
     });
   }
 
@@ -490,6 +491,20 @@ export class MockDataSource implements DataSource {
         source: 'tagger',
       };
     });
+  }
+
+  private materializeCandidate(tag: string): { character: CharacterRow; created: boolean } {
+    const existing = this.idx.charByTag.get(tag);
+    if (existing) return { character: existing, created: false };
+    if (!this.idx.visible.some(img => !img.excludedBy && img.suggestions.some(([name]) => name === tag))) {
+      throw new NotFoundError('角色建议');
+    }
+    const character: CharacterRow = {
+      id: `c_${hashString(tag).toString(36)}`, name: humanizeTag(tag), danbooruTag: tag,
+      source: 'danbooru', aliases: [], workIds: [], newCount: 0, coverImageId: null, coverFocus: null, pinned: false,
+    };
+    this.db.characters.set(character.id, character);
+    return { character, created: true };
   }
 
   private requireImage(id: ID): ImageRow {
@@ -1361,12 +1376,20 @@ export class MockDataSource implements DataSource {
     const n = rows.length;
     const action = body.action;
     let message: string;
+    let createdCandidate: ID | undefined;
 
     switch (action.type) {
       case 'assign': {
         const ch = this.requireCharacter(action.characterId);
         for (const r of rows) if (!r.characterIds.includes(ch.id)) r.characterIds = [...r.characterIds, ch.id];
         message = `已将 ${n} 张图归到「${ch.name}」`;
+        break;
+      }
+      case 'assignTag': {
+        const { character, created } = this.materializeCandidate(action.danbooruTag);
+        if (created) createdCandidate = character.id;
+        for (const r of rows) if (!r.characterIds.includes(character.id)) r.characterIds = [...r.characterIds, character.id];
+        message = `已将 ${n} 张图归到「${character.name}」`;
         break;
       }
       case 'unassign': {
@@ -1484,6 +1507,7 @@ export class MockDataSource implements DataSource {
         s.row.vetoedCharacterIds = s.vetoedCharacterIds;
       }
       this.db.exclusions = exclusionsBefore;
+      if (createdCandidate) this.db.characters.delete(createdCandidate);
     });
     return action.type === 'trash' ? this.trashWindow(res) : res;
   }
@@ -1851,6 +1875,19 @@ export class MockDataSource implements DataSource {
     const limit = query.limit ?? 20;
     const q = query.q.trim();
     if (!searchKey(q)) return []; // 空白、只有符号（如「_」）都算空查询
+    if (query.forAssignment) {
+      const known: SearchHit[] = this.filterCharacters({ q }).sort((a, b) => b.imageCount - a.imageCount)
+        .map(character => ({ type: 'character', character, workName: this.db.works.get(character.workIds[0] ?? '')?.name ?? null }));
+      const tags = new Set(this.idx.visible.filter(img => !img.excludedBy).flatMap(img => img.suggestions.map(([tag]) => tag)));
+      const candidates: SearchHit[] = [];
+      for (const tag of tags) {
+        const name = humanizeTag(tag);
+        if (!this.idx.charByTag.has(tag) && matchesQuery(q, [tag, name])) {
+          candidates.push({ type: 'characterCandidate', danbooruTag: tag, name, workName: null });
+        }
+      }
+      return [...known, ...candidates].slice(0, limit);
+    }
     // 给作品和标签各留名额，角色很多时它们也不会整组消失
     const chars: SearchHit[] = this.filterCharacters({ q })
       .sort((a, b) => b.imageCount - a.imageCount)
@@ -1932,11 +1969,12 @@ export class MockDataSource implements DataSource {
   }
 
   /** 达标、库里已有这个角色、图上还没有、没被用户去掉过的建议（mock 不新建角色） */
-  private promotable(): { img: ImageRow; tag: string; ch: CharacterRow }[] {
+  private promotable(kind?: ContentKind): { img: ImageRow; tag: string; ch: CharacterRow }[] {
     const t = this.db.settings.tagger.autoAcceptThreshold;
     const out: { img: ImageRow; tag: string; ch: CharacterRow }[] = [];
     for (const img of this.db.images.values()) {
-      if (!this.isVisible(img) || !isArt(img) || !img.suggestions.length) continue;
+      if (kind && (img.kind !== kind || img.characterIds.length)) continue;
+      if (!this.isVisible(img) || img.excludedBy || img.shelvedAt || img.originalAt || this.inComicRoot(img) || !img.suggestions.length) continue;
       for (const [tag, score] of img.suggestions) {
         const ch = score >= t ? this.idx.charByTag.get(tag) : undefined;
         if (ch) out.push({ img, tag, ch });
@@ -1945,13 +1983,13 @@ export class MockDataSource implements DataSource {
     return out;
   }
 
-  async promotableSuggestions(): Promise<PromotableSuggestions> {
-    const rows = this.promotable().filter(({ img, ch }) => !img.characterIds.includes(ch.id) && !img.vetoedCharacterIds?.includes(ch.id));
+  async promotableSuggestions(kind?: ContentKind): Promise<PromotableSuggestions> {
+    const rows = this.promotable(kind).filter(({ img, ch }) => !img.characterIds.includes(ch.id) && !img.vetoedCharacterIds?.includes(ch.id));
     return { images: new Set(rows.map((r) => r.img.id)).size, suggestions: rows.length, threshold: this.db.settings.tagger.autoAcceptThreshold };
   }
 
-  async promoteSuggestions(): Promise<MutationResult> {
-    const rows = this.promotable();
+  async promoteSuggestions(kind?: ContentKind): Promise<MutationResult> {
+    const rows = this.promotable(kind);
     if (!rows.length) return done('没有达标的建议了');
     const snap = [...new Set(rows.map((r) => r.img))].map((img) => ({ img, characterIds: img.characterIds, suggestions: img.suggestions }));
     const linked = new Set<ID>();

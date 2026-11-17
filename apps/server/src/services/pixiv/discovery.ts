@@ -33,8 +33,29 @@ export function createPixivDiscovery(db: Db, catalog: DanbooruCatalog, client: C
 
   return async (artwork, signal, onAdded) => {
     let changed = false;
+    const snapshot = catalog.offlineCharacters;
+    const workNames = (name: string) => (workKeys.all(searchKey(name), name) as { tag: string }[])
+      .map(row => catalog.canonicalize(row.tag));
     const workTags = () => new Set(artwork.tags.tags.flatMap(item => [item.tag, ...Object.values(item.translation ?? {})])
-      .flatMap(name => (workKeys.all(searchKey(name), name) as { tag: string }[]).map(r => catalog.canonicalize(r.tag))));
+      .flatMap(workNames));
+    const offlineScope = snapshot && workTags();
+    if (snapshot && offlineScope) {
+      for (const { tag } of artwork.tags.tags) {
+        const works = snapshot.workTags(tag);
+        if (works.length && !snapshot.candidates(tag).length) for (const work of works) offlineScope.add(work);
+      }
+      offlineScope.delete('original');
+    }
+    const knownOffline = (name: string): boolean => {
+      if (!snapshot || !offlineScope) return false;
+      const candidates = snapshot.candidates(name);
+      if (!candidates.length) return false;
+      const qualifier = /\(([^()]+)\)$/.exec(name.normalize('NFKC'))?.[1];
+      const scope = qualifier ? new Set([...workNames(qualifier), ...snapshot.workTags(qualifier)]) : offlineScope;
+      const compatible = new Set(candidates.map(tag => catalog.normalizeTag(snapshot.costumeBase(tag)))
+        .filter(tag => catalog.copyrights(tag).some(work => scope.has(work))));
+      return compatible.size === 1;
+    };
     const enrichWorks = async (tag: string) => {
       if (!client.relatedCopyrights || enrichTried.has(tag) || catalog.copyrights(tag).length || catalog.get(tag)?.relatedFetchedAt) return;
       enrichTried.add(tag);
@@ -73,6 +94,7 @@ export function createPixivDiscovery(db: Db, catalog: DanbooruCatalog, client: C
 
     for (const item of artwork.tags.tags) {
       const names = [item.tag, ...Object.values(item.translation ?? {})];
+      if (knownOffline(item.tag)) continue;
       if (known.has(searchKey(item.tag))) {
         // Previously discovered names may still lack work metadata (including an interrupted fetch).
         for (const row of knownCharacters.all(searchKey(item.tag)) as { tag: string }[]) await enrichWorks(row.tag);

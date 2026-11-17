@@ -30,6 +30,8 @@ import type { Derived } from './derived.ts';
 import { toCharacter, toWork } from './library.ts';
 import { DEFAULT_DOMINANT, iso, parseId, toId, VISIBLE } from './sql.ts';
 import type { UndoRecorder } from './undo.ts';
+import type { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
+import { resolveSuggestedCharacter } from './suggestions.ts';
 
 const KIND_LABEL: Record<CollectionKind, string> = { doujin: '本子', artbook: '画集', group: '组图' };
 const isKind = (v: unknown): v is CollectionKind => v === 'doujin' || v === 'artbook' || v === 'group';
@@ -84,6 +86,7 @@ export class CollectionQueries {
     private readonly ctx: SqliteContext,
     private readonly service: CollectionService,
     private readonly derived: Derived,
+    private readonly catalog: () => CharacterCatalog,
   ) {}
 
   /** 4.1：全部 active 合集的摘要 */
@@ -533,15 +536,16 @@ export class CollectionQueries {
     const rows = [...new Set(body.ids)].map((x) => this.requireActive(x));
     const now = iso(this.ctx.clock());
     const a = body.action;
-    const target =
-      a.type === 'addCharacter'
-        ? { id: this.requireRow('characters', a.characterId, '角色'), table: 'collection_characters', col: 'character_id' }
-        : a.type === 'addWork'
-          ? { id: this.requireRow('works', a.workId, '作品'), table: 'collection_works', col: 'work_id' }
-          : null;
     if (a.type === 'kind' && !isKind(a.value)) throw new BadRequestError('请选择合集类型');
     const ids = rows.map((r) => r.id);
     return this.ctx.mutate((u) => {
+      const characterId = a.type === 'addCharacter' ? this.requireRow('characters', a.characterId, '角色')
+        : a.type === 'addCharacterTag' ? resolveSuggestedCharacter(this.ctx, u, this.catalog(), a.danbooruTag, now) : null;
+      const target = characterId !== null
+        ? { id: characterId, table: 'collection_characters' as const, col: 'character_id' }
+        : a.type === 'addWork'
+          ? { id: this.requireRow('works', a.workId, '作品'), table: 'collection_works' as const, col: 'work_id' }
+          : null;
       u.columns('collections', MUTABLE, ids);
       for (const r of rows) {
         if (a.type === 'review') this.write(r.id, { reviewed_at: now, origin: 'manual', updated_at: now });

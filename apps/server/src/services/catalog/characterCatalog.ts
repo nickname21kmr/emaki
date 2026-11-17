@@ -7,6 +7,7 @@ import { colorFromTag } from '../../util/color.ts';
 import { replaceAutoAliases } from '../aliases.ts';
 import { HumanizeLocalizer, type Localizer } from '../i18n/localizer.ts';
 import type { CopyrightSource } from './copyrights.ts';
+import type { CharacterVerifications } from './characterVerification.ts';
 
 export interface CatalogOptions {
   copyrights: CopyrightSource;
@@ -14,6 +15,7 @@ export interface CatalogOptions {
   localizer?: Localizer;
   /** 默认原样返回；T11 换成「改名解析 + 服装变体归本体」 */
   normalizeTag?: (tag: string) => string;
+  verifications?: CharacterVerifications;
 }
 
 /** 自建角色（没有 danbooru_tag）建议的主键占位前缀；真正的引用在 character_suggestions.character_id */
@@ -39,6 +41,7 @@ export class CharacterCatalog {
   }
 
   private readonly cache = new Map<string, number | null>();
+  private cachedRevision = 0;
   private readonly localizer: Localizer;
   private readonly normalize: (tag: string) => string;
   private readonly s: Record<string, Statement>;
@@ -73,6 +76,10 @@ export class CharacterCatalog {
     return this.normalize(tag);
   }
 
+  get verificationRevision(): number {
+    return this.o.verifications?.revision ?? 0;
+  }
+
   /** 丢掉 tag → id 缓存。识别任务一跑几个小时，每批开头清一次：中途合并 / 采纳 / 撤销都会改 characters 表 */
   clearCache(): void {
     this.cache.clear();
@@ -85,8 +92,19 @@ export class CharacterCatalog {
       const id = CharacterCatalog.customId(tag);
       return id !== null && this.db.prepare('SELECT 1 FROM characters WHERE id=?').get(id) ? id : null;
     }
+    const revision = this.verificationRevision;
+    if (this.cachedRevision !== revision) {
+      this.clearCache();
+      this.cachedRevision = revision;
+    }
     const t = this.normalize(tag);
-    return this.lookup(t) ?? (t !== tag ? this.lookup(tag) : null);
+    const existing = this.lookup(t) ?? (t !== tag ? this.lookup(tag) : null);
+    if (existing !== null) return existing;
+    for (const form of this.o.verifications?.formsOf(t) ?? []) {
+      const id = this.lookup(form.tag);
+      if (id !== null) return id;
+    }
+    return null;
   }
 
   private lookup(tag: string): number | null {
@@ -163,7 +181,7 @@ export class CharacterCatalog {
   /** 给 T15 拼 CharacterSuggestion；只查不写 */
   describeTag(tag: string): { characterId: number | null; name: string; workName: string | null } {
     const t = this.normalize(tag);
-    const id = this.resolveCharacterId(t);
+    const id = this.resolveCharacterId(tag);
     if (id !== null) {
       const info = this.s.charInfo!.get(id) as { name: string; work: string | null };
       return { characterId: id, name: info.name, workName: info.work };
@@ -172,13 +190,24 @@ export class CharacterCatalog {
     const workName = primary ? ((this.s.workName!.get(primary) as string | undefined) ?? this.localizer.workName(primary).name) : null;
     return { characterId: null, name: this.localizer.characterName(t).name, workName };
   }
+
+  /** 搜索可用建议与建档时用同一份本地名字资料。 */
+  namesForTag(tag: string, displayName: string): string[] {
+    return [displayName, tag, ...this.localizer.aliasesFor(tag, 'character', displayName).map(a => a.alias)];
+  }
 }
 
 /** 给 T14 / T15 用的便捷函数 */
 export function resolveCharacterIdByTag(db: Db, tag: string, normalize: (t: string) => string = (t) => t): number | null {
   const t = normalize(tag);
   const row = db
-    .prepare('SELECT id FROM characters WHERE danbooru_tag = @tag UNION ALL SELECT character_id FROM danbooru_tag_redirects WHERE tag = @tag LIMIT 1')
-    .get({ tag: t }) as { id: number } | undefined;
+    .prepare(`SELECT id FROM characters WHERE danbooru_tag = @tag
+      UNION ALL SELECT character_id FROM danbooru_tag_redirects WHERE tag = @tag
+      UNION ALL SELECT id FROM characters WHERE danbooru_tag = @raw
+      UNION ALL SELECT character_id FROM danbooru_tag_redirects WHERE tag = @raw
+      UNION ALL SELECT c.id FROM character_verified_forms f JOIN characters c ON c.danbooru_tag = f.tag WHERE f.character_tag = @tag
+      UNION ALL SELECT r.character_id FROM character_verified_forms f JOIN danbooru_tag_redirects r ON r.tag = f.tag WHERE f.character_tag = @tag
+      LIMIT 1`)
+    .get({ tag: t, raw: tag }) as { id: number } | undefined;
   return row?.id ?? null;
 }

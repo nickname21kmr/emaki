@@ -173,14 +173,21 @@ describe('TagResultWriter', () => {
     expect(count("SELECT count(*) FROM image_characters ic JOIN characters c ON c.id = ic.character_id WHERE ic.image_id = 3 AND c.danbooru_tag = 'hina_(blue_archive)'")).toBe(1);
   });
 
-  it('阈值调低后提升建议', () => {
-    db.prepare("INSERT INTO character_suggestions (image_id, danbooru_tag, score) VALUES (1, 'mika_(blue_archive)', 0.88)").run();
-    expect(writer().promoteSuggestions()).toBe(1);
-    expect(count('SELECT count(*) FROM character_suggestions')).toBe(0);
-    expect(count('SELECT count(*) FROM image_characters')).toBe(1);
+  it('达标的 GIF 可建立角色，截图可复用已有角色，截图里的新角色保留为建议', () => {
+    db.exec(`UPDATE images SET format = 'gif' WHERE id = 1;
+      UPDATE images SET content_kind = 'screenshot', content_kind_manual = 1 WHERE id IN (2, 3);`);
+    writer().writeBatch([
+      ok(1, [['mika_(blue_archive)', 0.85]]),
+      ok(2, [['mika_(blue_archive)', 0.91]]),
+      ok(3, [['hina_(blue_archive)', 0.98]]),
+    ]);
+    expect(db.prepare('SELECT image_id, score FROM image_characters ORDER BY image_id').all()).toEqual([
+      { image_id: 1, score: 0.85 }, { image_id: 2, score: 0.91 },
+    ]);
+    expect(db.prepare('SELECT image_id, score FROM character_suggestions').all()).toEqual([{ image_id: 3, score: 0.98 }]);
   });
 
-  it('用户去掉过的角色：重新识别不加回、不建议，提升建议也跳过；别的图照常', () => {
+  it('用户去掉过的角色：重新识别不加回、不建议；别的图照常', () => {
     const w = writer();
     w.writeBatch([ok(1, [['mika_(blue_archive)', 0.95]])]);
     const mika = count("SELECT id FROM characters WHERE danbooru_tag = 'mika_(blue_archive)'");
@@ -192,10 +199,6 @@ describe('TagResultWriter', () => {
     expect(count('SELECT count(*) FROM character_suggestions WHERE image_id = 1')).toBe(0);
     w.writeBatch([ok(2, [['mika_(blue_archive)', 0.95]])]);
     expect(count('SELECT count(*) FROM image_characters WHERE image_id = 2')).toBe(1);
-    db.prepare("INSERT INTO character_suggestions (image_id, danbooru_tag, score) VALUES (1, 'mika_(blue_archive)', 0.9)").run();
-    expect(w.promoteSuggestions()).toBe(0);
-    expect(count('SELECT count(*) FROM image_characters WHERE image_id = 1')).toBe(0);
-    expect(count('SELECT count(*) FROM character_suggestions WHERE image_id = 1')).toBe(0);
   });
 });
 

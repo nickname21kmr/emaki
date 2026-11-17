@@ -15,11 +15,12 @@ import { recordChange, type PixivPayload } from '../../datasource/sqlite/changeL
 
 // Pixiv 也能认出动图的角色：动图不进未识别，但这里一起查。
 // 漫画页在设置关掉「未识别里也列出漫画页」时不查（QUEUE_KINDS_SQL）
-const ELIGIBLE = `(${QUEUE_KINDS_SQL} OR i.content_kind = 'animated') AND i.shelved_at IS NULL AND i.original_at IS NULL
+const ELIGIBLE_BASE = `(${QUEUE_KINDS_SQL} OR i.content_kind = 'animated') AND i.shelved_at IS NULL
   AND ${NOT_IN_BOOK} AND NOT ${IN_COMIC_I} AND i.source_site='pixiv' AND i.source_post_id IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id=i.id)
   AND NOT EXISTS (SELECT 1 FROM character_suggestions cs WHERE cs.image_id=i.id AND cs.source='tagger' AND cs.score>=0.8)
   AND NOT EXISTS (SELECT 1 FROM pixiv_unavailable_posts p WHERE p.post_id=i.source_post_id)`;
+const ELIGIBLE = `${ELIGIBLE_BASE} AND i.original_at IS NULL`;
 const PENDING = `${ELIGIBLE} AND EXISTS (SELECT 1 FROM pixiv_character_checks p WHERE p.image_id=i.id
   AND p.checked_at IS NULL AND p.post_id=i.source_post_id AND p.modified_at=i.modified_at)`;
 const CUSTOM = 'emaki:character:';
@@ -86,29 +87,46 @@ export async function syncPixivCharacters(
   client: Pick<PixivClient, 'artwork'> = new PixivClient(),
   intervalMs = 1000,
   discover?: PixivDiscover,
-  options: { imageIds?: number[] } = {},
+  options: { imageIds?: number[]; recheckCached?: boolean } = {},
 ): Promise<string> {
   const { db } = ctx;
+  if (options.recheckCached && options.imageIds === undefined) throw new Error('Rechecking cached Pixiv results requires explicit image IDs');
+  // Re-evaluate selected results without clearing the previous check or requesting Pixiv again.
+  // Only an intact automatic original mark (same timestamp as its Pixiv check) can be corrected.
+  const pending = options.recheckCached ? `${ELIGIBLE_BASE}
+    AND EXISTS (SELECT 1 FROM pixiv_artwork_cache a WHERE a.post_id=i.source_post_id)
+    AND EXISTS (SELECT 1 FROM pixiv_character_checks p WHERE p.image_id=i.id
+      AND p.post_id=i.source_post_id AND (
+        (i.original_at IS NULL AND (p.checked_at IS NULL OR p.result='unmatched' OR (
+          p.result='suggested' AND EXISTS (SELECT 1 FROM character_suggestions s WHERE s.image_id=i.id)
+        ))) OR (p.result='original' AND p.checked_at=i.original_at AND p.modified_at=i.modified_at)
+      ))` : PENDING;
   const scope=options.imageIds===undefined ? '' : ' AND i.id IN (SELECT value FROM json_each(@imageIds))';
   const scopeParams=options.imageIds===undefined ? {} : {imageIds:JSON.stringify(options.imageIds)};
   const posts = db.prepare(`SELECT DISTINCT i.source_post_id AS id FROM v_counted_images i
-    WHERE ${PENDING} AND i.source_post_id NOT IN (SELECT value FROM json_each(@backoff))${scope}
+    WHERE ${pending} AND i.source_post_id NOT IN (SELECT value FROM json_each(@backoff))${scope}
     ORDER BY i.source_post_id`).all({...scopeParams,backoff:backoffPosts()}) as { id: string }[];
   job.setTotal(posts.length);
-  let linked = 0, original = 0, suggested = 0, unavailable = 0, unmatched = 0, failed = 0;
+  let linked = 0, original = 0, correctedOriginal = 0, suggested = 0, unavailable = 0, unmatched = 0, failed = 0;
   let requested = 0, cached = 0;
   let danbooruDown = '';
-  const summary = () => `Pixiv 标签：关联 ${linked} 张 · 原创 ${original} 张 · 建议 ${suggested} 张 · 不可访问 ${unavailable} 个投稿 · 未匹配角色 ${unmatched} 个投稿 · 失败 ${failed} 个投稿 · 复用缓存 ${cached} 个投稿 · 联网查询 ${requested} 个投稿${danbooruDown && `（Danbooru 连不上，这轮只用本地词库：${danbooruDown}）`}`;
+  const summary = () => `Pixiv 标签：关联 ${linked} 张 · 原创 ${original} 张${correctedOriginal ? ` · 修正原创 ${correctedOriginal} 张` : ''} · 建议 ${suggested} 张 · 不可访问 ${unavailable} 个投稿 · 未匹配角色 ${unmatched} 个投稿 · 失败 ${failed} 个投稿 · 复用缓存 ${cached} 个投稿 · 联网查询 ${requested} 个投稿${danbooruDown && `（Danbooru 连不上，这轮只用本地词库：${danbooruDown}）`}`;
   if (!posts.length) return summary();
   // 匹配索引全量建一次要一两秒（卡主线程）：第一次用到时才建，之后只增量补
   let match: PixivMatcher | undefined;
-  const matcher = (): PixivMatcher => {
-    if (!match) { const u = makeCatalog(); match = createPixivMatcher(db, u.catalog, u.copyrights); }
+  let verificationRevision: number | undefined;
+  const matcher = (revision: number): PixivMatcher => {
+    if (!match || revision !== verificationRevision) {
+      const { catalog, copyrights } = makeCatalog();
+      match = createPixivMatcher(db, catalog, copyrights);
+      verificationRevision = revision;
+    }
     return match;
   };
-  const current = db.prepare(`SELECT i.id FROM v_counted_images i WHERE ${PENDING} AND i.source_post_id=@postId${scope}`);
+  const current = db.prepare(`SELECT i.id,i.original_at FROM v_counted_images i WHERE ${pending} AND i.source_post_id=@postId${scope}`);
   // result：linked / original / suggested / unmatched / unavailable / skipped / dismissed，补跑据此决定重不重试
-  const complete = db.prepare(`UPDATE pixiv_character_checks SET checked_at=?,result=? WHERE image_id=?`);
+  const complete = db.prepare(`UPDATE pixiv_character_checks SET checked_at=?,result=?,
+    modified_at=(SELECT modified_at FROM images WHERE id=pixiv_character_checks.image_id) WHERE image_id=?`);
   const completePost = (id: string, result: string) => db.transaction(() => {
     for (const row of current.all({...scopeParams,postId:id}) as {id:number}[]) complete.run(new Date(ctx.clock()).toISOString(),result,row.id);
   })();
@@ -118,13 +136,25 @@ export async function syncPixivCharacters(
   const clearPixivSuggestions = db.prepare("DELETE FROM character_suggestions WHERE image_id=? AND source='pixiv'");
   const vetoed = db.prepare('SELECT 1 FROM character_vetoes WHERE image_id=? AND character_id=?').pluck();
   const liveCustom = db.prepare('SELECT 1 FROM characters WHERE id=? AND danbooru_tag IS NULL');
+  const previousSuggestions = options.recheckCached ? db.prepare(`
+    SELECT s.source,s.danbooru_tag FROM pixiv_character_checks p
+    JOIN character_suggestions s ON s.image_id=p.image_id WHERE p.image_id=? AND p.result='suggested'
+  `) : undefined;
+  const originalWork = options.recheckCached ? db.prepare(`
+    SELECT CAST(o.value ->> 1 AS INTEGER) FROM change_log l, json_each(l.payload,'$.originals') o
+    WHERE l.kind='pixiv-sync' AND l.reverted_at IS NULL AND o.value ->> 0 = ?
+      AND o.value ->> 2 = ? AND o.value ->> 3 = 1 ORDER BY l.id DESC LIMIT 1
+  `).pluck() : undefined;
+  const clearOriginal = db.prepare('UPDATE images SET original_at=NULL WHERE id=?');
+  const removeOriginalWork = db.prepare('DELETE FROM image_copyrights WHERE image_id=? AND work_id=? AND score IS NULL');
   // 这一轮加的关联和原创标记：结束（包括让出、出错）时记成一条「自动改动」，设置里能撤回
-  const round: PixivPayload = { links: [], originals: [] };
+  const round: Required<PixivPayload> = { links: [], originals: [], correctedOriginals: [] };
   try {
   for (let n = 0; n < posts.length; n++) {
     job.signal.throwIfAborted();
     const post = posts[n]!;
     let artwork = cachedArtwork(db, post.id);
+    if (options.recheckCached && !artwork) { job.advance(1, summary()); continue; }
     if (artwork) await yieldToEventLoop(undefined, { signal: job.signal });
     // Cached matching is local and needs no network pacing. Still yield between posts.
     if (!artwork && requested && intervalMs) await sleep(intervalMs, undefined, { signal: job.signal });
@@ -142,7 +172,7 @@ export async function syncPixivCharacters(
         }
         artwork = fetched ?? undefined;
       } else cached++;
-      if (artwork && discover && !hasOriginalTag(artwork)) {
+      if (artwork && discover && !options.recheckCached && !hasOriginalTag(artwork)) {
         try {
           // 写进目录的新角色马上补进索引；后面的请求失败了这部分也不丢
           await discover(artwork, job.signal, (tags) => match?.refresh(tags));
@@ -188,7 +218,7 @@ export async function syncPixivCharacters(
     // 请求期间可能有人手动整理角色；重新读取目录与队列，避免覆盖用户的新决定。
     const fresh = makeCatalog();
     const { catalog } = fresh;
-    let result = matcher()(artwork);
+    let result = matcher(catalog.verificationRevision)(artwork);
     // 任务期间自建角色可能被合并、删除或编号被新角色占用：伪标签失效就重建索引再匹配（同步执行，写入前不会再变）
     if (result.tags.some((t) => t.startsWith(CUSTOM) && !liveCustom.get(Number(t.slice(CUSTOM.length))))) {
       match = createPixivMatcher(db, fresh.catalog, fresh.copyrights);
@@ -198,15 +228,34 @@ export async function syncPixivCharacters(
     const noMatch = !result.tags.length && !isOriginal;
     const outcome = isOriginal ? 'original' : noMatch ? 'unmatched' : result.automatic ? 'linked' : 'suggested';
     const ids: number[] = [];
-    const added: PixivPayload = { links: [], originals: [] };
+    const added: Required<PixivPayload> = { links: [], originals: [], correctedOriginals: [] };
+    const correctsOriginal = options.recheckCached && !isOriginal && result.tags.length > 0
+      && (artwork.isOriginal === true || hasOriginalTag(artwork));
     db.transaction(() => {
-      const rows = current.all({...scopeParams,postId:post.id}) as { id: number }[];
+      const rows = current.all({...scopeParams,postId:post.id}) as { id: number; original_at: string | null }[];
       const now = new Date(ctx.clock()).toISOString();
       for (const row of rows) {
         // 只处理未识别图片，网络请求期间完成的模型/手动关联也不能追加。
         if (db.prepare('SELECT 1 FROM image_characters WHERE image_id=?').get(row.id)) {
           complete.run(now,'skipped',row.id);
           continue;
+        }
+        const allowed = result.tags.filter(tag => {
+          const known = catalog.resolveCharacterId(tag);
+          return known === null || vetoed.get(row.id, known) === undefined;
+        });
+        const previous = previousSuggestions?.all(row.id) as { source: string; danbooru_tag: string }[] | undefined;
+        // The primary key can leave a matching model suggestion in place of the Pixiv suggestion.
+        if (previous?.length && !previous.some(s => s.source === 'pixiv') &&
+          !(result.automatic && previous.some(s => allowed.includes(s.danbooru_tag)))) continue;
+        if (row.original_at) {
+          if (!correctsOriginal || !allowed.length) continue;
+          const work = originalWork?.get(row.id, row.original_at) as number | undefined;
+          const removed = work !== undefined && removeOriginalWork.run(row.id, work).changes > 0;
+          clearOriginal.run(row.id);
+          added.correctedOriginals.push([row.id, row.original_at, now, removed ? work! : null]);
+          correctedOriginal++;
+          ids.push(row.id);
         }
         let linkChanges = 0, suggestionChanges = 0;
         // 成功取回投稿后才刷新来源建议；失败时保留旧值，同名模型分数也不动。
@@ -219,10 +268,7 @@ export async function syncPixivCharacters(
           original++;
           ids.push(row.id);
         }
-        for (const tag of result.tags) {
-          // 用户从这张图上去掉过的角色：不加回、不建议
-          const known = catalog.resolveCharacterId(tag);
-          if (known !== null && vetoed.get(row.id, known) !== undefined) continue;
+        for (const tag of allowed) {
           if (result.automatic) {
             const character = catalog.ensureCharacter(tag, now);
             const c = insert.run(row.id, character.id, now).changes;
@@ -246,6 +292,7 @@ export async function syncPixivCharacters(
     })();
     round.links.push(...added.links);
     round.originals.push(...added.originals);
+    round.correctedOriginals.push(...added.correctedOriginals);
     if (ids.length) ctx.touch();
     if (noMatch) unmatched++;
     job.advance(1, summary());
@@ -257,9 +304,9 @@ export async function syncPixivCharacters(
 }
 
 /** 一轮 Pixiv 补充加了关联或原创标记就记一条，什么都没加不记 */
-function recordPixivRound(ctx: SqliteContext, round: PixivPayload): void {
-  if (!round.links.length && !round.originals.length) return;
-  const images = new Set([...round.links.map((l) => l[0]), ...round.originals.map((o) => o[0])]).size;
+function recordPixivRound(ctx: SqliteContext, round: Required<PixivPayload>): void {
+  if (!round.links.length && !round.originals.length && !round.correctedOriginals.length) return;
+  const images = new Set([...round.links, ...round.originals, ...round.correctedOriginals].map(row => row[0])).size;
   const chars = [...new Set(round.links.map((l) => l[1]))];
   const names = ctx.db
     .prepare('SELECT name FROM characters WHERE id IN (SELECT value FROM json_each(?)) ORDER BY name LIMIT 3')
@@ -269,9 +316,10 @@ function recordPixivRound(ctx: SqliteContext, round: PixivPayload): void {
   const parts = [
     round.links.length && `给 ${linkedImages} 张图加了角色（${names.join('、')}${chars.length > 3 ? ` 等 ${chars.length} 个` : ''}）`,
     round.originals.length && `${round.originals.length} 张标为原创`,
+    round.correctedOriginals.length && `修正 ${round.correctedOriginals.length} 张的原创标记`,
   ].filter(Boolean);
   recordChange(ctx, 'pixiv-sync', `Pixiv 补充：${parts.join('，')}`, round, {
     count: images,
-    hint: `去掉这轮 Pixiv 补充加上的角色和原创标记（${images} 张图）。`,
+    hint: `撤回这轮 Pixiv 补充的改动（${images} 张图）。`,
   });
 }

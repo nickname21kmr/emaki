@@ -26,6 +26,8 @@ export type UndoTable =
   | 'duplicate_groups'
   | 'duplicate_members'
   | 'danbooru_tag_redirects'
+  | 'character_verified_forms'
+  | 'character_verified_names'
   | 'custom_character_matches'
   | 'collections'
   | 'collection_characters'

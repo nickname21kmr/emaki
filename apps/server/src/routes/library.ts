@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { DataSource } from '../datasource/DataSource.ts';
 import { NotFoundError } from '../http/errors.ts';
 import { idParam, parse, qBool, qNumber } from '../http/validate.ts';
+import { characterVerificationSchema } from '../services/catalog/characterVerification.ts';
 
 /** 统计、作品、角色、搜索 */
 export function libraryRoutes(app: FastifyInstance, ds: DataSource): void {
@@ -106,10 +107,14 @@ export function libraryRoutes(app: FastifyInstance, ds: DataSource): void {
     return ds.mergeCharacter(id, targetId);
   });
 
+  if (ds.verifyCharacter) {
+    app.post('/api/characters/verification', (req) => ds.verifyCharacter!(parse(characterVerificationSchema, req.body)));
+  }
+
   // ---------------------------------------------------------- 搜索
 
   app.get('/api/search', (req) => {
-    const q = parse(z.object({ q: z.string().default(''), limit: qNumber.min(1).max(50).optional() }), req.query);
+    const q = parse(z.object({ q: z.string().default(''), limit: qNumber.min(1).max(50).optional(), forAssignment: qBool.optional() }), req.query);
     return ds.search(q);
   });
 

@@ -17,6 +17,7 @@ import type {
   ListCollectionsResponse,
   UpdateCollectionBody,
   Character,
+  ContentKind,
   CoverCandidatesQuery,
   CoverCandidatesResponse,
   CreateCharacterBody,
@@ -191,17 +192,17 @@ export const api = {
   createExclusion: (body: CreateExclusionBody) => post<MutationResult>('/exclusions', body),
   deleteExclusion: (id: ID) => del<MutationResult>(`/exclusions/${encodeURIComponent(id)}`),
 
-  search: (q: string, limit = 20) => get<SearchResponse>('/search', { q, limit }),
+  search: (q: string, limit = 20, forAssignment = false) => get<SearchResponse>('/search', { q, limit, ...(forAssignment ? { forAssignment } : {}) }),
   /** 一般标签联想（自定义画面）；q 为空 = 最常见的 */
   tags: (q: string, limit = 20) => get<TagSuggestionsResponse>('/tags', { q, limit }),
 
   settings: () => get<GetSettingsResponse>('/settings'),
   /** 可选的识别模型（设置页下拉框） */
   taggerModels: () => get<ListTaggerModelsResponse>('/tagger/models'),
-  /** 已有建议里分数达到自动采纳阈值的（调低阈值后才会有） */
-  promotableSuggestions: () => get<PromotableSuggestions>('/tagger/promotable'),
+  /** 当前可补采纳的模型建议 */
+  promotableSuggestions: (kind?: ContentKind) => get<PromotableSuggestions>('/tagger/promotable', { kind }),
   /** 把达标的建议归到角色（可撤销） */
-  promoteSuggestions: () => post<MutationResult>('/tagger/promote'),
+  promoteSuggestions: (kind?: ContentKind) => post<MutationResult>('/tagger/promote', { kind }),
   updateSettings: (body: UpdateSettingsBody) => put<Settings>('/settings', body),
   addLibraryRoot: (body: AddLibraryRootBody) => post<MutationResult>('/library-roots', body),
   updateArtistLinks: (body: UpdateArtistLinksBody) => post<MutationResult>('/artists/links', body),

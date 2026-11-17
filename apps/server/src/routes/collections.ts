@@ -47,6 +47,7 @@ export function collectionRoutes(app: FastifyInstance, ds: DataSource): void {
         action: z.discriminatedUnion('type', [
           z.object({ type: z.literal('review') }),
           z.object({ type: z.literal('addCharacter'), characterId: z.string() }),
+          z.object({ type: z.literal('addCharacterTag'), danbooruTag: z.string().trim().min(1).max(200) }),
           z.object({ type: z.literal('addWork'), workId: z.string() }),
           z.object({ type: z.literal('kind'), value: kindSchema }),
         ]),

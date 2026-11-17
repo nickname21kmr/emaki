@@ -8,6 +8,8 @@ import { UndoStack } from '../../core/undo.ts';
 import { createContext } from '../../datasource/sqlite/context.ts';
 import { CharacterCatalog } from '../catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../catalog/copyrights.ts';
+import { OfflineCharacterIndex, identityKey } from '../catalog/offlineCharacters.ts';
+import { DanbooruCatalog } from '../danbooru/catalog.ts';
 import { TagResultWriter } from '../tagger/writer.ts';
 import { PixivAccessError, PixivClient, type PixivArtwork } from './client.ts';
 import { createPixivMatcher } from './match.ts';
@@ -274,11 +276,10 @@ it('同一标签的译名可消除原文别名歧义，不把真正的多角色�
   expect(match(artwork)).toEqual({tags:[A,B],automatic:false});
 });
 
-it('Pixiv 建议不会因模型阈值设为零被自动提升，重新识别仍保留来源候选', async () => {
+it('重新识别仍保留 Pixiv 来源候选', async () => {
   await syncPixivCharacters(ctx, job, makeCatalog, { artwork: async () => art(2, ['アリス','ボブ']) }, 0);
   const { catalog, copyrights } = makeCatalog();
   const writer = new TagResultWriter(db, catalog, copyrights, { repo:'test', autoAcceptThreshold:0, characterThreshold:0, generalThreshold:0 });
-  expect(writer.promoteSuggestions()).toBe(0);
   writer.writeBatch([{id:1,ok:true,rating:null,general:[],character:[]}]);
   expect(db.prepare("SELECT * FROM character_suggestions WHERE source='pixiv'").all()).toHaveLength(4);
 });
@@ -827,6 +828,66 @@ it('分级标签及无身份依据的普通译名，不展开成同名角色列�
   const {catalog,copyrights}=makeCatalog();
   expect(createPixivMatcher(db,catalog,copyrights)({id:'123',pageCount:10,tags:{tags:[{tag:'R-18G'},{tag:'妹',translation:{en:'little sister'}}]}}))
     .toEqual({tags:[],automatic:false});
+});
+
+it('用同作品的限定译名兜底，同时保留原文精确身份和普通词保护', () => {
+  name('game_a','作品A',3); name('game_b','作品B',3);
+  name(B,'ジェーン'); name(A,'Jane'); name(A,'火花(作品A)'); name('sparks','火花',0);
+  const {catalog,copyrights}=makeCatalog();
+  const match=createPixivMatcher(db,catalog,copyrights);
+  const translated=(tag:string,en:string) => match({id:'123',pageCount:5,tags:{tags:[{tag,translation:{en}}]}});
+  expect(translated('ジェーン(作品A)','Jane (Game A)')).toEqual({tags:[A],automatic:true});
+  expect(translated('ジェーン(作品A)','Jane (Game B)')).toEqual({tags:[],automatic:false});
+  expect(translated('ジェーン(作品A)','Jane')).toEqual({tags:[],automatic:false});
+  expect(match(art(5,['火花(作品A)'],'123',[]))).toEqual({tags:[A],automatic:true});
+  expect(match(art(5,['火花'],'123',['作品A']))).toEqual({tags:[],automatic:false});
+  expect(match(art(5,['火花(作品A)','ボブ'],'123',['作品B']))).toEqual({tags:[A,B],automatic:false});
+});
+
+it('缓存复算只修正 Pixiv 加过的原创标记，并保留多角色投稿的建议', async () => {
+  const artwork={...art(5,['アリス','ボブ'],'123',[]),isOriginal:true};
+  const client={artwork:vi.fn().mockResolvedValue(artwork)};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  db.prepare("UPDATE images SET original_at='manual' WHERE id=2").run();
+  cacheArtwork(db,{...artwork,tags:art(5,['アリス','ボブ']).tags},'updated');
+  const updated={...ctx,clock:()=>1000};
+  await syncPixivCharacters(updated,job,makeCatalog,client,0,undefined,{imageIds:[1,2],recheckCached:true});
+  expect(client.artwork).toHaveBeenCalledTimes(1);
+  expect(links()).toHaveLength(0);
+  expect(db.prepare("SELECT image_id FROM pixiv_character_checks WHERE result='suggested'").pluck().all()).toEqual([1]);
+  expect(db.prepare('SELECT original_at FROM images ORDER BY id').pluck().all()).toEqual([null,'manual']);
+  expect(db.prepare('SELECT image_id FROM image_copyrights ORDER BY image_id').pluck().all()).toEqual([2]);
+});
+
+it('离线扩展库按作品查同名角色，已知名称无需请求 Danbooru', async () => {
+  const indexDb = openDatabase(':memory:');
+  indexDb.exec(`
+    PRAGMA user_version=1;
+    CREATE TABLE character(tag TEXT PRIMARY KEY, works TEXT, names TEXT);
+    CREATE TABLE name(identity_key TEXT, search_key TEXT, tag TEXT);
+    CREATE TABLE work(identity_key TEXT, tag TEXT);
+  `);
+  const add = indexDb.prepare('INSERT INTO name VALUES (?,?,?)');
+  for (const [tag, work] of [['rare_alice_(game_a)','game_a'],['rare_alice_(game_b)','game_b']]) {
+    indexDb.prepare('INSERT INTO character VALUES (?,?,?)').run(tag, JSON.stringify([work]), '["珍しいアリス"]');
+    add.run(identityKey('珍しいアリス'), searchKey('珍しいアリス'), tag);
+  }
+  const index = new OfflineCharacterIndex(indexDb);
+  try {
+    const { createPixivDiscovery } = await import('./discovery.ts');
+    const copyrights = new DanbooruCatalog(db, makeCatalog().copyrights, index);
+    const catalog = new CharacterCatalog(db, { copyrights });
+    const match = createPixivMatcher(db, catalog, copyrights);
+    const artwork = art(5, ['珍しいアリス'], '123', ['ゲームA']);
+    expect(match(artwork)).toEqual({tags:['rare_alice_(game_a)'],automatic:true});
+    expect(match(art(5, ['珍しいアリス'], '123', ['ゲームB']))).toEqual({tags:['rare_alice_(game_b)'],automatic:true});
+    expect(match(art(5, ['珍しいアリス'], '123', []))).toEqual({tags:[],automatic:false});
+    const client = { autocomplete: vi.fn().mockResolvedValue([]), tagsByNames: vi.fn(), wikiByTitles: vi.fn() };
+    await createPixivDiscovery(db, copyrights, client)(artwork, job.signal);
+    expect(client.autocomplete).not.toHaveBeenCalled();
+  } finally {
+    index.close();
+  }
 });
 
 it('补跑成功后替换旧 Pixiv 建议，保留模型原分数；请求失败时保留原建议', async () => {

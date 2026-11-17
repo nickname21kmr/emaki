@@ -57,6 +57,7 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
         ids: z.array(z.string()).min(1).max(5000),
         action: z.discriminatedUnion('type', [
           z.object({ type: z.literal('assign'), characterId: z.string() }),
+          z.object({ type: z.literal('assignTag'), danbooruTag: z.string().trim().min(1).max(200) }),
           z.object({ type: z.literal('unassign'), characterId: z.string() }),
           z.object({ type: z.literal('exclude') }),
           z.object({ type: z.literal('restore') }),

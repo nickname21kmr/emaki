@@ -9,12 +9,13 @@ import type { SqliteContext } from './context.ts';
 import type { PendingTrash } from './pendingTrash.ts';
 import { artistAutoMessage, artistEditMessage, normArtists } from '../artistEdits.ts';
 import { artistGroupMap, artistNames } from './artists.ts';
-import { createExclusionInTx } from './exclusions.ts';
+import { applyExclusionRules, createExclusionInTx } from './exclusions.ts';
 import { assertKindValue, setKindInTx, type KindDeps } from './kinds.ts';
 import type { CollectionsHook } from '../../services/collections/CollectionService.ts';
 import { iso, parseId } from './sql.ts';
 import { dismissPixivCharacterChecks } from './pixivChecks.ts';
 import { vetoRemovedCharacter } from './vetoes.ts';
+import { resolveSuggestedCharacter } from './suggestions.ts';
 
 export const RATING_LABEL: Record<Rating, string> = { general: '全年龄', sensitive: '轻微', questionable: '较敏感', explicit: '限制级' };
 
@@ -45,9 +46,11 @@ export class BulkOps {
     const a = body.action;
 
     switch (a.type) {
-      case 'assign': {
-        const ch = this.characterName(a.characterId);
+      case 'assign':
+      case 'assignTag': {
         return this.ctx.mutate((u) => {
+          const ch = a.type === 'assign' ? this.characterName(a.characterId)
+            : this.characterName(String(resolveSuggestedCharacter(this.ctx, u, this.kindDeps.catalog(), a.danbooruTag, now)));
           const fresh = db
             .prepare('SELECT value FROM json_each(?) WHERE value NOT IN (SELECT image_id FROM image_characters WHERE character_id = ?)')
             .pluck()
@@ -56,6 +59,10 @@ export class BulkOps {
             "INSERT OR IGNORE INTO image_characters (image_id, character_id, origin, score, added_at) SELECT value, ?, 'manual', NULL, ? FROM json_each(?)",
           ).run(ch.id, now, json);
           if (fresh.length) u.sql('DELETE FROM image_characters WHERE character_id = ? AND image_id IN (SELECT value FROM json_each(?))', [ch.id, JSON.stringify(fresh)]);
+          if (a.type === 'assignTag' && fresh.length) {
+            u.columns('images', ['excluded_by'], fresh);
+            applyExclusionRules(this.ctx, { imageIds: fresh });
+          }
           return { message: `已将 ${n} 张图归到「${ch.name}」` };
         });
       }

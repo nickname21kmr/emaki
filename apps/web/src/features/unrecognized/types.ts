@@ -3,6 +3,9 @@ import type { CharacterSuggestion, ID, Rating } from '@emaki/shared';
 /** 「归到哪个角色」的目标：来自搜索结果或本次会话里用过的角色 */
 export interface AssignTarget {
   id: ID;
+  /** 未建档候选的标准标签。 */
+  candidateTag?: string;
+  matchedName?: string;
   name: string;
   workName: string | null;
   coverImageId: ID | null;

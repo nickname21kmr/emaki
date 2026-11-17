@@ -43,11 +43,11 @@ export function CharacterSearch({
     setQ(createdCharacter.name);
   }, [createdCharacter]);
   const term = useDebounced(q.trim(), 150);
-  const search = useSearch(term);
+  const search = useSearch(term, true);
 
   const results = useMemo<AssignTarget[]>(() => {
-    if (!term) return [];
-    return (search.data ?? []).flatMap((hit) =>
+    if (!term || search.isPlaceholderData || term !== q.trim()) return [];
+    return (search.data ?? []).flatMap<AssignTarget>((hit) =>
       hit.type === 'character'
         ? [
             {
@@ -59,15 +59,23 @@ export function CharacterSearch({
               imageCount: hit.character.imageCount,
             },
           ]
-        : [],
+        : hit.type === 'characterCandidate' ? [{
+          id: `candidate:${hit.danbooruTag}`,
+          candidateTag: hit.danbooruTag,
+          name: hit.name,
+          matchedName: hit.matchedName,
+          workName: hit.workName,
+          coverImageId: null,
+        }] : [],
     ).slice(0, 6);
-  }, [term, search.data]);
+  }, [term, q, search.data, search.isPlaceholderData]);
 
   const typing = q.trim().length > 0;
   const list = typing ? results : recent;
   const searching = typing && (term !== q.trim() || search.isFetching) && !results.length;
   // 结果回来之后才出现，免得手快回车误开新建（RV-T-14 ③）
-  const canCreate = typing && !searching && term === q.trim() && !results.some((r) => r.name === q.trim());
+  const canCreate = typing && !searching && term === q.trim() && !search.isError
+    && !results.some((r) => r.name === term || r.matchedName === term);
   const count = list.length + (canCreate ? 1 : 0);
   const activeIndex = Math.min(active, Math.max(0, count - 1));
   useEffect(() => {
@@ -165,10 +173,11 @@ export function CharacterSearch({
             >
               <ChipAvatar image={t.coverImageId ? { id: t.coverImageId, rating: t.coverRating ?? 'general' } : null} label={t.name} />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13px] font-medium">{t.name}</span>
+                <span className="block truncate text-[13px] font-medium">{t.name}{t.matchedName && `（${t.matchedName}）`}</span>
                 <span className="block truncate text-[11.5px] text-fg-muted tabular">
                   {t.workName ?? '未知作品'}
                   {t.imageCount !== undefined && ` · ${formatCount(t.imageCount)} 张`}
+                  {t.candidateTag && ' · 新角色'}
                 </span>
               </span>
               {i === activeIndex && <CornerDownLeft className="size-3.5 shrink-0 text-fg-subtle" />}

@@ -1,5 +1,6 @@
 import {
   CUSTOM_THEME_LIMITS,
+  CONTENT_KINDS,
   type ListTaggerModelsResponse,
   type NetworkCheckResponse,
   type PickFolderResponse,
@@ -114,9 +115,9 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
     return ds.updateSettings(body);
   });
 
-  // 调低自动采纳阈值后：有多少已有建议达标；用户点按钮再归（可撤销）
-  app.get('/api/tagger/promotable', () => ds.promotableSuggestions());
-  app.post('/api/tagger/promote', () => ds.promoteSuggestions());
+  const promotionScope = z.object({ kind: z.enum(CONTENT_KINDS).optional() });
+  app.get('/api/tagger/promotable', (req) => ds.promotableSuggestions(parse(promotionScope, req.query).kind));
+  app.post('/api/tagger/promote', (req) => ds.promoteSuggestions(parse(promotionScope, req.body ?? {}).kind));
 
   app.post('/api/library-roots', (req) => {
     const body = parse(

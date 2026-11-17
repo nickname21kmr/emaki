@@ -890,7 +890,7 @@ export function searchContract(make: ContractFactory, name: Name) {
           ? `c:${e.back('character', h.character.id)}/${h.workName}`
           : h.type === 'work'
             ? `w:${e.back('work', h.work.id)}`
-            : `t:${h.tag}=${h.imageCount}`,
+            : h.type === 'tag' ? `t:${h.tag}=${h.imageCount}` : `candidate:${h.danbooruTag}`,
       );
     };
 

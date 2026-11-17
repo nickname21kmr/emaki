@@ -32,7 +32,7 @@ export async function buildApp(ds: DataSource, bus: EventBus) {
   // - 防跨站 POST：写操作必须是 JSON。跨站页面发 JSON 会触发预检，没有 CORS 就过不去；
   //   fastify 默认也解析 text/plain，不拦的话没有 body 的 POST（撤销、标记已看过）可以被任意网页触发。
   //   不看路径：req.url 是没解码的原始路径，'/%61pi/...' 照样会路由到 /api/...
-  const allowedHosts = new Set(['127.0.0.1', 'localhost', '[::1]', config.host]);
+  const allowedHosts = new Set(['127.0.0.1', 'localhost', '[::1]', config.host, ...config.allowedHosts]);
   app.addHook('onRequest', async (req, reply) => {
     const hostHeader = (req.headers.host ?? '').toLowerCase();
     if (!allowedHosts.has(hostHeader.replace(/:\d+$/, ''))) {

@@ -10,6 +10,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { buildApp } from '../src/app.ts';
 import { EventBus } from '../src/core/events.ts';
 import { MockDataSource } from '../src/datasource/mock/MockDataSource.ts';
+import { SqliteDataSource } from '../src/datasource/sqlite/SqliteDataSource.ts';
 import { NOW } from './contract/harness.ts';
 import { buildContractDb } from './fixtures/contract-db.ts';
 
@@ -178,6 +179,21 @@ describe('统计、作品、角色、搜索（routes/library.ts）', () => {
     const { status, json } = await call('POST', '/api/characters/c5/merge', { targetId: 'c4' });
     expect([status, json]).toEqual([200, withUndo]);
     expect((await call('POST', '/api/characters/c1/merge', {})).status).toBe(400);
+  });
+
+  route('POST /api/characters/verification', async () => {
+    await app.close();
+    const sqlite = await SqliteDataSource.open(bus, dataState.dir, { memory: true, autoJobs: false, importDict: false });
+    app = await buildApp(sqlite, bus);
+    app.addHook('onClose', () => sqlite.close());
+    const { id } = sqlite.makeCatalog().catalog.ensureCharacter('sample_character', new Date(NOW).toISOString());
+    const body = { type: 'name', tag: 'sample_character', name: '常用名', sources: ['https://example.com/character'], evidence: '发行方角色介绍' };
+    expect((await call('POST', '/api/characters/verification', { ...body, sources: [] })).status).toBe(400);
+    const { status, json } = await call('POST', '/api/characters/verification', body);
+    expect([status, json]).toEqual([200, withUndo]);
+    expect((await call('GET', `/api/characters/${id}`)).json.character.name).toBe('常用名');
+    expect((await call('POST', `/api/undo/${json.undoToken}`)).status).toBe(200);
+    expect((await call('GET', `/api/characters/${id}`)).json.character.name).toBe('Sample Character');
   });
 
   route('GET /api/search', async () => {

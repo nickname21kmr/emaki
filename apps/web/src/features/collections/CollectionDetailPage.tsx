@@ -1,4 +1,4 @@
-import type { CollectionKind, GetCollectionResponse, ID, ImageItem, Rating } from '@emaki/shared';
+import type { BulkImageAction, CollectionKind, GetCollectionResponse, ID, ImageItem, Rating } from '@emaki/shared';
 import {
   ArrowDownAZ,
   BookOpenText,
@@ -83,6 +83,7 @@ function Detail({ data }: { data: GetCollectionResponse }) {
   const navigate = useNavigate();
   const [dialog, setDialog] = useState<'rename' | 'series' | 'works' | null>(null);
   const update = useMutate((body: Parameters<typeof api.updateCollection>[1]) => api.updateCollection(c.id, body));
+  const addCandidate = useMutate((danbooruTag: string) => api.bulkCollections({ ids: [c.id], action: { type: 'addCharacterTag', danbooruTag } }));
   const dismiss = useMutate(() => api.deleteCollection(c.id), { onSuccess: () => navigate('/collections') });
   const progress = readProgress.get(c.id);
   const [adding, setAdding] = useState(false);
@@ -175,6 +176,7 @@ function Detail({ data }: { data: GetCollectionResponse }) {
                   meta="整本"
                   align="end"
                   onPick={(ch) => !manualChars.includes(ch.id) && update.mutate({ manualCharacterIds: [...manualChars, ch.id] })}
+                  onCandidate={(tag) => addCandidate.mutate(tag)}
                 >
                   <Button variant="ghost" size="sm" icon={<UserRoundPlus className="size-3.5" />}>
                     关联角色…
@@ -525,7 +527,7 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
   const [artistOpen, setArtistOpen] = useState(false);
   const [splitting, setSplitting] = useState(false);
   const selection = useScopedSelection(scope, images, artistOpen || splitting);
-  const assign = useMutate((v: { ids: ID[]; characterId: ID }) => api.bulkImages({ ids: v.ids, action: { type: 'assign', characterId: v.characterId } }), {
+  const assign = useMutate((v: { ids: ID[]; action: BulkImageAction }) => api.bulkImages(v), {
     onSuccess: selection.clear,
   });
   const rating = useMutate((v: { ids: ID[]; value: Rating }) => api.bulkImages({ ids: v.ids, action: { type: 'rating', value: v.value } }), {
@@ -624,7 +626,8 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
         side="top"
         align="center"
         meta={`${selection.count} ${word}`}
-        onPick={(ch) => assign.mutate({ ids: selection.ids, characterId: ch.id })}
+        onPick={(ch) => assign.mutate({ ids: selection.ids, action: { type: 'assign', characterId: ch.id } })}
+        onCandidate={(danbooruTag) => assign.mutate({ ids: selection.ids, action: { type: 'assignTag', danbooruTag } })}
       >
         <span className="pointer-events-none fixed bottom-24 left-1/2" />
       </CharacterPicker>

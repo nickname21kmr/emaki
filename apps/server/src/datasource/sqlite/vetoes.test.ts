@@ -78,3 +78,34 @@ it('调低阈值后的采纳按钮：跳过去掉过的角色，那条建议删�
   expect(chars(2)).toEqual([]);
   expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM character_suggestions').pluck().get()).toBe(2);
 });
+
+it('旧建议补采纳支持动图建档和别册复用，合并标签只计一次并保留最高分', async () => {
+  await ds.updateImage('1', { characterIds: ['2'] });
+  await ds.updateImage('2', { characterIds: [] });
+  const db = ds.ctx.db;
+  db.exec(`
+    UPDATE images SET content_kind = 'animated' WHERE id = 1;
+    UPDATE images SET content_kind = 'screenshot' WHERE id = 2;
+    INSERT INTO danbooru_tag_redirects (tag, character_id) VALUES ('merged_mika', 1);
+    INSERT INTO character_suggestions (image_id, danbooru_tag, score, source) VALUES
+      (1, 'new_character', 0.91, 'tagger'), (2, 'new_character', 0.96, 'tagger'),
+      (2, 'merged_mika', 0.99, 'tagger'), (2, 'hina_(blue_archive)', 0.88, 'tagger'),
+      (1, 'merged_hina', 0.92, 'tagger'), (2, 'merged_hina', 0.95, 'tagger'),
+      (2, 'unknown_screenshot', 0.99, 'tagger'), (1, 'pixiv_character', 0.99, 'pixiv');
+    INSERT INTO danbooru_tag_redirects (tag, character_id) VALUES ('merged_hina', 2);
+  `);
+  expect(await ds.promotableSuggestions('animated')).toEqual({ images: 0, suggestions: 0, threshold: 0.85 });
+  expect(await ds.promotableSuggestions('screenshot')).toEqual({ images: 1, suggestions: 1, threshold: 0.85 });
+  expect(await ds.promotableSuggestions()).toEqual({ images: 2, suggestions: 3, threshold: 0.85 });
+  const r = await ds.promoteSuggestions();
+  const created = db.prepare("SELECT id FROM characters WHERE danbooru_tag = 'new_character'").pluck().get();
+  expect(chars(1)).toEqual([2, created]);
+  expect(chars(2)).toEqual([2, created]);
+  expect(db.prepare('SELECT score FROM image_characters WHERE image_id = 2 AND character_id = 2').pluck().get()).toBe(0.95);
+  expect(db.prepare('SELECT danbooru_tag FROM character_suggestions ORDER BY danbooru_tag').pluck().all()).toEqual(['pixiv_character', 'unknown_screenshot']);
+  expect(await ds.promotableSuggestions()).toEqual({ images: 0, suggestions: 0, threshold: 0.85 });
+  await ds.undo(r.undoToken!);
+  expect(chars(1)).toEqual([2]);
+  expect(chars(2)).toEqual([]);
+  expect(db.prepare('SELECT COUNT(*) FROM character_suggestions').pluck().get()).toBe(8);
+});

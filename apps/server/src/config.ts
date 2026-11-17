@@ -23,6 +23,14 @@ const dataDir = path.resolve(repoRoot, process.env.EMAKI_DATA_DIR ?? 'data');
 export const config = {
   repoRoot,
   host: process.env.EMAKI_HOST ?? '127.0.0.1',
+  /**
+   * 额外允许的 Host（逗号分隔），只影响 app.ts 的 Host 校验，不改变监听地址。
+   * 局域网/手机访问时填本机局域网 IP，例如 192.168.0.100；不填就只认本机。
+   */
+  allowedHosts: (process.env.EMAKI_ALLOWED_HOSTS ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean),
   port: Number(process.env.EMAKI_PORT ?? 5174),
   /**
    * sqlite：真实实现，读写 dataDir 下的数据库和缩略图缓存（默认）。

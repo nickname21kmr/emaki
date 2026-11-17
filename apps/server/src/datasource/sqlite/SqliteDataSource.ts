@@ -10,6 +10,7 @@ import type {
   ListCollectionsQuery,
   UpdateCollectionBody,
   Character,
+  ContentKind,
   ContentKindSummary,
   CoverCandidatesResponse,
   CreateCharacterBody,
@@ -72,6 +73,7 @@ import type { EventBus } from '../../core/events.ts';
 import { JobQueue, type JobContext } from '../../core/jobs.ts';
 import { done, UndoStack } from '../../core/undo.ts';
 import { closeDatabase, openDatabase, transact, type Db } from '../../db/connection.ts';
+import { OfflineCharacterIndex } from '../../services/catalog/offlineCharacters.ts';
 import { migrate } from '../../db/migrate.ts';
 import { refreshPlannerStats } from '../../db/plannerStats.ts';
 import { SoftCache } from './softCache.ts';
@@ -102,6 +104,7 @@ import { findModel } from '../../services/tagger/models.ts';
 import { createTagStage } from '../../services/tagger/tagJob.ts';
 import { resetIoBackoff } from '../../services/tagger/readBackoff.ts';
 import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
+import type { CharacterVerification } from '../../services/catalog/characterVerification.ts';
 import { CopyrightResolver } from '../../services/catalog/copyrights.ts';
 import { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
 import { createDanbooruSyncRunner, hasUncachedArtists, hasUncachedCharacterTags } from '../../services/danbooru/sync.ts';
@@ -217,20 +220,23 @@ export class SqliteDataSource implements DataSource {
     ds.autoTag = opts.autoJobs !== false;
     // 识别角色（T10）。T11 / T20 之后在这里继续 register
     // 角色 → 作品的完整回退链 + 标签规范化（改名、服装变体归本体）来自 Danbooru 缓存（T11）
-    const danbooru = new DanbooruCatalog(db, CopyrightResolver.fromAsset(db));
+    const offlineCharacters = opts.memory ? undefined : OfflineCharacterIndex.open(dataDir);
+    const danbooru = new DanbooruCatalog(db, CopyrightResolver.fromAsset(db), offlineCharacters);
+    if (offlineCharacters) console.log('[character-index] 已加载离线角色索引');
     // 中文名（T12）：随仓库分发的词库，版本变了才重新导入；导入后全库重算显示名
     const dict = opts.importDict === false ? { imported: false } : importDictIfNeeded(db);
     const localizer: Localizer = new SqliteLocalizer(db, danbooru);
+    ds.localizer = localizer;
     if (dict.imported) db.transaction(() => relocalizeAll(db, localizer))();
     const makeCatalog = () => ({
-      catalog: new CharacterCatalog(db, { copyrights: danbooru, localizer, normalizeTag: (t) => danbooru.normalizeTag(t) }),
+      catalog: new CharacterCatalog(db, { copyrights: danbooru, localizer, verifications: danbooru.verifications, normalizeTag: (t) => danbooru.normalizeTag(t) }),
       copyrights: danbooru,
     });
     ds.danbooru = danbooru;
     ds.makeCatalog = makeCatalog;
     // 同一个角色被拆成好几个的收拢（换模型后的改名、服装变体归本体；用户 2026-09-28）。已经收拢过就什么也不做
     const merged = consolidateCharacterTags(db, {
-      normalizeTag: (t) => danbooru.normalizeTag(t),
+      normalizeTag: (t) => danbooru.normalizeDanbooruTag(t),
       localizer,
       merge: (from, to) => void ds.characters.merge(String(from), String(to)),
       log: (m) => console.log(`[角色] ${m}`),
@@ -353,6 +359,7 @@ export class SqliteDataSource implements DataSource {
   readonly pipeline: Pipeline;
   /** Danbooru 缓存（T11）；T14 用它重算自建角色匹配 */
   danbooru!: DanbooruCatalog;
+  private localizer!: Localizer;
   /** 每次新建一个带完整回退链的角色目录（缓存只在一次请求内有效） */
   makeCatalog!: () => { catalog: CharacterCatalog; copyrights: DanbooruCatalog };
   private readonly characters: CharacterMutations;
@@ -418,7 +425,7 @@ export class SqliteDataSource implements DataSource {
     this.results = new SoftCache<unknown>({ softMs, maxMs: 5 * 60_000, max: 200 });
     this.derived = new Derived(this.ctx, softMs);
     this.collections = new CollectionService(db, this.ctx.clock);
-    this.collectionQueries = new CollectionQueries(this.ctx, this.collections, this.derived);
+    this.collectionQueries = new CollectionQueries(this.ctx, this.collections, this.derived, () => this.makeCatalog().catalog);
     this.library = new LibraryQueries(this.ctx, this.derived, () => this.collectionQueries.stats());
     this.kindDeps = { catalog: () => this.makeCatalog().catalog, autoAcceptThreshold: () => readSettings(db).tagger.autoAcceptThreshold };
     this.pendingTrash = new PendingTrash(this.ctx, { trashImpl: opts.trashImpl, checkRoot: opts.checkRecyclable });
@@ -512,6 +519,7 @@ export class SqliteDataSource implements DataSource {
     await this.pendingTrash.flushAll();
     await shutdownTagger(); // 关掉推理子进程，释放显存
     clearInterval(this.optimizeTimer);
+    this.danbooru?.offlineCharacters?.close();
     closeDatabase(this.ctx.db);
   }
 
@@ -626,6 +634,9 @@ export class SqliteDataSource implements DataSource {
   }
   async mergeCharacter(id: ID, targetId: ID): Promise<MutationResult> {
     return this.characters.merge(id, targetId);
+  }
+  async verifyCharacter(body: CharacterVerification): Promise<MutationResult> {
+    return this.characters.verify(body, this.localizer);
   }
 
   // T05 图片查询与文件服务
@@ -983,7 +994,7 @@ export class SqliteDataSource implements DataSource {
   }
 
   async search(query: SearchQuery): Promise<SearchHit[]> {
-    return this.searchQueries.search(query);
+    return this.searchQueries.search(query, query.forAssignment ? this.makeCatalog().catalog : undefined);
   }
 
   // T02 设置 / 图库文件夹
@@ -1216,16 +1227,16 @@ export class SqliteDataSource implements DataSource {
     return settings;
   }
 
-  /** 已有建议里分数达到现在的自动采纳阈值的（调低阈值后才会有） */
-  async promotableSuggestions(): Promise<PromotableSuggestions> {
+  /** 按当前阈值和角色目录计算可补采纳的建议 */
+  async promotableSuggestions(kind?: ContentKind): Promise<PromotableSuggestions> {
     const threshold = readSettings(this.ctx.db).tagger.autoAcceptThreshold;
-    return { ...countPromotable(this.ctx.db, threshold), threshold };
+    return { ...countPromotable(this.ctx, this.kindDeps, kind), threshold };
   }
 
   /** 用户点按钮：把达标的建议归到角色，可撤销 */
-  async promoteSuggestions(): Promise<MutationResult> {
+  async promoteSuggestions(kind?: ContentKind): Promise<MutationResult> {
     return this.ctx.mutate((u) => {
-      const ids = promoteSuggestionsInTx(this.ctx, u, null, this.kindDeps);
+      const ids = promoteSuggestionsInTx(this.ctx, u, null, this.kindDeps, kind);
       if (ids.length) this.collectionsHook(u, ids);
       return { message: ids.length ? `已把 ${ids.length} 张图按达标的建议归到角色` : '没有达标的建议了' };
     });

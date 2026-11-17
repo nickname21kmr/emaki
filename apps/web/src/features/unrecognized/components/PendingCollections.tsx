@@ -88,6 +88,7 @@ export function PendingCollections() {
                     done={done.get(unitKey(u))}
                     onReview={() => act(u, { type: 'review' })}
                     onCharacter={(id) => act(u, { type: 'addCharacter', characterId: id })}
+                    onCandidate={(danbooruTag) => act(u, { type: 'addCharacterTag', danbooruTag })}
                   />
                 </motion.div>
               ))}
@@ -99,7 +100,7 @@ export function PendingCollections() {
   );
 }
 
-function Unit({ u, done, onReview, onCharacter }: { u: ShelfUnit; done?: DoneInfo; onReview: () => void; onCharacter: (id: ID) => void }) {
+function Unit({ u, done, onReview, onCharacter, onCandidate }: { u: ShelfUnit; done?: DoneInfo; onReview: () => void; onCharacter: (id: ID) => void; onCandidate: (tag: string) => void }) {
   const prefs = useBlurPrefs();
   const head = unitHead(u);
   const href =
@@ -139,7 +140,7 @@ function Unit({ u, done, onReview, onCharacter }: { u: ShelfUnit; done?: DoneInf
         <DoneNote label={done.label} token={done.token} className="mt-2.5 h-7" />
       ) : (
         <div className="mt-2.5 flex gap-1.5">
-          <CharacterPicker title="关联角色" onPick={(c) => onCharacter(c.id)}>
+          <CharacterPicker title="关联角色" onPick={(c) => onCharacter(c.id)} onCandidate={onCandidate}>
             <Button size="sm" variant="secondary" icon={<UserRoundPlus className="size-3.5" />}>
               关联…
             </Button>

@@ -5,6 +5,9 @@
 import { searchKey, type Character, type CreateCharacterBody, type ID, type MutationResult, type UpdateCharacterBody } from '@emaki/shared';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
 import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
+import type { CharacterVerification } from '../../services/catalog/characterVerification.ts';
+import type { Localizer } from '../../services/i18n/localizer.ts';
+import { replaceAutoAliases } from '../../services/aliases.ts';
 import type { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
 import { automaticCustomMatches, recomputeCustomMatches } from '../../services/danbooru/matcher.ts';
 import type { SqliteContext } from './context.ts';
@@ -233,6 +236,96 @@ export class CharacterMutations {
     if ((this.derived.get().characters.get(id)?.newCount ?? 0) === 0) return; // mock 不发事件
     this.db.prepare('UPDATE characters SET last_seen_at = ? WHERE id = ?').run(iso(this.ctx.clock()), id);
     this.ctx.touch();
+  }
+
+  verify(body: CharacterVerification, localizer: Localizer): MutationResult {
+    const danbooru = this.danbooru();
+    const { verifications } = danbooru;
+    const aliasTag = danbooru.canonicalize(body.tag);
+    if (!danbooru.knowsCharacterTag(aliasTag) && !danbooru.knowsCharacterTag(body.tag)) {
+      throw new BadRequestError(`角色词库里没有标签 ${body.tag}`);
+    }
+    const tag = body.type === 'name' ? danbooru.normalizeTag(aliasTag) : aliasTag;
+    const base = body.type === 'identity' ? danbooru.normalizeTag(body.characterTag) : tag;
+    if (body.type === 'identity') {
+      if (!danbooru.knowsCharacterTag(base)) throw new BadRequestError(`角色词库里没有标签 ${base}`);
+      if (tag === base) throw new BadRequestError('请选择两个不同的角色标签');
+      if (verifications.formsOf(tag).length || danbooru.normalizeDanbooruTag(base) === tag) {
+        throw new ConflictError('请先核对该标签已有的身份关系');
+      }
+      const previous = verifications.base(tag);
+      if (previous && previous !== base) throw new ConflictError(`该标签已归到 ${previous}，请先核对已有关系`);
+      const formerOwner = this.catalog().resolveCharacterId(tag);
+      const target = this.catalog().resolveCharacterId(base);
+      if (formerOwner !== null && target !== null && formerOwner !== target &&
+          !this.db.prepare('SELECT 1 FROM characters WHERE id = ? AND danbooru_tag = ?').get(formerOwner, tag)) {
+        throw new ConflictError('该标签已重定向到另一个角色，请先核对已有关系');
+      }
+    }
+    const affected = [...new Set([base, tag, ...verifications.formsOf(base).map(form => form.tag)])];
+    const affectedCharacters = this.db.prepare(`SELECT id, name, name_locked, created_at, danbooru_tag AS tag FROM characters
+      WHERE danbooru_tag IN (SELECT value FROM json_each(?))`);
+    const getAffected = () => affectedCharacters.all(JSON.stringify(affected)) as {
+      id: number; name: string; name_locked: number; created_at: string; tag: string;
+    }[];
+    const rows = getAffected();
+    const refresh = () => {
+      verifications.reload();
+      localizer.invalidate();
+    };
+    try {
+      return this.ctx.mutate((u) => {
+        const table = body.type === 'identity' ? 'character_verified_forms' : 'character_verified_names';
+        u.set(table, 'tag = ?', [tag]);
+        if (body.type === 'identity') {
+          const existing = verifications.formsOf(base).find(form => form.tag === tag);
+          const aliases = [...new Set([...(existing?.aliases ?? []), ...body.aliases])];
+          this.db.prepare(`INSERT OR REPLACE INTO character_verified_forms
+            (tag, character_tag, relation, aliases, sources, evidence) VALUES (?, ?, ?, ?, ?, ?)`)
+            .run(tag, base, body.relation, JSON.stringify(aliases), JSON.stringify(body.sources), body.evidence);
+        } else {
+          const prior = verifications.preferred(tag);
+          const aliases = [...new Set([...body.aliases, ...(prior?.aliases ?? []), prior?.name,
+            ...rows.filter(row => !row.name_locked && row.tag === tag).map(row => row.name)]
+            .filter(name => name && name !== body.name))];
+          this.db.prepare('INSERT OR REPLACE INTO character_verified_names (tag, name, aliases, sources, evidence) VALUES (?, ?, ?, ?, ?)')
+            .run(tag, body.name, JSON.stringify(aliases), JSON.stringify(body.sources), body.evidence);
+        }
+        const saved = this.db.prepare(`SELECT * FROM ${table} WHERE tag = ?`).get(tag) as Record<string, unknown>;
+        const columns = Object.keys(saved).filter(key => key !== 'tag');
+        if (body.type === 'name') {
+          for (const row of rows.filter(row => row.tag === tag && !row.name_locked)) {
+            u.sql('UPDATE characters SET name = ? WHERE id = ? AND created_at = ? AND name_locked = 0 AND name = ?',
+              [row.name, row.id, row.created_at, body.name]);
+          }
+        }
+        u.guard(`SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM ${table} WHERE tag = ? AND ${columns.map(key => `${key} = ?`).join(' AND ')})`,
+          [tag, ...columns.map(key => saved[key])], '这条角色核验记录已更新，请先撤销较新的修改');
+        refresh();
+        for (const row of rows) {
+          const name = body.type === 'name' && row.tag === tag && !row.name_locked ? body.name : row.name;
+          if (name !== row.name) this.db.prepare('UPDATE characters SET name = ? WHERE id = ?').run(name, row.id);
+          replaceAutoAliases(this.db, 'character', row.id, localizer.aliasesFor(row.tag, 'character', name));
+        }
+        u.onUndo(() => {
+          refresh();
+          this.db.transaction(() => {
+            for (const row of getAffected()) {
+              if (body.type === 'name' && row.tag === tag && !row.name_locked &&
+                  !rows.some(before => before.id === row.id && before.created_at === row.created_at) && row.name === body.name) {
+                row.name = localizer.characterName(tag).name;
+                this.db.prepare('UPDATE characters SET name = ? WHERE id = ?').run(row.name, row.id);
+              }
+              replaceAutoAliases(this.db, 'character', row.id, localizer.aliasesFor(row.tag, 'character', row.name));
+            }
+          })();
+        });
+        return { message: body.type === 'identity' ? `已记录 ${tag} → ${base}` : `已记录常用名「${body.name}」` };
+      });
+    } catch (error) {
+      refresh();
+      throw error;
+    }
   }
 
   merge(fromStr: ID, toStr: ID): MutationResult {

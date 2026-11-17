@@ -36,6 +36,8 @@ export interface PixivPayload {
   links: [number, number, string][];
   /** [图, 作品, original_at, 这轮新加了 image_copyrights 行 1/0] */
   originals: [number, number, string, number][];
+  /** [图, 原标记时间, 本次检查时间, 随原标记删除的作品（如果有）] */
+  correctedOriginals?: [number, string, string, number | null][];
 }
 
 export interface MovePayload {
@@ -141,14 +143,18 @@ export class ChangeLog {
       };
     }
     if (r.kind === 'pixiv-sync') {
-      const { links, originals } = this.pixivIntact(p as PixivPayload);
-      const n = new Set([...links.map((l) => l[0]), ...originals.map((o) => o[0])]).size;
+      const { links, originals, correctedOriginals } = this.pixivIntact(p as PixivPayload);
+      const n = new Set([...links, ...originals, ...correctedOriginals].map(row => row[0])).size;
       if (!n) return { ...base, count: 0, revertHint: '这轮加的角色和原创标记之后都改过了，没有可撤回的', revertable: false };
-      const parts = [links.length && `${links.length} 个角色关联`, originals.length && `${originals.length} 张原创标记`].filter(Boolean).join('、');
+      const parts = [
+        links.length && `去掉 ${links.length} 个角色关联`,
+        originals.length && `去掉 ${originals.length} 张原创标记`,
+        correctedOriginals.length && `恢复 ${correctedOriginals.length} 张的原创标记`,
+      ].filter(Boolean).join('，');
       return {
         ...base,
         count: n,
-        revertHint: `去掉这轮 Pixiv 补充加上的${parts}（${n} 张图）。之后改过的不动，去掉的角色以后不会再自动加回。`,
+        revertHint: `${parts}（${n} 张图）。`,
         revertable: true,
       };
     }
@@ -229,12 +235,17 @@ export class ChangeLog {
   // ------------------------------------------------------------ Pixiv 补充
 
   /** 这轮加的、之后没被改过的 */
-  private pixivIntact(p: PixivPayload): PixivPayload {
+  private pixivIntact(p: PixivPayload): Required<PixivPayload> {
     const link = this.db.prepare("SELECT 1 FROM image_characters WHERE image_id = ? AND character_id = ? AND origin = 'tagger' AND added_at = ?");
     const orig = this.db.prepare('SELECT 1 FROM images WHERE id = ? AND original_at = ?');
+    const corrected = this.db.prepare(`SELECT 1 FROM images i JOIN pixiv_character_checks p ON p.image_id=i.id
+      WHERE i.id=? AND i.original_at IS NULL AND i.source_site='pixiv' AND i.source_post_id=p.post_id
+        AND i.modified_at=p.modified_at AND p.checked_at=?
+        AND NOT EXISTS (SELECT 1 FROM image_characters c WHERE c.image_id=i.id AND c.origin='manual')`);
     return {
       links: p.links.filter(([img, ch, at]) => link.get(img, ch, at)),
       originals: p.originals.filter(([img, , at]) => orig.get(img, at)),
+      correctedOriginals: (p.correctedOriginals ?? []).filter(([img, , checkedAt]) => corrected.get(img, checkedAt)),
     };
   }
 
@@ -242,10 +253,10 @@ export class ChangeLog {
     const db = this.db;
     const now = iso(this.ctx.clock());
     const result = this.ctx.mutate((u) => {
-      const { links, originals } = this.pixivIntact(p);
+      const { links, originals, correctedOriginals } = this.pixivIntact(p);
       const linkImgs = [...new Set(links.map((l) => l[0]))];
       const origImgs = [...new Set(originals.map((o) => o[0]))];
-      const all = [...new Set([...linkImgs, ...origImgs])];
+      const all = [...new Set([...linkImgs, ...origImgs, ...correctedOriginals.map(o => o[0])])];
       if (!all.length) throw new ConflictError('这轮加的角色和原创标记之后都改过了，没有可撤回的');
       // 撤回后不再自动补这几张（手动补跑也跳过），撤销时一起恢复
       dismissPixivCharacterChecks(db, u, all, now);
@@ -267,10 +278,23 @@ export class ChangeLog {
           if (added) delWork.run(img, work);
         }
       }
+      if (correctedOriginals.length) {
+        const ids = correctedOriginals.map(o => o[0]);
+        u.set('image_copyrights', 'image_id IN (SELECT value FROM json_each(?))', [JSON.stringify(ids)]);
+        u.columns('images', ['original_at'], ids);
+        const restore = db.prepare('UPDATE images SET original_at=? WHERE id=?');
+        const work = db.prepare(`INSERT OR IGNORE INTO image_copyrights(image_id,work_id,score)
+          SELECT ?,id,NULL FROM works WHERE id=? AND danbooru_tag='original'`);
+        for (const [img, markedAt, , workId] of correctedOriginals) {
+          restore.run(markedAt, img);
+          if (workId !== null) work.run(img, workId);
+        }
+      }
       this.markReverted(u, r.id, now, null);
       this.deps.collectionsHook(u, all);
-      const parts = [links.length && `${links.length} 个角色关联`, originals.length && `${originals.length} 张原创标记`].filter(Boolean).join('、');
-      return { message: `已撤回 Pixiv 补充：去掉了${parts}（${all.length} 张图）` };
+      const removed = [links.length && `${links.length} 个角色关联`, originals.length && `${originals.length} 张原创标记`].filter(Boolean).join('、');
+      const parts = [removed && `去掉了${removed}`, correctedOriginals.length && `恢复 ${correctedOriginals.length} 张的原创标记`].filter(Boolean).join('，');
+      return { message: `已撤回 Pixiv 补充：${parts}（${all.length} 张图）` };
     });
     return result;
   }

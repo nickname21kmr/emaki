@@ -7,17 +7,17 @@ const f2 = (v: number) => v.toFixed(2);
  * 两个滑块单看很抽象，放在一起才看得出中间那段就是「未识别」要人工确认的量。
  */
 export function ThresholdMap({ character, auto }: { character: number; auto: number }) {
-  const upper = Math.max(character, auto);
+  const lower = Math.min(character, auto);
   const segments = [
-    { key: 'drop', grow: character, bar: 'bg-line-strong', label: '不算识别', range: `< ${f2(character)}` },
+    { key: 'drop', grow: lower, bar: 'bg-line-strong', label: '低于建议阈值', range: `< ${f2(lower)}` },
     {
       key: 'review',
-      grow: upper - character,
+      grow: auto - lower,
       bar: 'bg-shu',
       label: '进入「未识别」等你确认',
-      range: upper > character ? `${f2(character)} – ${f2(upper)}` : '无',
+      range: auto > lower ? `${f2(lower)} – < ${f2(auto)}` : '无',
     },
-    { key: 'auto', grow: 1 - upper, bar: 'bg-ink', label: '直接归到角色', range: `≥ ${f2(upper)}` },
+    { key: 'auto', grow: 1 - auto, bar: 'bg-ink', label: '达到自动采纳阈值', range: `≥ ${f2(auto)}` },
   ];
 
   return (
@@ -45,11 +45,6 @@ export function ThresholdMap({ character, auto }: { character: number; auto: num
           </div>
         ))}
       </dl>
-      {auto <= character && (
-        <p className="mt-3 text-xs text-warn">
-          自动采纳阈值不高于角色阈值：识别出的角色会全部直接采纳，不再进入「未识别」。
-        </p>
-      )}
     </div>
   );
 }

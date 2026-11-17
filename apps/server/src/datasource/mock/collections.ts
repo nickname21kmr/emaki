@@ -46,6 +46,7 @@ export interface MockCollectionDeps {
   toCharacter: (row: CharacterRow) => Character;
   toWork: (row: WorkRow) => Work;
   withUndo: (message: string, revert: () => void) => MutationResult;
+  materializeCandidate: (tag: string) => { character: CharacterRow; created: boolean };
 }
 
 interface Loaded {
@@ -470,13 +471,15 @@ export class MockCollections {
     if (a.type === 'addWork' && !this.d.db.works.has(a.workId)) throw new NotFoundError('作品');
     if (a.type === 'kind' && !isKind(a.value)) throw new BadRequestError('类型只能是本子或画集');
     const restore = this.snapshot(rows.map((r) => r.id));
+    const candidate = a.type === 'addCharacterTag' ? this.d.materializeCandidate(a.danbooruTag) : null;
+    const characterId = a.type === 'addCharacter' ? a.characterId : candidate?.character.id;
     const at = new Date(this.d.now).toISOString();
     for (const r of rows) {
       r.origin = 'manual';
       r.updatedAt = at;
       if (a.type === 'review') r.reviewedAt = at;
       else if (a.type === 'kind') Object.assign(r, { kind: a.value, kindSource: 'manual', kindManual: true });
-      else if (a.type === 'addCharacter' && !r.manualCharacterIds.includes(a.characterId)) r.manualCharacterIds = [...r.manualCharacterIds, a.characterId];
+      else if (characterId && !r.manualCharacterIds.includes(characterId)) r.manualCharacterIds = [...r.manualCharacterIds, characterId];
       else if (a.type === 'addWork' && !r.manualWorkIds.includes(a.workId)) r.manualWorkIds = [...r.manualWorkIds, a.workId];
     }
     const n = rows.length;
@@ -485,7 +488,10 @@ export class MockCollections {
         ? `已把 ${n} 本标为已整理`
         : a.type === 'kind'
           ? `已把 ${n} 本改为${KIND_LABEL[a.value]}`
-          : `已把 ${n} 本关联到「${a.type === 'addCharacter' ? this.d.db.characters.get(a.characterId)!.name : this.d.db.works.get(a.workId)!.name}」`;
-    return this.d.withUndo(message, restore);
+          : `已把 ${n} 本关联到「${a.type === 'addWork' ? this.d.db.works.get(a.workId)!.name : this.d.db.characters.get(characterId!)!.name}」`;
+    return this.d.withUndo(message, () => {
+      restore();
+      if (candidate?.created) this.d.db.characters.delete(candidate.character.id);
+    });
   }
 }

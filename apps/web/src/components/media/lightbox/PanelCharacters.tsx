@@ -37,6 +37,7 @@ export function PanelCharacters({
           title="添加角色"
           selectedIds={characterIds}
           onPick={(c) => actions.addCharacter(c.id)}
+          onCandidate={actions.addCandidate}
         >
           <button
             type="button"

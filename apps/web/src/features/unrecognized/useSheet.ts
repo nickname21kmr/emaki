@@ -103,8 +103,9 @@ export function useSheet(params: UnrecognizedParams, enabled: boolean) {
 
   const assign = (t: AssignTarget) => {
     const n = selectedCount;
-    setRecent((prev) => [t, ...prev.filter((p) => p.id !== t.id)].slice(0, 5));
-    run({ type: 'assign', characterId: t.id }, { hide: true, stamp: ['归', `${n} 张 · ${t.name}`] });
+    if (!t.candidateTag) setRecent((prev) => [t, ...prev.filter((p) => p.id !== t.id)].slice(0, 5));
+    const action: BulkImageAction = t.candidateTag ? { type: 'assignTag', danbooruTag: t.candidateTag } : { type: 'assign', characterId: t.id };
+    run(action, { hide: true, stamp: ['归', `${n} 张 · ${t.name}`] });
   };
   const shelve = (value: boolean) => {
     const n = selectedCount;

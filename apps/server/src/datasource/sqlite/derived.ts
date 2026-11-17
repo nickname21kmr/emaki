@@ -40,6 +40,8 @@ export interface CharacterRec {
   recentCount: number;
   /** searchKey(名字、标签、全部别名（含隐藏的）、所属作品名和别名) */
   keys: string[];
+  /** 与作品名区分，让角色原名和别名的命中优先。 */
+  nameKeys: string[];
 }
 
 export interface WorkRec {
@@ -300,6 +302,8 @@ export class Derived {
     const characters = new Map<number, CharacterRec>();
     for (const c of charRows) {
       const all = aliasList('character', c.id);
+      const nameKeys = [c.name, c.danbooru_tag, ...all.map((a) => a.alias)]
+        .filter((x): x is string => !!x).map(searchKey);
       const st = charStats.get(c.id);
       const workIds = workIdsOf.get(c.id) ?? [];
       const workKeys = workIds.flatMap((wid) => works.get(wid)?.keys ?? []);
@@ -333,10 +337,8 @@ export class Derived {
         coverManual: c.cover_manual === 1,
         coverColor: null,
         recentCount: st?.recent_count ?? 0,
-        keys: [
-          ...[c.name, c.danbooru_tag, ...all.map((a) => a.alias)].filter((x): x is string => !!x).map(searchKey),
-          ...workKeys,
-        ],
+        nameKeys,
+        keys: [...nameKeys, ...workKeys],
       });
     }
 
