@@ -111,6 +111,26 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
 - 只有基础设施层接触真实的文件、网络和模型；这一层抽象成可以替换的「端口」，演示模式和测试换成假的实现（第 8 节）。
 - 现在的 `DataSource` 接口（63 个方法）在迁移过程中逐步退化成「命令 + 查询注册表」的一个外壳，最后删掉。
 
+### 3.1 目录和表的主人（P0 定下）
+
+领域模块的代码放在 `apps/server/src/domain/<模块>/`，命令层放在 `apps/server/src/commands/`。每张表只由主人目录里的代码写入；`images` 一张表按列组分给不同的主人。这张表由 `apps/server/test/architecture/owners.ts` 强制检查（单一写入者测试），现在主人目录之外的写入记在同目录的 `writers.allowlist.ts` 里，只许变短。
+
+| 模块 | 目录 | 表 | `images` 的列 |
+| --- | --- | --- | --- |
+| 图库与文件 | `domain/library/` | `library_roots`、`comic_folders`、`scan_errors`、`pending_trash`、`pending_trash_items` | 新增、删除整行；`root_id`、`rel_path`、`file_name`、尺寸、`bytes`、`format`、`sha256`、`added_at`、`modified_at`、`missing`、`trashed_at` |
+| 分析 | `domain/analysis/` | `image_fingerprints` | `dhash`、`dominant_color`、`thumb_at`、`decode_error`、`content_kind*`（手动标记除外）、`camera`、`kind_signals`、`theme`、`art_score`、`frame_count` |
+| 证据 | `domain/evidence/` | `tags`、`image_tags`、`character_suggestions`（P3 改成派生视图）、`pixiv_artwork_cache`、`pixiv_character_checks`、`pixiv_unavailable_posts`、`danbooru_tags`、`danbooru_artists` | `tagged_at`、`tagger_model`、`retag`、`artist_checked_at`、`source_site` / `source_post_id` / `source_artist` / `source_url` |
+| 编目 | `domain/catalog/` | `characters`、`works`、`character_works`、`aliases`、`danbooru_tag_redirects`、`custom_character_matches`、`character_verified_forms`、`character_verified_names`、`artist_links`、`tag_i18n`、`tag_name_keys`、`tag_renames` | |
+| 归类 | `domain/curation/` | `image_characters`、`image_copyrights`、`image_artists`、`character_vetoes` | `rating`、`rating_manual`、`favorite`、`shelved_at`、`original_at`、`content_kind_manual`、`artist_manual`、`source_manual` |
+| 可见性 | `domain/visibility/` | `exclusions` | `excluded_by`、`exclude_exempt` |
+| 合集 | `domain/collections/` | `collections`、`collection_characters`、`collection_works` | `collection_id`、`page_no`、`collection_detached` |
+| 查重 | `domain/duplicates/` | `duplicate_groups`、`duplicate_members`、`duplicate_comparisons` | |
+| 设置 | `domain/settings/` | `settings` | |
+| 命令层 | `commands/` | `change_log`，以及撤销回放这类按表名拼 SQL 的通用写入 | |
+
+- 永久例外只有 `demo/`：演示数据直接灌进空的一次性库，不经过命令。
+- 识别方式：扫描源码里所有字符串（含多行模板），找 `INSERT` / `REPLACE` / `UPDATE … SET` / `DELETE`；撤销记录器的 `u.columns` / `u.set` / `u.inserted` 也算写入。`images` 看 `SET` 的列名；看不出列（列名拼出来、整行快照）的记成 `images#?`，表名拼出来的记成 `<dynamic>`，这两种只能进允许清单或放进命令层。
+
 ## 4. 写入：命令和自动决定
 
 ### 4.1 命令
