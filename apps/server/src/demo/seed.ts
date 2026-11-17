@@ -215,7 +215,18 @@ export function seedDemoDb(db: Db, demo: DemoDb, opts: { now: number }): IdMap {
     );
     const insIcr = db.prepare('INSERT OR IGNORE INTO image_copyrights (image_id, work_id, score) VALUES (?, ?, NULL)');
     const insTag = db.prepare('INSERT INTO tags (name, category) VALUES (?, ?) ON CONFLICT(name) DO NOTHING');
-    const tagId = db.prepare('SELECT id FROM tags WHERE name = ?').pluck();
+    const findTag = db.prepare('SELECT id FROM tags WHERE name = ?').pluck();
+    // 演示数据有十几万条图片标签，标签 id 记在内存里，每个标签只插一次、查一次
+    const tagIds = new Map<string, number>();
+    const tagId = (name: string, category: string): number => {
+      let id = tagIds.get(name);
+      if (id === undefined) {
+        insTag.run(name, category);
+        id = findTag.get(name) as number;
+        tagIds.set(name, id);
+      }
+      return id;
+    };
     const insIt = db.prepare('INSERT OR IGNORE INTO image_tags (image_id, tag_id, score) VALUES (?, ?, ?)');
     const insSug = db.prepare('INSERT OR IGNORE INTO character_suggestions (image_id, danbooru_tag, score) VALUES (?, ?, ?)');
     const setTheme = db.prepare('UPDATE images SET theme = ?, art_score = ? WHERE id = ?');
@@ -232,10 +243,7 @@ export function seedDemoDb(db: Db, demo: DemoDb, opts: { now: number }): IdMap {
       // 不经角色得到的作品（只有 copyright 没角色的图）
       for (const wid of img.copyrightWorkIds) if (!viaChars.has(wid)) insIcr.run(iid, need(map.works, wid, '作品'));
       if (img.originalAt) insIcr.run(iid, originalWorkId());
-      for (const t of img.tags) {
-        insTag.run(t.tag, t.category);
-        insIt.run(iid, tagId.get(t.tag), t.score);
-      }
+      for (const t of img.tags) insIt.run(iid, tagId(t.tag, t.category), t.score);
       for (const [tag, score] of img.suggestions) insSug.run(iid, tag, score);
       for (const a of img.artists ?? []) insArtist.run(iid, a.tag, a.score);
       if (img.artists || img.artistsManual) setArtist.run(img.addedAt, img.artistsManual ? 1 : 0, iid);

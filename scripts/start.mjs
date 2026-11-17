@@ -159,7 +159,7 @@ const server = spawn(process.execPath, ['--import', 'tsx', path.join('apps', 'se
   stdio: 'inherit',
   env: {
     ...process.env,
-    EMAKI_DATA_SOURCE: args.has('--mock') ? 'mock' : (process.env.EMAKI_DATA_SOURCE ?? 'sqlite'),
+    EMAKI_DATA_SOURCE: args.has('--mock') ? 'demo' : (process.env.EMAKI_DATA_SOURCE ?? 'sqlite'),
     // sharp 和文件读写共用 libuv 线程池（见 T04）
     UV_THREADPOOL_SIZE: process.env.UV_THREADPOOL_SIZE ?? '8',
   },

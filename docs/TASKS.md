@@ -7,7 +7,7 @@
 
 1. **按里程碑顺序实现**：M0 → M1 → M2 → M3 → T21 → **M5** → M4 剩余（T22–T24）。里程碑内部按「里程碑总览」里的**推荐顺序**做（和编号顺序不完全一致，例如 T24 阶段 A 紧跟 T01，T19 是 M3 的第一个）。
 2. **每个任务都能单独验收**：做完就跑该任务「验收标准」里的命令，全部通过再开始下一个。验收不过不要往下做。
-3. **行为以 `MockDataSource` 为准**：`apps/server/src/datasource/mock/MockDataSource.ts` 是完整的参考实现。排序、过滤、分页口径、提示文案、撤销、事件都要和它一致；只有任务里明确写了「有意差异」的地方可以不同。
+3. **行为以 `SqliteDataSource` 为准**（2026-11-17 起，架构重构 P1）：早期的参考实现 `MockDataSource` 已经删掉，下文各任务里「和 mock 一致」「mock 与 sqlite 两边」之类的说法是当时的历史记录。现在业务逻辑只有一份；演示模式（`npm run dev:mock`）也跑真实引擎，只是换成演示数据和假部件，见 [ARCHITECTURE.md](ARCHITECTURE.md)「设计决策 2」和 [core-architecture.md](core-architecture.md) 第 8 节。
 4. **前端不需要改**：后端把 `SqliteDataSource` 填完，设置 `EMAKI_DATA_SOURCE=sqlite` 就能切过去。例外只有 T21（首次启动引导），以及标了「可选」的新接口。
 5. **契约不动**：`packages/shared` 的类型是前后端契约，除非任务明确要求，不要改。
 6. **冲突时的优先级**：「关键技术决策」和「全局约定」两节 > 任务正文。如果发现任务正文和这两节矛盾，以这两节为准，并把问题记进文末「风险与未决问题」。**例外**：M5 一节（T25–T37）明确改写的口径、契约和前端，以 M5 为准；第 4、5 条不适用于 M5（M5 会改前端和契约）。M5 的任务会在第 0 步先把新口径写进「全局约定」。
@@ -4388,7 +4388,7 @@ export async function pickFolder(): Promise<string | null> {
 - `$env:EMAKI_DATA_DIR='F:/Claude/emaki/data/empty'; npm run dev`（默认即 sqlite）→ 打开 http://localhost:5173 自动跳到 `/welcome`。
 - 点「浏览…」弹出系统对话框，选择含中文的文件夹（用户提供的本地插画目录）→ 路径正确出现在列表；手动粘贴带引号的路径也能添加。
 - 完成三步 → 进度条随扫描推进 → 进入首页能看到图；重启后不再进入引导。`GET /api/settings` 里的阈值和 `danbooru.enabled` 与引导里选的一致。
-- `npm run dev:mock` 仍是演示数据，侧栏显示「演示数据」。
+- `npm run dev:mock` 仍是演示数据，侧栏显示「演示数据」。（2026-11-17 起 `/api/health` 的 `dataSource` 是 `demo`，前端按它显示角标。）
 - 设置页「关于」显示的版本号 = 根 `package.json` 的 version，数据目录 = 实际的 `EMAKI_DATA_DIR`（例如上面的 `F:\Claude\emaki\data\empty`）。
 - 未识别页副标题「其中 N 张 tagger 有建议」的 N = `(Invoke-RestMethod 'http://127.0.0.1:5174/api/unrecognized?limit=1').suggestedCount`；unrecognized 契约（T24）加一条 `suggestedCount` 断言，mock 与 sqlite 两边通过。
 - sqlite 模式下看图器 / 多选栏里「移到回收站」的提示不再写「可撤销」。
@@ -4559,6 +4559,8 @@ app.addHook('onRequest', async (req, reply) => {
 M
 
 ## T24 测试（vitest：services 单元测试 + DataSource 契约测试 mock 与 sqlite 共用）
+
+> 2026-11-17（架构重构 P1）：mock 已删除，契约测试只在真实引擎上跑，`cross.test.ts` 换成固定期望结果（`test/contract/queries.test.ts`），种子搬到 `apps/server/src/demo/seed.ts`（`seedDemoDb`），脚本改名 `scripts/seed-demo.ts`。下面是当时的规格，作为历史记录保留。
 
 ### 目标
 - monorepo 统一的 vitest：`npm test` 跑全部。
@@ -4787,11 +4789,12 @@ L（阶段 A：M）
 7. **吸顶**：页头高度按 RV-A-6 的数字验收（239±3）。`SectionBar` 吸在页头下面，按 RV-A-5，用 `--page-head-h` 定位。
 8. **原 T29b 里没被拆进 T29b-1 到 T29b-4 的部分**（Seal、看图器暗房 bg-stage、网格 6px 圆角、sonner 覆写），归到新任务 **T29b-5**（RV-A-12），做法照原 T29b 的规格。
 9. **SEL-20「漫画成册」和 `/api/images/folders` 不做**，由合集（T38）代替；T32b 的规格来源里删掉这两项（RV-C-13）。
-10. **截图验收一律用 mock**：规格里写的 `npm run dev:mock` 固定用 5173 / 5174 端口，而用户的真实后端通常正在这两个端口上跑（RV-A-15）。所以 mock 验收改为：
+10. **截图验收一律用演示数据**：规格里写的 `npm run dev:mock` 固定用 5173 / 5174 端口，而用户的真实后端通常正在这两个端口上跑（RV-A-15）。所以演示验收改为：
     - `EMAKI_PORT=5190 npx tsx apps/server/src/index.ts --mock`；
     - `cd apps/web && EMAKI_PORT=5190 npx vite --port 5191`。
     
     **不许结束 5173 / 5174 上的进程**；不要用真实库截图做仓库里的文档图（RV-C-18）。
+    （2026-11-17 起 `--mock` 打开的是真实引擎 + 演示数据：库在 `data/demo/`，每次启动重建；图片是占位图；不扫描、不识别、不联网，移动 / 导入 / 替换 / 添加文件夹会提示「演示数据不支持」。）
 11. **章节编号**：T29b-3 改用 CSS 计数器自动编号、`SectionTitle` 不再有 `index` 属性。04-round2 里 T34b、T38d、T38f 传 `index={n}` 的地方一律删掉；「放下的」那一组传 `numbered={false}`。
 
 ### 第二轮的默认决定（合集判定和阅读器方向已在检查点 D 由用户确认，2026-09-27）
