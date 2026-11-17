@@ -6,7 +6,7 @@ import { EventBus } from '../../core/events.ts';
 import { JobQueue, type JobContext } from '../../core/jobs.ts';
 import { UndoStack } from '../../core/undo.ts';
 import { createContext } from '../../datasource/sqlite/context.ts';
-import { CharacterCatalog } from '../catalog/characterCatalog.ts';
+import { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../catalog/copyrights.ts';
 import { OfflineCharacterIndex, identityKey } from '../catalog/offlineCharacters.ts';
 import { DanbooruCatalog } from '../danbooru/catalog.ts';

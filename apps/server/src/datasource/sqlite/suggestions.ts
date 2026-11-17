@@ -6,9 +6,9 @@
  */
 import type { CharacterSuggestion } from '@emaki/shared';
 import { NotFoundError } from '../../http/errors.ts';
-import { CUSTOM_TAG_PREFIX, type CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
+import { CUSTOM_TAG_PREFIX, type CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import type { SqliteContext } from './context.ts';
-import { insertDanbooruCharacter } from './characters.ts';
+import { insertDanbooruCharacter } from '../../domain/catalog/characterCatalog.ts';
 import type { UndoRecorder } from './undo.ts';
 import { toId } from './sql.ts';
 

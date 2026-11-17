@@ -13,7 +13,7 @@ import type { Db } from '../../db/connection.ts';
 import { NOT_IN_BOOK } from '../../datasource/sqlite/sql.ts';
 import { IN_COMIC } from '../../services/classify/comicAreas.ts';
 import { PixivArtworkSchema, type PixivArtwork } from '../../services/pixiv/client.ts';
-import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
+import { CharacterCatalog } from '../catalog/characterCatalog.ts';
 import { stmt } from '../tx.ts';
 import type { CharacterCandidate } from './store.ts';
 

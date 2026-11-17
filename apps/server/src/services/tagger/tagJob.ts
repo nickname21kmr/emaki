@@ -6,7 +6,7 @@ import type { ContentKind, Rating, Settings } from '@emaki/shared';
 import type { EventBus } from '../../core/events.ts';
 import type { JobContext } from '../../core/jobs.ts';
 import type { Db } from '../../db/connection.ts';
-import { CharacterCatalog } from '../catalog/characterCatalog.ts';
+import { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import { CopyrightResolver, type CopyrightSource } from '../catalog/copyrights.ts';
 import { toAbs } from '../fs/paths.ts';
 import { backfillClassification } from '../classify/backfill.ts';

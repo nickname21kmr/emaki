@@ -18,7 +18,6 @@ export interface AllowedWrite {
 
 export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   // datasource/sqlite/SqliteDataSource.ts
-  { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'artist_links' },
   { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'collections' },
   { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'comic_folders' },
   { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'exclusions' },
@@ -29,34 +28,11 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   // datasource/sqlite/bulk.ts
   { file: 'datasource/sqlite/bulk.ts', table: 'images#library' },
   // datasource/sqlite/changeLog.ts
-  { file: 'datasource/sqlite/changeLog.ts', table: 'aliases' },
   { file: 'datasource/sqlite/changeLog.ts', table: 'change_log' },
-  { file: 'datasource/sqlite/changeLog.ts', table: 'character_works' },
-  { file: 'datasource/sqlite/changeLog.ts', table: 'characters' },
-  { file: 'datasource/sqlite/changeLog.ts', table: 'custom_character_matches' },
-  { file: 'datasource/sqlite/changeLog.ts', table: 'works' },
-  // datasource/sqlite/characters.ts
-  { file: 'datasource/sqlite/characters.ts', table: '<dynamic>', note: '合并角色时快照别名表：aliases、danbooru_tag_redirects 等' },
-  { file: 'datasource/sqlite/characters.ts', table: 'aliases' },
-  { file: 'datasource/sqlite/characters.ts', table: 'character_verified_forms' },
-  { file: 'datasource/sqlite/characters.ts', table: 'character_verified_names' },
-  { file: 'datasource/sqlite/characters.ts', table: 'character_works' },
-  { file: 'datasource/sqlite/characters.ts', table: 'characters' },
-  { file: 'datasource/sqlite/characters.ts', table: 'collection_characters' },
-  { file: 'datasource/sqlite/characters.ts', table: 'custom_character_matches' },
-  { file: 'datasource/sqlite/characters.ts', table: 'danbooru_tag_redirects' },
-  { file: 'datasource/sqlite/characters.ts', table: 'works' },
   // datasource/sqlite/collections.ts
   { file: 'datasource/sqlite/collections.ts', table: '<dynamic>', note: '手选合集的角色 / 作品：collection_characters、collection_works' },
   { file: 'datasource/sqlite/collections.ts', table: 'collections' },
   { file: 'datasource/sqlite/collections.ts', table: 'images#collections' },
-  // datasource/sqlite/consolidate.ts
-  { file: 'datasource/sqlite/consolidate.ts', table: 'aliases' },
-  { file: 'datasource/sqlite/consolidate.ts', table: 'character_works' },
-  { file: 'datasource/sqlite/consolidate.ts', table: 'characters' },
-  { file: 'datasource/sqlite/consolidate.ts', table: 'collection_works' },
-  { file: 'datasource/sqlite/consolidate.ts', table: 'danbooru_tag_redirects' },
-  { file: 'datasource/sqlite/consolidate.ts', table: 'works' },
   // datasource/sqlite/duplicates.ts
   { file: 'datasource/sqlite/duplicates.ts', table: 'duplicate_groups' },
   { file: 'datasource/sqlite/duplicates.ts', table: 'images#library' },
@@ -81,25 +57,8 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'datasource/sqlite/settings.ts', table: 'settings' },
   // datasource/sqlite/undo.ts
   { file: 'datasource/sqlite/undo.ts', table: '<dynamic>', note: '撤销回放：按记录的表名还原（UndoTable 里的表）' },
-  // services/aliases.ts
-  { file: 'services/aliases.ts', table: 'aliases' },
-  // services/catalog/characterCatalog.ts
-  { file: 'services/catalog/characterCatalog.ts', table: 'character_works' },
-  { file: 'services/catalog/characterCatalog.ts', table: 'characters' },
-  { file: 'services/catalog/characterCatalog.ts', table: 'works' },
   // services/classify/backfill.ts
   { file: 'services/classify/backfill.ts', table: 'images#analysis' },
-  // services/danbooru/apply.ts
-  { file: 'services/danbooru/apply.ts', table: 'characters' },
-  // services/danbooru/catalog.ts
-  { file: 'services/danbooru/catalog.ts', table: 'danbooru_tags' },
-  { file: 'services/danbooru/catalog.ts', table: 'tag_name_keys' },
-  { file: 'services/danbooru/catalog.ts', table: 'tag_renames' },
-  // services/danbooru/matcher.ts
-  { file: 'services/danbooru/matcher.ts', table: 'custom_character_matches' },
-  // services/danbooru/sync.ts
-  { file: 'services/danbooru/sync.ts', table: 'danbooru_artists' },
-  { file: 'services/danbooru/sync.ts', table: 'tag_name_keys' },
   // services/dedupe/DedupeService.ts
   { file: 'services/dedupe/DedupeService.ts', table: 'duplicate_comparisons' },
   { file: 'services/dedupe/DedupeService.ts', table: 'duplicate_groups' },
@@ -107,12 +66,6 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'services/dedupe/DedupeService.ts', table: 'settings' },
   // services/i18n/dict.ts
   { file: 'services/i18n/dict.ts', table: 'settings' },
-  { file: 'services/i18n/dict.ts', table: 'tag_i18n' },
-  { file: 'services/i18n/dict.ts', table: 'tag_name_keys' },
-  { file: 'services/i18n/dict.ts', table: 'tag_renames' },
-  // services/i18n/relocalize.ts
-  { file: 'services/i18n/relocalize.ts', table: 'characters' },
-  { file: 'services/i18n/relocalize.ts', table: 'works' },
   // services/image/ThumbnailService.ts
   { file: 'services/image/ThumbnailService.ts', table: 'images#analysis' },
   // services/scan/Scanner.ts

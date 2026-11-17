@@ -7,7 +7,7 @@ import type { JobContext } from '../../../core/jobs.ts';
 import { EventBus } from '../../../core/events.ts';
 import { openDatabase, type Db } from '../../../db/connection.ts';
 import { migrate } from '../../../db/migrate.ts';
-import { CharacterCatalog } from '../../catalog/characterCatalog.ts';
+import { CharacterCatalog } from '../../../domain/catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../../catalog/copyrights.ts';
 import { humanizeCharacterTag, humanizeCopyrightTag } from '../../i18n/humanize.ts';
 import { HumanizeLocalizer, type AutoAlias } from '../../i18n/localizer.ts';

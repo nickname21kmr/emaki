@@ -14,7 +14,7 @@
 import type { ContentKind, Settings } from '@emaki/shared';
 import type { Db } from '../../db/connection.ts';
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
-import { insertDanbooruCharacter } from '../../datasource/sqlite/characters.ts';
+import { insertDanbooruCharacter } from '../catalog/characterCatalog.ts';
 import { recordChange, type RetractPayload } from '../../datasource/sqlite/changeLog.ts';
 import { readSettings } from '../../datasource/sqlite/settings.ts';
 import { iso, NOT_IN_BOOK, UNRECOGNIZED } from '../../datasource/sqlite/sql.ts';
@@ -22,7 +22,7 @@ import type { UndoRecorder } from '../../datasource/sqlite/undo.ts';
 import { isInteractive, type Actor } from '../../propagation/actor.ts';
 import type { ChangeSet, ChangeType } from '../../propagation/changes.ts';
 import type { Reaction } from '../../propagation/registry.ts';
-import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
+import { CharacterCatalog } from '../catalog/characterCatalog.ts';
 import { IN_COMIC } from '../../services/classify/comicAreas.ts';
 import { ensureOriginalWork } from '../catalog/original.ts';
 import { imagesWithCandidates, loadEvidence, type CharacterEvidenceProvider } from '../evidence/store.ts';

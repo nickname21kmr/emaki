@@ -4,7 +4,7 @@
  * recomputeCustomMatches 自己开事务，放在提交后。characterIds 为空表示全部重算（后台自动关联）。
  */
 import type { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
-import { recomputeCustomMatches } from '../../services/danbooru/matcher.ts';
+import { recomputeCustomMatches } from './customMatches.ts';
 import type { Reaction } from '../../propagation/registry.ts';
 
 export function catalogReactions(danbooru: () => DanbooruCatalog | undefined): Reaction[] {

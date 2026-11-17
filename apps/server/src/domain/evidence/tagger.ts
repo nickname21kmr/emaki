@@ -13,7 +13,7 @@
 import type { Db, Statement } from '../../db/connection.ts';
 import type { Change } from '../../propagation/changes.ts';
 import { writeArtists } from '../../services/tagger/artists.ts';
-import type { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
+import type { CharacterCatalog } from '../catalog/characterCatalog.ts';
 import type { CopyrightSource } from '../../services/catalog/copyrights.ts';
 import { CLASS_COLS, classificationStatements, computeClassification, writeClassification, type ClassRow } from '../../services/classify/backfill.ts';
 import { pickRating } from '../../services/tagger/postprocess.ts';

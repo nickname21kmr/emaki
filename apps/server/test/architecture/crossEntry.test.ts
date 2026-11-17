@@ -20,7 +20,7 @@ import { declareTagged } from '../../src/domain/evidence/reactions.ts';
 import { SqliteDataSource } from '../../src/datasource/sqlite/SqliteDataSource.ts';
 import { patchSettingsInternal, readSettings } from '../../src/datasource/sqlite/settings.ts';
 import { backfillClassification } from '../../src/services/classify/backfill.ts';
-import { CharacterCatalog } from '../../src/services/catalog/characterCatalog.ts';
+import { CharacterCatalog } from '../../src/domain/catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../../src/services/catalog/copyrights.ts';
 import type { PixivArtwork } from '../../src/services/pixiv/client.ts';
 import { pendingPixivCount, queuePixivImages, resetPixivBackoff, syncPixivCharacters } from '../../src/services/pixiv/sync.ts';

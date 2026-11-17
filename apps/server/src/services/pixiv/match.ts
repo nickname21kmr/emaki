@@ -1,6 +1,6 @@
 import { searchKey } from '@emaki/shared';
 import type { Db, Statement } from '../../db/connection.ts';
-import type { CharacterCatalog } from '../catalog/characterCatalog.ts';
+import type { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import type { CopyrightSource } from '../catalog/copyrights.ts';
 import { identityKey as fullKey } from '../catalog/offlineCharacters.ts';
 import { creatorQualifiedNames, verifiedCharacterNames, verifiedWorkNames, verifiedWorkParents } from '../catalog/verifiedNames.ts';

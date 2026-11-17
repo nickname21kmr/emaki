@@ -4,8 +4,8 @@
  */
 import { searchKey } from '@emaki/shared';
 import type { Db } from '../../db/connection.ts';
-import type { DanbooruCatalog } from './catalog.ts';
-import { resolveCharacterIdByTag } from '../catalog/characterCatalog.ts';
+import type { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
+import { createCatalog, type CharacterCatalog } from './characterCatalog.ts';
 
 export interface DanbooruMatch {
   danbooruTag: string;
@@ -22,7 +22,13 @@ const KIND_SCORE: Record<string, number> = { zh: 1.0, other_name: 0.9, alias: 0.
 /** 纯 ASCII 的 key 长度 < 3、其他 < 2 的丢掉（防止「ba」「未」这类误配） */
 const usableKey = (k: string) => (/^[\x00-\x7f]*$/.test(k) ? k.length >= 3 : k.length >= 2);
 
-export function findDanbooruMatches(db: Db, danbooru: DanbooruCatalog, characterId: number): DanbooruMatch[] {
+/** catalog：解析「这个标签已经属于哪个角色」用（编目唯一的 resolve）；一批里共用一个，不传就按 danbooru 新建 */
+export function findDanbooruMatches(
+  db: Db,
+  danbooru: DanbooruCatalog,
+  characterId: number,
+  catalog: CharacterCatalog = createCatalog(db, danbooru),
+): DanbooruMatch[] {
   const ch = db.prepare('SELECT name FROM characters WHERE id = ?').get(characterId) as { name: string } | undefined;
   if (!ch) return [];
   const aliases = db.prepare("SELECT alias FROM aliases WHERE owner_type = 'character' AND owner_id = ?").pluck().all(characterId) as string[];
@@ -72,7 +78,7 @@ export function findDanbooruMatches(db: Db, danbooru: DanbooruCatalog, character
         reason += ' - work 不符';
       }
     }
-    return { danbooruTag: tag, score, postCount: b.postCount, reason, existingCharacterId: resolveCharacterIdByTag(db, tag, (t) => danbooru.normalizeTag(t)), nameKind: b.kind, workMatch };
+    return { danbooruTag: tag, score, postCount: b.postCount, reason, existingCharacterId: catalog.resolveCharacterId(tag), nameKind: b.kind, workMatch };
   });
 }
 
@@ -90,21 +96,23 @@ export function recomputeCustomMatches(db: Db, danbooru: DanbooruCatalog, charac
     characterIds ??
     (db.prepare("SELECT id FROM characters WHERE source = 'custom' AND danbooru_tag IS NULL").pluck().all() as number[]);
   const upsert = db.prepare(`INSERT INTO custom_character_matches (character_id, danbooru_tag, score, reason, existing_character_id, computed_at, dismissed)
-    VALUES (?, ?, ?, ?, (SELECT id FROM characters WHERE danbooru_tag = ?), ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(character_id) DO UPDATE SET danbooru_tag = excluded.danbooru_tag, score = excluded.score, reason = excluded.reason,
       existing_character_id = excluded.existing_character_id, computed_at = excluded.computed_at,
       dismissed = excluded.dismissed`);
   const previous = db.prepare('SELECT danbooru_tag, dismissed FROM custom_character_matches WHERE character_id = ?');
-  const del = db.prepare('DELETE FROM custom_character_matches WHERE character_id = ?');
+  // 对不上了就删，但忽略过的留着（用户解绑、撤回自动绑定记下的）：以后名字又对上同一个标签时，自动关联照样不绑
+  const del = db.prepare('DELETE FROM custom_character_matches WHERE character_id = ? AND dismissed = 0');
   const isCustom = db.prepare("SELECT 1 FROM characters WHERE id = ? AND source = 'custom' AND danbooru_tag IS NULL").pluck();
   const now = new Date().toISOString();
+  const catalog = createCatalog(db, danbooru);
   db.transaction(() => {
     for (const id of ids) {
-      const m = isCustom.get(id) ? decideMatch(findDanbooruMatches(db, danbooru, id)) : null;
+      const m = isCustom.get(id) ? decideMatch(findDanbooruMatches(db, danbooru, id, catalog)) : null;
       if (m) {
         const prev = previous.get(id) as { danbooru_tag: string; dismissed: number } | undefined;
         const dismissed = prev?.dismissed && danbooru.normalizeTag(prev.danbooru_tag) === danbooru.normalizeTag(m.danbooruTag) ? 1 : 0;
-        upsert.run(id, m.danbooruTag, m.score, m.reason, m.danbooruTag, now, dismissed);
+        upsert.run(id, m.danbooruTag, m.score, m.reason, m.existingCharacterId, now, dismissed);
       }
       else del.run(id);
     }
@@ -124,7 +132,8 @@ export function decideAutomaticMatch(cands: DanbooruMatch[], normalize: (tag: st
 export function automaticCustomMatches(db: Db, danbooru: DanbooruCatalog): { id: number; match: DanbooruMatch }[] {
   const customs = db.prepare("SELECT id FROM characters WHERE source = 'custom' AND danbooru_tag IS NULL").all() as { id: number }[];
   const dismissed = db.prepare('SELECT danbooru_tag FROM custom_character_matches WHERE character_id = ? AND dismissed = 1').pluck();
-  const candidates = customs.map(({ id }) => ({ id, matches: findDanbooruMatches(db, danbooru, id) }));
+  const catalog = createCatalog(db, danbooru);
+  const candidates = customs.map(({ id }) => ({ id, matches: findDanbooruMatches(db, danbooru, id, catalog) }));
   const claimants = new Map<string, Set<number>>();
   for (const { id, matches } of candidates) {
     for (const m of matches.filter((m) => m.workMatch !== 'different')) {
@@ -138,7 +147,7 @@ export function automaticCustomMatches(db: Db, danbooru: DanbooruCatalog): { id:
     if (!match || claimants.get(match.danbooruTag)!.size !== 1) return [];
     const ignoredTag = dismissed.get(id) as string | undefined;
     if (ignoredTag && danbooru.normalizeTag(ignoredTag) === match.danbooruTag) return [];
-    if (resolveCharacterIdByTag(db, match.danbooruTag) !== null) return [];
+    if (catalog.resolveCharacterId(match.danbooruTag) !== null) return [];
     return [{ id, match }];
   });
 }

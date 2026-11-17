@@ -30,7 +30,7 @@ import type { Derived } from './derived.ts';
 import { toCharacter, toWork } from './library.ts';
 import { DEFAULT_DOMINANT, iso, parseId, toId, VISIBLE } from './sql.ts';
 import type { UndoRecorder } from './undo.ts';
-import type { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
+import type { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import { resolveSuggestedCharacter } from './suggestions.ts';
 
 const KIND_LABEL: Record<CollectionKind, string> = { doujin: '本子', artbook: '画集', group: '组图' };

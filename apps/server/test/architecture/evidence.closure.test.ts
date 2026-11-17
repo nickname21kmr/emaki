@@ -19,7 +19,7 @@ import { patchSettingsInternal, readSettings } from '../../src/datasource/sqlite
 import { loadSuggestions } from '../../src/datasource/sqlite/suggestions.ts';
 import { declareTagged } from '../../src/domain/evidence/reactions.ts';
 import { TagResultWriter } from '../../src/domain/evidence/tagger.ts';
-import { CharacterCatalog } from '../../src/services/catalog/characterCatalog.ts';
+import { CharacterCatalog } from '../../src/domain/catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../../src/services/catalog/copyrights.ts';
 import type { PixivArtwork } from '../../src/services/pixiv/client.ts';
 import { queuePixivImages, resetPixivBackoff, syncPixivCharacters } from '../../src/services/pixiv/sync.ts';

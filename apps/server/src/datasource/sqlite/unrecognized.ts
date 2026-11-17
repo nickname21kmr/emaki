@@ -19,9 +19,9 @@ import {
   type UnrecognizedTheme,
 } from '@emaki/shared';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
-import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
+import { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import { acceptMessage } from '../acceptMessage.ts';
-import { insertDanbooruCharacter } from './characters.ts';
+import { insertDanbooruCharacter } from '../../domain/catalog/characterCatalog.ts';
 import { linkEach, type LinkItem } from '../../domain/curation/links.ts';
 import { manual } from '../../domain/curation/provenance.ts';
 import { markRetag } from '../../domain/evidence/retag.ts';

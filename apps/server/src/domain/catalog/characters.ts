@@ -1,45 +1,26 @@
 /**
  * 角色编辑、合并、自建角色（T14）。所有写操作都在 ctx.mutate 里（一个事务 + 撤销记录），声明 catalog.* 变化；
  * 之后重算「自建角色能对上 Danbooru」由提交后的反应做（domain/catalog/reactions.ts），撤销时重放同样的变化。
+ * 合并时图 ↔ 角色的关联经归类模块搬（domain/curation/links.ts），合集的整本关联经合集模块搬（domain/collections/entityLinks.ts）。
  */
-import { searchKey, type Character, type CreateCharacterBody, type ID, type MutationResult, type UpdateCharacterBody } from '@emaki/shared';
+import { type Character, type CreateCharacterBody, type ID, type MutationResult, type UpdateCharacterBody } from '@emaki/shared';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
-import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
 import type { CharacterVerification } from '../../services/catalog/characterVerification.ts';
 import type { Localizer } from '../../services/i18n/localizer.ts';
-import { replaceAutoAliases } from '../../services/aliases.ts';
 import type { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
-import { automaticCustomMatches } from '../../services/danbooru/matcher.ts';
-import type { SqliteContext } from './context.ts';
-import type { Derived } from './derived.ts';
-import { toCharacter } from './library.ts';
-import { iso, parseId } from './sql.ts';
-import { UndoRecorder } from './undo.ts';
-import { recordChange, type AssociatePayload } from './changeLog.ts';
-import { moveCharacterLinks } from '../../domain/curation/links.ts';
-import { moveCharacterEvidence } from '../../domain/evidence/store.ts';
-
-/** 可撤销地按标签新建 danbooru 角色（必要时新建作品）。调用方必须在 ctx.mutate 里调用 */
-export function insertDanbooruCharacter(
-  u: UndoRecorder,
-  catalog: CharacterCatalog,
-  tag: string,
-  opts: { now: string },
-): { id: number; created: boolean } {
-  const r = catalog.ensureCharacter(tag, opts.now);
-  if (r.created) {
-    // 记录顺序决定撤销顺序（撤销时逆序）：先删角色别名 → 删角色（级联 character_works）→ 删作品别名 → 删作品
-    for (const wid of r.createdWorkIds) {
-      u.inserted('works', wid);
-      u.sql("DELETE FROM aliases WHERE owner_type = 'work' AND owner_id = ?", [wid]);
-    }
-    u.inserted('characters', r.id);
-    u.sql("DELETE FROM aliases WHERE owner_type = 'character' AND owner_id = ?", [r.id]);
-    // 同 create：合并掉以后编号可能被新角色拿走，按建立时间认是不是原来那个
-    u.guard('SELECT 1 FROM characters WHERE id = ? AND created_at <> ?', [r.id, opts.now], `无法撤销：新建的角色 ${tag} 已经合并掉了，原来的编号给了之后新建的角色`);
-  }
-  return { id: r.id, created: r.created };
-}
+import type { SqliteContext } from '../../datasource/sqlite/context.ts';
+import type { Derived } from '../../datasource/sqlite/derived.ts';
+import { toCharacter } from '../../datasource/sqlite/library.ts';
+import { iso, parseId } from '../../datasource/sqlite/sql.ts';
+import { UndoRecorder } from '../../datasource/sqlite/undo.ts';
+import { recordChange, type AssociatePayload } from '../../datasource/sqlite/changeLog.ts';
+import { moveCharacterLinks } from '../curation/links.ts';
+import { moveCharacterEvidence } from '../evidence/store.ts';
+import { carryCollectionCharacters } from '../collections/entityLinks.ts';
+import { carryCharacterAliases, replaceAutoAliases, writeUserAliases } from './aliases.ts';
+import { bindDanbooru, linkDanbooruWorks, unbindDanbooru } from './bindings.ts';
+import { CharacterCatalog } from './characterCatalog.ts';
+import { automaticCustomMatches } from './customMatches.ts';
 
 /** trim、去空、保序去重、最多 50 个、每个 ≤ 100 字 */
 function normalizeAliases(xs: string[] | undefined): string[] {
@@ -92,16 +73,6 @@ export class CharacterMutations {
     }
   }
 
-  /** 用户编辑别名：替换 origin='user' 的行，自动别名改成只供搜索 */
-  private writeUserAliases(ownerId: number, aliases: string[]): void {
-    this.db.prepare("DELETE FROM aliases WHERE owner_type = 'character' AND owner_id = ? AND origin = 'user'").run(ownerId);
-    const ins = this.db.prepare(
-      "INSERT OR REPLACE INTO aliases (owner_type, owner_id, alias, search_key, origin, visible, position) VALUES ('character', ?, ?, ?, 'user', 1, ?)",
-    );
-    aliases.forEach((a, i) => ins.run(ownerId, a, searchKey(a), i));
-    this.db.prepare("UPDATE aliases SET visible = 0 WHERE owner_type = 'character' AND owner_id = ? AND origin <> 'user'").run(ownerId);
-  }
-
   private writeCharacterWorks(characterId: number, workIds: number[]): void {
     this.db.prepare('DELETE FROM character_works WHERE character_id = ?').run(characterId);
     const ins = this.db.prepare('INSERT INTO character_works (character_id, work_id, position) VALUES (?, ?, ?)');
@@ -113,26 +84,17 @@ export class CharacterMutations {
     return toCharacter(this.derived.get().characters.get(id)!);
   }
 
-  /** 明确匹配的绑定与当前操作共用事务、撤销记录；名称和已有图片关联保持原样。 */
+  /**
+   * 明确匹配的绑定与当前操作共用事务、撤销记录；名称和已有图片关联保持原样。
+   * 绑定和手动绑定是同一个函数：没有手动指定作品时补上所属作品，用户已有的作品选择保持
+   */
   private autoAssociateInTx(u: UndoRecorder, ids?: number[]): AssociatePayload[] {
     const matches = automaticCustomMatches(this.db, this.danbooru()).filter((m) => !ids || ids.includes(m.id));
     const out: AssociatePayload[] = [];
     for (const { id, match } of matches) {
-      const row = this.db.prepare('SELECT name, created_at, works_locked FROM characters WHERE id = ?').get(id) as { name: string; created_at: string; works_locked: number };
-      const worksBefore = this.db.prepare('SELECT work_id, position FROM character_works WHERE character_id = ? ORDER BY position').all(id) as AssociatePayload['worksBefore'];
-      const createdWorkIds: number[] = [];
-      u.columns('characters', ['danbooru_tag', 'source'], [id]);
-      this.db.prepare("UPDATE characters SET danbooru_tag = ?, source = 'danbooru' WHERE id = ?").run(match.danbooruTag, id);
-      // 没有手动指定作品时补上所属作品；用户已有的作品选择保持。
-      if (row.works_locked === 0) {
-        u.set('character_works', 'character_id = ?', [id]);
-        for (const wid of this.catalog().linkWorks(id, match.danbooruTag, iso(this.ctx.clock()))) {
-          createdWorkIds.push(wid);
-          u.inserted('works', wid);
-          u.sql("DELETE FROM aliases WHERE owner_type = 'work' AND owner_id = ?", [wid]);
-        }
-      }
-      out.push({ characterId: id, name: row.name, tag: match.danbooruTag, characterCreatedAt: row.created_at, worksChanged: row.works_locked === 0, worksBefore, createdWorkIds });
+      const row = this.db.prepare('SELECT name, created_at FROM characters WHERE id = ?').get(id) as { name: string; created_at: string };
+      const works = bindDanbooru(this.db, u, this.catalog(), id, match.danbooruTag, iso(this.ctx.clock()));
+      out.push({ characterId: id, name: row.name, tag: match.danbooruTag, characterCreatedAt: row.created_at, ...works });
     }
     return out;
   }
@@ -181,8 +143,10 @@ export class CharacterMutations {
       // created_at 建了就不改，对不上就整个拒绝（最后记录，最先检查）
       u.guard('SELECT 1 FROM characters WHERE id = ? AND created_at <> ?', [id, now], `无法撤销：「${name}」已经合并掉了，原来的编号给了之后新建的角色`);
       this.writeCharacterWorks(id, workIds);
-      this.writeUserAliases(id, normalizeAliases(body.aliases));
-      if (!tag) this.autoAssociateInTx(u, [id]);
+      writeUserAliases(this.db, id, normalizeAliases(body.aliases));
+      // 给了标签：和自动绑定一样，没手动指定作品就按 Danbooru 补作品；没给标签：试试自动关联
+      if (tag) linkDanbooruWorks(this.db, u, this.catalog(), id, tag, now);
+      else this.autoAssociateInTx(u, [id]);
       this.ctx.changed({ type: 'catalog.characterChanged', characterIds: [id], ids: [] });
       return { message: `已新建角色「${name}」` };
     });
@@ -216,11 +180,17 @@ export class CharacterMutations {
           newName = n;
         }
       }
-      if (body.aliases !== undefined) this.writeUserAliases(id, normalizeAliases(body.aliases));
-      if (tag !== undefined) set(tag ? "danbooru_tag = ?, source = 'danbooru'" : 'danbooru_tag = ?', tag);
+      if (body.aliases !== undefined) writeUserAliases(this.db, id, normalizeAliases(body.aliases));
       if (workIds) {
         this.writeCharacterWorks(id, workIds);
         set('works_locked = 1');
+      }
+      // 绑定 / 解绑和自动关联、撤回自动关联是同一套（bindings.ts）：绑定时没手动指定作品就按 Danbooru 补作品
+      // （这次一起指定了作品的，上面已经锁定）；解绑后改回自建，并忽略这个标签，免得又被自动绑回去
+      if (tag !== undefined && tag !== cur.danbooru_tag) {
+        const now = iso(this.ctx.clock());
+        if (tag) bindDanbooru(this.db, u, this.catalog(), id, tag, now);
+        else unbindDanbooru(this.db, u, id, cur.danbooru_tag!, now, 'unbound');
       }
       // 设封面 = 手动（自动选图不再换掉它）；设为 null = 恢复自动封面
       if (cover !== undefined) set('cover_image_id = ?, cover_manual = ?', cover, cover === null ? 0 : 1);
@@ -254,7 +224,8 @@ export class CharacterMutations {
     if (body.type === 'identity') {
       if (!danbooru.knowsCharacterTag(base)) throw new BadRequestError(`角色词库里没有标签 ${base}`);
       if (tag === base) throw new BadRequestError('请选择两个不同的角色标签');
-      if (verifications.formsOf(tag).length || danbooru.normalizeDanbooruTag(base) === tag) {
+      // 目标本身又归到这个标签（变体或核验过的身份）：会成环
+      if (verifications.formsOf(tag).length || danbooru.normalizeTag(base) === tag) {
         throw new ConflictError('请先核对该标签已有的身份关系');
       }
       const previous = verifications.base(tag);
@@ -292,7 +263,9 @@ export class CharacterMutations {
           }
         });
         const table = body.type === 'identity' ? 'character_verified_forms' : 'character_verified_names';
-        u.set(table, 'tag = ?', [tag]);
+        // 表名写成字面量：单一写入者测试按字面量认表（拼出来的表名只许出现在命令层）
+        if (body.type === 'identity') u.set('character_verified_forms', 'tag = ?', [tag]);
+        else u.set('character_verified_names', 'tag = ?', [tag]);
         if (body.type === 'identity') {
           const existing = verifications.formsOf(base).find(form => form.tag === tag);
           const aliases = [...new Set([...(existing?.aliases ?? []), ...body.aliases])];
@@ -346,15 +319,6 @@ export class CharacterMutations {
     const result = this.ctx.mutate((u) => {
       // 目标这边只记合并搬过去的行：撤销时只删这些，合并之后识别器等给目标新加的关联、别名都留着
       const list = (sql: string, ...args: unknown[]) => JSON.stringify(this.db.prepare(sql).pluck().all(...args));
-      const movedCollections = list(
-        'SELECT collection_id FROM collection_characters WHERE character_id = @from AND collection_id NOT IN (SELECT collection_id FROM collection_characters WHERE character_id = @to)',
-        p,
-      );
-      const newAliases = list(
-        `SELECT alias FROM (SELECT @name AS alias UNION SELECT alias FROM aliases WHERE owner_type = 'character' AND owner_id = @from)
-         WHERE alias NOT IN (SELECT alias FROM aliases WHERE owner_type = 'character' AND owner_id = @to)`,
-        { ...p, name: from.name },
-      );
       const redirected = list('SELECT tag FROM danbooru_tag_redirects WHERE character_id = ?', from.id);
       // Pixiv 给自建角色的证据（character_id）改指向目标，按目标合并后的写法：有 Danbooru 标签就写标签（character_id 留空），
       // 没有就写目标的占位标签。图上同一个来源已有目标的候选就不搬，删角色时级联删掉
@@ -366,11 +330,10 @@ export class CharacterMutations {
       const moved = moveCharacterLinks(this.ctx, u, from.id, to.id);
       // 同上：必须在 characters 之前记录（证据模块搬并记撤销）。撤销时先删搬过去的行，再插回原来的
       moveCharacterEvidence(this.db, u, from.id, { id: to.id, tag: toDanbooru });
-      // 合集的整本关联（T38b，RV-C-6）：必须在 characters 之前记录，撤销时 characters 先插回，外键才不失败
-      u.sql('DELETE FROM collection_characters WHERE character_id = ? AND collection_id IN (SELECT value FROM json_each(?))', [to.id, movedCollections]);
-      u.set('collection_characters', 'character_id = ?', [from.id]);
-      u.sql("DELETE FROM aliases WHERE owner_type = 'character' AND owner_id = ? AND alias IN (SELECT value FROM json_each(?))", [to.id, newAliases]);
-      u.set('aliases', "owner_type = 'character' AND owner_id = ?", [from.id]);
+      // 合集的整本关联（T38b，RV-C-6，合集模块）：必须在 characters 之前记录，撤销时 characters 先插回，外键才不失败
+      carryCollectionCharacters(this.db, u, from.id, to.id);
+      // 别名：目标 = 目标原别名 + 被合并角色的名字 + 它的别名（同上，在 characters 之前记录）
+      carryCharacterAliases(this.db, u, from, to.id);
       u.set('character_works', 'character_id = ?', [from.id]);
       u.sql('UPDATE danbooru_tag_redirects SET character_id = ? WHERE character_id = ? AND tag IN (SELECT value FROM json_each(?))', [from.id, to.id, redirected]);
       if (from.danbooru_tag && to.danbooru_tag) u.set('danbooru_tag_redirects', 'tag = ?', [from.danbooru_tag]);
@@ -381,12 +344,6 @@ export class CharacterMutations {
         u.sql('UPDATE characters SET danbooru_tag = NULL, source = ? WHERE id = ? AND danbooru_tag = ?', [to.source, to.id, from.danbooru_tag]);
       }
 
-      this.db
-        .prepare(
-          `INSERT OR IGNORE INTO collection_characters (collection_id, character_id, added_at)
-           SELECT collection_id, @to, added_at FROM collection_characters WHERE character_id = @from`,
-        )
-        .run(p);
       // 2 指向被合并角色的重定向改指向目标
       this.db.prepare('UPDATE danbooru_tag_redirects SET character_id = @to WHERE character_id = @from').run(p);
       // 3 标签：目标没有就接过来；目标已有就留一条重定向（否则下次打标签会把被合并的角色重新建出来）
@@ -398,20 +355,7 @@ export class CharacterMutations {
           this.db.prepare('INSERT OR REPLACE INTO danbooru_tag_redirects (tag, character_id) VALUES (?, ?)').run(from.danbooru_tag, to.id);
         }
       }
-      // 4 别名：目标 = 目标原别名 + 被合并角色的名字 + 它的别名
-      this.db
-        .prepare(
-          "INSERT OR IGNORE INTO aliases (owner_type, owner_id, alias, search_key, origin, visible, position) VALUES ('character', ?, ?, ?, 'user', 1, 50)",
-        )
-        .run(to.id, from.name, searchKey(from.name));
-      this.db
-        .prepare(
-          `INSERT OR IGNORE INTO aliases (owner_type, owner_id, alias, search_key, origin, visible, position)
-           SELECT 'character', @to, alias, search_key, origin, visible, position + 1000 FROM aliases WHERE owner_type = 'character' AND owner_id = @from`,
-        )
-        .run(p);
-      this.db.prepare("DELETE FROM aliases WHERE owner_type = 'character' AND owner_id = ?").run(from.id);
-      // 5 删除（级联 character_works / custom_character_matches / 没搬的角色证据；关联和否决上面已经搬走）
+      // 4 删除（级联 character_works / custom_character_matches / 没搬的角色证据；关联和否决上面已经搬走）
       this.db.prepare('DELETE FROM characters WHERE id = ?').run(from.id);
       // id 不是 AUTOINCREMENT：删掉的是最大 id 时，识别器之后新建的角色会拿到它。撤销时最先查，被占了就整个拒绝，免得删掉新角色
       u.guard('SELECT 1 FROM characters WHERE id = ?', [from.id], `无法撤销：「${from.name}」原来的编号已经给了之后新建的角色`);

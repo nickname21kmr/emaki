@@ -5,7 +5,7 @@
 import { searchKey, TAG_FILTER_MIN_SCORE, type SearchHit, type SearchQuery, type TagSuggestion, type TagSuggestionsQuery } from '@emaki/shared';
 import { stripZhQualifier } from '../../services/i18n/humanize.ts';
 import type { Db } from '../../db/connection.ts';
-import type { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
+import type { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import type { Derived } from './derived.ts';
 import { toCharacter, toWork } from './library.ts';
 

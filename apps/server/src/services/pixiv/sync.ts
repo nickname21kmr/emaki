@@ -8,7 +8,7 @@ import { setTimeout as sleep, setImmediate as yieldToEventLoop } from 'node:time
 import type { JobContext } from '../../core/jobs.ts';
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import { iso } from '../../datasource/sqlite/sql.ts';
-import type { CharacterCatalog } from '../catalog/characterCatalog.ts';
+import type { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import type { CopyrightSource } from '../catalog/copyrights.ts';
 import { DanbooruError } from '../danbooru/client.ts';
 import { hasOriginalTag, PixivAccessError, PixivClient, PixivPostError } from './client.ts';

@@ -8,7 +8,7 @@
 import { CONTENT_KINDS, type ContentKind } from '@emaki/shared';
 import { BadRequestError } from '../../http/errors.ts';
 import { backfillClassification } from '../../services/classify/backfill.ts';
-import type { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
+import type { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import { setKindManual } from '../../domain/curation/kinds.ts';
 import type { SqliteContext } from './context.ts';
 import type { UndoRecorder } from './undo.ts';
