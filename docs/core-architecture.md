@@ -1,6 +1,6 @@
 # Emaki 核心架构设计（v2 草案）
 
-> 状态：D1、D2、D3、D4、D5、D7、D8 已批准（2026-11-17）；D6 和插件挪到下一阶段（第 13 节）。P0、P1 已完成（2026-11-17），见第 12 节。依据的代码快照：fork 的起点（`codex/flexible-collections` @ 13c677d 加上当时未提交的改动，2026-11-17）。
+> 状态：D1、D2、D3、D4、D5、D7、D8 已批准（2026-11-17）；D6 和插件挪到下一阶段（第 13 节）。P0、P1、P2 已完成（2026-11-17），见第 12 节。依据的代码快照：fork 的起点（`codex/flexible-collections` @ 13c677d 加上当时未提交的改动，2026-11-17）。
 > 现状盘点和已知的不一致见 [core-architecture-inventory.md](core-architecture-inventory.md)。本文里「附录 #n」指那里的第 n 条。
 
 ## 0. 要解决什么
@@ -127,8 +127,11 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
 | 查重 | `domain/duplicates/` | `duplicate_groups`、`duplicate_members`、`duplicate_comparisons` | |
 | 设置 | `domain/settings/` | `settings` | |
 | 命令层 | `commands/` | `change_log`，以及撤销回放这类按表名拼 SQL 的通用写入 | |
+| 变更传播（P2） | `propagation/` | `pending_work`（排队状态，迁移 033） | |
 
 - 永久例外只有 `demo/`：演示数据直接灌进空的一次性库，不经过命令。
+- P2 已搬进主人目录的：合集（原 `services/collections/` → `domain/collections/`）、可见性（原 `datasource/sqlite/exclusions.ts` → `domain/visibility/`）；
+  各模块的反应放在 `domain/<模块>/reactions.ts`，变更传播层本身在 `propagation/`（第 5 节）。
 - 识别方式：扫描源码里所有字符串（含多行模板），找 `INSERT` / `REPLACE` / `UPDATE … SET` / `DELETE`；撤销记录器的 `u.columns` / `u.set` / `u.inserted` 也算写入。`images` 看 `SET` 的列名；看不出列（列名拼出来、整行快照）的记成 `images#?`，表名拼出来的记成 `<dynamic>`，这两种只能进允许清单或放进命令层。
 
 ## 4. 写入：命令和自动决定
@@ -177,7 +180,7 @@ decideAuto(image: ImageFacts, evidence: Evidence[], current: Decisions, settings
 
 ### 5.1 变化
 
-主人模块每写一笔，就往当前事务的「变化集」里加一条，带上涉及的 id 集合和必要的细节：
+主人模块每写一笔，就往当前事务的「变化集」里加一条，带上涉及的 id 集合和必要的细节（实现：`propagation/changes.ts`，写法见 `ARCHITECTURE.md`「变更传播」）：
 
 | 变化 | 何时发出 | 关键细节 |
 | --- | --- | --- |
@@ -191,33 +194,43 @@ decideAuto(image: ImageFacts, evidence: Evidence[], current: Decisions, settings
 | `evidence.changed` | 某个来源的证据变了 | `provider` |
 | `curation.*Changed` | 角色、原创、放下、分级、收藏、画师、否决变化 | 角色变化带上新增 / 移除和来历 |
 | `catalog.*` | 角色改名、合并、绑定变化 | |
-| `visibility.changed` | 排除结果变化（新增排除或解除排除） | |
-| `collections.changed` | 合集成员或类型变化 | |
+| `visibility.rulesChanged` | 排除规则或排除例外（决定）变化 | 要重新判定的图 |
+| `visibility.changed` | 排除结果变化（新增排除或解除排除） | `excluded` / `released`，按操作之前的状态算 |
+| `collections.changed` | 合集成员或类型变化 | 进出本子的图；要重排页序的合集 |
+| `duplicates.changed` | 重复组生成或处理 | |
 | `settings.changed` | 某节设置变化 | |
+| `library.opened` | 启动修补做完 | 规则版本可能变了，全量对一遍派生数据 |
 
 ### 5.2 反应
 
-反应在注册表里声明：订阅哪些变化、在哪个阶段执行。下表是从现状里各调用方手工维护的连带处理整理出来的（来源见附录）：
+反应在注册表里声明：订阅哪些变化、在哪个阶段执行。下表是 P2 实际注册的反应（`SqliteDataSource.registerReactions`，同一阶段按表里的顺序执行），取代以前各调用方手工维护的连带处理（来源见附录）：
 
 | 反应 | 订阅 | 阶段 | 取代现在的 |
 | --- | --- | --- | --- |
-| `analyze` | `image.added`、`image.fileChanged`、`image.moved`（路径相关的分类） | 事务内做便宜的部分，昂贵的排队 | 扫描、替换、移动各自的分类入口，现在替换和移动都漏了（附录 #10、#11） |
-| `reparseSource` | `image.moved`（来源未手动锁定时） | 事务内 | 只有扫描时的移动会重新解析（附录 #13） |
-| `reevaluateAuto` | 见 4.2 | 事务内 | 识别写入、补采纳、改类型、Pixiv 各自的四套判断 |
-| `reevaluateExclusions` | `curation.charactersChanged`、`image.moved`、`evidence.changed`（标签）、排除规则变化 | 事务内，同时负责排除和解除排除 | 现在 6 处会套用排除规则、4 处没套，而且从来不解除（附录 #14、#15） |
-| `refreshFolderCollections` | `image.*`、`image.kindChanged`、`visibility.changed`、`root.*` | 事务内（按 id）或提交后（全量） | `collectionsHook` 的 20 处调用，以及漏掉的移动、撤回移动、相机识别（附录 #17） |
-| `refreshPostGroups` | `image.sourceChanged` | 事务内 | 只有部分来源修改的路径会刷新 |
-| `queueTagging` | `image.added`、`image.fileChanged`、`visibility.changed`（重新可见时）、`root.modeChanged`（离开漫画区时） | 排队 | 恢复排除后不会重新识别（附录 #16） |
-| `queuePixivCheck` | `image.sourceChanged`、`evidence.changed`、影响资格的归类变化 | 排队 | 现在只在识别批次结束时排队（附录 #19） |
-| `markDedupeDirty` | `image.fileChanged`、`visibility.changed`、`image.gone` / `returned` / `trashed` / `restored` | 排队，持久化 | 现在只有图库文件夹变化会标记，而且重启就丢（附录 #18） |
-| `recomputeCustomMatches` | `catalog.*`、`curation.charactersChanged` | 提交后 | 5 处手动调用 |
-| `invalidateCaches` + 推送事件 | 任何变化 | 提交后 | 现在 `touch` 有 21 处调用，强刷新 / 弱刷新约定被后台路径破坏（附录 #20、#21） |
+| `reparseSource` | `image.moved`（来源未手动锁定时） | 事务内 | 只有扫描时的移动会重新解析（附录 #13）。三条移动路径和撤回移动都发 `image.moved` |
+| `reclassifyByPath`（`analyze` 里便宜的部分） | `image.moved`、`root.modeChanged` | 事务内 | 路径相关的分类、漫画文件夹的类型和分级、去掉识别器的角色；声明 `image.kindChanged`、`curation.charactersChanged` |
+| `dropStalePixivEvidence` | `image.sourceChanged` | 事务内 | 来源变了，按旧投稿号查的 Pixiv 建议和检查记录去掉（附录 #13）；以前只有改识别方式会做 |
+| `reevaluateExclusions` | `visibility.rulesChanged`、`curation.charactersChanged`、`evidence.changed`（标签）、`image.added`、`image.moved`、`library.opened` | 事务内，同时负责排除和解除排除 | 现在 6 处会套用排除规则、4 处没套，而且从来不解除（附录 #14、#15） |
+| `queuePixivCheck` | `image.sourceChanged`、`image.kindChanged`、放下、原创、角色、`visibility.changed`、`evidence.changed`、`root.modeChanged`、`collections.changed` | 事务内登记（持久化的队列） | 现在只在识别批次结束时登记（附录 #19） |
+| `refreshPostGroups` | `image.sourceChanged` | 事务内（后台任务延后到结束） | 只有部分来源修改的路径会刷新 |
+| `refreshFolderCollections` | `image.*`、`image.kindChanged`、`visibility.changed`、`evidence.changed` | 事务内按 id（后台任务延后到结束全量） | `collectionsHook` 的 20 处调用，以及漏掉的移动、撤回移动、相机识别、让出或中止的任务（附录 #17） |
+| `renumberCollections` | `collections.changed`（手动增删成员） | 事务内 | `onUndoLast` 里的页序重排 |
+| `markDedupeDirty` | `image.added` / `fileChanged` / `gone` / `returned` / `trashed` / `restored`、`visibility.changed`、`root.visibilityChanged` | 排队，持久化在 `pending_work` | 现在只有图库文件夹变化会标记，而且重启就丢（附录 #18） |
+| `rescanRoots`、`queueTagging`、`queueAnalysis`、`queueArtists`、`schedulePixiv`、`rematchCachedPixiv` | 文件夹重新显示；放出排除、离开漫画文件夹、新图；新图和换了文件；改回自动画师；资格变了；来源变了 | 排队（只有用户和助手的操作直接拉起任务） | 恢复排除后不会重新识别（附录 #16）；撤销改识别方式、`artist-auto` 不会重跑（附录 #22） |
+| `refreshAllCollections` | `root.*`、`library.opened` | 提交后（全量） | 文件夹启停、漫画设置变化后的手工全量重算 |
+| `recomputeCustomMatches` | `catalog.*` | 提交后 | 5 处手动调用 |
+| `notifySettings`、`notifyRoots` | `settings.changed`；`root.*` | 提交后 | 设置和文件夹监听的手工通知 |
+| `invalidateCaches` + 推送事件 | 任何写入 | 提交后 | 现在 `touch` 有 21 处调用，强刷新 / 弱刷新约定被后台路径破坏（附录 #20、#21） |
+
+和最初设计的出入：`reevaluateAuto`（第 4.2 节）是 P3 的事，P2 的改类型、补采纳仍在命令里直接评估；`recomputeCustomMatches` 只订阅 `catalog.*`（它只看自建角色和标签，图上的角色变化不影响它）；
+`analyze` 只把路径相关的分类放在事务内，统一「文件内容变化」的语义和唯一入口留给 P4（D1）。
 
 三个阶段的含义：
 
 - **事务内**：保证派生数据和事实一致，必须是幂等的重算，也就是从事实重新算出结果，而不是增量修补。反应自己写入的东西会再产生变化，处理到没有新变化为止；超过固定深度就报错，用测试检查有没有循环。
 - **提交后**：刷新缓存、推送事件。强刷新还是弱刷新由 actor 决定：用户和助手的操作强刷新，后台任务弱刷新。不再由各处自己选择。
 - **排队**：交给后台任务的工作，比如缩略图、识别、Pixiv、查重。排队状态持久化在数据库里，不再只放在内存。
+- 后台任务和启动修补里昂贵的全量重算（合集）延后到任务结束时做一次（`defer`），不论任务是完成、让出还是被取消。
 
 ### 5.3 撤销
 
@@ -357,7 +370,7 @@ AI 助手已经能读写图库，还可以让它直接写新页面（比如各�
 | --- | --- | --- | --- |
 | **P0 护栏**（已完成 2026-11-17） | 确认本文和第 13 节的决定。加两类架构测试：① 单一写入者检查：扫描源码，找出在主人模块之外写某张表的地方，现有违例列入允许清单，之后只许减少；② 跨入口一致性测试的骨架。 | 两类测试进 CI；允许清单如实记录现状。已完成：`apps/server/test/architecture/` 的 `singleWriter.test.ts`（主人映射见第 3.1 节，允许清单 `writers.allowlist.ts`）和 `crossEntry.test.ts`（附录 #1、#2、#3、#5、#14 现状不一致的用例用 `it.fails` 标出） | S |
 | **P1 一个实现**（已完成 2026-11-17） | 演示模式改跑真实引擎 + 假部件（第 8 节）；补全灌数据；删除 MockDataSource；契约测试改成对单一实现的接口测试 | `dev:mock` 不再依赖 MockDataSource；README 截图流程照常可用；附录 #31 关闭。已完成：可替换部件在 `infra/ports.ts`，演示模式在 `demo/`（`engine.ts`、`ports.ts`、`seed.ts`） | M |
-| **P2 变更传播骨架** | 变化集、反应注册表、三个阶段；把现有的连带处理逐个搬成反应；撤销改为「还原 + 重跑反应」；同时补上盘点出来的漏处理（移动、替换、解除排除、恢复后重新识别、查重标记） | 主人模块之外不再直接调用 `collectionsHook` / `touch` / `invalidate`；附录 #13–#22 关闭 | L |
+| **P2 变更传播骨架**（已完成 2026-11-17） | 变化集、反应注册表、三个阶段；把现有的连带处理逐个搬成反应；撤销改为「还原 + 重跑反应」；同时补上盘点出来的漏处理（移动、替换、解除排除、恢复后重新识别、查重标记） | 主人模块之外不再直接调用 `collectionsHook` / `touch` / `invalidate`；附录 #13–#22 关闭。已完成：`propagation/`（变化、注册表、actor、排队状态 `pending_work`），反应在 `domain/<模块>/reactions.ts` 和 `propagation/engine.ts`；`test/architecture/sideEffects.test.ts` 检查连带处理只在主人模块和变更传播层，`changes.closure.test.ts` 逐条证明附录 #13–#22 已关闭 | L |
 | **P3 归类收口** | 证据表和统一的来历字段（含旧数据迁移）；`decideAuto` 和 `reevaluateAuto`；13 个写入点全部改走 `curation.link` / `unlink`；建议改成派生视图；Pixiv 只产出证据；否决语义按 D3 | 对 `image_characters` 和证据表的允许清单清零；跨入口一致性测试全部通过；附录 #1–#9、#12、#37、#39 关闭 | L |
 | **P4 入库与分析收口** | 统一文件内容变化的语义（按 D1）；`analyze` 唯一入口；三条移动路径合一；合集判定版本号真正生效；派生数据都带版本 | 附录 #10、#11、#23 关闭 | M |
 | **P5 读模型与前端** | 命名口径唯一；状态拆成三个事实；汇总接口；共用的展示规则移进 `packages/shared`；前端删掉自带的业务规则；设置只有一份 | 附录 #24–#30、#32、#38 关闭 | M |

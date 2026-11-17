@@ -109,7 +109,7 @@ export class UnrecognizedQueries {
     private readonly softMs = 0,
   ) {}
 
-  /** 写操作、扫描、识别之后清缓存（SqliteDataSource 接 onInvalidate 和 library-changed） */
+  /** 写操作、扫描、识别之后清缓存（SqliteDataSource 接 onInvalidate，由变更传播的提交后反应调用） */
   invalidate(soft = false): void {
     // 软失效：汇总最多晚 SOFT_MS 更新（识别期间侧栏数字不必每 5 秒重算一遍）
     if (soft && this.cached) this.softAt ??= performance.now();

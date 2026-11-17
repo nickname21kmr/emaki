@@ -22,6 +22,7 @@
 │  DataSource 接口 (datasource/DataSource.ts)                                                    │
 │      └── SqliteDataSource  唯一的业务实现：SQLite + 文件系统                                     │
 │              │   演示模式 / 测试：同一个引擎，换掉 infra/ports.ts 里的可替换部件（demo/）           │
+│              ├── domain/  领域模块（主人）与它们的反应   propagation/  变化集 · 反应注册表 · actor  │
 │              ├── core/  JobQueue（io / gpu 两条通道） UndoStack（撤销） EventBus（→ SSE）         │
 │              └── services/  scanner · thumbnails · tagger(ONNX) · pixiv · danbooru · dedupe     │
 └──────────────────────────────────────────────────────────────────────────────────────────────┘
@@ -45,7 +46,9 @@ emaki/
 │  ├─ core/            JobQueue / UndoStack / EventBus
 │  ├─ datasource/
 │  │  ├─ DataSource.ts          接口（P6 换成命令 / 查询注册表后删掉）
-│  │  └─ sqlite/                唯一的实现
+│  │  └─ sqlite/                唯一的实现（context.ts：写入的唯一入口 ctx.mutate / ctx.apply）
+│  ├─ domain/<模块>/   领域模块：表的主人（test/architecture/owners.ts）和它们的反应（P2 起逐步搬进来）
+│  ├─ propagation/     变更传播：变化（changes.ts）、反应注册表和三个阶段（registry.ts）、actor、引擎层的反应、排队状态
 │  ├─ infra/ports.ts   可替换部件：时钟、回收站、图片文件、图库文件夹、后台任务（扫描 / 模型 / 联网）
 │  ├─ demo/            演示数据（fixtures、种子、占位图）、灌数据、演示用的假部件
 │  └─ db/              迁移（schema.sql 是 v1，migrations/ 是之后的版本）
@@ -83,6 +86,53 @@ Node 后端 + 浏览器前端，`npm run dev` 就能用。以后要做成桌面�
 
 ### 5. 撤销
 所有修改接口返回 `MutationResult { message, undoToken }`。服务端 `UndoStack` 保存反向操作（最近 50 条，内存）。前端 toast 上有「撤销」按钮，顶栏撤销按钮 / Ctrl+Z 撤销最近一次。这让「排除」「归类」「移到回收站」这类批量操作可以放心大胆地做。
+撤销 = 还原事实 + 重放变化（见下一节）；后台的自动关联、Pixiv 补充、移动记在 `change_log` 里，重启后也能撤回，不占撤销栈。
+
+### 5a. 变更传播：写操作只声明「改了什么」
+（[core-architecture.md](core-architecture.md) 第 5 节，P2 起。）写操作只写自己负责的事实，然后声明一条「变化」；
+套排除规则、重算合集、登记 Pixiv 补充、标记要查重、刷新缓存、推事件这些连带处理，由订阅这条变化的**反应**完成。
+谁写的、从哪个入口写的（网页、AI 助手、后台任务、启动修补）都一样，撤销也一样。
+
+**写一个新的写操作**：
+
+```ts
+// 可撤销：一个事务 + 撤销记录 + 变更传播
+return this.ctx.mutate((u) => {
+  u.columns('images', ['shelved_at'], ids);                     // 只记事实的快照
+  db.prepare('UPDATE images SET shelved_at = ? …').run(…);
+  this.ctx.changed({ type: 'curation.shelvedChanged', ids });   // 声明改了什么
+  return { message: `已放下 ${ids.length} 张图` };
+});
+// 不可撤销的（后台任务、启动修补、自带撤销逻辑的文件操作）：ctx.apply(() => { …; ctx.changed(…) })
+```
+
+- 变化的类型在 `propagation/changes.ts`（第 5.1 节的表），都带涉及的图片 id；按图片的变化 id 为空时直接丢掉。
+- **不要**自己调合集重算、`reevaluateExclusions`、缓存失效、推 `library-changed`、通知设置监听者：`test/architecture/sideEffects.test.ts` 会失败。
+- 删掉会让派生数据跟着变的事实（例如删排除规则，外键会把 `excluded_by` 清空）时，**先声明变化再删**：反应在变化声明的那一刻记下「改之前」的样子（`snapshot`）。
+- 撤销不需要接线：`ctx.mutate` 的撤销 = 按撤销记录还原事实 + 在同一个事务里把这次声明的变化重放一遍，反应都是重算，派生数据自然对。
+  快照表达不了的还原步骤用 `u.custom(fn)`（在撤销事务里逆序执行，只还原事实）。`onUndo` 已经删掉了。
+
+**写一个新的反应**：放在主人模块（`domain/<模块>/reactions.ts`）或 `propagation/engine.ts`，在 `SqliteDataSource.registerReactions` 里注册（同一阶段按注册顺序执行）：
+
+```ts
+export const reevaluateExclusionsReaction: Reaction = {
+  name: 'reevaluateExclusions',
+  on: ['visibility.rulesChanged', 'curation.charactersChanged', …],  // 订阅
+  phase: 'tx',                                                        // tx / queue / after
+  emits: ['visibility.changed'],                                      // 会声明的变化（检查有没有环）
+  run({ ctx, changes, emit, actor, undo }) { … },
+};
+```
+
+- **事务内（tx）**：和写操作同一个事务，必须是幂等的重算（从事实算出结果，不做增量修补），按 `changes.ids()` 批量处理，不要逐行查询。
+  自己声明的变化会继续交给后面的反应，最多 8 轮，超过就报错回滚（有环）。删掉了重算不出来的东西（过期的证据）时记在 `undo` 里。
+- **排队（queue）**：提交后把工作交给后台任务；要做的事持久化在库里（识别、Pixiv 补充本来就在图片行和 `pixiv_character_checks` 里，查重在 `pending_work`）。
+  只有用户和助手的操作在这里直接拉起任务，后台任务写库后由任务链接着排。
+- **提交后（after）**：缓存、事件、监听者。出错只记日志。
+- **actor**：HTTP 请求是 `user`；助手经 `app.inject` 调接口时带内部令牌，是 `assistant`；任务执行体在 `job:<种类>` 下；启动修补是 `system:startup`。
+  用户和助手的操作强刷新缓存、马上推 `library-changed`（reason `mutation`）；后台任务和启动修补弱刷新（旧结果最多再用 10 秒），事件按任务种类节流，任务结束时推一次。
+  后台任务里昂贵的全量重算（合集）用 `defer` 延后到任务结束（不论完成、让出还是取消）一次做完。
+- 找慢的反应：`EMAKI_PROFILE_REACTIONS=1` 打印每个反应的耗时；写操作的测速脚本是 `apps/server/scripts/bench-mutations.ts`（合成数据）。
 
 ### 6. 后台任务 + SSE
 扫描、缩略图、识别、Pixiv 补充、Danbooru 同步、查重都是 `JobQueue` 里的任务，分两条通道：识别角色和画师主要吃显卡，走 gpu 道；其余吃 CPU / 硬盘，走 io 道。每条道同一时间只跑一个，道内按优先级出队，两条道可以同时跑。进度通过 `EventBus` → `GET /api/events`（SSE）推给前端，侧边栏显示进度环。

@@ -80,7 +80,7 @@ export type FileResponse =
  * 约定：
  * - 找不到资源时 get* 返回 null，其余方法抛 NotFoundError。
  * - 所有修改方法返回 MutationResult，可撤销的带 undoToken（用 UndoStack.result）。
- * - 修改后要 emit `library-changed`，让前端刷新。
+ * - 修改在 ctx.mutate / ctx.apply 里声明变化；缓存失效和 `library-changed` 由变更传播的提交后反应按 actor 推送（propagation/）。
  */
 export interface DataSource {
   /** 数据库文件的路径（内存库为 null）：AI 助手的只读 SQL 工具直接读它 */
