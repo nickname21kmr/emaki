@@ -174,6 +174,8 @@ export interface ImageDetail extends ImageItem {
   tags: TagScore[];
   /** tagger 给出的、还没被采纳的角色建议 */
   characterSuggestions: CharacterSuggestion[];
+  /** 已关联角色的来历（和 characterIds 同序）：手动还是自动、自动的依据哪个来源（P3a 统一来历） */
+  characterLinks: CharacterLinkProvenance[];
   /** 类型是怎么判出来的；还没判过为 null */
   kindSource: ContentKindSource | null;
   /** 给人看的判定依据，例如「文件夹「表情包2」」「识别标签 comic 0.93」；手动设置时为 null */
@@ -194,6 +196,17 @@ export interface ImageDetail extends ImageItem {
   artists: ImageArtist[];
   /** 用户手动改过画师：识别、补跑都不再动 */
   artistsManual: boolean;
+}
+
+/** 一条「图 ↔ 角色」关联的来历（看图器的角色栏用）。完整来历（规则、actor、时间）在库里，见 docs/core-architecture.md 第 2.2 节 */
+export interface CharacterLinkProvenance {
+  characterId: ID;
+  /** manual = 用户归的（包括单张采纳建议）；auto = 规则自动关联的 */
+  decision: 'manual' | 'auto';
+  /** 依据的证据来源：tagger = 识别模型，pixiv = Pixiv 投稿标签；没有证据为 null */
+  source: 'tagger' | 'pixiv' | null;
+  /** 证据的分数（模型的置信度）；没有为 null */
+  score: number | null;
 }
 
 /** 一张图上的一位画师 */

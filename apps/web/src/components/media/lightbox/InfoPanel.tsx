@@ -105,6 +105,7 @@ export function InfoPanel({
           <>
             <PanelCharacters
               characterIds={actions.characterIds}
+              links={detail.characterLinks}
               suggestions={detail.characterSuggestions}
               actions={actions}
               onNavigate={onNavigate}

@@ -720,6 +720,14 @@ export class SqliteDataSource implements DataSource {
       absPath: path.normalize(toAbs(row.root_path, row.rel_path)),
       tags,
       characterSuggestions: loadSuggestions(this.ctx, [n], this.makeCatalog().catalog).get(n) ?? [],
+      characterLinks: (
+        this.ctx
+          .stmt(
+            `SELECT character_id, decision, evidence_provider, evidence_score FROM image_characters
+             WHERE image_id = ? ORDER BY added_at, character_id`,
+          )
+          .all(n) as { character_id: number; decision: 'manual' | 'auto'; evidence_provider: 'tagger' | 'pixiv' | null; evidence_score: number | null }[]
+      ).map((r) => ({ characterId: toId(r.character_id), decision: r.decision, source: r.evidence_provider, score: r.evidence_score })),
       kindSource: row.content_kind_manual ? 'manual' : row.content_kind_source,
       kindReason: row.content_kind_manual ? null : describeKindReason(row.content_kind_source, row.content_kind_evidence),
       collection: this.imageCollection(n),
