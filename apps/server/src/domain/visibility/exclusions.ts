@@ -94,7 +94,7 @@ export interface VisibilityDelta {
  * 按现在的规则和排除例外重算这些图的 excluded_by（ids = 'all' 全库），只写真的变了的行。
  * 唯一写 excluded_by 的地方（创建规则时的计数、恢复时的判断只读）；必须在事务里调用，一般由反应调用
  */
-export function reevaluateExclusions(ctx: SqliteContext, ids: number[] | 'all'): VisibilityDelta {
+export function reevaluateExclusions(ctx: SqliteContext, ids: number[] | 'all', before?: ReadonlyMap<number, number | null>): VisibilityDelta {
   const out: VisibilityDelta = { excluded: [], released: [], rewritten: 0 };
   if (ids !== 'all' && !ids.length) return out;
   const best = firstMatchingRules(ctx, ids);
@@ -106,11 +106,14 @@ export function reevaluateExclusions(ctx: SqliteContext, ids: number[] | 'all'):
   const set = ctx.stmt('UPDATE images SET excluded_by = ? WHERE id = ?');
   for (const r of rows) {
     const next = r.exclude_exempt ? null : (best.get(r.id) ?? null);
-    if (next === r.excluded_by) continue;
-    set.run(next, r.id);
-    out.rewritten++;
-    if (r.excluded_by === null) out.excluded.push(r.id);
-    else if (next === null) out.released.push(r.id);
+    if (next !== r.excluded_by) {
+      set.run(next, r.id);
+      out.rewritten++;
+    }
+    // 排除 / 放出按「这次操作之前」算：删规则时外键已经先把 excluded_by 清空了
+    const was = before?.has(r.id) ? before.get(r.id)! : r.excluded_by;
+    if (was === null && next !== null) out.excluded.push(r.id);
+    else if (was !== null && next === null) out.released.push(r.id);
   }
   return out;
 }
@@ -131,14 +134,21 @@ export const reevaluateExclusionsReaction: Reaction = {
   ],
   phase: 'tx',
   emits: ['visibility.changed'],
-  run({ ctx, changes, emit }) {
+  // 声明变化时记下这些图当时的排除结果（删规则、撤销时外键会先把 excluded_by 清掉，要按改之前的算谁被放出来）
+  snapshot(ctx, change) {
+    if (change.type === 'library.opened' || !change.ids.length) return [];
+    return ctx.db.prepare('SELECT id, excluded_by FROM images WHERE id IN (SELECT value FROM json_each(?))').all(JSON.stringify(change.ids));
+  },
+  run({ ctx, changes, emit, snapshots }) {
     const all = changes.has('library.opened');
     // 只有模型标签会影响「标签」规则；Pixiv、画师的证据不影响
     const evidence = changes.of('evidence.changed').filter((c) => c.provider === 'tagger').flatMap((c) => c.ids);
     const ids = all
       ? 'all'
       : [...new Set([...changes.ids('visibility.rulesChanged', 'curation.charactersChanged', 'image.added', 'image.moved'), ...evidence])];
-    const d = reevaluateExclusions(ctx, ids);
+    const before = new Map<number, number | null>();
+    for (const list of snapshots as { id: number; excluded_by: number | null }[][]) for (const r of list) if (!before.has(r.id)) before.set(r.id, r.excluded_by);
+    const d = reevaluateExclusions(ctx, ids, before);
     if (d.excluded.length || d.released.length) {
       emit({ type: 'visibility.changed', ids: [...d.excluded, ...d.released], excluded: d.excluded, released: d.released });
     }
@@ -235,6 +245,8 @@ export function restoreImagesInTx(ctx: SqliteContext, u: UndoRecorder, ids: numb
     .all(JSON.stringify(ids)) as { id: number; excluded_by: number; kind: ExclusionKind | null }[];
   if (!rows.length) return 0;
   const excluded = rows.map((r) => r.id);
+  // 先声明（记下改之前的排除结果），再删规则：外键会顺手把 excluded_by 清掉
+  ctx.changed({ type: 'visibility.rulesChanged', ids: excluded });
   for (const r of rows) {
     if (r.kind !== 'image') continue;
     u.set('exclusions', 'id = ?', [r.excluded_by]);
@@ -244,7 +256,6 @@ export function restoreImagesInTx(ctx: SqliteContext, u: UndoRecorder, ids: numb
   const exempt = excluded.filter((id) => still.has(id));
   u.columns('images', ['exclude_exempt'], exempt);
   db.prepare('UPDATE images SET exclude_exempt = 1 WHERE id IN (SELECT value FROM json_each(?))').run(JSON.stringify(exempt));
-  ctx.changed({ type: 'visibility.rulesChanged', ids: excluded });
   return rows.length;
 }
 
@@ -293,9 +304,9 @@ export class ExclusionQueries {
     return this.ctx.mutate((u) => {
       const affected = this.ctx.stmt('SELECT id FROM images WHERE excluded_by = ?').pluck().all(row.id) as number[];
       u.set('exclusions', 'id = ?', [row.id]);
-      // 外键 ON DELETE SET NULL 先放开；同时被其他规则命中的图由反应重新排除
-      this.ctx.stmt('DELETE FROM exclusions WHERE id = ?').run(row.id);
+      // 先声明（记下改之前的排除结果）再删：外键 ON DELETE SET NULL 先放开；同时被其他规则命中的图由反应重新排除
       this.ctx.changed({ type: 'visibility.rulesChanged', ids: affected });
+      this.ctx.stmt('DELETE FROM exclusions WHERE id = ?').run(row.id);
       return { message: `已恢复：${row.label}（${affected.length} 张）` };
     });
   }

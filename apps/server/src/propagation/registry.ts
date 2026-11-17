@@ -37,6 +37,8 @@ export interface ReactionInput {
   emit(c: Change): void;
   /** 把昂贵的全量重算延后：任务结束、启动完成时做一次（key 相同的只做一次） */
   defer(key: string): void;
+  /** 事务内反应：声明变化那一刻 snapshot() 记下的东西（按声明顺序） */
+  readonly snapshots: readonly unknown[];
 }
 
 export interface Reaction {
@@ -48,6 +50,11 @@ export interface Reaction {
   readonly emits?: readonly ChangeType[];
   /** 提交后反应：没有任何变化（例如只改了画师合并关系）也执行 */
   readonly always?: boolean;
+  /**
+   * 事务内反应：订阅的变化一声明就调用，记下「改之前」的样子（例如排除结果）。
+   * 声明变化要放在改事实之前才拿得到改之前的值；撤销重放时在还原之前调用
+   */
+  snapshot?(ctx: SqliteContext, change: Change): unknown;
   run(input: ReactionInput): void | Promise<unknown>;
 }
 
@@ -55,6 +62,7 @@ interface Frame {
   set: ChangeSet;
   actor: Actor;
   undo: UndoRecorder | null;
+  snapshots: Map<Reaction, unknown[]>;
 }
 
 export class Propagation {
@@ -102,7 +110,17 @@ export class Propagation {
   /** 声明一条变化。只能在 run（ctx.mutate / ctx.apply）里调用 */
   changed(c: Change): void {
     if (!this.frame) throw new Error(`变化「${c.type}」只能在 ctx.mutate / ctx.apply 里声明`);
-    this.frame.set.add(c);
+    this.add(this.frame, c);
+  }
+
+  private add(frame: Frame, c: Change): void {
+    if (!frame.set.add(c)) return;
+    for (const r of this.reactions) {
+      if (r.phase !== 'tx' || !r.snapshot || !r.on.includes(c.type)) continue;
+      const list = frame.snapshots.get(r) ?? [];
+      list.push(r.snapshot(this.ctx, c));
+      frame.snapshots.set(r, list);
+    }
   }
 
   /**
@@ -114,17 +132,17 @@ export class Propagation {
     const outer = this.frame;
     if (outer) {
       const from = outer.set.size;
-      for (const c of opts.replay ?? []) outer.set.add(c);
+      for (const c of opts.replay ?? []) this.add(outer, c);
       const value = fn();
       return { value, declared: outer.set.list.slice(from) };
     }
-    const frame: Frame = { set: new ChangeSet(), actor: opts.actor ?? currentActor(), undo: opts.undo ?? null };
+    const frame: Frame = { set: new ChangeSet(), actor: opts.actor ?? currentActor(), undo: opts.undo ?? null, snapshots: new Map() };
     this.frame = frame;
     let declared: Change[] = [];
     let value: T;
     try {
       value = this.ctx.db.transaction(() => {
-        for (const c of opts.replay ?? []) frame.set.add(c);
+        for (const c of opts.replay ?? []) this.add(frame, c);
         const v = fn();
         declared = [...frame.set.list];
         this.runTx(frame);
@@ -137,14 +155,15 @@ export class Propagation {
     return { value, declared };
   }
 
-  private input(frame: Frame, changes: ChangeSet): ReactionInput {
+  private input(frame: Frame, changes: ChangeSet, r: Reaction): ReactionInput {
     return {
       ctx: this.ctx,
       changes,
       all: frame.set,
       actor: frame.actor,
       undo: frame.undo,
-      emit: (c) => frame.set.add(c),
+      snapshots: frame.snapshots.get(r) ?? [],
+      emit: (c) => this.add(frame, c),
       defer: (key) => {
         if (!this.deferredHandlers.has(key)) throw new Error(`没有登记延后处理 ${key}`);
         this.deferred.add(key);
@@ -163,7 +182,7 @@ export class Propagation {
         seen.set(r, frame.set.size);
         if (!mine.length) continue;
         ran = true;
-        r.run(this.input(frame, new ChangeSet(mine)));
+        r.run(this.input(frame, new ChangeSet(mine), r));
       }
       if (!ran) return;
       if (round >= MAX_ROUNDS) {
@@ -181,7 +200,7 @@ export class Propagation {
         const mine = new ChangeSet(frame.set.list.filter((c) => r.on.includes(c.type)));
         if (!mine.size && !r.always) continue;
         try {
-          const out = r.run(this.input(frame, mine));
+          const out = r.run(this.input(frame, mine, r));
           if (out instanceof Promise) this.track(out, r.name);
         } catch (err) {
           console.warn(`[变更传播] 提交后的反应 ${r.name} 失败：${err instanceof Error ? err.message : String(err)}`);

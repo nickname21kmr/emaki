@@ -113,8 +113,11 @@ export class ChangeSet {
     return this.list.length;
   }
 
-  add(c: Change): void {
-    if (!isEmptyChange(c)) this.list.push(c);
+  /** 加一条；返回加了没有（空的按图片变化不加） */
+  add(c: Change): boolean {
+    if (isEmptyChange(c)) return false;
+    this.list.push(c);
+    return true;
   }
 
   has(...types: ChangeType[]): boolean {

@@ -51,6 +51,13 @@ export function extractStrings(src: string, file = '<src>'): StringToken[] {
   return tokenize(src, file).strings;
 }
 
+/** 把注释换成空格（换行保留，行号不变），其余原样：按调用点扫描时不把注释里提到的名字算进去 */
+export function stripComments(src: string, file = '<src>'): string {
+  const units = src.split('');
+  for (const [a, b] of tokenize(src, file).comments) for (let k = a; k < b; k++) if (units[k] !== '\n') units[k] = ' ';
+  return units.join('');
+}
+
 /** 词法结果：字符串字面量，以及注释的位置（[起点, 终点)） */
 function tokenize(src: string, file: string): { strings: StringToken[]; comments: [number, number][] } {
   const out: StringToken[] = [];
