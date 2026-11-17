@@ -16,6 +16,7 @@ import path from 'node:path';
 import { EventBus } from '../../src/core/events.ts';
 import type { Db } from '../../src/db/connection.ts';
 import { SqliteDataSource } from '../../src/datasource/sqlite/SqliteDataSource.ts';
+import { insertWork } from '../../src/domain/catalog/characterCatalog.ts';
 import { DanbooruCatalog } from '../../src/services/danbooru/catalog.ts';
 import { dumpCore } from '../helpers/dump.ts';
 import { makeTmpDir } from '../helpers/tmp.ts';
@@ -199,6 +200,41 @@ describe('#37-2 标签规范化只有一个入口，撞上已有角色都合并'
     expect(catalog.normalizeWorkTag('alice_in_wonderland')).toBe("alice's_adventures_in_wonderland");
     expect(ds.ctx.db.prepare('SELECT danbooru_tag FROM works WHERE id = ?').pluck().get(w)).toBe("alice's_adventures_in_wonderland");
     expect(catalog.ensureWork('alice_in_wonderland', T)).toEqual({ id: w, created: false });
+    // 可撤销地建作品（给「原创」这类命令用）：同一个入口，已有的直接用，新建的撤销时连别名一起删
+    const db = ds.ctx.db;
+    const before = dumpCore(db);
+    let made = { id: 0, created: false };
+    const r = ds.ctx.mutate((u) => {
+      expect(insertWork(u, catalog, 'alice_in_wonderland', { now: T })).toEqual({ id: w, created: false });
+      made = insertWork(u, catalog, 'original', { now: T });
+      return { message: 'x' };
+    });
+    expect(made.created).toBe(true);
+    expect(db.prepare('SELECT danbooru_tag FROM works WHERE id = ?').pluck().get(made.id)).toBe('original');
+    await ds.undo(r.undoToken!);
+    expect(dumpCore(db)).toEqual(before);
+  });
+
+  it('Danbooru 同步落库时作品也一起收拢：改过名的作品换成新名，已有新名的并过去（以前要等下次启动）', async () => {
+    let oldOnly = 0;
+    let dup = 0;
+    let target = 0;
+    const ds = await engine((db) => {
+      const ins = db.prepare('INSERT INTO works (name, danbooru_tag, created_at) VALUES (?, ?, ?)');
+      oldOnly = Number(ins.run('Yuru Yuri', 'yuru_yuri', T).lastInsertRowid);
+      dup = Number(ins.run('旧爱丽丝', 'alice_in_wonderland', T).lastInsertRowid);
+      target = Number(ins.run('爱丽丝', "alice's_adventures_in_wonderland", T).lastInsertRowid);
+      // 收拢合并作品时，合并留下的旧名字（auto）和用户写的一样跟着搬
+      db.prepare("INSERT INTO aliases (owner_type, owner_id, alias, search_key, origin, visible, position) VALUES ('work', ?, '梦游仙境', '梦游仙境', 'auto', 1, 50)").run(dup);
+    });
+    const db = ds.ctx.db;
+    const now = new Date(NOW).toISOString();
+    ds.danbooru.markAlias('yuru_yuri', 'yuruyuri', now);
+    ds.danbooru.markAlias('alice_in_wonderland', "alice's_adventures_in_wonderland", now);
+    await syncDanbooru(ds);
+    expect(db.prepare('SELECT danbooru_tag FROM works WHERE id = ?').pluck().get(oldOnly)).toBe('yuruyuri');
+    expect(db.prepare('SELECT 1 FROM works WHERE id = ?').get(dup)).toBeUndefined();
+    expect(aliasRows(ds, 'work', target)).toContainEqual({ alias: '梦游仙境', origin: 'auto', visible: 1 });
   });
 
   it('只按 Danbooru 规则（不看核验）的那一步不再对外：调用方只能用 normalizeTag', () => {
