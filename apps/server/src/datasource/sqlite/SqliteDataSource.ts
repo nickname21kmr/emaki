@@ -76,7 +76,7 @@ import { OfflineCharacterIndex } from '../../services/catalog/offlineCharacters.
 import { migrate } from '../../db/migrate.ts';
 import { refreshPlannerStats } from '../../db/plannerStats.ts';
 import { SoftCache } from './softCache.ts';
-import { consolidateCharacterTags, consolidateWorkTags } from '../../domain/catalog/consolidate.ts';
+import { consolidateCatalog } from '../../domain/catalog/consolidate.ts';
 import { BadRequestError, ConflictError, NeedsConfirmError, NotFoundError, NotImplementedError } from '../../http/errors.ts';
 import type { DataSource, FileResponse } from '../DataSource.ts';
 import { parentRel, toAbs } from '../../services/fs/paths.ts';
@@ -109,7 +109,7 @@ import { isModelReady } from '../../services/tagger/download.ts';
 import { findModel } from '../../services/tagger/models.ts';
 import { createTagStage } from '../../services/tagger/tagJob.ts';
 import { resetIoBackoff } from '../../services/tagger/readBackoff.ts';
-import { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
+import { createCatalog, type CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import type { CharacterVerification } from '../../services/catalog/characterVerification.ts';
 import { CopyrightResolver } from '../../services/catalog/copyrights.ts';
 import { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
@@ -246,22 +246,19 @@ export class SqliteDataSource implements DataSource {
     const localizer: Localizer = new SqliteLocalizer(db, danbooru);
     ds.localizer = localizer;
     if (dict.imported) db.transaction(() => relocalizeAll(db, localizer))();
-    const makeCatalog = () => ({
-      catalog: new CharacterCatalog(db, { copyrights: danbooru, localizer, verifications: danbooru.verifications, normalizeTag: (t) => danbooru.normalizeTag(t) }),
-      copyrights: danbooru,
-    });
+    const makeCatalog = () => ({ catalog: createCatalog(db, danbooru, localizer), copyrights: danbooru });
     ds.danbooru = danbooru;
     ds.makeCatalog = makeCatalog;
-    // 同一个角色被拆成好几个的收拢（换模型后的改名、服装变体归本体；用户 2026-09-28）。已经收拢过就什么也不做
-    const merged = consolidateCharacterTags(db, {
-      normalizeTag: (t) => danbooru.normalizeDanbooruTag(t),
+    // 同一个角色被拆成好几个的收拢（换模型后的改名、服装变体归本体；用户 2026-09-28），作品同理：Danbooru 改过名的版权标签，
+    // 新旧两个名字各建了一部（用户 2026-09-29）。撞上已有角色走用户手动合并同一个函数。已经收拢过就什么也不做
+    const mergeCharacters = (from: number, to: number) => void ds.characters.merge(String(from), String(to));
+    const { characters: merged, works } = consolidateCatalog(db, {
+      catalog: makeCatalog().catalog,
       localizer,
-      merge: (from, to) => void ds.characters.merge(String(from), String(to)),
+      merge: mergeCharacters,
       log: (m) => console.log(`[角色] ${m}`),
     });
     if (merged.merged || merged.renamed) console.log(`[角色] 收拢拆开的角色：合并 ${merged.merged} 个，改标签 ${merged.renamed} 个`);
-    // 作品同理：Danbooru 改过名的版权标签，新旧两个名字各建了一部（用户 2026-09-29）
-    const works = consolidateWorkTags(db, { canonicalize: (t) => danbooru.canonicalize(t), localizer });
     if (works.merged || works.renamed) console.log(`[作品] 收拢改过名的作品：合并 ${works.merged} 部，改标签 ${works.renamed} 部`);
     ds.characters.associateAutomatic();
     ds.pipeline.register({
@@ -309,6 +306,8 @@ export class SqliteDataSource implements DataSource {
           relocalizeAll,
           getDanbooru: () => ({ ...readSettings(db).danbooru, apiKey: getDanbooruApiKey(db) }),
           associateCustomCharacters: () => ds.characters.associateAutomatic(),
+          mergeCharacters,
+          log: (m) => console.log(`[角色] ${m}`),
           setLastSyncAt: (at) => patchSettingsInternal(db, 'danbooru', { lastSyncAt: at }),
         }),
       },

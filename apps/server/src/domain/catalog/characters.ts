@@ -223,7 +223,8 @@ export class CharacterMutations {
     if (body.type === 'identity') {
       if (!danbooru.knowsCharacterTag(base)) throw new BadRequestError(`角色词库里没有标签 ${base}`);
       if (tag === base) throw new BadRequestError('请选择两个不同的角色标签');
-      if (verifications.formsOf(tag).length || danbooru.normalizeDanbooruTag(base) === tag) {
+      // 目标本身又归到这个标签（变体或核验过的身份）：会成环
+      if (verifications.formsOf(tag).length || danbooru.normalizeTag(base) === tag) {
         throw new ConflictError('请先核对该标签已有的身份关系');
       }
       const previous = verifications.base(tag);

@@ -31,6 +31,9 @@ export interface DanbooruSyncDeps {
   setLastSyncAt(iso: string): void;
   associateCustomCharacters?: () => void;
   relocalizeAll?: ApplyDeps['relocalizeAll'];
+  /** 落库收拢时撞上已有角色就合并（用户手动合并同一个函数）；不给就记日志跳过 */
+  mergeCharacters?: ApplyDeps['merge'];
+  log?: (msg: string) => void;
   now?: () => number;
   // 测试注入
   fetchImpl?: FetchLike;
@@ -53,7 +56,15 @@ export function createDanbooruSyncRunner(deps: DanbooruSyncDeps): JobRunner {
   return async (ctx) => {
     const settings = deps.getDanbooru();
     const apply = () => {
-      const r = applyToLibrary({ db, danbooru, getCatalog: deps.getCatalog, localizer: deps.localizer, relocalizeAll: deps.relocalizeAll });
+      const r = applyToLibrary({
+        db,
+        danbooru,
+        getCatalog: deps.getCatalog,
+        localizer: deps.localizer,
+        relocalizeAll: deps.relocalizeAll,
+        merge: deps.mergeCharacters,
+        log: deps.log,
+      });
       deps.associateCustomCharacters?.();
       deps.localizer.invalidate();
       return r;

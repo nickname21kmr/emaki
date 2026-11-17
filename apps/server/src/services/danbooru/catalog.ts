@@ -154,7 +154,10 @@ export class DanbooruCatalog implements CopyrightSource {
     setDanbooruCopyrights(this.db, name, list, now);
   }
 
-  /** 顺着 tag_renames 最多 3 跳 */
+  /**
+   * 顺着 tag_renames 最多 3 跳。作品标签的规范化就是它（CharacterCatalog.normalizeWorkTag）；
+   * 角色标签用 normalizeTag（它的第一步也是这个）。名字查找（显示名、名字索引）也先按改名表换成现在的名字
+   */
   canonicalize(tag: string): string {
     let t = tag;
     for (let i = 0; i < 3; i++) {
@@ -215,8 +218,8 @@ export class DanbooruCatalog implements CopyrightSource {
     );
   }
 
-  /** 给 T10 CharacterCatalog 的 normalizeTag */
-  normalizeDanbooruTag(tag: string): string {
+  /** 只按 Danbooru 的规则（改名、服装变体归本体）：normalizeTag 的一步，不单独对外 */
+  private danbooruBase(tag: string): string {
     // 改名、变体归本体交替做到不再变化为止（本体本身也可能改过名，归完还能再归）：
     // 结果必须幂等，调用方可能对已经规范化的标签再规范化一次（2026-09-28 的 UNIQUE 冲突）
     let t = tag;
@@ -228,13 +231,17 @@ export class DanbooruCatalog implements CopyrightSource {
     return t;
   }
 
+  /**
+   * 角色标签 → 身份标签：改名、服装变体归本体、核验过的身份（character_verified_forms）。
+   * 编目里角色标签只有这一个规范化（附录 #37），经 CharacterCatalog.normalizeTag 用：解析、建角色、收拢都一样
+   */
   normalizeTag(tag: string): string {
     const canonical = this.canonicalize(tag);
     const verified = this.verifications.base(canonical) ?? this.verifications.base(tag);
-    if (verified) return this.normalizeDanbooruTag(verified);
-    const base = this.normalizeDanbooruTag(canonical);
+    if (verified) return this.danbooruBase(verified);
+    const base = this.danbooruBase(canonical);
     const verifiedBase = this.verifications.base(base);
-    return verifiedBase ? this.normalizeDanbooruTag(verifiedBase) : base;
+    return verifiedBase ? this.danbooruBase(verifiedBase) : base;
   }
 
   knowsCharacterTag(tag: string): boolean {

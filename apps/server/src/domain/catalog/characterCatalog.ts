@@ -1,9 +1,16 @@
 /**
- * 「标签 → 角色 / 作品」的唯一实现（T10、T11、T14、T15 共用）。全是同步 API：要在 better-sqlite3 事务里调用。
+ * 「标签 → 角色 / 作品」的唯一实现（T10、T11、T14、T15 共用；附录 #37）。全是同步 API：要在 better-sqlite3 事务里调用。
  * 缓存只在一次任务或一次请求内有效——每次用都 new 一个（合并 / 删除角色后长期缓存会过期）。
+ *
+ * 编目里的标签规范化和解析都从这里走：
+ * - normalizeTag：角色标签 → 身份（改名、服装变体归本体、核验过的身份）。解析、建角色、收拢都用它
+ * - normalizeWorkTag：作品标签只按改名表（作品没有服装变体和核验身份，套角色的规则会把带括号的作品名拆坏）
+ * - resolveCharacterId：标签 → 角色（规范化 → 角色自己的标签 → 合并重定向 → 核验过的形态）
+ * 生产环境用 createCatalog 建（规则来自 Danbooru 缓存）；直接 new 时不给规则就是原样返回，测试用。
  */
 import type { Db, Statement } from '../../db/connection.ts';
 import type { UndoRecorder } from '../../datasource/sqlite/undo.ts';
+import type { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
 import type { CharacterVerifications } from '../../services/catalog/characterVerification.ts';
 import type { CopyrightSource } from '../../services/catalog/copyrights.ts';
 import { HumanizeLocalizer, type Localizer } from '../../services/i18n/localizer.ts';
@@ -14,8 +21,10 @@ export interface CatalogOptions {
   copyrights: CopyrightSource;
   /** 默认 new HumanizeLocalizer() */
   localizer?: Localizer;
-  /** 默认原样返回；T11 换成「改名解析 + 服装变体归本体」 */
+  /** 角色标签的规范化。默认原样返回；createCatalog 给的是 DanbooruCatalog.normalizeTag（改名 + 服装变体归本体 + 核验过的身份） */
   normalizeTag?: (tag: string) => string;
+  /** 作品标签的规范化。默认原样返回；createCatalog 给的是 DanbooruCatalog.canonicalize（只按改名表） */
+  normalizeWorkTag?: (tag: string) => string;
   verifications?: CharacterVerifications;
 }
 
@@ -45,6 +54,7 @@ export class CharacterCatalog {
   private cachedRevision = 0;
   private readonly localizer: Localizer;
   private readonly normalize: (tag: string) => string;
+  private readonly normalizeWork: (tag: string) => string;
   private readonly s: Record<string, Statement>;
 
   constructor(
@@ -53,6 +63,7 @@ export class CharacterCatalog {
   ) {
     this.localizer = o.localizer ?? new HumanizeLocalizer();
     this.normalize = o.normalizeTag ?? ((t) => t);
+    this.normalizeWork = o.normalizeWorkTag ?? ((t) => t);
     this.s = {
       resolve: db.prepare(
         'SELECT id FROM characters WHERE danbooru_tag = @tag UNION ALL SELECT character_id FROM danbooru_tag_redirects WHERE tag = @tag LIMIT 1',
@@ -73,8 +84,14 @@ export class CharacterCatalog {
     };
   }
 
+  /** 角色标签 → 身份标签（见文件头） */
   normalizeTag(tag: string): string {
     return this.normalize(tag);
+  }
+
+  /** 作品标签 → 现在的名字（见文件头） */
+  normalizeWorkTag(tag: string): string {
+    return this.normalizeWork(tag);
   }
 
   get verificationRevision(): number {
@@ -134,7 +151,9 @@ export class CharacterCatalog {
     return { id, created: true, createdWorkIds };
   }
 
-  ensureWork(copyright: string, now: string): { id: number; created: boolean } {
+  /** 已存在就返回；否则新建作品（名字、颜色、自动别名）。标签先按改名表换成现在的名字 */
+  ensureWork(rawTag: string, now: string): { id: number; created: boolean } {
+    const copyright = this.normalizeWork(rawTag);
     const row = this.s.workByTag!.get(copyright) as { id: number } | undefined;
     if (row) return { id: row.id, created: false };
     const name = this.localizer.workName(copyright).name;
@@ -220,17 +239,23 @@ export function insertDanbooruCharacter(
   return { id: r.id, created: r.created };
 }
 
-/** 给 T14 / T15 用的便捷函数 */
-export function resolveCharacterIdByTag(db: Db, tag: string, normalize: (t: string) => string = (t) => t): number | null {
-  const t = normalize(tag);
-  const row = db
-    .prepare(`SELECT id FROM characters WHERE danbooru_tag = @tag
-      UNION ALL SELECT character_id FROM danbooru_tag_redirects WHERE tag = @tag
-      UNION ALL SELECT id FROM characters WHERE danbooru_tag = @raw
-      UNION ALL SELECT character_id FROM danbooru_tag_redirects WHERE tag = @raw
-      UNION ALL SELECT c.id FROM character_verified_forms f JOIN characters c ON c.danbooru_tag = f.tag WHERE f.character_tag = @tag
-      UNION ALL SELECT r.character_id FROM character_verified_forms f JOIN danbooru_tag_redirects r ON r.tag = f.tag WHERE f.character_tag = @tag
-      LIMIT 1`)
-    .get({ tag: t, raw: tag }) as { id: number } | undefined;
-  return row?.id ?? null;
+/** 可撤销地按标签找 / 建作品（例如「原创」）。调用方必须在 ctx.mutate 里调用；撤销时先删作品的别名再删作品 */
+export function insertWork(u: UndoRecorder, catalog: CharacterCatalog, tag: string, opts: { now: string }): { id: number; created: boolean } {
+  const w = catalog.ensureWork(tag, opts.now);
+  if (w.created) {
+    u.inserted('works', w.id);
+    u.sql("DELETE FROM aliases WHERE owner_type = 'work' AND owner_id = ?", [w.id]);
+  }
+  return w;
+}
+
+/** 生产环境的编目：角色、作品标签的规范化和角色 → 作品的回退链都来自 Danbooru 缓存（SqliteDataSource.makeCatalog 也用这个） */
+export function createCatalog(db: Db, danbooru: DanbooruCatalog, localizer?: Localizer): CharacterCatalog {
+  return new CharacterCatalog(db, {
+    copyrights: danbooru,
+    localizer,
+    verifications: danbooru.verifications,
+    normalizeTag: (t) => danbooru.normalizeTag(t),
+    normalizeWorkTag: (t) => danbooru.canonicalize(t),
+  });
 }

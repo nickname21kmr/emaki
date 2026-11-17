@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase, type Db } from '../../../db/connection.ts';
 import { migrate } from '../../../db/migrate.ts';
+import { createCatalog } from '../../../domain/catalog/characterCatalog.ts';
 import { consolidateCharacterTags, consolidateWorkTags } from '../../../domain/catalog/consolidate.ts';
 import { CopyrightResolver } from '../../catalog/copyrights.ts';
 import { HumanizeLocalizer } from '../../i18n/localizer.ts';
@@ -61,9 +62,8 @@ describe('consolidateCharacterTags', () => {
     const variant = Number(ins.run('凑阿库娅（初始服装）', 'minato_aqua_(1st_costume)').lastInsertRowid);
     const renamedId = Number(ins.run('Hoshino Ai', 'hoshino_ai_(oshi_no_ko)').lastInsertRowid);
     const merges: [number, number][] = [];
-    const c = catalog();
     const deps = {
-      normalizeTag: (t: string) => c.normalizeTag(t),
+      catalog: createCatalog(db, catalog()),
       localizer: new HumanizeLocalizer(),
       merge: (from: number, to: number) => {
         merges.push([from, to]);
@@ -107,8 +107,7 @@ describe('consolidateWorkTags', () => {
       "INSERT INTO aliases (owner_type, owner_id, alias, search_key, origin, visible, position) VALUES ('work', ?, '梦游仙境', '梦游仙境', 'user', 1, 50)",
     ).run(oldId);
 
-    const c = catalog();
-    const deps = { canonicalize: (t: string) => c.canonicalize(t), localizer: new HumanizeLocalizer() };
+    const deps = { catalog: createCatalog(db, catalog()), localizer: new HumanizeLocalizer() };
     expect(consolidateWorkTags(db, deps)).toEqual({ merged: 1, renamed: 1 });
     expect(db.prepare('SELECT id FROM works WHERE id = ?').get(oldId)).toBeUndefined();
     expect(db.prepare('SELECT image_id, score FROM image_copyrights WHERE work_id = ? ORDER BY image_id').all(newId)).toEqual([

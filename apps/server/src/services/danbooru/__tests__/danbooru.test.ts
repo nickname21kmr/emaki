@@ -7,7 +7,7 @@ import type { JobContext } from '../../../core/jobs.ts';
 import { openDatabase, type Db } from '../../../db/connection.ts';
 import { migrate } from '../../../db/migrate.ts';
 import type { FetchLike, HttpResponse } from '../../../net/http.ts';
-import { CharacterCatalog } from '../../../domain/catalog/characterCatalog.ts';
+import { createCatalog } from '../../../domain/catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../../catalog/copyrights.ts';
 import { HumanizeLocalizer } from '../../i18n/localizer.ts';
 import { DanbooruCatalog } from '../catalog.ts';
@@ -155,7 +155,7 @@ describe('sync', () => {
     return createDanbooruSyncRunner({
       db,
       danbooru: d,
-      getCatalog: () => new CharacterCatalog(db, { copyrights: d }),
+      getCatalog: () => createCatalog(db, d),
       localizer: new HumanizeLocalizer(),
       getDanbooru: () => ({ enabled, username: '', apiKey: null }),
       setLastSyncAt: () => {},
@@ -198,8 +198,10 @@ describe('sync', () => {
     expect(aliasCalls.every((c) => !(c.url.searchParams.get('search[antecedent_name_comma]') ?? '').includes('gojou_satoru'))).toBe(true);
     expect(db.prepare("SELECT new_name FROM tag_renames WHERE old_name = 'old_name'").pluck().get()).toBe('new_name');
     expect(db.prepare("SELECT not_found FROM danbooru_tags WHERE name = 'nobody_here'").pluck().get()).toBe(1);
-    // 落库：角色标签改成新名
-    expect(db.prepare("SELECT danbooru_tag FROM characters WHERE name = 'A'").pluck().get()).toBe('gojo_satoru');
+    // 落库：角色标签改成新名（和启动时的收拢是同一个函数：旧标签留重定向；名字没锁定，跟着换成新标签的名字，旧名字留作别名）
+    expect(db.prepare("SELECT danbooru_tag, name FROM characters WHERE id = 1").get()).toEqual({ danbooru_tag: 'gojo_satoru', name: 'Gojo Satoru' });
+    expect(db.prepare("SELECT character_id FROM danbooru_tag_redirects WHERE tag = 'gojou_satoru'").pluck().get()).toBe(1);
+    expect(db.prepare("SELECT origin FROM aliases WHERE owner_type = 'character' AND owner_id = 1 AND alias = 'A'").pluck().get()).toBeTruthy();
 
     const before = f.calls.length;
     await runner(true, f.fn)(ctx());
