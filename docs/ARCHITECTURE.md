@@ -47,7 +47,8 @@ emaki/
 │  ├─ datasource/
 │  │  ├─ DataSource.ts          接口（P6 换成命令 / 查询注册表后删掉）
 │  │  └─ sqlite/                唯一的实现（context.ts：写入的唯一入口 ctx.mutate / ctx.apply）
-│  ├─ domain/<模块>/   领域模块：表的主人（test/architecture/owners.ts）和它们的反应（P2 起逐步搬进来）
+│  ├─ domain/<模块>/   领域模块：表的主人（test/architecture/owners.ts）和它们的反应（P2 起逐步搬进来）；
+│  │                   domain/curation/ 是图 ↔ 角色和否决的唯一写入者（P3a）
 │  ├─ propagation/     变更传播：变化（changes.ts）、反应注册表和三个阶段（registry.ts）、actor、引擎层的反应、排队状态
 │  ├─ infra/ports.ts   可替换部件：时钟、回收站、图片文件、图库文件夹、后台任务（扫描 / 模型 / 联网）
 │  ├─ demo/            演示数据（fixtures、种子、占位图）、灌数据、演示用的假部件
@@ -111,6 +112,12 @@ return this.ctx.mutate((u) => {
 - 删掉会让派生数据跟着变的事实（例如删排除规则，外键会把 `excluded_by` 清空）时，**先声明变化再删**：反应在变化声明的那一刻记下「改之前」的样子（`snapshot`）。
 - 撤销不需要接线：`ctx.mutate` 的撤销 = 按撤销记录还原事实 + 在同一个事务里把这次声明的变化重放一遍，反应都是重算，派生数据自然对。
   快照表达不了的还原步骤用 `u.custom(fn)`（在撤销事务里逆序执行，只还原事实）。`onUndo` 已经删掉了。
+
+**图 ↔ 角色只经归类模块写**（P3a，[core-architecture.md](core-architecture.md) 第 2.2、2.4 节）：`image_characters` 和 `character_vetoes`
+只有 `domain/curation/` 写（单一写入者测试检查）。要加、去掉、整组替换、搬关联，调 `link` / `linkEach` / `unlink` / `replaceCharacters` /
+`moveCharacterLinks` / `carryLinks`，每条关联带来历（`provenance.ts`：`manual(at, 证据)` 或 `auto(规则@版本, at, 证据)`）；
+它们负责写来历、清对应的建议、记否决（用户去掉的）或清否决（用户手动加回的，D3）、记撤销、声明 `curation.charactersChanged`。
+自动关联能不能加由 `curation/auto.ts` 的 `judgeAutoLink` 判断（P3b 换成 `decideAuto`）。收藏、分级、放下、原创在 `curation/marks.ts`。
 
 **写一个新的反应**：放在主人模块（`domain/<模块>/reactions.ts`）或 `propagation/engine.ts`，在 `SqliteDataSource.registerReactions` 里注册（同一阶段按注册顺序执行）：
 
