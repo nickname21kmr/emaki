@@ -12,7 +12,7 @@ const COLLAPSED = 5;
 const TEXT: Record<ChangeGroup, { title: string; hint: string; action: string; confirm: string }> = {
   auto: {
     title: '最近的自动改动',
-    hint: '后台自动给自建角色绑 Danbooru 标签、Pixiv 补充加角色时记在这里，重启后也能撤回。',
+    hint: '后台自动给自建角色绑 Danbooru 标签、Pixiv 补充加角色，以及证据不再支持时撤回的自动关联都记在这里，重启后也能撤回。',
     action: '撤回',
     confirm: '撤回这条自动改动？',
   },

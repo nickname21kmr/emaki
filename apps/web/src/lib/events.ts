@@ -182,6 +182,10 @@ export function useServerEvents() {
           if (event.change.kind === 'auto-associate') {
             toast(event.change.summary, { description: '不对的话，到「设置 → 识别 → 最近的自动改动」里撤回' });
           }
+          // 重新识别后证据不再支持、自动撤回了关联：说一声在哪能加回来
+          if (event.change.kind === 'auto-retract') {
+            toast(event.change.summary, { description: '要加回来的话，到「设置 → 识别 → 最近的自动改动」里撤回' });
+          }
           break;
       }
     };

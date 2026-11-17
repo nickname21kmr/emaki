@@ -9,6 +9,7 @@ import {
   formatBytes,
   formatConfidence,
   formatCount,
+  suggestionEvidence,
   formatDimensions,
   formatRelative,
   isSensitive,
@@ -91,9 +92,10 @@ export function DecisionPanel({
                   name={s.name}
                   workName={s.workName}
                   value={s.score}
-                  valueLabel={s.source !== 'pixiv' && s.score > 0 ? formatConfidence(s.score).slice(0, -1) : null}
+                  valueLabel={s.source !== 'pixiv' && s.score > 0 ? formatConfidence(s.score).slice(0, -1) : s.source === 'pixiv' ? suggestionEvidence(s).value : null}
                   valueUnit={s.source !== 'pixiv' && s.score > 0 ? '%' : undefined}
-                  sourceLabel={s.source === 'pixiv' ? 'Pixiv 标签' : undefined}
+                  sourceLabel={suggestionEvidence(s).source}
+                  bar={s.source !== 'pixiv'}
                   isNew={!s.characterId}
                   title={`${s.danbooruTag} · 按 ${i + 1} 采纳`}
                   onPick={() => triage.acceptSuggestion(s)}

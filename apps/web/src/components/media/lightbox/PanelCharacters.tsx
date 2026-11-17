@@ -3,7 +3,7 @@ import { Plus, Sparkles, X } from 'lucide-react';
 import { Link } from 'react-router';
 import { Button, Progress, Skeleton, Tooltip } from '@/components/ui';
 import { CharacterAvatar, CharacterPicker } from '@/features/gallery/CharacterPicker';
-import { formatConfidence } from '@/lib/format';
+import { formatConfidence, suggestionEvidence } from '@/lib/format';
 import { useCharacter } from '@/lib/queries';
 import { Section } from './PanelParts';
 import type { ImageActions } from './useImageActions';
@@ -140,9 +140,9 @@ function SuggestionRow({
             </span>
           )}
         </div>
-        {s.source === 'pixiv' ? <p className="mt-1 text-[11px] text-fg-subtle">Pixiv 标签</p> : s.score > 0 && <div className="mt-1.5 flex items-center gap-2">
+        {s.source === 'pixiv' ? <p className="mt-1 text-[11px] text-fg-subtle">Pixiv 标签 · {suggestionEvidence(s).value}</p> : s.score > 0 && <div className="mt-1.5 flex items-center gap-2">
           <Progress value={s.score} tone="shu" />
-          <span className="shrink-0 text-right text-[11px] text-fg-muted tabular">{formatConfidence(s.score)}</span>
+          <span className="shrink-0 text-right text-[11px] text-fg-muted tabular" title="识别模型的置信度">{formatConfidence(s.score)}</span>
         </div>}
       </div>
       <Button size="sm" variant="secondary" loading={busy} disabled={disabled && !busy} onClick={onAccept}>
