@@ -1,7 +1,10 @@
 /**
- * 迁移 036（编目的来历，P3b，附录 #37）：造一个停在 v35 的库，覆盖各种旧别名，迁移之后逐条核对。
- * 不变量：别名条数、每一行的别名 / 位置 / 可见性都不变，只改来历；只有合并 / 收拢写的（角色别名、user、position % 1000 = 50）
- * 改成 auto，其余原样。改过的库下次启动重新导入词库（刷新被藏起来的自动别名），没改过的不动。
+ * 迁移 036（编目的来历，P3b，附录 #37）：造一个停在 v35 的库，覆盖各种旧别名和解绑过的角色，迁移之后逐条核对。
+ * 不变量：
+ * - 别名条数、每一行的别名 / 位置 / 可见性都不变，只改来历；只有合并 / 收拢写的（角色别名、user、position % 1000 = 50）
+ *   改成 auto，其余原样。改过的库下次启动重新导入词库（刷新被藏起来的自动别名），没改过的不动；
+ * - 角色条数、标签不变；只有「source = danbooru、标签已清空、能从关联证据认出原来标签」的改成 custom，并忽略那个标签；
+ *   认不出的、还绑着的、本来就是自建的都不动；关联一条不动。
  */
 import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -98,4 +101,51 @@ it('改过别名来历的库：去掉词库版本，下次启动重新导入词�
     INSERT INTO aliases (owner_type, owner_id, alias, search_key, origin, visible, position) VALUES ('character', 1, 'x', 'x', 'user', 1, 0);`);
   migrate(db);
   expect(version()).toBe('"dict@1#1"');
+});
+
+it('解绑过 Danbooru 的角色：认得出原来标签的改成自建并忽略那个标签，认不出的保持原样；其余角色不动', () => {
+  db.exec(`
+    INSERT INTO library_roots (id, path) VALUES (1, '//old/lib');
+    INSERT INTO characters (id, name, danbooru_tag, source, created_at) VALUES
+      (1, '解绑过·有证据', NULL, 'danbooru', '${T}'),
+      (2, '解绑过·没证据', NULL, 'danbooru', '${T}'),
+      (3, '绑着的', 'bound_tag', 'danbooru', '${T}'),
+      (4, '自建', NULL, 'custom', '${T}'),
+      (5, '解绑过·有旧匹配', NULL, 'danbooru', '${T}'),
+      (6, '解绑过·只有占位标签', NULL, 'danbooru', '${T}');
+    INSERT INTO custom_character_matches (character_id, danbooru_tag, score, reason, existing_character_id, dismissed, computed_at)
+      VALUES (5, 'some_other', 0.9, 'zh:x', NULL, 0, '${T}');
+  `);
+  const img = db.prepare(
+    "INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at) VALUES (?, 1, ?, ?, 1, 1, 1, 'png', ?, 'x', 'x')",
+  );
+  for (let id = 1; id <= 8; id++) img.run(id, `${id}.png`, `${id}.png`, `s${id}`);
+  const link = db.prepare(
+    "INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_tag, added_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  );
+  // 角色 1：两张按 nia_liston 自动归的、一张按别的标签、一张手动归的（没有证据）
+  link.run(1, 1, 'auto', 'job:tag', 'auto-accept@1', 'tagger', 'nia_liston', T);
+  link.run(2, 1, 'auto', 'job:tag', 'auto-accept@1', 'tagger', 'nia_liston', T);
+  link.run(3, 1, 'auto', 'job:tag', 'auto-accept@1', 'tagger', 'nia_(alt)', T);
+  link.run(4, 1, 'manual', 'user', null, null, null, T);
+  // 角色 2：只有手动的
+  link.run(5, 2, 'manual', 'user', null, null, null, T);
+  // 角色 5：单张采纳（手动、带证据）
+  link.run(6, 5, 'manual', 'user', null, 'tagger', 'old_five', T);
+  // 角色 6：Pixiv 给自建角色的占位标签不算
+  link.run(7, 6, 'auto', 'job:pixiv', 'pixiv@1', 'pixiv', 'emaki:character:6', T);
+
+  const chars = () => db.prepare('SELECT id, danbooru_tag, source FROM characters ORDER BY id').all();
+  const before = chars();
+  migrate(db);
+  expect(chars()).toEqual(
+    (before as { id: number; danbooru_tag: string | null; source: string }[]).map((c) => (c.id === 1 || c.id === 5 ? { ...c, source: 'custom' } : c)),
+  );
+  const matches = db.prepare('SELECT character_id, danbooru_tag, reason, dismissed FROM custom_character_matches ORDER BY character_id').all();
+  expect(matches).toEqual([
+    { character_id: 1, danbooru_tag: 'nia_liston', reason: 'unbound', dismissed: 1 },
+    { character_id: 5, danbooru_tag: 'old_five', reason: 'zh:x', dismissed: 1 },
+  ]);
+  // 关联一条不动
+  expect(db.prepare('SELECT count(*) FROM image_characters').pluck().get()).toBe(7);
 });

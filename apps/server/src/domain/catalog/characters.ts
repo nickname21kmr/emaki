@@ -17,6 +17,7 @@ import { recordChange, type AssociatePayload } from '../../datasource/sqlite/cha
 import { moveCharacterLinks } from '../curation/links.ts';
 import { carryCollectionCharacters } from '../collections/entityLinks.ts';
 import { carryCharacterAliases, replaceAutoAliases, writeUserAliases } from './aliases.ts';
+import { bindDanbooru, linkDanbooruWorks, unbindDanbooru } from './bindings.ts';
 import { CharacterCatalog } from './characterCatalog.ts';
 import { automaticCustomMatches } from './customMatches.ts';
 
@@ -82,26 +83,17 @@ export class CharacterMutations {
     return toCharacter(this.derived.get().characters.get(id)!);
   }
 
-  /** 明确匹配的绑定与当前操作共用事务、撤销记录；名称和已有图片关联保持原样。 */
+  /**
+   * 明确匹配的绑定与当前操作共用事务、撤销记录；名称和已有图片关联保持原样。
+   * 绑定和手动绑定是同一个函数：没有手动指定作品时补上所属作品，用户已有的作品选择保持
+   */
   private autoAssociateInTx(u: UndoRecorder, ids?: number[]): AssociatePayload[] {
     const matches = automaticCustomMatches(this.db, this.danbooru()).filter((m) => !ids || ids.includes(m.id));
     const out: AssociatePayload[] = [];
     for (const { id, match } of matches) {
-      const row = this.db.prepare('SELECT name, created_at, works_locked FROM characters WHERE id = ?').get(id) as { name: string; created_at: string; works_locked: number };
-      const worksBefore = this.db.prepare('SELECT work_id, position FROM character_works WHERE character_id = ? ORDER BY position').all(id) as AssociatePayload['worksBefore'];
-      const createdWorkIds: number[] = [];
-      u.columns('characters', ['danbooru_tag', 'source'], [id]);
-      this.db.prepare("UPDATE characters SET danbooru_tag = ?, source = 'danbooru' WHERE id = ?").run(match.danbooruTag, id);
-      // 没有手动指定作品时补上所属作品；用户已有的作品选择保持。
-      if (row.works_locked === 0) {
-        u.set('character_works', 'character_id = ?', [id]);
-        for (const wid of this.catalog().linkWorks(id, match.danbooruTag, iso(this.ctx.clock()))) {
-          createdWorkIds.push(wid);
-          u.inserted('works', wid);
-          u.sql("DELETE FROM aliases WHERE owner_type = 'work' AND owner_id = ?", [wid]);
-        }
-      }
-      out.push({ characterId: id, name: row.name, tag: match.danbooruTag, characterCreatedAt: row.created_at, worksChanged: row.works_locked === 0, worksBefore, createdWorkIds });
+      const row = this.db.prepare('SELECT name, created_at FROM characters WHERE id = ?').get(id) as { name: string; created_at: string };
+      const works = bindDanbooru(this.db, u, this.catalog(), id, match.danbooruTag, iso(this.ctx.clock()));
+      out.push({ characterId: id, name: row.name, tag: match.danbooruTag, characterCreatedAt: row.created_at, ...works });
     }
     return out;
   }
@@ -151,7 +143,9 @@ export class CharacterMutations {
       u.guard('SELECT 1 FROM characters WHERE id = ? AND created_at <> ?', [id, now], `无法撤销：「${name}」已经合并掉了，原来的编号给了之后新建的角色`);
       this.writeCharacterWorks(id, workIds);
       writeUserAliases(this.db, id, normalizeAliases(body.aliases));
-      if (!tag) this.autoAssociateInTx(u, [id]);
+      // 给了标签：和自动绑定一样，没手动指定作品就按 Danbooru 补作品；没给标签：试试自动关联
+      if (tag) linkDanbooruWorks(this.db, u, this.catalog(), id, tag, now);
+      else this.autoAssociateInTx(u, [id]);
       this.ctx.changed({ type: 'catalog.characterChanged', characterIds: [id], ids: [] });
       return { message: `已新建角色「${name}」` };
     });
@@ -186,10 +180,16 @@ export class CharacterMutations {
         }
       }
       if (body.aliases !== undefined) writeUserAliases(this.db, id, normalizeAliases(body.aliases));
-      if (tag !== undefined) set(tag ? "danbooru_tag = ?, source = 'danbooru'" : 'danbooru_tag = ?', tag);
       if (workIds) {
         this.writeCharacterWorks(id, workIds);
         set('works_locked = 1');
+      }
+      // 绑定 / 解绑和自动关联、撤回自动关联是同一套（bindings.ts）：绑定时没手动指定作品就按 Danbooru 补作品
+      // （这次一起指定了作品的，上面已经锁定）；解绑后改回自建，并忽略这个标签，免得又被自动绑回去
+      if (tag !== undefined && tag !== cur.danbooru_tag) {
+        const now = iso(this.ctx.clock());
+        if (tag) bindDanbooru(this.db, u, this.catalog(), id, tag, now);
+        else unbindDanbooru(this.db, u, id, cur.danbooru_tag!, now, 'unbound');
       }
       // 设封面 = 手动（自动选图不再换掉它）；设为 null = 恢复自动封面
       if (cover !== undefined) set('cover_image_id = ?, cover_manual = ?', cover, cover === null ? 0 : 1);

@@ -101,7 +101,8 @@ export function recomputeCustomMatches(db: Db, danbooru: DanbooruCatalog, charac
       existing_character_id = excluded.existing_character_id, computed_at = excluded.computed_at,
       dismissed = excluded.dismissed`);
   const previous = db.prepare('SELECT danbooru_tag, dismissed FROM custom_character_matches WHERE character_id = ?');
-  const del = db.prepare('DELETE FROM custom_character_matches WHERE character_id = ?');
+  // 对不上了就删，但忽略过的留着（用户解绑、撤回自动绑定记下的）：以后名字又对上同一个标签时，自动关联照样不绑
+  const del = db.prepare('DELETE FROM custom_character_matches WHERE character_id = ? AND dismissed = 0');
   const isCustom = db.prepare("SELECT 1 FROM characters WHERE id = ? AND source = 'custom' AND danbooru_tag IS NULL").pluck();
   const now = new Date().toISOString();
   const catalog = createCatalog(db, danbooru);

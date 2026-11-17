@@ -17,6 +17,7 @@ import { EventBus } from '../../src/core/events.ts';
 import type { Db } from '../../src/db/connection.ts';
 import { SqliteDataSource } from '../../src/datasource/sqlite/SqliteDataSource.ts';
 import { DanbooruCatalog } from '../../src/services/danbooru/catalog.ts';
+import { dumpCore } from '../helpers/dump.ts';
 import { makeTmpDir } from '../helpers/tmp.ts';
 import { listSourceFiles } from './sqlWrites.ts';
 
@@ -286,5 +287,85 @@ describe('#37-4 合并 / 收拢留下的旧名字记成 auto，不再把自动�
     expect(sourcesMatching(/'user', 1, \?\)|'user', 1, 50\)/)).toEqual(['domain/catalog/aliases.ts']);
     const src = readFileSync(path.join(SRC, 'domain/catalog/aliases.ts'), 'utf8');
     expect(src.match(/'user', 1, /g)).toHaveLength(1);
+  });
+});
+
+describe('#37-5 解绑之后都是自建；手动绑定和自动绑定一样补作品', () => {
+  const NIA = 'nia_liston';
+  const NIA_WORK = 'kyouran_reijou_nia_liston';
+  /** 词库：nia_liston 是角色，作品猜 kyouran_reijou_nia_liston；日文名能对上 */
+  const niaDict = (db: Db) => {
+    db.prepare("INSERT INTO tag_i18n (tag, category, aliases, copyright_guess, post_count) VALUES (?, 4, '[]', ?, 11)").run(NIA, NIA_WORK);
+    db.prepare("INSERT INTO tag_name_keys (search_key, tag, kind, source) VALUES ('にありすとん', ?, 'other_name', 'danbooru')").run(NIA);
+  };
+  const workTags = (ds: SqliteDataSource, id: number) =>
+    ds.ctx.db
+      .prepare('SELECT w.danbooru_tag FROM character_works cw JOIN works w ON w.id = cw.work_id WHERE cw.character_id = ? ORDER BY cw.position')
+      .pluck()
+      .all(id);
+  const match = (ds: SqliteDataSource, id: number) =>
+    ds.ctx.db.prepare('SELECT danbooru_tag AS tag, dismissed FROM custom_character_matches WHERE character_id = ?').get(id);
+
+  it('手动解绑：改回自建、忽略这个标签，之后的自动关联不会再绑回去；撤销恢复绑定', async () => {
+    const ds = await engine(niaDict);
+    const made = await ds.createCharacter({ name: '倪亚', aliases: ['ニア・リストン'], workIds: [] });
+    const id = Number(made.character.id);
+    expect(charRow(ds, id)).toMatchObject({ tag: NIA, source: 'danbooru' });
+    const r = await ds.updateCharacter(made.character.id, { danbooruTag: null });
+    expect(charRow(ds, id)).toMatchObject({ tag: null, source: 'custom' });
+    expect(match(ds, id)).toEqual({ tag: NIA, dismissed: 1 });
+    // 同步落库之后会跑一遍自动关联：不会把用户解掉的标签绑回去，也不出现在待确认的匹配里
+    await syncDanbooru(ds);
+    expect(charRow(ds, id)).toMatchObject({ tag: null, source: 'custom' });
+    expect(await ds.listCustomCharacterMatches()).toEqual([]);
+    await ds.undo(r.undoToken!);
+    expect(charRow(ds, id)).toMatchObject({ tag: NIA, source: 'danbooru' });
+  });
+
+  it('手动解绑和撤回自动绑定的结果一样（都是自建 + 忽略这个标签）', async () => {
+    const ds = await engine();
+    const db = ds.ctx.db;
+    // 先建自建角色，之后词库才有它的名字：后台自动关联会记一条可撤回的改动
+    const auto = Number((await ds.createCharacter({ name: '倪亚', aliases: ['ニア・リストン'], workIds: [] })).character.id);
+    niaDict(db);
+    await syncDanbooru(ds);
+    expect(charRow(ds, auto)).toMatchObject({ tag: NIA, source: 'danbooru' });
+    const [entry] = await ds.listChanges('auto');
+    await ds.revertChange(entry!.id);
+    // 另一个角色手动绑定再手动解绑
+    const manual = Number((await ds.createCharacter({ name: '另一个', workIds: [] })).character.id);
+    await ds.updateCharacter(String(manual), { danbooruTag: NIA });
+    await ds.updateCharacter(String(manual), { danbooruTag: null });
+    for (const id of [auto, manual]) {
+      expect(charRow(ds, id)).toMatchObject({ tag: null, source: 'custom' });
+      // 名字对不上任何标签（「另一个」）时，忽略记录也留着
+      expect(match(ds, id)).toEqual({ tag: NIA, dismissed: 1 });
+    }
+  });
+
+  it('手动绑定和自动绑定一样：没手动指定作品就按 Danbooru 补作品，撤销连新建的作品一起还原；一起指定了作品就不补', async () => {
+    const ds = await engine(niaDict);
+    const db = ds.ctx.db;
+    // 编辑时绑定
+    const plain = await ds.createCharacter({ name: '甲', workIds: [] });
+    const before = dumpCore(db);
+    const r = await ds.updateCharacter(plain.character.id, { danbooruTag: NIA });
+    expect(workTags(ds, Number(plain.character.id))).toEqual([NIA_WORK]);
+    await ds.undo(r.undoToken!);
+    expect(dumpCore(db)).toEqual(before);
+    // 新建时就给标签
+    const made = await ds.createCharacter({ name: '乙', danbooruTag: NIA, workIds: [] });
+    expect(workTags(ds, Number(made.character.id))).toEqual([NIA_WORK]);
+    await ds.undo(made.undoToken!);
+    expect(dumpCore(db)).toEqual(before);
+    // 一起指定了作品：用户的选择优先
+    const own = Number(db.prepare("INSERT INTO works (name, created_at) VALUES ('我的作品', ?)").run(T).lastInsertRowid);
+    const locked = await ds.createCharacter({ name: '丙', danbooruTag: NIA, workIds: [String(own)] });
+    expect(workTags(ds, Number(locked.character.id))).toEqual([null]);
+    // 自动绑定（新建时按日文名对上）补的也是同一部
+    await ds.undo(locked.undoToken!);
+    const auto = await ds.createCharacter({ name: '丁', aliases: ['ニア・リストン'], workIds: [] });
+    expect(auto.character).toMatchObject({ danbooruTag: NIA, source: 'danbooru' });
+    expect(workTags(ds, Number(auto.character.id))).toEqual([NIA_WORK]);
   });
 });
