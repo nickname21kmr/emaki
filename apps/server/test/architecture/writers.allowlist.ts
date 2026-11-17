@@ -17,7 +17,6 @@ export interface AllowedWrite {
 
 export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   // datasource/sqlite/SqliteDataSource.ts
-  { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'artist_links' },
   { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'character_suggestions' },
   { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'collections' },
   { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'comic_folders' },
@@ -36,39 +35,14 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'datasource/sqlite/bulk.ts', table: 'images#library' },
   { file: 'datasource/sqlite/bulk.ts', table: 'works' },
   // datasource/sqlite/changeLog.ts
-  { file: 'datasource/sqlite/changeLog.ts', table: 'aliases' },
   { file: 'datasource/sqlite/changeLog.ts', table: 'change_log' },
-  { file: 'datasource/sqlite/changeLog.ts', table: 'character_works' },
-  { file: 'datasource/sqlite/changeLog.ts', table: 'characters' },
-  { file: 'datasource/sqlite/changeLog.ts', table: 'custom_character_matches' },
   { file: 'datasource/sqlite/changeLog.ts', table: 'image_copyrights' },
   { file: 'datasource/sqlite/changeLog.ts', table: 'images#curation' },
   { file: 'datasource/sqlite/changeLog.ts', table: 'images#evidence' },
-  { file: 'datasource/sqlite/changeLog.ts', table: 'works' },
-  // datasource/sqlite/characters.ts
-  { file: 'datasource/sqlite/characters.ts', table: '<dynamic>', note: '合并角色时快照别名表：aliases、danbooru_tag_redirects 等' },
-  { file: 'datasource/sqlite/characters.ts', table: 'aliases' },
-  { file: 'datasource/sqlite/characters.ts', table: 'character_suggestions' },
-  { file: 'datasource/sqlite/characters.ts', table: 'character_verified_forms' },
-  { file: 'datasource/sqlite/characters.ts', table: 'character_verified_names' },
-  { file: 'datasource/sqlite/characters.ts', table: 'character_works' },
-  { file: 'datasource/sqlite/characters.ts', table: 'characters' },
-  { file: 'datasource/sqlite/characters.ts', table: 'collection_characters' },
-  { file: 'datasource/sqlite/characters.ts', table: 'custom_character_matches' },
-  { file: 'datasource/sqlite/characters.ts', table: 'danbooru_tag_redirects' },
-  { file: 'datasource/sqlite/characters.ts', table: 'works' },
   // datasource/sqlite/collections.ts
   { file: 'datasource/sqlite/collections.ts', table: '<dynamic>', note: '手选合集的角色 / 作品：collection_characters、collection_works' },
   { file: 'datasource/sqlite/collections.ts', table: 'collections' },
   { file: 'datasource/sqlite/collections.ts', table: 'images#collections' },
-  // datasource/sqlite/consolidate.ts
-  { file: 'datasource/sqlite/consolidate.ts', table: 'aliases' },
-  { file: 'datasource/sqlite/consolidate.ts', table: 'character_works' },
-  { file: 'datasource/sqlite/consolidate.ts', table: 'characters' },
-  { file: 'datasource/sqlite/consolidate.ts', table: 'collection_works' },
-  { file: 'datasource/sqlite/consolidate.ts', table: 'danbooru_tag_redirects' },
-  { file: 'datasource/sqlite/consolidate.ts', table: 'image_copyrights' },
-  { file: 'datasource/sqlite/consolidate.ts', table: 'works' },
   // datasource/sqlite/duplicates.ts
   { file: 'datasource/sqlite/duplicates.ts', table: 'duplicate_groups' },
   { file: 'datasource/sqlite/duplicates.ts', table: 'image_artists' },
@@ -104,28 +78,15 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'datasource/sqlite/undo.ts', table: '<dynamic>', note: '撤销回放：按记录的表名还原（UndoTable 里的表）' },
   // datasource/sqlite/unrecognized.ts
   { file: 'datasource/sqlite/unrecognized.ts', table: 'images#evidence' },
-  // services/aliases.ts
-  { file: 'services/aliases.ts', table: 'aliases' },
-  // services/catalog/characterCatalog.ts
-  { file: 'services/catalog/characterCatalog.ts', table: 'character_works' },
-  { file: 'services/catalog/characterCatalog.ts', table: 'characters' },
-  { file: 'services/catalog/characterCatalog.ts', table: 'works' },
+  // domain/catalog/characters.ts（P3b 编目搬家时原样跟过来的建议表语句：建议归证据模块，主线程换掉）
+  { file: 'domain/catalog/characters.ts', table: 'character_suggestions', note: '合并角色时搬 Pixiv 给自建角色的建议' },
+  // domain/catalog/consolidate.ts（同上：图 ↔ 作品归归类模块）
+  { file: 'domain/catalog/consolidate.ts', table: 'image_copyrights', note: '收拢改过名的作品时把图搬到新作品' },
   // services/classify/backfill.ts
   { file: 'services/classify/backfill.ts', table: 'images#analysis' },
   // services/classify/rootMode.ts
   { file: 'services/classify/rootMode.ts', table: 'images#curation' },
   { file: 'services/classify/rootMode.ts', table: 'images#evidence' },
-  // services/danbooru/apply.ts
-  { file: 'services/danbooru/apply.ts', table: 'characters' },
-  // services/danbooru/catalog.ts
-  { file: 'services/danbooru/catalog.ts', table: 'danbooru_tags' },
-  { file: 'services/danbooru/catalog.ts', table: 'tag_name_keys' },
-  { file: 'services/danbooru/catalog.ts', table: 'tag_renames' },
-  // services/danbooru/matcher.ts
-  { file: 'services/danbooru/matcher.ts', table: 'custom_character_matches' },
-  // services/danbooru/sync.ts
-  { file: 'services/danbooru/sync.ts', table: 'danbooru_artists' },
-  { file: 'services/danbooru/sync.ts', table: 'tag_name_keys' },
   // services/dedupe/DedupeService.ts
   { file: 'services/dedupe/DedupeService.ts', table: 'duplicate_comparisons' },
   { file: 'services/dedupe/DedupeService.ts', table: 'duplicate_groups' },
@@ -133,12 +94,6 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'services/dedupe/DedupeService.ts', table: 'settings' },
   // services/i18n/dict.ts
   { file: 'services/i18n/dict.ts', table: 'settings' },
-  { file: 'services/i18n/dict.ts', table: 'tag_i18n' },
-  { file: 'services/i18n/dict.ts', table: 'tag_name_keys' },
-  { file: 'services/i18n/dict.ts', table: 'tag_renames' },
-  // services/i18n/relocalize.ts
-  { file: 'services/i18n/relocalize.ts', table: 'characters' },
-  { file: 'services/i18n/relocalize.ts', table: 'works' },
   // services/image/ThumbnailService.ts
   { file: 'services/image/ThumbnailService.ts', table: 'images#analysis' },
   // services/pixiv/cache.ts

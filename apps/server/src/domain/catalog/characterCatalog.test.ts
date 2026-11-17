@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { openDatabase, type Db } from '../../../db/connection.ts';
-import { migrate } from '../../../db/migrate.ts';
-import { CharacterCatalog } from '../characterCatalog.ts';
+import { openDatabase, type Db } from '../../db/connection.ts';
+import { migrate } from '../../db/migrate.ts';
+import { CharacterCatalog } from './characterCatalog.ts';
 
 const noCopyrights = { copyrights: () => [] };
 

@@ -11,22 +11,17 @@ import { dismissPixivCharacterChecks } from './pixivChecks.ts';
 import type { SqliteContext } from './context.ts';
 import { moveBack, type MoveBackFailure, type Moved } from './move.ts';
 import { iso, parseId } from './sql.ts';
+import { revertAutoBinding, type AutoBinding } from '../../domain/catalog/bindings.ts';
 import { linkEach, unlink, unlinkEach } from '../../domain/curation/links.ts';
 import { fromLegacySnapshot, fromRow, LEGACY_RULE_PREFIX, type LinkRow } from '../../domain/curation/provenance.ts';
 
 /** 每类最多留这么多条，更早的删掉 */
 const KEEP = 100;
 
-export interface AssociatePayload {
-  characterId: number;
+export interface AssociatePayload extends AutoBinding {
   name: string;
-  tag: string;
   /** 角色的 created_at：编号被别的角色占用时认得出来 */
   characterCreatedAt: string;
-  /** 绑定时改了作品（没手动指定作品的才会改）：撤回时放回原来的 */
-  worksChanged: boolean;
-  worksBefore: { work_id: number; position: number }[];
-  createdWorkIds: number[];
 }
 
 export interface PixivPayload {
@@ -188,7 +183,6 @@ export class ChangeLog {
 
   private revertAssociate(r: Row, a: AssociatePayload): MutationResult {
     if (!this.stillBound(a)) throw new ConflictError(`「${a.name}」之后改过标签或已经合并、删除，不能自动撤回`);
-    const db = this.db;
     const now = iso(this.ctx.clock());
     let removed: number[] = [];
     const result = this.ctx.mutate((u) => {
@@ -196,35 +190,8 @@ export class ChangeLog {
       removed = this.assocImages(a, r.created_at);
       // 只去掉这次绑定造成的自动关联；记成否决：重新识别、Pixiv 补充都不再加回
       unlink(this.ctx, u, removed, [cid], { veto: true, at: now, only: (row) => row.decision === 'auto' });
-      if (a.worksChanged && db.prepare('SELECT works_locked FROM characters WHERE id = ?').pluck().get(cid) === 0) {
-        u.set('character_works', 'character_id = ?', [cid]);
-        db.prepare('DELETE FROM character_works WHERE character_id = ?').run(cid);
-        const ins = db.prepare('INSERT OR IGNORE INTO character_works (character_id, work_id, position) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM works WHERE id = ?)');
-        for (const w of a.worksBefore) ins.run(cid, w.work_id, w.position, w.work_id);
-        // 绑定时新建、现在没人用的作品删掉
-        for (const wid of a.createdWorkIds) {
-          const used = db
-            .prepare(
-              `SELECT 1 FROM character_works WHERE work_id = @w UNION ALL SELECT 1 FROM image_copyrights WHERE work_id = @w
-               UNION ALL SELECT 1 FROM collection_works WHERE work_id = @w LIMIT 1`,
-            )
-            .get({ w: wid });
-          if (used || !db.prepare('SELECT 1 FROM works WHERE id = ?').get(wid)) continue;
-          u.set('aliases', "owner_type = 'work' AND owner_id = ?", [wid]);
-          u.set('works', 'id = ?', [wid]);
-          db.prepare("DELETE FROM aliases WHERE owner_type = 'work' AND owner_id = ?").run(wid);
-          db.prepare('DELETE FROM works WHERE id = ?').run(wid);
-        }
-      }
-      u.set('custom_character_matches', 'character_id = ?', [cid]);
-      u.columns('characters', ['danbooru_tag', 'source'], [cid]);
-      db.prepare("UPDATE characters SET danbooru_tag = NULL, source = 'custom' WHERE id = ?").run(cid);
-      // 记成「忽略这个匹配」，以后不再自动绑同一个标签
-      db.prepare(
-        `INSERT INTO custom_character_matches (character_id, danbooru_tag, score, reason, existing_character_id, dismissed, computed_at)
-         VALUES (?, ?, 1, 'reverted', NULL, 1, ?)
-         ON CONFLICT(character_id) DO UPDATE SET danbooru_tag = excluded.danbooru_tag, dismissed = 1`,
-      ).run(cid, a.tag, now);
+      // 作品放回原来的、解绑、记成忽略这个匹配（编目模块）
+      revertAutoBinding(this.ctx.db, u, a, now);
       this.markReverted(u, r.id, now, null);
       // 排除结果、合集、「自建角色能对上 Danbooru」都由反应重算；撤销这次撤回时同样重放
       this.ctx.changed({ type: 'catalog.bindingChanged', characterIds: [cid], ids: removed });

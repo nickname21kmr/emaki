@@ -4,8 +4,8 @@
  */
 import { searchKey } from '@emaki/shared';
 import type { Db } from '../../db/connection.ts';
-import type { DanbooruCatalog } from './catalog.ts';
-import { resolveCharacterIdByTag } from '../catalog/characterCatalog.ts';
+import type { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
+import { resolveCharacterIdByTag } from './characterCatalog.ts';
 
 export interface DanbooruMatch {
   danbooruTag: string;

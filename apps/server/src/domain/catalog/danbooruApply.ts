@@ -3,11 +3,11 @@
  * 复用 T10 的 CharacterCatalog，不再写第二份 ensureWork / 新建角色。
  */
 import type { Db } from '../../db/connection.ts';
-import { replaceAutoAliases } from '../aliases.ts';
-import type { CharacterCatalog } from '../catalog/characterCatalog.ts';
-import type { Localizer } from '../i18n/localizer.ts';
-import type { DanbooruCatalog } from './catalog.ts';
-import { recomputeCustomMatches } from './matcher.ts';
+import type { Localizer } from '../../services/i18n/localizer.ts';
+import type { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
+import { replaceAutoAliases } from './aliases.ts';
+import type { CharacterCatalog } from './characterCatalog.ts';
+import { recomputeCustomMatches } from './customMatches.ts';
 
 export interface ApplyDeps {
   db: Db;

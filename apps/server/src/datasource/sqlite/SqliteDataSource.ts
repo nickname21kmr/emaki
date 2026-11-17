@@ -76,7 +76,7 @@ import { OfflineCharacterIndex } from '../../services/catalog/offlineCharacters.
 import { migrate } from '../../db/migrate.ts';
 import { refreshPlannerStats } from '../../db/plannerStats.ts';
 import { SoftCache } from './softCache.ts';
-import { consolidateCharacterTags, consolidateWorkTags } from './consolidate.ts';
+import { consolidateCharacterTags, consolidateWorkTags } from '../../domain/catalog/consolidate.ts';
 import { BadRequestError, ConflictError, NeedsConfirmError, NotFoundError, NotImplementedError } from '../../http/errors.ts';
 import type { DataSource, FileResponse } from '../DataSource.ts';
 import { parentRel, toAbs } from '../../services/fs/paths.ts';
@@ -109,14 +109,14 @@ import { isModelReady } from '../../services/tagger/download.ts';
 import { findModel } from '../../services/tagger/models.ts';
 import { createTagStage } from '../../services/tagger/tagJob.ts';
 import { resetIoBackoff } from '../../services/tagger/readBackoff.ts';
-import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
+import { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import type { CharacterVerification } from '../../services/catalog/characterVerification.ts';
 import { CopyrightResolver } from '../../services/catalog/copyrights.ts';
 import { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
 import { createDanbooruSyncRunner, hasUncachedArtists, hasUncachedCharacterTags } from '../../services/danbooru/sync.ts';
 import { importDictIfNeeded } from '../../services/i18n/dict.ts';
 import { SqliteLocalizer, type Localizer } from '../../services/i18n/localizer.ts';
-import { relocalizeAll } from '../../services/i18n/relocalize.ts';
+import { relocalizeAll } from '../../domain/catalog/relocalize.ts';
 import { LibraryWatcher, type WatchedRoot } from '../../services/watch/LibraryWatcher.ts';
 import { config } from '../../config.ts';
 import { hydrateImages, IMAGE_COLS, type ImageRow } from './hydrate.ts';
@@ -139,7 +139,8 @@ import { SearchQueries } from './search.ts';
 import { DedupeService } from '../../services/dedupe/DedupeService.ts';
 import { PendingTrash } from './pendingTrash.ts';
 import { resolvePorts, type EnginePorts, type ImageFileRow } from '../../infra/ports.ts';
-import { CharacterMutations } from './characters.ts';
+import { CharacterMutations } from '../../domain/catalog/characters.ts';
+import { setArtistLinks } from '../../domain/catalog/artists.ts';
 import { UnrecognizedQueries } from './unrecognized.ts';
 import { createContext } from './context.ts';
 import { Derived } from './derived.ts';
@@ -583,15 +584,9 @@ export class SqliteDataSource implements DataSource {
     const tags = planArtistLinks(body.mode, given, into, groups);
     const names = body.mode === 'split' ? tagNames(db, tags) : artistNames(db, given);
     const intoName = into ? artistNames(db, [into])[0] : undefined;
-    const json = JSON.stringify(tags);
     const now = iso(this.ctx.clock());
     return this.ctx.mutate((u) => {
-      u.set('artist_links', 'tag IN (SELECT value FROM json_each(?))', [json]);
-      db.prepare('DELETE FROM artist_links WHERE tag IN (SELECT value FROM json_each(?))').run(json);
-      if (body.mode !== 'auto') {
-        const ins = db.prepare('INSERT INTO artist_links (tag, group_tag, created_at) VALUES (?, ?, ?)');
-        for (const t of tags) ins.run(t, into ?? null, now);
-      }
+      setArtistLinks(db, u, body.mode, tags, into ?? null, now);
       return { message: artistLinksMessage(body.mode, names, intoName) };
     });
   }

@@ -7,7 +7,7 @@ import { DanbooruCatalog } from '../../danbooru/catalog.ts';
 import { importDictIfNeeded } from '../dict.ts';
 import { cleanOtherName, stripZhQualifier } from '../humanize.ts';
 import { SqliteLocalizer } from '../localizer.ts';
-import { relocalizeAll } from '../relocalize.ts';
+import { relocalizeAll } from '../../../domain/catalog/relocalize.ts';
 import { isNeutralHan, isSimplifiedZh } from '../script.ts';
 
 let db: Db;

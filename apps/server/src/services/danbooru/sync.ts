@@ -10,9 +10,11 @@ import { searchKey } from '@emaki/shared';
 import type { JobRunner } from '../../core/jobs.ts';
 import type { Db } from '../../db/connection.ts';
 import type { FetchLike } from '../../net/http.ts';
-import type { CharacterCatalog } from '../catalog/characterCatalog.ts';
+import type { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
+import { applyToLibrary, type ApplyDeps } from '../../domain/catalog/danbooruApply.ts';
+import { addDanbooruOtherName } from '../../domain/catalog/nameIndex.ts';
+import { putDanbooruArtist } from '../../domain/evidence/danbooru.ts';
 import type { Localizer } from '../i18n/localizer.ts';
-import { applyToLibrary, type ApplyDeps } from './apply.ts';
 import type { DanbooruCatalog } from './catalog.ts';
 import type { DbArtist } from './types.ts';
 import { normName, pickDisplayName, twitterOf } from './artistNames.ts';
@@ -223,7 +225,6 @@ export function createDanbooruSyncRunner(deps: DanbooruSyncDeps): JobRunner {
         }
 
         // ---- D：自建角色在线匹配
-        const insKey = db.prepare("INSERT OR IGNORE INTO tag_name_keys (search_key, tag, kind, source) VALUES (?, ?, 'other_name', 'danbooru')");
         const aliasOf = db.prepare("SELECT alias FROM aliases WHERE owner_type = 'character' AND owner_id = ? ORDER BY position LIMIT 2").pluck();
         for (const c of customs) {
           if (signal.aborted) break;
@@ -240,7 +241,7 @@ export function createDanbooruSyncRunner(deps: DanbooruSyncDeps): JobRunner {
           const needWiki = tags.filter((t) => !danbooru.get(t)?.wikiFetchedAt);
           if (needWiki.length) await fetchWiki(needWiki);
           db.transaction(() => {
-            for (const [k, t] of found) insKey.run(k, t);
+            for (const [k, t] of found) addDanbooruOtherName(db, k, t);
           })();
           done++;
           ctx.advance(1, `匹配自建角色 ${c.name}`);
@@ -255,12 +256,6 @@ export function createDanbooruSyncRunner(deps: DanbooruSyncDeps): JobRunner {
           .pluck()
           .all(stale) as string[];
         ctx.setTotal(done + Math.ceil(artistNames.length / 100));
-        const putArtist = db.prepare(
-          `INSERT INTO danbooru_artists (name, display, names, twitter, alias_of, not_found, fetched_at)
-           VALUES (@name, @display, @names, @twitter, @alias, @nf, @now)
-           ON CONFLICT(name) DO UPDATE SET display = excluded.display, names = excluded.names, twitter = excluded.twitter,
-             alias_of = excluded.alias_of, not_found = excluded.not_found, fetched_at = excluded.fetched_at`,
-        );
         for (let i = 0; i < artistNames.length && !signal.aborted; i += 100) {
           const batch = artistNames.slice(i, i + 100);
           const got = new Map((await client.artistsByNames(batch, signal)).filter((a) => !a.is_deleted).map((a) => [a.name, a]));
@@ -271,7 +266,7 @@ export function createDanbooruSyncRunner(deps: DanbooruSyncDeps): JobRunner {
           if (targets.length) for (const a of await client.artistsByNames(targets, signal)) if (!a.is_deleted) got.set(a.name, a);
           const now = iso(nowMs());
           const put = (name: string, a: DbArtist | undefined, alias: string | undefined) =>
-            putArtist.run({
+            putDanbooruArtist(db, {
               name,
               display: a ? pickDisplayName(name, a.other_names, a.group_name) : null,
               names: JSON.stringify(a ? [...a.other_names, ...(a.group_name ? [a.group_name] : [])].map(normName) : []),

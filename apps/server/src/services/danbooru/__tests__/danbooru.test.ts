@@ -7,13 +7,13 @@ import type { JobContext } from '../../../core/jobs.ts';
 import { openDatabase, type Db } from '../../../db/connection.ts';
 import { migrate } from '../../../db/migrate.ts';
 import type { FetchLike, HttpResponse } from '../../../net/http.ts';
-import { CharacterCatalog } from '../../catalog/characterCatalog.ts';
+import { CharacterCatalog } from '../../../domain/catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../../catalog/copyrights.ts';
 import { HumanizeLocalizer } from '../../i18n/localizer.ts';
 import { DanbooruCatalog } from '../catalog.ts';
 import { DanbooruClient } from '../client.ts';
 import { guessCopyrightFromQualifier, pickCopyrights, type CopyrightCandidate } from '../copyright.ts';
-import { decideAutomaticMatch, automaticCustomMatches, decideMatch, findDanbooruMatches, recomputeCustomMatches } from '../matcher.ts';
+import { decideAutomaticMatch, automaticCustomMatches, decideMatch, findDanbooruMatches, recomputeCustomMatches } from '../../../domain/catalog/customMatches.ts';
 import { RateLimiter } from '../rateLimiter.ts';
 import { createDanbooruSyncRunner } from '../sync.ts';
 

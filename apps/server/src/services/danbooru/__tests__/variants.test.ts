@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase, type Db } from '../../../db/connection.ts';
 import { migrate } from '../../../db/migrate.ts';
-import { consolidateCharacterTags, consolidateWorkTags } from '../../../datasource/sqlite/consolidate.ts';
+import { consolidateCharacterTags, consolidateWorkTags } from '../../../domain/catalog/consolidate.ts';
 import { CopyrightResolver } from '../../catalog/copyrights.ts';
 import { HumanizeLocalizer } from '../../i18n/localizer.ts';
 import { DanbooruCatalog, sameLineage } from '../catalog.ts';

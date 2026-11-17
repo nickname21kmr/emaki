@@ -3,9 +3,9 @@
  * 用户改过的名字（name_locked = 1）不动。
  */
 import type { Db } from '../../db/connection.ts';
-import { replaceAutoAliases } from '../aliases.ts';
-import { humanizeCharacterTag } from './humanize.ts';
-import type { Localizer } from './localizer.ts';
+import { humanizeCharacterTag } from '../../services/i18n/humanize.ts';
+import type { Localizer } from '../../services/i18n/localizer.ts';
+import { replaceAutoAliases } from './aliases.ts';
 
 export function relocalizeAll(db: Db, localizer: Localizer): { renamed: number } {
   let renamed = 0;

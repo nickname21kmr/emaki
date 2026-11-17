@@ -1,9 +1,18 @@
 /**
  * Danbooru 元数据的本地缓存（danbooru_tags 表）。全部同步方法，可在事务里用。
  * 同时是完整的「角色 → 作品」回退链：在线 > 离线表 > 词库猜测 > 限定词猜测 > []。
+ * 写入在主人模块里：元数据是证据（domain/evidence/danbooru.ts），改名表和名字反查是编目的（domain/catalog/nameIndex.ts）。
  */
 import { searchKey } from '@emaki/shared';
 import type { Db, Statement } from '../../db/connection.ts';
+import { recordDanbooruRename, replaceDanbooruOtherNames } from '../../domain/catalog/nameIndex.ts';
+import {
+  markDanbooruAlias,
+  markDanbooruNotFound,
+  setDanbooruCopyrights,
+  setDanbooruOtherNames,
+  upsertDanbooruTag,
+} from '../../domain/evidence/danbooru.ts';
 import type { CopyrightResolver, CopyrightSource } from '../catalog/copyrights.ts';
 import type { OfflineCharacterIndex } from '../catalog/offlineCharacters.ts';
 import { verifiedCharacterWorks } from '../catalog/verifiedNames.ts';
@@ -76,20 +85,6 @@ export class DanbooruCatalog implements CopyrightSource {
     this.verifications = new CharacterVerifications(db);
     this.s = {
       get: db.prepare('SELECT * FROM danbooru_tags WHERE name = ?'),
-      upsertBase: db.prepare(`INSERT INTO danbooru_tags (name, category, post_count, fetched_at, implies, is_deprecated, not_found, alias_of)
-        VALUES (@name, @category, @post_count, @now, @implies, @is_deprecated, 0, NULL)
-        ON CONFLICT(name) DO UPDATE SET category = excluded.category, post_count = excluded.post_count,
-          fetched_at = excluded.fetched_at, implies = excluded.implies, is_deprecated = excluded.is_deprecated,
-          not_found = 0, alias_of = NULL`),
-      markAlias: db.prepare(`INSERT INTO danbooru_tags (name, category, fetched_at, alias_of) VALUES (?, -1, ?, ?)
-        ON CONFLICT(name) DO UPDATE SET alias_of = excluded.alias_of, fetched_at = excluded.fetched_at, not_found = 0`),
-      rename: db.prepare("INSERT OR REPLACE INTO tag_renames (old_name, new_name, source) VALUES (?, ?, 'danbooru')"),
-      markNotFound: db.prepare(`INSERT INTO danbooru_tags (name, category, fetched_at, not_found) VALUES (?, -1, ?, 1)
-        ON CONFLICT(name) DO UPDATE SET not_found = 1, fetched_at = excluded.fetched_at`),
-      setOther: db.prepare('UPDATE danbooru_tags SET other_names = ?, wiki_fetched_at = ? WHERE name = ?'),
-      delOtherKeys: db.prepare("DELETE FROM tag_name_keys WHERE tag = ? AND kind = 'other_name' AND source = 'danbooru'"),
-      insKey: db.prepare('INSERT OR IGNORE INTO tag_name_keys (search_key, tag, kind, source) VALUES (?, ?, ?, ?)'),
-      setCopyrights: db.prepare('UPDATE danbooru_tags SET copyrights = ?, related_fetched_at = ? WHERE name = ?'),
       renameStep: db.prepare('SELECT new_name FROM tag_renames WHERE old_name = ?').pluck(),
       i18nGuess: db.prepare('SELECT copyright_guess FROM tag_i18n WHERE tag = ?').pluck(),
       i18nCopyright: db.prepare('SELECT tag FROM tag_i18n WHERE tag = ? AND category = 3').pluck(),
@@ -135,37 +130,28 @@ export class DanbooruCatalog implements CopyrightSource {
   }
 
   upsertBase(t: DbTag, now: string): void {
-    this.s.upsertBase!.run({
-      name: t.name,
-      category: t.category,
-      post_count: t.post_count,
-      now,
-      implies: JSON.stringify(t.antecedent_implications.map((x) => x.consequent_name)),
-      is_deprecated: t.is_deprecated ? 1 : 0,
-    });
+    upsertDanbooruTag(this.db, t, now);
   }
 
+  /** 旧名改成了新名：元数据记 alias_of（证据），改名表记一条（编目） */
   markAlias(oldName: string, newName: string, now: string): void {
     if (oldName === newName) return;
-    this.s.markAlias!.run(oldName, now, newName);
-    this.s.rename!.run(oldName, newName);
+    markDanbooruAlias(this.db, oldName, newName, now);
+    recordDanbooruRename(this.db, oldName, newName);
   }
 
   markNotFound(name: string, now: string): void {
-    this.s.markNotFound!.run(name, now);
+    markDanbooruNotFound(this.db, name, now);
   }
 
+  /** wiki 的其他名字：元数据（证据）和名字反查（编目）一起换 */
   setOtherNames(name: string, names: string[], now: string): void {
-    this.s.setOther!.run(JSON.stringify(names), now, name);
-    this.s.delOtherKeys!.run(name);
-    for (const n of names) {
-      const k = searchKey(n);
-      if (k) this.s.insKey!.run(k, name, 'other_name', 'danbooru');
-    }
+    setDanbooruOtherNames(this.db, name, names, now);
+    replaceDanbooruOtherNames(this.db, name, names);
   }
 
   setCopyrights(name: string, list: string[], now: string): void {
-    this.s.setCopyrights!.run(JSON.stringify(list), now, name);
+    setDanbooruCopyrights(this.db, name, list, now);
   }
 
   /** 顺着 tag_renames 最多 3 跳 */

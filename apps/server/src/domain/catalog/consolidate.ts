@@ -1,7 +1,7 @@
-import { searchKey } from '@emaki/shared';
 import type { Db } from '../../db/connection.ts';
-import { replaceAutoAliases } from '../../services/aliases.ts';
 import type { Localizer } from '../../services/i18n/localizer.ts';
+import { carryCollectionWorks } from '../collections/entityLinks.ts';
+import { addFormerName, replaceAutoAliases } from './aliases.ts';
 
 /**
  * 把已经拆开的角色收拢（2026-09-28）：标签按现在的规则规范化（改名、服装变体归本体）后和原来不同的，
@@ -55,11 +55,7 @@ export function consolidateCharacterTags(
         db.prepare('UPDATE characters SET danbooru_tag = ?, name = ? WHERE id = ?').run(target, name, r.id);
         db.prepare('INSERT OR REPLACE INTO danbooru_tag_redirects (tag, character_id) VALUES (?, ?)').run(r.tag, r.id);
         replaceAutoAliases(db, 'character', r.id, deps.localizer.aliasesFor(target, 'character', name));
-        if (name !== r.name) {
-          db.prepare(
-            "INSERT OR IGNORE INTO aliases (owner_type, owner_id, alias, search_key, origin, visible, position) VALUES ('character', ?, ?, ?, 'user', 1, 50)",
-          ).run(r.id, r.name, searchKey(r.name));
-        }
+        if (name !== r.name) addFormerName(db, r.id, r.name);
       })();
       renamed++;
       changed = true;
@@ -97,8 +93,6 @@ export function consolidateWorkTags(
     images: db.prepare(`INSERT INTO image_copyrights (image_id, work_id, score)
       SELECT image_id, @to, score FROM image_copyrights WHERE work_id = @from
       ON CONFLICT(image_id, work_id) DO UPDATE SET score = MAX(score, excluded.score)`),
-    collections: db.prepare(`INSERT OR IGNORE INTO collection_works (collection_id, work_id, added_at)
-      SELECT collection_id, @to, added_at FROM collection_works WHERE work_id = @from`),
     aliases: db.prepare(`INSERT OR IGNORE INTO aliases (owner_type, owner_id, alias, search_key, origin, visible, position)
       SELECT owner_type, @to, alias, search_key, origin, visible, position FROM aliases
       WHERE owner_type = 'work' AND owner_id = @from AND origin = 'user'`),
@@ -115,7 +109,7 @@ export function consolidateWorkTags(
         const p = { from: r.id, to };
         s.chars.run(p);
         s.images.run(p);
-        s.collections.run(p);
+        carryCollectionWorks(db, r.id, to); // 合集模块
         s.aliases.run(p);
         s.dropAliases.run(r.id);
         s.drop.run(r.id); // character_works / image_copyrights / collection_works 随外键级联删除
