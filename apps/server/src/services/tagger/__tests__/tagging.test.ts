@@ -89,7 +89,7 @@ describe('TagResultWriter', () => {
     const w = new TagResultWriter(db, catalog, copyrights, { repo: REPO, ...TH, autoAcceptThreshold: 0.8 });
     w.writeBatch([ok(1, [['mika_(blue_archive)', 0.7989]]), ok(2, [['mika_(blue_archive)', 0.8]])]);
     expect(db.prepare('SELECT image_id, score FROM character_suggestions').all()).toEqual([{ image_id: 1, score: 0.7989 }]);
-    expect(db.prepare('SELECT image_id, score FROM image_characters').all()).toEqual([{ image_id: 2, score: 0.8 }]);
+    expect(db.prepare('SELECT image_id, evidence_score AS score FROM image_characters').all()).toEqual([{ image_id: 2, score: 0.8 }]);
   });
 
   it('按规则写：自动采纳、建议、作品、分级', () => {
@@ -98,7 +98,9 @@ describe('TagResultWriter', () => {
     const work = db.prepare("SELECT id, name FROM works WHERE danbooru_tag = 'blue_archive'").get() as { id: number; name: string };
     expect(work.name).toBe('Blue Archive');
     expect(count('SELECT position FROM character_works')).toBe(0);
-    expect(db.prepare('SELECT image_id, origin, score FROM image_characters').all()).toEqual([{ image_id: 1, origin: 'tagger', score: 0.95 }]);
+    expect(db.prepare('SELECT image_id, decision, rule, evidence_provider, evidence_tag, evidence_score FROM image_characters').all()).toEqual([
+      { image_id: 1, decision: 'auto', rule: 'auto-accept@1', evidence_provider: 'tagger', evidence_tag: 'mika_(blue_archive)', evidence_score: 0.95 },
+    ]);
     expect(db.prepare('SELECT image_id, danbooru_tag, score FROM character_suggestions').all()).toEqual([
       { image_id: 1, danbooru_tag: 'hina_(blue_archive)', score: 0.5 },
     ]);
@@ -120,7 +122,7 @@ describe('TagResultWriter', () => {
   it('手动分级不覆盖；已手动关联的角色不再建议', () => {
     db.prepare("UPDATE images SET rating = 'explicit', rating_manual = 1 WHERE id = 2").run();
     db.prepare("INSERT INTO characters (id, name, danbooru_tag, source, created_at) VALUES (5, '日奈', 'hina_(blue_archive)', 'danbooru', 'x')").run();
-    db.prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (3, 5, 'manual', 'x')").run();
+    db.prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, added_at) VALUES (3, 5, 'manual', 'user', 'x')").run();
     writer().writeBatch([ok(2, [], 'sensitive'), ok(3, [['hina_(blue_archive)', 0.5]])]);
     expect(count('SELECT rating = \'explicit\' FROM images WHERE id = 2')).toBe(1);
     expect(count('SELECT count(*) FROM character_suggestions WHERE image_id = 3')).toBe(0);
@@ -181,7 +183,7 @@ describe('TagResultWriter', () => {
       ok(2, [['mika_(blue_archive)', 0.91]]),
       ok(3, [['hina_(blue_archive)', 0.98]]),
     ]);
-    expect(db.prepare('SELECT image_id, score FROM image_characters ORDER BY image_id').all()).toEqual([
+    expect(db.prepare('SELECT image_id, evidence_score AS score FROM image_characters ORDER BY image_id').all()).toEqual([
       { image_id: 1, score: 0.85 }, { image_id: 2, score: 0.91 },
     ]);
     expect(db.prepare('SELECT image_id, score FROM character_suggestions').all()).toEqual([{ image_id: 3, score: 0.98 }]);

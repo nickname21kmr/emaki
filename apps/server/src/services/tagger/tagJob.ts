@@ -21,6 +21,7 @@ import { IN_COMIC } from '../classify/comicAreas.ts';
 import { NOT_SKIPPED, noteReadFailures, skipIds } from './readBackoff.ts';
 import { ResilientTagger } from './resilient.ts';
 import { TagResultWriter } from './writer.ts';
+import type { Change } from '../../propagation/changes.ts';
 
 export interface TagJobDeps {
   db: Db;
@@ -30,8 +31,8 @@ export interface TagJobDeps {
   getTaggerSettings(): Settings['tagger'];
   /** 每次任务 new 一个 catalog；T11 / T12 注入升级版 */
   makeCatalog?: () => { catalog: CharacterCatalog; copyrights: CopyrightSource };
-  /** T17：同一事务里对本批图应用排除规则 */
-  afterBatchInTx?: (imageIds: number[]) => void;
+  /** 每批写完、同一事务里：声明变化（见 TagResultWriter 的 afterBatchInTx） */
+  afterBatchInTx?: (imageIds: number[], changes: Change[]) => void;
   log?: (msg: string) => void;
   now?: () => number;
   // 测试注入
@@ -180,7 +181,7 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
     const selBatch = db.prepare(batch(pass.where));
     const itemImage = db.prepare('SELECT dominant_color, rating, content_kind FROM images WHERE id = ?');
     const itemChars = db.prepare(
-      'SELECT c.name, ic.score FROM image_characters ic JOIN characters c ON c.id = ic.character_id WHERE ic.image_id = ? ORDER BY ic.score DESC',
+      'SELECT c.name, ic.evidence_score AS score FROM image_characters ic JOIN characters c ON c.id = ic.character_id WHERE ic.image_id = ? ORDER BY ic.evidence_score DESC',
     );
 
     const { catalog, copyrights } = deps.makeCatalog?.() ?? {

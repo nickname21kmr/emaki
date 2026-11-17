@@ -22,6 +22,9 @@ import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors
 import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
 import { acceptMessage } from '../acceptMessage.ts';
 import { insertDanbooruCharacter } from './characters.ts';
+import { linkEach, type LinkItem } from '../../domain/curation/links.ts';
+import { manual } from '../../domain/curation/provenance.ts';
+import { dropSuggestions } from '../../domain/evidence/suggestions.ts';
 import type { SqliteContext } from './context.ts';
 import { loadImageItems } from './hydrate.ts';
 import { ANNEX_KINDS_SQL, QUEUE_KINDS_SQL, IN_COMIC_I, NOT_IN_BOOK, decodeCursor, encodeCursor, iso, parseId, QUEUE, THEME_EXPR, UNRECOGNIZED } from './sql.ts';
@@ -276,11 +279,11 @@ export class UnrecognizedQueries {
     if (!tags.length || tags.some((t) => !t)) throw new BadRequestError('标签不能为空');
     const rows = tags.map((tag) => {
       const row = this.ctx
-        .stmt('SELECT score, character_id FROM character_suggestions WHERE image_id = ? AND danbooru_tag = ?')
-        .get(imageId, tag) as { score: number; character_id: number | null } | undefined;
+        .stmt('SELECT score, character_id, source FROM character_suggestions WHERE image_id = ? AND danbooru_tag = ?')
+        .get(imageId, tag) as { score: number; character_id: number | null; source: 'tagger' | 'pixiv' } | undefined;
       // 自建角色的建议只认 character_id：角色合并 / 删除后这行已级联删掉，不能按编号再找（编号可能给了别的角色）
       if (CharacterCatalog.isCustomTag(tag) && row?.character_id == null) throw new ConflictError('这条建议已失效，请刷新');
-      return { tag, score: row?.score ?? null, characterId: row?.character_id ?? null };
+      return { tag, score: row?.score ?? null, characterId: row?.character_id ?? null, source: row?.source ?? ('tagger' as const) };
     });
     const catalog = this.catalog();
     const db = this.ctx.db;
@@ -288,8 +291,8 @@ export class UnrecognizedQueries {
     return this.ctx.mutate((u) => {
       const names: string[] = [];
       let created = 0;
+      const items: LinkItem[] = [];
       for (const r of rows) {
-        u.set('character_suggestions', 'image_id = ? AND danbooru_tag = ?', [imageId, r.tag]);
         let characterId = r.characterId ?? catalog.resolveCharacterId(r.tag);
         if (characterId === null) {
           // 新建角色（封面由 derived 自动选）；和自动采纳一样按作品挂好（必要时新建作品），撤销时一并删除
@@ -297,15 +300,14 @@ export class UnrecognizedQueries {
           characterId = c.id;
           if (c.created) created++;
         }
-        const ins = db
-          .prepare("INSERT OR IGNORE INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, ?, 'manual', ?, ?)")
-          .run(imageId, characterId, r.score, now);
-        if (ins.changes === 1) u.sql('DELETE FROM image_characters WHERE image_id = ? AND character_id = ?', [imageId, characterId]);
-        db.prepare('DELETE FROM character_suggestions WHERE image_id = ? AND danbooru_tag = ?').run(imageId, r.tag);
+        // 用户点的：手动，带着这条建议的证据（附录 #5）
+        items.push({ imageId, characterId, provenance: manual(now, { provider: r.source, tag: r.tag, score: r.source === 'pixiv' ? null : r.score }) });
         names.push(db.prepare('SELECT name FROM characters WHERE id = ?').pluck().get(characterId) as string);
       }
-      // 新角色可能命中「角色」排除规则：由反应重新判定（撤销时重放，排除自然放出来）
-      this.ctx.changed({ type: 'curation.charactersChanged', ids: [imageId] });
+      // 归类模块写关联、清掉否决和对应的建议、声明变化（新角色命中「角色」排除规则由反应处理）
+      linkEach(this.ctx, u, items);
+      // 采纳的这几条建议本身也去掉（标签没解析到这个角色时上面清不到）
+      dropSuggestions(db, u, rows.map((r) => ({ imageId, tag: r.tag })));
       return { message: acceptMessage(names, created) };
     });
   }

@@ -4,20 +4,25 @@
  *   characterThreshold ≤ 分数 < autoAccept → character_suggestions（每图最多 5 条），建议角色的主作品已存在时挂 image_copyrights；
  *   rating 取 argmax（手动改过的不动）；DECODE / UNSUPPORTED 也标记已处理；ENOENT 不写，留给扫描器标 missing；
  *   IO（文件暂时读不了）也不写，下次识别再试。
- * 重打标签时 image_tags / suggestions / image_copyrights 先删后写，image_characters 只增不删。
- * 用户从图上去掉过的角色（character_vetoes）不再加回，也不再作为建议。
+ * 重打标签时 image_tags / suggestions / image_copyrights 先删后写，角色关联只增不删。
+ * 角色关联经归类模块写入（domain/curation：能不能自动关联由 judgeAutoLink 判断，link 带 auto / auto-accept@1 来历，一批写一次）；
+ * 用户从图上去掉过的角色（否决）不再加回，也不再作为建议。
  * T27：写完标签后按标签重算内容类型、主题和 art_score（manual 只保护类型）；截图、文字、照片、表情上的
  * 未知角色不新建，只进建议（BI-15），已有角色照常关联。
  */
 import type { ContentKind } from '@emaki/shared';
 import type { Db, Statement } from '../../db/connection.ts';
+import { judgeAutoLink } from '../../domain/curation/auto.ts';
+import { collectingTx, linkEach, vetoChecker, type LinkItem } from '../../domain/curation/links.ts';
+import { auto, RULES } from '../../domain/curation/provenance.ts';
+import { currentActor } from '../../propagation/actor.ts';
+import type { Change } from '../../propagation/changes.ts';
 import { writeArtists } from './artists.ts';
 import type { CharacterCatalog } from '../catalog/characterCatalog.ts';
 import type { CopyrightSource } from '../catalog/copyrights.ts';
 import { CLASS_COLS, classificationStatements, computeClassification, writeClassification, type ClassRow } from '../classify/backfill.ts';
 import { pickRating } from './postprocess.ts';
 import type { HostItemResult } from './protocol.ts';
-import { canAutoAcceptCharacter } from './characterAcceptance.ts';
 
 export interface WriterOptions {
   repo: string;
@@ -25,8 +30,11 @@ export interface WriterOptions {
   characterThreshold: number;
   autoAcceptThreshold: number;
   maxSuggestions?: number;
-  /** T17：在同一个事务里对本批图应用排除规则 */
-  afterBatchInTx?: (imageIds: number[]) => void;
+  /**
+   * 每批写完、在同一个事务里调用：imageIds 是这批处理过的图，changes 是归类模块写关联时声明的变化。
+   * 引擎里交给 declareTagged（ctx.apply 声明变化，排除规则、Pixiv 排队等由反应做）；测试不传就不做连带处理
+   */
+  afterBatchInTx?: (imageIds: number[], changes: Change[]) => void;
   now?: () => number;
   /**
    * 这次识别顺便解码了画师（开着「识别画师」、模型能出画师）：识别失败的图也标画师跑过，
@@ -49,6 +57,9 @@ export class TagResultWriter {
   private readonly tagIds = new Map<string, number>();
   private readonly s: Record<string, Statement>;
   private readonly cls: { auto: Statement; manual: Statement };
+  private readonly vetoed: (imageId: number, characterId: number) => boolean;
+  /** 这一批要自动关联的（批末一次交给归类模块写） */
+  private batchLinks: LinkItem[] = [];
 
   constructor(
     private readonly db: Db,
@@ -69,15 +80,13 @@ export class TagResultWriter {
         ON CONFLICT(image_id, work_id) DO UPDATE SET score = MAX(score, excluded.score)`),
       workByTag: db.prepare('SELECT id FROM works WHERE danbooru_tag = ?'),
       linkedIds: db.prepare('SELECT character_id FROM image_characters WHERE image_id = ?').pluck(),
-      insImageChar: db.prepare(`INSERT INTO image_characters (image_id, character_id, origin, score, added_at)
-        VALUES (@imageId, @characterId, 'tagger', @score, @now) ON CONFLICT(image_id, character_id) DO NOTHING`),
       updRating: db.prepare('UPDATE images SET rating = ? WHERE id = ? AND rating_manual = 0'),
       markTagged: db.prepare('UPDATE images SET tagged_at = ?, tagger_model = ?, retag = 0 WHERE id = ?'),
       classRow: db.prepare(`SELECT ${CLASS_COLS} FROM images WHERE id = ?`),
       acceptance: db.prepare('SELECT content_kind AS kind, shelved_at IS NULL AND original_at IS NULL AS allowed FROM images WHERE id = ?'),
-      // 用户从这张图上去掉过这个角色：不再加回，也不再作为建议
-      vetoed: db.prepare('SELECT 1 FROM character_vetoes WHERE image_id = ? AND character_id = ?').pluck(),
     };
+    // 用户从这张图上去掉过这个角色：不再加回，也不再作为建议
+    this.vetoed = vetoChecker(db);
     this.cls = classificationStatements(db);
   }
 
@@ -101,11 +110,16 @@ export class TagResultWriter {
     this.catalog.clearCache();
     return this.db.transaction(() => {
       const ids: number[] = [];
+      this.batchLinks = [];
       for (const r of results) {
         const id = this.writeOne(r, now);
         if (id !== null) ids.push(id);
       }
-      if (ids.length) this.o.afterBatchInTx?.(ids);
+      // 自动关联经归类模块一次写完（来历、否决、建议、变化都由它处理）
+      const tx = collectingTx(this.db);
+      this.stats.linked += linkEach(tx, null, this.batchLinks).linked.length;
+      this.batchLinks = [];
+      if (ids.length) this.o.afterBatchInTx?.(ids, tx.changes);
       return ids;
     })();
   }
@@ -147,26 +161,33 @@ export class TagResultWriter {
     s.delImageCopyrights!.run(r.id);
 
     const pending = new Set<string>();
+    const linked = new Set(s.linkedIds!.all(r.id) as number[]);
+    const actor = currentActor();
     for (const { tag, score } of sorted) {
       if (score < o.autoAcceptThreshold) continue;
       const known = catalog.resolveCharacterId(tag);
-      if (known !== null && s.vetoed!.get(r.id, known) !== undefined) continue;
-      if (!allowed || !canAutoAcceptCharacter(kind, known)) {
+      if (known !== null && this.vetoed(r.id, known)) continue;
+      if (!judgeAutoLink({ entry: 'recognize', kind, allowed: !!allowed, characterId: known })) {
         pending.add(tag);
         continue;
       }
       const { id, created } = catalog.ensureCharacter(tag, now);
       if (created) stats.createdCharacters++;
-      if (s.insImageChar!.run({ imageId: r.id, characterId: id, score, now }).changes) stats.linked++;
+      if (linked.has(id)) continue;
+      linked.add(id);
+      this.batchLinks.push({
+        imageId: r.id,
+        characterId: id,
+        provenance: auto(RULES.autoAccept, now, { provider: 'tagger', tag: catalog.normalizeTag(tag), score }, actor),
+      });
     }
 
-    const linked = new Set(s.linkedIds!.all(r.id) as number[]);
     let n = 0;
     for (const { tag, score } of sorted) {
       if ((score >= o.autoAcceptThreshold ? !pending.has(tag) : score < o.characterThreshold) || n >= (o.maxSuggestions ?? 5)) continue;
       const cid = catalog.resolveCharacterId(tag);
       if (cid !== null && linked.has(cid)) continue; // 已经归到这个角色了（包括手动归的、合并后的重定向）
-      if (cid !== null && s.vetoed!.get(r.id, cid) !== undefined) continue; // 用户去掉过的不再建议
+      if (cid !== null && this.vetoed(r.id, cid)) continue; // 用户去掉过的不再建议
       s.insSuggestion!.run(r.id, tag, score);
       n++;
       // 建议角色的主作品：只挂已存在的作品，不新建

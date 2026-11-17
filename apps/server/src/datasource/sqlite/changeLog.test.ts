@@ -23,7 +23,7 @@ afterEach(() => env.close());
 const db = () => ds.ctx.db;
 const img = (id: string) => Number(env.id('image', id));
 const NOW_ISO = () => new Date(env.now).toISOString();
-const links = (cid: number) => db().prepare('SELECT image_id, origin FROM image_characters WHERE character_id = ? ORDER BY image_id').all(cid);
+const links = (cid: number) => db().prepare('SELECT image_id, decision FROM image_characters WHERE character_id = ? ORDER BY image_id').all(cid);
 /** 词库里的名字（pixiv 匹配、自建角色对 Danbooru 都靠它） */
 function name(tag: string, value: string, category = 4, extra: { zh?: string; copyright?: string } = {}) {
   db().prepare('INSERT OR IGNORE INTO tag_i18n (tag, category, zh, copyright_guess, post_count) VALUES (?, ?, ?, ?, 5000)').run(tag, category, extra.zh ?? null, extra.copyright ?? null);
@@ -38,14 +38,14 @@ describe('自动关联 Danbooru 标签', () => {
     name('hoshino_(blue_archive)', '小鸟游星野', 4, { zh: '小鸟游星野', copyright: 'blue_archive' });
     const cid = Number(db().prepare("INSERT INTO characters (name, source, created_at) VALUES ('小鸟游星野', 'custom', ?)").run(NOW_ISO()).lastInsertRowid);
     db().prepare('INSERT INTO character_works (character_id, work_id) VALUES (?, ?)').run(cid, Number(env.id('work', 'w1')));
-    db().prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (?, ?, 'manual', 'x')").run(img('i30'), cid);
+    db().prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, added_at) VALUES (?, ?, 'manual', 'user', 'x')").run(img('i30'), cid);
     (ds as unknown as { characters: { associateAutomatic(): void } }).characters.associateAutomatic();
     expect(db().prepare('SELECT danbooru_tag, source FROM characters WHERE id = ?').get(cid)).toEqual({ danbooru_tag: 'hoshino_(blue_archive)', source: 'danbooru' });
     expect(env.events.filter((e) => e.type === 'auto-change')).toEqual([
       { type: 'auto-change', change: expect.objectContaining({ kind: 'auto-associate', summary: '「小鸟游星野」自动绑上了 Danbooru 标签 hoshino_(blue_archive)' }) },
     ]);
     // 绑定之后识别器按这个标签归进来一张
-    db().prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (?, ?, 'tagger', ?)").run(img('i27'), cid, NOW_ISO());
+    db().prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_tag, evidence_score, added_at) VALUES (?, ?, 'auto', 'job:tag', 'auto-accept@1', 'tagger', ?, 0.9, ?)").run(img('i27'), cid, 'hoshino_(blue_archive)', NOW_ISO());
     const [entry] = await ds.listChanges('auto');
     expect(entry).toMatchObject({ kind: 'auto-associate', count: 1, revertable: true, revertedAt: null });
     expect(entry!.revertHint).toContain('去掉之后经这个标签自动归进来的 1 张图');
@@ -54,7 +54,7 @@ describe('自动关联 Danbooru 标签', () => {
     const r = await ds.revertChange(entry!.id);
     expect(r.message).toBe('已撤回自动关联：「小鸟游星野」不再绑 hoshino_(blue_archive)，去掉了 1 张自动归进来的图');
     expect(db().prepare('SELECT danbooru_tag, source FROM characters WHERE id = ?').get(cid)).toEqual({ danbooru_tag: null, source: 'custom' });
-    expect(links(cid)).toEqual([{ image_id: img('i30'), origin: 'manual' }]);
+    expect(links(cid)).toEqual([{ image_id: img('i30'), decision: 'manual' }]);
     expect(db().prepare('SELECT image_id FROM character_vetoes WHERE character_id = ?').pluck().all(cid)).toEqual([img('i27')]);
     expect(db().prepare('SELECT danbooru_tag, dismissed FROM custom_character_matches WHERE character_id = ?').get(cid)).toEqual({ danbooru_tag: 'hoshino_(blue_archive)', dismissed: 1 });
     expect((await ds.listChanges('auto'))[0]).toMatchObject({ revertable: false, revertedAt: NOW_ISO() });
@@ -96,8 +96,8 @@ describe('Pixiv 补充', () => {
     await syncPixivCharacters(ds.ctx, job(), ds.makeCatalog, client, 0);
     const yuuka = Number(env.id('character', 'c2'));
     expect(links(yuuka).filter((l) => [img('i27'), img('i28')].includes((l as { image_id: number }).image_id))).toEqual([
-      { image_id: img('i27'), origin: 'tagger' },
-      { image_id: img('i28'), origin: 'tagger' },
+      { image_id: img('i27'), decision: 'auto' },
+      { image_id: img('i28'), decision: 'auto' },
     ]);
     expect(db().prepare('SELECT original_at FROM images WHERE id = ?').pluck().get(img('i29'))).not.toBeNull();
     const [entry] = await ds.listChanges('auto');

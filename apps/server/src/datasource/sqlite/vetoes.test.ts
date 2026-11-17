@@ -6,7 +6,7 @@ import { rmSync } from 'node:fs';
 import { EventBus } from '../../core/events.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
 import { SqliteDataSource } from './SqliteDataSource.ts';
-import { vetoRemovedCharacter } from './vetoes.ts';
+import { unlinkByUser } from '../../domain/curation/links.ts';
 
 const T = '2026-01-01T00:00:00.000Z';
 let ds: SqliteDataSource;
@@ -22,7 +22,9 @@ beforeEach(async () => {
     INSERT INTO characters (id, name, danbooru_tag, source, created_at) VALUES (1, '未花', 'mika_(blue_archive)', 'danbooru', '${T}'), (2, '日奈', 'hina_(blue_archive)', 'danbooru', '${T}');
     INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
       VALUES (1, 1, '1.png', '1.png', 10, 10, 1, 'png', 's1', '${T}', '${T}'), (2, 1, '2.png', '2.png', 10, 10, 1, 'png', 's2', '${T}', '${T}');
-    INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (1, 1, 'tagger', 0.9, '${T}'), (1, 2, 'manual', NULL, '${T}'), (2, 1, 'tagger', 0.9, '${T}');
+    INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_score, added_at) VALUES
+      (1, 1, 'auto', 'job:tag', 'auto-accept@1', 'tagger', 0.9, '${T}'), (1, 2, 'manual', 'user', NULL, NULL, NULL, '${T}'),
+      (2, 1, 'auto', 'job:tag', 'auto-accept@1', 'tagger', 0.9, '${T}');
   `);
   ds.ctx.invalidate();
 });
@@ -40,11 +42,9 @@ it('详情里去掉角色：记下，撤销后作废', async () => {
   expect(chars(1)).toEqual([1, 2]);
 });
 
-it('批量移除用的 helper：只记现在挂着的，撤销后作废', async () => {
+it('归类模块的「用户去掉」：只记现在挂着的，撤销后作废', async () => {
   const r = ds.ctx.mutate((u) => {
-    u.set('image_characters', 'character_id = 1');
-    vetoRemovedCharacter(ds.ctx.db, u, 1, [1, 2], T);
-    ds.ctx.db.prepare('DELETE FROM image_characters WHERE character_id = 1').run();
+    unlinkByUser(ds.ctx, u, [1, 2, 3], [1], T);
     return { message: 'x' };
   });
   expect(vetoes()).toEqual([{ image_id: 1, character_id: 1 }, { image_id: 2, character_id: 1 }]);
@@ -101,7 +101,7 @@ it('旧建议补采纳支持动图建档和别册复用，合并标签只计一�
   const created = db.prepare("SELECT id FROM characters WHERE danbooru_tag = 'new_character'").pluck().get();
   expect(chars(1)).toEqual([2, created]);
   expect(chars(2)).toEqual([2, created]);
-  expect(db.prepare('SELECT score FROM image_characters WHERE image_id = 2 AND character_id = 2').pluck().get()).toBe(0.95);
+  expect(db.prepare('SELECT evidence_score FROM image_characters WHERE image_id = 2 AND character_id = 2').pluck().get()).toBe(0.95);
   expect(db.prepare('SELECT danbooru_tag FROM character_suggestions ORDER BY danbooru_tag').pluck().all()).toEqual(['pixiv_character', 'unknown_screenshot']);
   expect(await ds.promotableSuggestions()).toEqual({ images: 0, suggestions: 0, threshold: 0.85 });
   await ds.undo(r.undoToken!);

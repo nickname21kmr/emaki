@@ -52,7 +52,7 @@ describe('getStats 角色数 / 作品数', () => {
         )
         .run(id, root, `${id}.png`, `s${id}`, kind, extra.excluded ? 1 : null, extra.trashed ? 'x' : null);
     const link = (img: number, cid: number) =>
-      db.prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (?, ?, 'tagger', 'x')").run(img, cid);
+      db.prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, rule, added_at) VALUES (?, ?, 'auto', 'job:tag', 'auto-accept@1', 'x')").run(img, cid);
     add(1, 1, 'illustration');
     link(1, 1); // C1、W1 算
     add(2, 1, 'illustration', { excluded: true });

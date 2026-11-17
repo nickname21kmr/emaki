@@ -11,7 +11,8 @@ import { dismissPixivCharacterChecks } from './pixivChecks.ts';
 import type { SqliteContext } from './context.ts';
 import { moveBack, type MoveBackFailure, type Moved } from './move.ts';
 import { iso, parseId } from './sql.ts';
-import { vetoRemovedCharacter } from './vetoes.ts';
+import { linkEach, unlink, unlinkEach } from '../../domain/curation/links.ts';
+import { fromLegacySnapshot, fromRow, LEGACY_RULE_PREFIX, type LinkRow } from '../../domain/curation/provenance.ts';
 
 /** 每类最多留这么多条，更早的删掉 */
 const KEEP = 100;
@@ -41,10 +42,20 @@ export interface MovePayload {
   where: string;
   /** 还没移回的；移回一张去掉一张 */
   items: Moved[];
-  charSnap: { image_id: number; character_id: number; origin: string; score: number | null; added_at: string }[];
+  /** 移动时漫画区同步去掉的自动关联（整行，带来历）；迁移 034 之前记的是 origin / score 的旧形状 */
+  charSnap: (LinkRow | LegacyCharSnap)[];
   retagSnap: { id: number; retag: number }[];
   /** P2 之前记的「移动时新排除的图」；现在排除结果由反应按新位置重算，不再用它（旧记录里可能还有） */
   excluded?: unknown;
+}
+
+/** 迁移 034 之前的关联快照 */
+interface LegacyCharSnap {
+  image_id: number;
+  character_id: number;
+  origin: string;
+  score: number | null;
+  added_at: string;
 }
 
 interface Row {
@@ -161,12 +172,18 @@ export class ChangeLog {
       .get(a.characterId, a.characterCreatedAt, a.tag);
   }
 
-  /** 绑定之后识别器 / Pixiv 自动归进来的图（手动归的 origin 是 manual，不算） */
+  /**
+   * 这次绑定造成的自动关联（附录 #6）：绑定之后、依据的证据就是这个标签的自动关联。手动归的、按别的标签（合并重定向）
+   * 或 Pixiv 按名字对上自建角色的都不算。迁移 034 之前的模型关联不知道当时的标签（evidence_tag 为空），按以前的办法算进来
+   */
   private assocImages(a: AssociatePayload, since: string): number[] {
     return this.db
-      .prepare("SELECT image_id FROM image_characters WHERE character_id = ? AND origin = 'tagger' AND added_at >= ?")
+      .prepare(
+        `SELECT image_id FROM image_characters WHERE character_id = @cid AND decision = 'auto' AND added_at >= @since
+           AND (evidence_tag = @tag OR (evidence_tag IS NULL AND evidence_provider = 'tagger' AND rule LIKE @legacy))`,
+      )
       .pluck()
-      .all(a.characterId, since) as number[];
+      .all({ cid: a.characterId, since, tag: a.tag, legacy: `${LEGACY_RULE_PREFIX}%` }) as number[];
   }
 
   private revertAssociate(r: Row, a: AssociatePayload): MutationResult {
@@ -177,12 +194,8 @@ export class ChangeLog {
     const result = this.ctx.mutate((u) => {
       const cid = a.characterId;
       removed = this.assocImages(a, r.created_at);
-      if (removed.length) {
-        u.set('image_characters', 'character_id = ?', [cid]);
-        // 记成用户去掉的：重新识别、Pixiv 补充都不再加回
-        vetoRemovedCharacter(db, u, cid, removed, now);
-        db.prepare("DELETE FROM image_characters WHERE character_id = ? AND origin = 'tagger' AND image_id IN (SELECT value FROM json_each(?))").run(cid, JSON.stringify(removed));
-      }
+      // 只去掉这次绑定造成的自动关联；记成否决：重新识别、Pixiv 补充都不再加回
+      unlink(this.ctx, u, removed, [cid], { veto: true, at: now, only: (row) => row.decision === 'auto' });
       if (a.worksChanged && db.prepare('SELECT works_locked FROM characters WHERE id = ?').pluck().get(cid) === 0) {
         u.set('character_works', 'character_id = ?', [cid]);
         db.prepare('DELETE FROM character_works WHERE character_id = ?').run(cid);
@@ -214,8 +227,6 @@ export class ChangeLog {
       ).run(cid, a.tag, now);
       this.markReverted(u, r.id, now, null);
       // 排除结果、合集、「自建角色能对上 Danbooru」都由反应重算；撤销这次撤回时同样重放
-      this.ctx.changed({ type: 'curation.charactersChanged', ids: removed });
-      this.ctx.changed({ type: 'curation.vetoesChanged', ids: removed });
       this.ctx.changed({ type: 'catalog.bindingChanged', characterIds: [cid], ids: removed });
       return { message: `已撤回自动关联：「${a.name}」不再绑 ${a.tag}${removed.length ? `，去掉了 ${removed.length} 张自动归进来的图` : ''}` };
     });
@@ -226,12 +237,15 @@ export class ChangeLog {
 
   /** 这轮加的、之后没被改过的 */
   private pixivIntact(p: PixivPayload): Required<PixivPayload> {
-    const link = this.db.prepare("SELECT 1 FROM image_characters WHERE image_id = ? AND character_id = ? AND origin = 'tagger' AND added_at = ?");
+    // 这轮加的那条还在：同一对、同一个时间、还是 Pixiv 的自动关联（之后被用户改成手动的不算）
+    const link = this.db.prepare(
+      "SELECT 1 FROM image_characters WHERE image_id = ? AND character_id = ? AND decision = 'auto' AND evidence_provider = 'pixiv' AND added_at = ?",
+    );
     const orig = this.db.prepare('SELECT 1 FROM images WHERE id = ? AND original_at = ?');
     const corrected = this.db.prepare(`SELECT 1 FROM images i JOIN pixiv_character_checks p ON p.image_id=i.id
       WHERE i.id=? AND i.original_at IS NULL AND i.source_site='pixiv' AND i.source_post_id=p.post_id
         AND i.modified_at=p.modified_at AND p.checked_at=?
-        AND NOT EXISTS (SELECT 1 FROM image_characters c WHERE c.image_id=i.id AND c.origin='manual')`);
+        AND NOT EXISTS (SELECT 1 FROM image_characters c WHERE c.image_id=i.id AND c.decision='manual')`);
     return {
       links: p.links.filter(([img, ch, at]) => link.get(img, ch, at)),
       originals: p.originals.filter(([img, , at]) => orig.get(img, at)),
@@ -250,14 +264,13 @@ export class ChangeLog {
       if (!all.length) throw new ConflictError('这轮加的角色和原创标记之后都改过了，没有可撤回的');
       // 撤回后不再自动补这几张（手动补跑也跳过），撤销时一起恢复
       dismissPixivCharacterChecks(db, u, all, now);
-      if (linkImgs.length) {
-        u.set('image_characters', 'image_id IN (SELECT value FROM json_each(?))', [JSON.stringify(linkImgs)]);
-        const del = db.prepare("DELETE FROM image_characters WHERE image_id = ? AND character_id = ? AND origin = 'tagger'");
-        for (const [img, ch] of links) {
-          vetoRemovedCharacter(db, u, ch, [img], now);
-          del.run(img, ch);
-        }
-      }
+      // 只去掉这轮 Pixiv 加的自动关联（按来历精确删除），记成否决
+      unlinkEach(
+        this.ctx,
+        u,
+        links.map(([imageId, characterId]) => ({ imageId, characterId })),
+        { veto: true, at: now, only: (row) => row.decision === 'auto' && row.evidence_provider === 'pixiv' },
+      );
       if (origImgs.length) {
         u.set('image_copyrights', 'image_id IN (SELECT value FROM json_each(?))', [JSON.stringify(origImgs)]);
         u.columns('images', ['original_at'], origImgs);
@@ -281,8 +294,6 @@ export class ChangeLog {
         }
       }
       this.markReverted(u, r.id, now, null);
-      this.ctx.changed({ type: 'curation.charactersChanged', ids: linkImgs });
-      this.ctx.changed({ type: 'curation.vetoesChanged', ids: linkImgs });
       this.ctx.changed({ type: 'curation.originalChanged', ids: [...origImgs, ...correctedOriginals.map((o) => o[0])] });
       const removed = [links.length && `${links.length} 个角色关联`, originals.length && `${originals.length} 张原创标记`].filter(Boolean).join('、');
       const parts = [removed && `去掉了${removed}`, correctedOriginals.length && `恢复 ${correctedOriginals.length} 张的原创标记`].filter(Boolean).join('，');
@@ -317,19 +328,16 @@ export class ChangeLog {
       if (restored.size) {
         const ids = [...restored];
         this.ctx.changed({ type: 'image.moved', ids, reason: 'revertMove' });
-        // 角色这期间被删掉、合并掉的不插（外键会报错），这几页留着重新识别
-        const ins = this.db.prepare(
-          `INSERT OR IGNORE INTO image_characters (image_id, character_id, origin, score, added_at)
-           SELECT @image_id, @character_id, @origin, @score, @added_at WHERE EXISTS (SELECT 1 FROM characters WHERE id = @character_id)`,
+        // 按原来的来历放回（归类模块；用户这期间否决过的不放回），角色这期间被删掉、合并掉的放不回，这几页留着重新识别
+        const res = linkEach(
+          this.ctx,
+          null,
+          m.charSnap
+            .filter((c) => restored.has(c.image_id))
+            .map((c) => ({ imageId: c.image_id, characterId: c.character_id, provenance: 'decision' in c ? fromRow(c) : fromLegacySnapshot(c) })),
+          { vetoes: 'respect' },
         );
-        const lost = new Set<number>();
-        const back: number[] = [];
-        for (const c of m.charSnap) {
-          if (!restored.has(c.image_id)) continue;
-          if (ins.run(c).changes) back.push(c.image_id);
-          else if (!this.hasLink(c)) lost.add(c.image_id);
-        }
-        this.ctx.changed({ type: 'curation.charactersChanged', ids: back });
+        const lost = new Set([...res.missing, ...res.vetoed].map((x) => x.imageId));
         // 重新识别的标记按移动前写回（移回原位后漫画文件夹的同步不会再标：它只标漫画文件夹里还挂着识别器角色的页）
         const setRetag = this.db.prepare('UPDATE images SET retag = @retag WHERE id = @id');
         for (const s of m.retagSnap) if (restored.has(s.id)) setRetag.run({ id: s.id, retag: lost.has(s.id) ? 1 : s.retag });
@@ -351,10 +359,6 @@ export class ChangeLog {
       throw new ConflictError(`移回了 ${back.restored} 张，${back.failed.length} 张没能移回：${fileList(back.failed)}`);
     }
     return done(back.failed.length ? `移回了 ${back.restored} 张；${back.failed.length} 张没能移回：${fileList(back.failed)}` : `已把 ${back.restored} 张移回原处`);
-  }
-
-  private hasLink(c: { image_id: number; character_id: number }): boolean {
-    return !!this.db.prepare('SELECT 1 FROM image_characters WHERE image_id = ? AND character_id = ?').get(c.image_id, c.character_id);
   }
 
   // ------------------------------------------------------------ 公共

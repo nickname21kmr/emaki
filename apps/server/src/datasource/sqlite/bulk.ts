@@ -2,6 +2,7 @@
  * 批量操作（T18）。assign / unassign / exclude / restore / favorite / rating / kind / artist 可撤销；
  * trash 先只在库里标记、记一批待移（pendingTrash.ts），最近几次可撤销；挤出窗口后才真的移到系统回收站（绝不永久删除）。
  * 每个操作只写自己的事实并声明变化；套排除规则、重算合集、Pixiv 排队、画师补跑等连带处理由反应完成（P2）。
+ * 角色、收藏、分级、放下、原创经归类模块的命令写（domain/curation，P3a）。
  */
 import type { BulkImagesBody, MutationResult, Rating } from '@emaki/shared';
 import { NotFoundError } from '../../http/errors.ts';
@@ -13,9 +14,10 @@ import { artistGroupMap, artistNames } from './artists.ts';
 import { createExclusionInTx, restoreImagesInTx } from '../../domain/visibility/exclusions.ts';
 import { assertKindValue, setKindInTx, type KindDeps } from './kinds.ts';
 import { iso, parseId } from './sql.ts';
-import { dismissPixivCharacterChecks } from './pixivChecks.ts';
-import { vetoRemovedCharacter } from './vetoes.ts';
 import { resolveSuggestedCharacter } from './suggestions.ts';
+import { link, unlinkByUser } from '../../domain/curation/links.ts';
+import { setFavorite, setOriginal, setRating, setShelved } from '../../domain/curation/marks.ts';
+import { manual } from '../../domain/curation/provenance.ts';
 
 export const RATING_LABEL: Record<Rating, string> = { general: '全年龄', sensitive: '轻微', questionable: '较敏感', explicit: '限制级' };
 
@@ -49,31 +51,16 @@ export class BulkOps {
         return this.ctx.mutate((u) => {
           const ch = a.type === 'assign' ? this.characterName(a.characterId)
             : this.characterName(String(resolveSuggestedCharacter(this.ctx, u, this.kindDeps.catalog(), a.danbooruTag, now)));
-          const fresh = db
-            .prepare('SELECT value FROM json_each(?) WHERE value NOT IN (SELECT image_id FROM image_characters WHERE character_id = ?)')
-            .pluck()
-            .all(json, ch.id) as number[];
-          db.prepare(
-            "INSERT OR IGNORE INTO image_characters (image_id, character_id, origin, score, added_at) SELECT value, ?, 'manual', NULL, ? FROM json_each(?)",
-          ).run(ch.id, now, json);
-          if (fresh.length) u.sql('DELETE FROM image_characters WHERE character_id = ? AND image_id IN (SELECT value FROM json_each(?))', [ch.id, JSON.stringify(fresh)]);
-          // 按角色、按标签都一样：新关联的图由反应套排除规则（附录 #14）
-          this.ctx.changed({ type: 'curation.charactersChanged', ids: fresh });
+          // 用户手动归的：已有的关联保持原来的来历；去掉过的清掉否决（D3）。按角色、按标签都一样，新关联的图由反应套排除规则（附录 #14）
+          link(this.ctx, u, ids, [ch.id], manual(now));
           return { message: `已将 ${n} 张图归到「${ch.name}」` };
         });
       }
       case 'unassign': {
         const ch = this.characterName(a.characterId);
         return this.ctx.mutate((u) => {
-          u.set('image_characters', 'character_id = ? AND image_id IN (SELECT value FROM json_each(?))', [ch.id, json]);
-          const removed = db.prepare('SELECT image_id FROM image_characters WHERE character_id = ? AND image_id IN (SELECT value FROM json_each(?))')
-            .pluck().all(ch.id,json) as number[];
-          dismissPixivCharacterChecks(db,u,removed,now);
-          // 手动去掉的角色，重新识别时不再加回来
-          vetoRemovedCharacter(db, u, ch.id, removed, now);
-          db.prepare('DELETE FROM image_characters WHERE character_id = ? AND image_id IN (SELECT value FROM json_each(?))').run(ch.id, json);
-          this.ctx.changed({ type: 'curation.charactersChanged', ids: removed });
-          this.ctx.changed({ type: 'curation.vetoesChanged', ids: removed });
+          // 手动去掉的角色记否决：重新识别、Pixiv 补充都不再加回来
+          unlinkByUser(this.ctx, u, ids, [ch.id], now);
           return { message: `已从「${ch.name}」移除 ${n} 张图` };
         });
       }
@@ -90,22 +77,15 @@ export class BulkOps {
         });
       case 'favorite':
         return this.ctx.mutate((u) => {
-          u.columns('images', ['favorite'], ids);
-          db.prepare('UPDATE images SET favorite = ? WHERE id IN (SELECT value FROM json_each(?))').run(a.value ? 1 : 0, json);
-          this.ctx.changed({ type: 'curation.favoriteChanged', ids });
+          setFavorite(this.ctx, u, ids, a.value);
           return { message: a.value ? `已收藏 ${n} 张图` : `已取消收藏 ${n} 张图` };
         });
-      case 'shelve': {
-        const now = iso(this.ctx.clock());
+      case 'shelve':
         return this.ctx.mutate((u) => {
-          u.columns('images', ['shelved_at'], ids);
-          db.prepare('UPDATE images SET shelved_at = ? WHERE id IN (SELECT value FROM json_each(?))').run(a.value ? now : null, json);
-          this.ctx.changed({ type: 'curation.shelvedChanged', ids });
+          setShelved(this.ctx, u, ids, a.value ? now : null);
           return { message: a.value ? `已放下 ${n} 张图，不再出现在未识别` : `已把 ${n} 张图放回未识别` };
         });
-      }
-      case 'original': {
-        const now = iso(this.ctx.clock());
+      case 'original':
         // 「原创」作品（标签 original）没有就建；手动挂的关联 score 为 NULL，移出时只删手动挂的（识别器认出的保留）
         return this.ctx.mutate((u) => {
           let wid = db.prepare("SELECT id FROM works WHERE danbooru_tag = 'original'").pluck().get() as number | undefined;
@@ -113,23 +93,12 @@ export class BulkOps {
             wid = Number(db.prepare("INSERT INTO works (name, danbooru_tag, created_at) VALUES ('原创', 'original', ?)").run(now).lastInsertRowid);
             u.inserted('works', wid);
           }
-          u.columns('images', ['original_at'], ids);
-          u.set('image_copyrights', 'work_id = ? AND image_id IN (SELECT value FROM json_each(?))', [wid, json]);
-          db.prepare('UPDATE images SET original_at = ? WHERE id IN (SELECT value FROM json_each(?))').run(a.value ? now : null, json);
-          if (a.value) {
-            db.prepare('INSERT OR IGNORE INTO image_copyrights (image_id, work_id, score) SELECT value, ?, NULL FROM json_each(?)').run(wid, json);
-          } else {
-            db.prepare('DELETE FROM image_copyrights WHERE work_id = ? AND score IS NULL AND image_id IN (SELECT value FROM json_each(?))').run(wid, json);
-          }
-          this.ctx.changed({ type: 'curation.originalChanged', ids });
+          setOriginal(this.ctx, u, ids, a.value ? now : null, wid);
           return { message: a.value ? `已把 ${n} 张图归为原创，不再出现在未识别` : `已把 ${n} 张图移出原创` };
         });
-      }
       case 'rating':
         return this.ctx.mutate((u) => {
-          u.columns('images', ['rating', 'rating_manual'], ids);
-          db.prepare('UPDATE images SET rating = ?, rating_manual = 1 WHERE id IN (SELECT value FROM json_each(?))').run(a.value, json);
-          this.ctx.changed({ type: 'curation.ratingChanged', ids });
+          setRating(this.ctx, u, ids, a.value);
           return { message: `已把 ${n} 张图设为「${RATING_LABEL[a.value]}」` };
         });
       case 'kind': {
@@ -167,18 +136,18 @@ export class BulkOps {
       }
       case 'artist-auto': {
         // 改回自动：只动手动改过的图，清掉手动改的、artist_checked_at 置空，「识别画师」会重新认；没改过的图不动
-        const manual = db.prepare('SELECT id FROM images WHERE artist_manual = 1 AND id IN (SELECT value FROM json_each(?))').pluck().all(json) as number[];
-        const mj = JSON.stringify(manual);
+        const edited = db.prepare('SELECT id FROM images WHERE artist_manual = 1 AND id IN (SELECT value FROM json_each(?))').pluck().all(json) as number[];
+        const mj = JSON.stringify(edited);
         return this.ctx.mutate((u) => {
-          if (manual.length) {
+          if (edited.length) {
             u.set('image_artists', 'image_id IN (SELECT value FROM json_each(?))', [mj]);
-            u.columns('images', ['artist_manual', 'artist_checked_at'], manual);
+            u.columns('images', ['artist_manual', 'artist_checked_at'], edited);
             db.prepare('DELETE FROM image_artists WHERE image_id IN (SELECT value FROM json_each(?))').run(mj);
             db.prepare('UPDATE images SET artist_manual = 0, artist_checked_at = NULL WHERE id IN (SELECT value FROM json_each(?))').run(mj);
           }
           // 改回自动的由反应排「识别画师」（撤销手动改画师时也一样，附录 #22）
-          this.ctx.changed({ type: 'curation.artistsChanged', ids: manual });
-          return { message: artistAutoMessage(n, manual.length) };
+          this.ctx.changed({ type: 'curation.artistsChanged', ids: edited });
+          return { message: artistAutoMessage(n, edited.length) };
         });
       }
     }

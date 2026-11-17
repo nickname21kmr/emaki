@@ -11,6 +11,9 @@ import { createPixivMatcher, type PixivMatcher } from './match.ts';
 import type { PixivDiscover } from './discovery.ts';
 import { cachedArtwork, cacheArtwork } from './cache.ts';
 import { recordChange, type PixivPayload } from '../../datasource/sqlite/changeLog.ts';
+import { judgeAutoLink } from '../../domain/curation/auto.ts';
+import { linkEach, type LinkItem } from '../../domain/curation/links.ts';
+import { auto, RULES } from '../../domain/curation/provenance.ts';
 
 // Pixiv 也能认出动图的角色：动图不进未识别，但这里一起查。
 // 漫画页在设置关掉「未识别里也列出漫画页」时不查（QUEUE_KINDS_SQL）
@@ -129,7 +132,6 @@ export async function syncPixivCharacters(
   const completePost = (id: string, result: string) => db.transaction(() => {
     for (const row of current.all({...scopeParams,postId:id}) as {id:number}[]) complete.run(new Date(ctx.clock()).toISOString(),result,row.id);
   })();
-  const insert = db.prepare("INSERT OR IGNORE INTO image_characters (image_id,character_id,origin,score,added_at) VALUES (?,?,'tagger',NULL,?)");
   // 自建角色的建议：danbooru_tag 写伪标签占主键，character_id 写真外键（读的时候看 character_id）
   const suggest = db.prepare("INSERT OR IGNORE INTO character_suggestions (image_id,danbooru_tag,character_id,score,source) VALUES (?,?,?,0,'pixiv')");
   const clearPixivSuggestions = db.prepare("DELETE FROM character_suggestions WHERE image_id=? AND source='pixiv'");
@@ -268,13 +270,14 @@ export async function syncPixivCharacters(
           original++;
           ids.push(row.id);
         }
+        // 能不能自动关联：归类模块的判断（P3a 原样是匹配器的 automatic；P3b 换成 decideAuto）
+        const autoLink = judgeAutoLink({ entry: 'pixiv', automatic: result.automatic });
+        const links: LinkItem[] = [];
         for (const tag of allowed) {
-          if (result.automatic) {
+          if (autoLink) {
             const character = catalog.ensureCharacter(tag, now);
-            const c = insert.run(row.id, character.id, now).changes;
-            if (c) added.links.push([row.id, character.id, now]);
-            linkChanges += c;
-            db.prepare('DELETE FROM character_suggestions WHERE image_id=? AND danbooru_tag=?').run(row.id, tag);
+            // 这个标签的建议由 link 一起去掉（证据里的候选就是它）
+            links.push({ imageId: row.id, characterId: character.id, provenance: auto(RULES.pixiv, now, { provider: 'pixiv', tag }) });
           } else {
             const existing = catalog.resolveCharacterId(tag);
             const custom = tag.startsWith(CUSTOM);
@@ -283,13 +286,17 @@ export async function syncPixivCharacters(
               suggestionChanges += suggest.run(row.id, tag, custom ? existing : null).changes;
           }
         }
+        // 自动关联经归类模块写（来历 auto / pixiv@1，否决、建议、角色变化都由它处理）
+        for (const l of linkEach(ctx, null, links).linked) {
+          added.links.push([l.imageId, l.characterId, now]);
+          linkChanges++;
+        }
         if (linkChanges || suggestionChanges) ids.push(row.id);
         if (linkChanges) linked++;
         if (suggestionChanges) suggested++;
         complete.run(now,outcome,row.id);
       }
       ctx.changed({ type: 'evidence.changed', provider: 'pixiv', ids });
-      ctx.changed({ type: 'curation.charactersChanged', ids });
       ctx.changed({ type: 'curation.originalChanged', ids });
     });
     round.links.push(...added.links);

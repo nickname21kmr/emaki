@@ -16,6 +16,7 @@ import { toCharacter } from './library.ts';
 import { iso, parseId } from './sql.ts';
 import { UndoRecorder } from './undo.ts';
 import { recordChange, type AssociatePayload } from './changeLog.ts';
+import { moveCharacterLinks } from '../../domain/curation/links.ts';
 
 /** 可撤销地按标签新建 danbooru 角色（必要时新建作品）。调用方必须在 ctx.mutate 里调用 */
 export function insertDanbooruCharacter(
@@ -344,10 +345,6 @@ export class CharacterMutations {
     const result = this.ctx.mutate((u) => {
       // 目标这边只记合并搬过去的行：撤销时只删这些，合并之后识别器等给目标新加的关联、别名都留着
       const list = (sql: string, ...args: unknown[]) => JSON.stringify(this.db.prepare(sql).pluck().all(...args));
-      const movedImages = list(
-        'SELECT image_id FROM image_characters WHERE character_id = @from AND image_id NOT IN (SELECT image_id FROM image_characters WHERE character_id = @to)',
-        p,
-      );
       const movedCollections = list(
         'SELECT collection_id FROM collection_characters WHERE character_id = @from AND collection_id NOT IN (SELECT collection_id FROM collection_characters WHERE character_id = @to)',
         p,
@@ -369,18 +366,9 @@ export class CharacterMutations {
       );
 
       // 严格按此顺序记录（撤销逆序：先还原目标的标签，再插回被合并的角色，再恢复各子表）
-      u.sql('DELETE FROM image_characters WHERE character_id = ? AND image_id IN (SELECT value FROM json_each(?))', [to.id, movedImages]);
-      u.set('image_characters', 'character_id = ?', [from.id]);
-      // 用户在图上去掉过的被合并角色：搬到目标上，免得按目标的名字又被识别加回。撤销时同样先删搬过去的再插回
-      const movedVetoes = list(
-        'SELECT image_id FROM character_vetoes WHERE character_id = @from AND image_id NOT IN (SELECT image_id FROM character_vetoes WHERE character_id = @to)',
-        p,
-      );
-      u.sql('DELETE FROM character_vetoes WHERE character_id = ? AND image_id IN (SELECT value FROM json_each(?))', [to.id, movedVetoes]);
-      u.set('character_vetoes', 'character_id = ?', [from.id]);
-      this.db
-        .prepare('INSERT OR IGNORE INTO character_vetoes (image_id, character_id, created_at) SELECT image_id, @to, created_at FROM character_vetoes WHERE character_id = @from')
-        .run(p);
+      // 1 关联和否决搬家（归类模块）：按原来的来历搬给目标，目标已有的保持目标自己的，目标被否决过的不搬（附录 #39）；
+      // 用户在图上去掉过的被合并角色记录搬到目标上，免得按目标的名字又被识别加回。撤销时先删搬过去的再插回
+      const moved = moveCharacterLinks(this.ctx, u, from.id, to.id);
       // 同上：必须在 characters 之前记录。撤销时先删搬过去的行，再插回原来的
       u.set('character_suggestions', 'character_id = ?', [from.id]);
       u.sql('DELETE FROM character_suggestions WHERE danbooru_tag = ? AND image_id IN (SELECT value FROM json_each(?))', [sug.tag, movedSuggestions]);
@@ -399,13 +387,6 @@ export class CharacterMutations {
         u.sql('UPDATE characters SET danbooru_tag = NULL, source = ? WHERE id = ? AND danbooru_tag = ?', [to.source, to.id, from.danbooru_tag]);
       }
 
-      // 1 关联搬家（目标已有的保持目标自己的）
-      this.db
-        .prepare(
-          `INSERT OR IGNORE INTO image_characters (image_id, character_id, origin, score, added_at)
-           SELECT image_id, @to, origin, score, added_at FROM image_characters WHERE character_id = @from`,
-        )
-        .run(p);
       this.db
         .prepare(
           `INSERT OR IGNORE INTO collection_characters (collection_id, character_id, added_at)
@@ -442,13 +423,11 @@ export class CharacterMutations {
         )
         .run(p);
       this.db.prepare("DELETE FROM aliases WHERE owner_type = 'character' AND owner_id = ?").run(from.id);
-      // 5 删除（级联 image_characters / character_works / custom_character_matches / 没搬的 character_suggestions）
+      // 5 删除（级联 character_works / custom_character_matches / 没搬的 character_suggestions；关联和否决上面已经搬走）
       this.db.prepare('DELETE FROM characters WHERE id = ?').run(from.id);
       // id 不是 AUTOINCREMENT：删掉的是最大 id 时，识别器之后新建的角色会拿到它。撤销时最先查，被占了就整个拒绝，免得删掉新角色
       u.guard('SELECT 1 FROM characters WHERE id = ?', [from.id], `无法撤销：「${from.name}」原来的编号已经给了之后新建的角色`);
-      // 搬到目标的关联要套排除规则（附录 #14）；「自建角色能对上 Danbooru」由反应重算
-      const moved = JSON.parse(movedImages) as number[];
-      this.ctx.changed({ type: 'curation.charactersChanged', ids: moved });
+      // 搬到目标的关联由反应套排除规则（附录 #14，归类模块已声明角色变化）；「自建角色能对上 Danbooru」由反应重算
       this.ctx.changed({ type: 'catalog.merged', characterIds: [from.id, to.id], ids: moved });
       return { message: `已把「${from.name}」合并进「${to.name}」（${n} 张）` };
     });

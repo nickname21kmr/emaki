@@ -40,7 +40,7 @@ describe('移动到文件夹（真的移动文件）', () => {
       `INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at, tagged_at, collection_id)
        VALUES (?, ?, ?, ?, 1, 1, 1, 'png', ?, ?, ?, ?, ?)`,
     ).run(id, root, rel, rel.split('/').pop(), `s${id}`, OLD.toISOString(), OLD.toISOString(), OLD.toISOString(), extra.collection ?? null);
-    if (extra.character) db.prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (?, ?, 'manual', 'x')").run(id, extra.character);
+    if (extra.character) db.prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, added_at) VALUES (?, ?, 'manual', 'user', 'x')").run(id, extra.character);
   };
   const rowOf = (id: number) => ds.ctx.db.prepare('SELECT root_id, rel_path, file_name FROM images WHERE id = ?').get(id);
 
@@ -133,13 +133,13 @@ describe('移动到文件夹（真的移动文件）', () => {
     const db = ds.ctx.db;
     db.prepare("INSERT INTO comic_folders (root_id, rel_dir, comic_rating, created_at) VALUES (1, 'C', 'general', 'x')").run();
     db.prepare("INSERT INTO characters (id, name, source, created_at) VALUES (8, 'A', 'custom', 'x')").run();
-    db.prepare("INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (1, 8, 'tagger', 0.9, 'x')").run();
+    db.prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_score, added_at) VALUES (1, 8, 'auto', 'job:tag', 'auto-accept@1', 'tagger', 0.9, 'x')").run();
     // 识别过、没有角色的页：撤销后不该被标重新识别
     db.prepare('DELETE FROM image_characters WHERE image_id = 3').run();
     const state = (id: number) => ({
       kind: db.prepare('SELECT content_kind FROM images WHERE id = ?').pluck().get(id),
       retag: db.prepare('SELECT retag FROM images WHERE id = ?').pluck().get(id),
-      chars: db.prepare('SELECT character_id || origin FROM image_characters WHERE image_id = ? ORDER BY 1').pluck().all(id),
+      chars: db.prepare('SELECT character_id || decision FROM image_characters WHERE image_id = ? ORDER BY 1').pluck().all(id),
     });
     const before = [state(1), state(3)];
 
@@ -164,7 +164,7 @@ describe('移动到文件夹（真的移动文件）', () => {
 
   it('预览：数出会移的图、同时属于别的角色的张数；提交 ids 后只移确认过的这些', async () => {
     ds.ctx.db.prepare("INSERT INTO characters (id, name, source, created_at) VALUES (8, '早濑优香', 'custom', 'x')").run();
-    ds.ctx.db.prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (1, 8, 'manual', 'x')").run();
+    ds.ctx.db.prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, added_at) VALUES (1, 8, 'manual', 'user', 'x')").run();
     const p = await ds.previewMove({ characterId: '7', rootId: '1', dir: 'x' });
     expect(p).toEqual({ ids: ['3'], alreadyThere: 2, inCollection: 1, otherCharacters: 0 });
     const p2 = await ds.previewMove({ characterId: '7', rootId: '1', dir: '未花' });

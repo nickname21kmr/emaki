@@ -137,7 +137,7 @@ it('replaces the original identity and preserves associations, metadata and late
   const original=item(await run([{path:await source()}])),oldStat=await stat(original.absPath);
   const id=original.imageId;
   const char=ds.ctx.db.prepare("INSERT INTO characters(name,source,created_at) VALUES('测试角色','custom','2026-01-01')").run().lastInsertRowid;
-  ds.ctx.db.prepare("INSERT INTO image_characters(image_id,character_id,origin,added_at) VALUES(?,?,'manual','2026-01-01')").run(id,char);
+  ds.ctx.db.prepare("INSERT INTO image_characters(image_id,character_id,decision,actor,added_at) VALUES(?,?,'manual','user','2026-01-01')").run(id,char);
   ds.ctx.db.prepare("UPDATE images SET favorite=1,rating='sensitive',rating_manual=1,original_at='2026-01-01',source_site='pixiv',source_post_id='12345678',source_url='https://www.pixiv.net/artworks/12345678',source_manual=1,tagged_at='2026-01-01' WHERE id=?").run(id);
   const hd=await sharp(image).resize(36,42).png().toBuffer(),file=await source('different-download-name.png',hd);
   const before=await ds.getImage(id),result=await ds.replaceImage(id,{path:file});

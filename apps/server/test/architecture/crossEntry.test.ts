@@ -8,8 +8,7 @@
  * 现在不一致的用例用 it.fails 标出来，注释里写明附录编号（docs/core-architecture-inventory.md）和修好它的阶段。
  * 修好之后把 it.fails 改回 it——it.fails 的用例一旦通过，测试就会失败，提醒去改。
  *
- * 来历现在只能从 image_characters 的 origin、score 读出来（manual / tagger，分数为空表示「手动」）。
- * P3 换成统一的来历字段后，改 provenance() 这一处即可。
+ * 来历从 image_characters 的统一来历字段读（P3a，迁移 034）：decision 手动 / 自动，evidence_provider 是依据的证据来源。
  */
 import type { JobContext } from '../../src/core/jobs.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -119,12 +118,11 @@ function recognize(ds: SqliteDataSource, batch: { id: number; general?: Scores; 
 function provenance(ds: SqliteDataSource, imageId: number): [string, 'manual' | 'auto', boolean][] {
   const rows = ds.ctx.db
     .prepare(
-      `SELECT COALESCE(c.danbooru_tag, c.name) AS tag, ic.origin, ic.score FROM image_characters ic JOIN characters c ON c.id = ic.character_id
+      `SELECT COALESCE(c.danbooru_tag, c.name) AS tag, ic.decision, ic.evidence_provider FROM image_characters ic JOIN characters c ON c.id = ic.character_id
        WHERE ic.image_id = ? ORDER BY tag`,
     )
-    .all(imageId) as { tag: string; origin: string; score: number | null }[];
-  // 现在的约定：origin = 'manual' 或分数为空都表示「手动」（附录 #5）
-  return rows.map((r) => [r.tag, r.origin === 'manual' || r.score === null ? 'manual' : 'auto', r.score !== null]);
+    .all(imageId) as { tag: string; decision: 'manual' | 'auto'; evidence_provider: string | null }[];
+  return rows.map((r) => [r.tag, r.decision, r.evidence_provider !== null]);
 }
 
 const linkedTags = (ds: SqliteDataSource, imageId: number) => provenance(ds, imageId).map(([tag]) => tag);
@@ -248,9 +246,9 @@ describe('Pixiv 和模型：同样的置信度，同样的资格判断', () => {
     expect(pixivChecks).toBe(modelLinks);
   });
 
-  // 附录 #5、#7：Pixiv 的自动关联存成 origin = 'tagger' 且分数为空，和「手动」的记法撞在一起；
-  // 模型的自动关联带分数。两种来源的自动关联都应当记成「自动 + 依据的证据」。P3（统一来历）修好
-  it.fails('Pixiv 的自动关联和模型的自动关联来历一样可辨认（附录 #5，P3）', async () => {
+  // 附录 #5（P3a 已关闭）：以前 Pixiv 的自动关联存成 origin = 'tagger' 且分数为空，和「手动」的记法撞在一起；
+  // 现在两种来源的自动关联都记成「自动 + 依据的证据」（统一来历，迁移 034）
+  it('Pixiv 的自动关联和模型的自动关联来历一样可辨认（附录 #5）', async () => {
     const ds = await engine();
     addImage(ds, { id: 1, post: '1003' });
     addImage(ds, { id: 2 });

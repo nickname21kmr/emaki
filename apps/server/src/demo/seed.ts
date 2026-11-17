@@ -210,8 +210,10 @@ export function seedDemoDb(db: Db, demo: DemoDb, opts: { now: number }): IdMap {
     };
 
     // 图片 ↔ 角色 / 作品 / 标签 / 建议 / 画师 / 否决
+    // 演示数据的关联都当作模型自动认出的（来历 auto / tagger）
     const insIc = db.prepare(
-      "INSERT OR IGNORE INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, ?, 'tagger', 0.95, ?)",
+      `INSERT OR IGNORE INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_score, added_at)
+       VALUES (?, ?, 'auto', 'system:demo', 'auto-accept@1', 'tagger', 0.95, ?)`,
     );
     const insIcr = db.prepare('INSERT OR IGNORE INTO image_copyrights (image_id, work_id, score) VALUES (?, ?, NULL)');
     const insTag = db.prepare('INSERT INTO tags (name, category) VALUES (?, ?) ON CONFLICT(name) DO NOTHING');

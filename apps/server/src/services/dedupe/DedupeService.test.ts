@@ -290,7 +290,7 @@ describe('DedupeService + 接口（:memory:）', () => {
     const a = addImage('a.png', 's1', H);
     const b = addImage('a (1).png', 's1', H);
     db.prepare("INSERT INTO characters (id, name, source, created_at) VALUES (2, '莫宁', 'custom', ?)").run(T);
-    db.prepare("INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, 2, 'manual', NULL, ?)").run(b, T);
+    db.prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, added_at) VALUES (?, 2, 'manual', 'user', ?)").run(b, T);
     db.prepare("UPDATE images SET favorite = 1, rating = 'questionable', rating_manual = 1 WHERE id = ?").run(b);
     await ds.dedupe.runOnce();
     const [g] = await ds.listDuplicates({});
@@ -305,16 +305,19 @@ describe('DedupeService + 接口（:memory:）', () => {
     expect(snap()).toEqual(before);
   });
 
-  it('resolve：副本上手动做的整理并到保留的图上（手动角色、收藏、原创、分级、画师、来源），识别器认的不搬', async () => {
+  // 附录 #12（P3a）：以前识别器认的不搬（补采纳、Pixiv 的关联会丢）；现在按来历搬：手动的还是手动，自动的记成 dedupe-merge
+  it('resolve：副本上的整理并到保留的图上（角色按来历、收藏、原创、分级、画师、来源）', async () => {
     const db = ds.ctx.db;
     const a = addImage('a.png', 's1', H);
     const b = addImage('a (1).png', 's1', H);
     const LATER = '2026-02-01T00:00:00.000Z';
     db.prepare("INSERT INTO characters (id, name, source, created_at) VALUES (1, '漂泊者', 'custom', ?), (2, '莫宁', 'custom', ?), (3, '识别的', 'custom', ?)").run(T, T, T);
-    const link = db.prepare('INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, ?, ?, ?, ?)');
-    link.run(a, 1, 'manual', null, T);
-    link.run(b, 2, 'manual', null, LATER);
-    link.run(b, 3, 'tagger', 0.9, T);
+    const link = db.prepare(
+      'INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_score, added_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    );
+    link.run(a, 1, 'manual', 'user', null, null, null, T);
+    link.run(b, 2, 'manual', 'user', null, null, null, LATER);
+    link.run(b, 3, 'auto', 'job:tag', 'auto-accept@1', 'tagger', 0.9, T);
     db.prepare("UPDATE images SET favorite = 1, original_at = ?, rating = 'questionable', rating_manual = 1, artist_manual = 1 WHERE id = ?").run(LATER, b);
     db.prepare("INSERT INTO image_artists (image_id, artist, score) VALUES (?, 'kantoku', 1), (?, 'someone', 0.8)").run(b, a);
     db.prepare(
@@ -332,9 +335,12 @@ describe('DedupeService + 接口（:memory:）', () => {
       source_manual: 1,
     });
 
-    expect(db.prepare('SELECT character_id, origin, added_at FROM image_characters WHERE image_id = ? ORDER BY character_id').all(a)).toEqual([
-      { character_id: 1, origin: 'manual', added_at: T },
-      { character_id: 2, origin: 'manual', added_at: LATER },
+    expect(
+      db.prepare('SELECT character_id, decision, rule, evidence_provider, evidence_score, added_at FROM image_characters WHERE image_id = ? ORDER BY character_id').all(a),
+    ).toEqual([
+      { character_id: 1, decision: 'manual', rule: null, evidence_provider: null, evidence_score: null, added_at: T },
+      { character_id: 2, decision: 'manual', rule: null, evidence_provider: null, evidence_score: null, added_at: LATER },
+      { character_id: 3, decision: 'auto', rule: 'dedupe-merge@1', evidence_provider: 'tagger', evidence_score: 0.9, added_at: T },
     ]);
     expect(db.prepare('SELECT favorite, original_at, rating, rating_manual, artist_manual FROM images WHERE id = ?').get(a)).toEqual({
       favorite: 1,
@@ -344,7 +350,7 @@ describe('DedupeService + 接口（:memory:）', () => {
       artist_manual: 1,
     });
     expect(db.prepare('SELECT artist FROM image_artists WHERE image_id = ?').pluck().all(a)).toEqual(['kantoku']);
-    expect((await ds.getImage(String(a)))!.characterIds.sort()).toEqual(['1', '2']);
+    expect((await ds.getImage(String(a)))!.characterIds.sort()).toEqual(['1', '2', '3']);
   });
 
   it('resolve：副本归为原创时，保留的图也挂到「原创」作品上（原创页里看得到）', async () => {

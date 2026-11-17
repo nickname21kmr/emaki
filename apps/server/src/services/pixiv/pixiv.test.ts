@@ -189,7 +189,7 @@ it('首次模型低置信度候选自动登记，页面角色不同仍可关联�
 it('网络返回前改成手动角色、或文件改变，不会应用过期的自动结果', async () => {
   const client={artwork:async()=>{
     const id=makeCatalog().catalog.ensureCharacter(A,'now').id;
-    db.prepare("INSERT INTO image_characters(image_id,character_id,origin,added_at) VALUES (1,?,'manual','now')").run(id);
+    db.prepare("INSERT INTO image_characters(image_id,character_id,decision,actor,added_at) VALUES (1,?,'manual','user','now')").run(id);
     db.exec("UPDATE images SET modified_at='new-file' WHERE id=2");
     return art(1,['ボブ']);
   }};
@@ -326,10 +326,10 @@ it.each([0.79,0.8,0.95])('模型候选分数 %f 仅在低于80%时允许页面�
 
 it('已有模型关联不登记，联网期间新增模型关联也不追加', async () => {
   const id=makeCatalog().catalog.ensureCharacter(A,'now').id;
-  db.prepare("INSERT INTO image_characters(image_id,character_id,origin,score,added_at) VALUES (1,?,'tagger',0.9,'now')").run(id);
+  db.prepare("INSERT INTO image_characters(image_id,character_id,decision,actor,rule,evidence_provider,evidence_score,added_at) VALUES (1,?,'auto','job:tag','auto-accept@1','tagger',0.9,'now')").run(id);
   expect(pendingPixivCount(ctx)).toBe(1);
   await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>{
-    db.prepare("INSERT INTO image_characters(image_id,character_id,origin,score,added_at) VALUES (2,?,'tagger',0.9,'now')").run(id);
+    db.prepare("INSERT INTO image_characters(image_id,character_id,decision,actor,rule,evidence_provider,evidence_score,added_at) VALUES (2,?,'auto','job:tag','auto-accept@1','tagger',0.9,'now')").run(id);
     return art(1,['ボブ']);
   }},0);
   expect(links()).toHaveLength(2);
@@ -405,7 +405,7 @@ it.each([false,undefined])('原创字段 %s 不会设置原创状态', async isO
 
 it.each([true,false])('原创字段/标签仍保护已有角色和80%以上候选（字段 %s）', async isOriginal => {
   const character=makeCatalog().catalog.ensureCharacter(A,'now');
-  db.prepare("INSERT INTO image_characters(image_id,character_id,origin,added_at) VALUES (1,?,'manual','now')").run(character.id);
+  db.prepare("INSERT INTO image_characters(image_id,character_id,decision,actor,added_at) VALUES (1,?,'manual','user','now')").run(character.id);
   db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (2,?,0.8,'tagger')").run(B);
   await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>({...art(2,['オリジナル']),isOriginal})},0);
   expect(db.prepare('SELECT COUNT(*) FROM images WHERE original_at IS NOT NULL').pluck().get()).toBe(0);
@@ -692,7 +692,7 @@ it('历史未匹配的多页单角色投稿可按姓名变体补充，已有角�
   const tag=takina();
   addImage(3,'123'); addImage(4,'123');
   const ch=makeCatalog().catalog.ensureCharacter(A,'now');
-  db.prepare("INSERT INTO image_characters(image_id,character_id,origin,added_at) VALUES (3,?,'manual','now')").run(ch.id);
+  db.prepare("INSERT INTO image_characters(image_id,character_id,decision,actor,added_at) VALUES (3,?,'manual','user','now')").run(ch.id);
   db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (1,?,0.7971,'tagger'),(4,?,0.9,'tagger')").run(tag,B);
   db.exec("UPDATE pixiv_character_checks SET result='unmatched',checked_at='before'");
   queuePixivImages(ctx);

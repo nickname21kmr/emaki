@@ -10,6 +10,7 @@
  */
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import { readSettings } from '../../datasource/sqlite/settings.ts';
+import type { Change } from '../../propagation/changes.ts';
 import type { Reaction } from '../../propagation/registry.ts';
 import { queuePixivImages } from '../../services/pixiv/sync.ts';
 import { parseSource } from '../../services/source/parseSource.ts';
@@ -107,13 +108,14 @@ export const queuePixivCheckReaction: Reaction = {
 };
 
 /**
- * 识别任务写完一批（在 writer 的事务里调用）：模型证据变了，自动关联的角色、按标签重判的类型也可能变了。
+ * 识别任务写完一批（在 writer 的事务里调用）：模型证据变了，按标签重判的类型也可能变了；
+ * linkChanges 是归类模块写自动关联时声明的变化（哪些图加了角色），原样转交。
  * 套排除规则、登记 Pixiv 补充、合集（任务结束时全量）都由反应做
  */
-export function declareTagged(ctx: SqliteContext, ids: number[]): void {
+export function declareTagged(ctx: SqliteContext, ids: number[], linkChanges: readonly Change[] = []): void {
   ctx.apply(() => {
     ctx.changed({ type: 'evidence.changed', provider: 'tagger', ids });
-    ctx.changed({ type: 'curation.charactersChanged', ids });
+    for (const c of linkChanges) ctx.changed(c);
     ctx.changed({ type: 'image.kindChanged', ids });
   });
 }

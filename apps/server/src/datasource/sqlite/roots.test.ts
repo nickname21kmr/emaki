@@ -45,7 +45,7 @@ describe('添加父文件夹：合并已有的图库文件夹', () => {
     addImage(3, rootId(sub('C2')), 'b.png');
     addImage(4, rootId(sub('C3')), 'c.png');
     db.prepare("INSERT INTO characters (id, name, source, created_at) VALUES (7, '圣园未花', 'custom', 'x')").run();
-    db.prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (1, 7, 'manual', 'x'), (4, 7, 'manual', 'x')").run();
+    db.prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, added_at) VALUES (1, 7, 'manual', 'user', 'x'), (4, 7, 'manual', 'user', 'x')").run();
     db.prepare(
       "INSERT INTO collections (id, root_id, rel_dir, kind, kind_source, origin, created_at, updated_at) VALUES (9, ?, 'book', 'doujin', 'manual', 'manual', 'x', 'x')",
     ).run(rootId(sub('C1')));
@@ -482,15 +482,18 @@ describe('按漫画导入', () => {
     const [p1, p2] = db.prepare('SELECT id FROM images ORDER BY rel_path').pluck().all() as number[];
     db.prepare("UPDATE images SET tagged_at = 'x', tagger_model = 'm'").run();
     db.prepare("INSERT INTO characters (id, name, danbooru_tag, source, created_at) VALUES (901, 'A', 'a_(x)', 'danbooru', 'x'), (902, 'B', 'b_(x)', 'custom', 'x')").run();
-    db.prepare("INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, 901, 'tagger', 0.9, 'x'), (?, 902, 'manual', NULL, 'x')").run(p1, p2);
-    const links = () => db.prepare('SELECT image_id, character_id, origin FROM image_characters ORDER BY image_id').all();
+    db.prepare(
+      `INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_score, added_at)
+       VALUES (?, 901, 'auto', 'job:tag', 'auto-accept@1', 'tagger', 0.9, 'x'), (?, 902, 'manual', 'user', NULL, NULL, NULL, 'x')`,
+    ).run(p1, p2);
+    const links = () => db.prepare('SELECT image_id, character_id, decision FROM image_characters ORDER BY image_id').all();
     const retag = () => db.prepare('SELECT retag FROM images ORDER BY rel_path').pluck().all();
     const before = links();
     const rootId = (await ds.getSettings()).libraryRoots[0]!.id;
 
     const on = await ds.updateLibraryRoot(rootId, { comicFolder: { relDir: '某漫画', comicRating: 'general' } });
     // 清掉角色的那页标重新识别（在漫画里识别任务不领，离开后才认），只剩手动角色的那页不用
-    expect(links()).toEqual([{ image_id: p2, character_id: 902, origin: 'manual' }]);
+    expect(links()).toEqual([{ image_id: p2, character_id: 902, decision: 'manual' }]);
     expect(retag()).toEqual([1, 0]);
     expect((await ds.getStats()).pendingTagCount).toBe(0);
     await ds.undo(on.undoToken!);
@@ -505,9 +508,9 @@ describe('按漫画导入', () => {
     expect(retag()).toEqual([1, 0]);
 
     // 扫描结束后的全库检查也会清（升级前就改成漫画的库）
-    db.prepare("INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, 901, 'tagger', 0.9, 'x')").run(p1);
+    db.prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_score, added_at) VALUES (?, 901, 'auto', 'job:tag', 'auto-accept@1', 'tagger', 0.9, 'x')").run(p1);
     expect(syncRootModes(db)).toBeGreaterThan(0);
-    expect(links()).toEqual([{ image_id: p2, character_id: 902, origin: 'manual' }]);
+    expect(links()).toEqual([{ image_id: p2, character_id: 902, decision: 'manual' }]);
   });
 
   it('添加后、扫描前改成漫画：扫描结束时按现在的设置判；漫画文件夹根目录直接放的页也成一本', async () => {
@@ -562,7 +565,7 @@ describe('移除的图库文件夹：重启后不清掉，30 天内重新添加�
       )
       .run(root);
     db().prepare("INSERT INTO characters (id, name, source, created_at) VALUES (7, '圣园未花', 'custom', 'x')").run();
-    db().prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (1, 7, 'manual', 'x')").run();
+    db().prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, added_at) VALUES (1, 7, 'manual', 'user', 'x')").run();
     ds.ctx.invalidate();
     const r = await ds.removeLibraryRoot(String(root));
     expect(r.message).toBe(`已移除文件夹：${lib}。磁盘上的文件没动，30 天内重新添加它能找回整理结果`);

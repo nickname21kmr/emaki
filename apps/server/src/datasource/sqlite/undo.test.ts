@@ -18,7 +18,7 @@ function setup(): Db {
     INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
       VALUES (1, 1, 'x/1.png', '1.png', 10, 10, 1, 'png', 's1', '${T}', '${T}'),
              (2, 1, 'x/2.png', '2.png', 10, 10, 1, 'png', 's2', '${T}', '${T}');
-    INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (1, 1, 'manual', '${T}'), (2, 2, 'manual', '${T}');
+    INSERT INTO image_characters (image_id, character_id, decision, actor, added_at) VALUES (1, 1, 'manual', 'user', '${T}'), (2, 2, 'manual', 'user', '${T}');
   `);
   return db;
 }

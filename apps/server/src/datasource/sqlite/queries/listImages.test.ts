@@ -45,7 +45,7 @@ function insert(n: number) {
   const ins = db.prepare(`INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, rating, favorite,
       added_at, modified_at, excluded_by, missing, trashed_at)
     VALUES (@id, @root, @file, @file, @width, @height, @bytes, 'png', @sha, @rating, @fav, @added, @modified, @ex, @missing, @trashed)`);
-  const ic = db.prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (?, ?, 'tagger', '2026-01-01')");
+  const ic = db.prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, rule, added_at) VALUES (?, ?, 'auto', 'job:tag', 'auto-accept@1', '2026-01-01')");
   const icr = db.prepare('INSERT INTO image_copyrights (image_id, work_id) VALUES (?, ?)');
   const tag = db.prepare('INSERT INTO image_tags (image_id, tag_id, score) VALUES (?, ?, 0.9)');
   db.transaction(() => {
@@ -254,7 +254,7 @@ describe('按角色翻页', () => {
       INSERT INTO characters (id, name, source, created_at) VALUES (1, 'A', 'custom', 'x'), (2, 'B', 'custom', 'x');`);
     const img = d.prepare(`INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
       VALUES (?, 1, ?, 'a.png', 1, 1, 1, 'png', ?, ?, 'x')`);
-    const ic = d.prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (?, ?, 'tagger', 'x')");
+    const ic = d.prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, rule, added_at) VALUES (?, ?, 'auto', 'job:tag', 'auto-accept@1', 'x')");
     d.transaction(() => {
       for (let id = 1; id <= 20_000; id++) {
         img.run(id, `${id}.png`, `s${id}`, new Date(Date.UTC(2026, 0, 1) + id * 60_000).toISOString());

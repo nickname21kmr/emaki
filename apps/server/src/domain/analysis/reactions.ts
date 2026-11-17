@@ -1,8 +1,8 @@
 /**
  * 分析的反应：路径相关的分类（docs/core-architecture.md 第 5.2 节 analyze 的「事务内做便宜的部分」）。
  *
- * 图移动了（三条移动路径一样）或者按漫画导入的设置变了：按新路径重判类型、漫画文件夹里的页按漫画判并去掉识别器认的角色。
- * 最终类型变了声明 image.kindChanged，识别器的角色被去掉声明 curation.charactersChanged。
+ * 图移动了（三条移动路径一样）或者按漫画导入的设置变了：按新路径重判类型、漫画文件夹里的页按漫画判并去掉自动关联的角色。
+ * 最终类型变了声明 image.kindChanged；去掉角色由归类模块声明 curation.charactersChanged（经 emit）。
  * 缩略图、识别这类昂贵的部分由提交后的排队反应交给后台任务（propagation/engine.ts）。
  * 统一「文件内容变化」的语义、analyze 唯一入口是 P4 的事（D1）。
  */
@@ -11,16 +11,11 @@ import { backfillClassification } from '../../services/classify/backfill.ts';
 import { syncRootModes } from '../../services/classify/rootMode.ts';
 import type { Reaction } from '../../propagation/registry.ts';
 
-const snapshot = (db: Db, ids: number[]) =>
+const kinds = (db: Db, ids: number[]) =>
   new Map(
-    (
-      db
-        .prepare(
-          `SELECT i.id, i.content_kind AS kind, EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id AND ic.origin = 'tagger') AS linked
-           FROM images i WHERE i.id IN (SELECT value FROM json_each(?))`,
-        )
-        .all(JSON.stringify(ids)) as { id: number; kind: string; linked: number }[]
-    ).map((r) => [r.id, r]),
+    (db.prepare('SELECT id, content_kind AS kind FROM images WHERE id IN (SELECT value FROM json_each(?))').all(JSON.stringify(ids)) as { id: number; kind: string }[]).map(
+      (r) => [r.id, r.kind],
+    ),
   );
 
 export const reclassifyByPathReaction: Reaction = {
@@ -33,21 +28,12 @@ export const reclassifyByPathReaction: Reaction = {
     const moved = changes.ids('image.moved');
     const ids = changes.ids();
     // 只知道「有图和设置对不上」（扫描结束时）：全库同步一遍，改了什么由全量的合集重算兜底
-    if (changes.of('root.modeChanged').some((c) => !c.ids.length)) syncRootModes(db);
+    if (changes.of('root.modeChanged').some((c) => !c.ids.length)) syncRootModes(db, undefined, emit);
     if (!ids.length) return;
-    const before = snapshot(db, ids);
+    const before = kinds(db, ids);
     if (moved.length) backfillClassification(db, { ids: moved });
-    syncRootModes(db, ids);
-    const after = snapshot(db, ids);
-    const kind: number[] = [];
-    const unlinked: number[] = [];
-    for (const [id, b] of before) {
-      const a = after.get(id);
-      if (!a) continue;
-      if (a.kind !== b.kind) kind.push(id);
-      if (b.linked && !a.linked) unlinked.push(id);
-    }
-    emit({ type: 'image.kindChanged', ids: kind });
-    emit({ type: 'curation.charactersChanged', ids: unlinked });
+    syncRootModes(db, ids, emit);
+    const after = kinds(db, ids);
+    emit({ type: 'image.kindChanged', ids: ids.filter((id) => before.has(id) && after.get(id) !== before.get(id)) });
   },
 };

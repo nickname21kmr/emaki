@@ -122,15 +122,17 @@ import { config } from '../../config.ts';
 import { hydrateImages, IMAGE_COLS, type ImageRow } from './hydrate.ts';
 import { listImages } from './queries/listImages.ts';
 import { loadSuggestions } from './suggestions.ts';
-import { dismissPixivCharacterChecks } from './pixivChecks.ts';
-import { vetoRemovedCharacter } from './vetoes.ts';
+import { replaceCharacters } from '../../domain/curation/links.ts';
+import { setFavorite, setRating } from '../../domain/curation/marks.ts';
+import { manual } from '../../domain/curation/provenance.ts';
 import { clearPendingPixivCache, pendingPixivCount, queuePixivImages, queueUnseenPixivAnimations, resetPixivBackoff, syncPixivCharacters } from '../../services/pixiv/sync.ts';
 import { refreshPixivAliases } from '../../services/pixiv/aliases.ts';
 import { createPixivDiscovery } from '../../services/pixiv/discovery.ts';
 import { DanbooruClient } from '../../services/danbooru/client.ts';
 import { BulkOps, RATING_LABEL } from './bulk.ts';
 import { CollectionQueries } from './collections.ts';
-import { assertKindValue, countPromotable, KIND_LABEL, promoteSuggestionsInTx, setKindInTx, type KindDeps } from './kinds.ts';
+import { assertKindValue, KIND_LABEL, setKindInTx, type KindDeps } from './kinds.ts';
+import { countPromotable, promoteSuggestions } from '../../domain/curation/auto.ts';
 import { describeKindReason } from './hydrate.ts';
 import { DuplicateQueries } from './duplicates.ts';
 import { SearchQueries } from './search.ts';
@@ -269,7 +271,7 @@ export class SqliteDataSource implements DataSource {
         getTaggerSettings: () => readSettings(db).tagger,
         makeCatalog,
         // 每批写完（在 writer 的事务里）：声明证据、角色、类型变了，套排除规则、登记 Pixiv 补充等由反应做
-        afterBatchInTx: (ids) => declareTagged(ds.ctx, ids),
+        afterBatchInTx: (ids, changes) => declareTagged(ds.ctx, ids, changes),
         log: (m) => console.info(`[tag] ${m}`),
       }),
       pixiv: {
@@ -339,7 +341,7 @@ export class SqliteDataSource implements DataSource {
       afterScan: () => {
         // 扫描按开始时的导入方式判类型：中途切换过的、在磁盘上移进移出漫画文件夹的，按现在的设置改过来
         ds.ctx.apply(() => {
-          if (syncRootModes(db)) ds.ctx.changed({ type: 'root.modeChanged', rootIds: [], ids: [] });
+          if (syncRootModes(db, undefined, (c) => ds.ctx.changed(c))) ds.ctx.changed({ type: 'root.modeChanged', rootIds: [], ids: [] });
         });
       },
     });
@@ -781,40 +783,19 @@ export class SqliteDataSource implements DataSource {
         setKindInTx(this.ctx, u, [iid], value, this.kindDeps);
         message = value === 'auto' ? '已恢复自动判断' : `已标为「${KIND_LABEL[value]}」`;
       }
-      const cols = [
-        ...(body.rating ? ['rating', 'rating_manual'] : []),
-        ...(body.favorite !== undefined ? ['favorite'] : []),
-      ];
-      u.columns('images', cols, [iid]);
       if (charIds) {
-        u.set('image_characters', 'image_id = ?', [iid]);
-        const ids = JSON.stringify(charIds);
-        const removed = this.ctx.stmt('SELECT 1 FROM image_characters WHERE image_id = ? AND character_id NOT IN (SELECT value FROM json_each(?)) LIMIT 1').get(iid,ids);
-        if (removed) dismissPixivCharacterChecks(this.ctx.db,u,[iid],now);
-        // 去掉的角色记下来，重新识别时不再加回（撤销时一起去掉）
-        const gone = this.ctx.stmt('SELECT character_id FROM image_characters WHERE image_id = ? AND character_id NOT IN (SELECT value FROM json_each(?))').pluck().all(iid, ids) as number[];
-        for (const cid of gone) vetoRemovedCharacter(this.ctx.db, u, cid, [iid], now);
-        this.ctx.stmt('DELETE FROM image_characters WHERE image_id = @iid AND character_id NOT IN (SELECT value FROM json_each(@ids))').run({ iid, ids });
-        this.ctx
-          .stmt(
-            `INSERT OR IGNORE INTO image_characters (image_id, character_id, origin, score, added_at)
-             SELECT @iid, value, 'manual', NULL, @now FROM json_each(@ids)`,
-          )
-          .run({ iid, ids, now });
-        // 整组替换和其他入口一样：新角色命中「角色」排除规则时由反应排除（附录 #14）
-        this.ctx.changed({ type: 'curation.charactersChanged', ids: [iid] });
-        if (gone.length) this.ctx.changed({ type: 'curation.vetoesChanged', ids: [iid] });
+        // 整组替换：去掉的记否决、Pixiv 补充不再采纳旧建议；新的手动加上（清掉否决，D3）；本来就有的保持原来的来历。
+        // 新角色命中「角色」排除规则时由反应排除（附录 #14）
+        replaceCharacters(this.ctx, u, iid, charIds, manual(now));
         message = '已更新角色';
       }
       // 手动改分级要记下来：T10 重打标签时不覆盖
       if (body.rating) {
-        this.ctx.stmt('UPDATE images SET rating = ?, rating_manual = 1 WHERE id = ?').run(body.rating, iid);
-        this.ctx.changed({ type: 'curation.ratingChanged', ids: [iid] });
+        setRating(this.ctx, u, [iid], body.rating);
         message = '已修改分级';
       }
       if (body.favorite !== undefined) {
-        this.ctx.stmt('UPDATE images SET favorite = ? WHERE id = ?').run(body.favorite ? 1 : 0, iid);
-        this.ctx.changed({ type: 'curation.favoriteChanged', ids: [iid] });
+        setFavorite(this.ctx, u, [iid], body.favorite);
         message = body.favorite ? '已收藏' : '已取消收藏';
       }
       return { message: message || '已更新' };
@@ -950,7 +931,8 @@ export class SqliteDataSource implements DataSource {
     const ids = out.moved.map((m) => m.id);
     // 移进漫画文件夹会清掉识别器认的角色、移出会标重新识别：撤销时放回去
     const json = JSON.stringify(ids);
-    const charSnap = this.ctx.db.prepare("SELECT * FROM image_characters WHERE origin = 'tagger' AND image_id IN (SELECT value FROM json_each(?))").all(json);
+    // 漫画区同步只去掉自动关联（附录 #6）：快照也只记自动的，移回时按原来的来历放回
+    const charSnap = this.ctx.db.prepare("SELECT * FROM image_characters WHERE decision = 'auto' AND image_id IN (SELECT value FROM json_each(?))").all(json);
     const retagSnap = this.ctx.db.prepare('SELECT id, retag FROM images WHERE id IN (SELECT value FROM json_each(?))').all(json);
     // 和扫描发现的移动、整理到子文件夹一样：来源、路径相关的分类（漫画文件夹）、排除规则、合集都由反应按新位置重算（附录 #11、#17）
     if (ids.length) this.ctx.apply(() => this.ctx.changed({ type: 'image.moved', ids, reason: 'move' }));
@@ -1278,7 +1260,7 @@ export class SqliteDataSource implements DataSource {
   /** 用户点按钮：把达标的建议归到角色，可撤销 */
   async promoteSuggestions(kind?: ContentKind): Promise<MutationResult> {
     return this.ctx.mutate((u) => {
-      const ids = promoteSuggestionsInTx(this.ctx, u, null, this.kindDeps, kind);
+      const ids = promoteSuggestions(this.ctx, u, null, this.kindDeps, kind);
       return { message: ids.length ? `已把 ${ids.length} 张图按达标的建议归到角色` : '没有达标的建议了' };
     });
   }
@@ -1546,7 +1528,7 @@ export class SqliteDataSource implements DataSource {
     }
     recompute.push(...now.keys());
     // 写回的行也对一遍：不按顺序撤销时（先撤里层的漫画子文件夹，外层的还在），快照里的「插画」已经不对了
-    syncRootModes(db, [...recompute, ...snap.map((x) => x.id)]);
+    syncRootModes(db, [...recompute, ...snap.map((x) => x.id)], (c) => this.ctx.changed(c));
   }
 
   /**

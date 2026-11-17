@@ -6,8 +6,8 @@
  * - 不要往里加新项。确实绕不开时加一项并在 note 里写清原因，评审时会看到。
  *
  * 表名的写法见 sqlWrites.ts：images 按列组记成 images#<列组>，看不出列的是 images#?，表名拼出来的是 <dynamic>。
- * 各阶段要清掉的（docs/core-architecture.md 第 12 节）：P3 清零 image_characters、character_suggestions、image_copyrights
- * 和证据表；P2、P4、P6 把其余的搬进主人目录。
+ * 各阶段要清掉的（docs/core-architecture.md 第 12 节）：P3a 已清零 image_characters、character_vetoes（只有 domain/curation/ 写）；
+ * P3b 清零 character_suggestions、image_copyrights 和证据表；P2、P4、P6 把其余的搬进主人目录。
  */
 export interface AllowedWrite {
   file: string;
@@ -22,7 +22,6 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'collections' },
   { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'comic_folders' },
   { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'exclusions' },
-  { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'image_characters' },
   { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'images#?', note: '列名是拼出来的或整行快照' },
   { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'images#collections' },
   { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'images#curation' },
@@ -32,8 +31,6 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'settings' },
   // datasource/sqlite/bulk.ts
   { file: 'datasource/sqlite/bulk.ts', table: 'image_artists' },
-  { file: 'datasource/sqlite/bulk.ts', table: 'image_characters' },
-  { file: 'datasource/sqlite/bulk.ts', table: 'image_copyrights' },
   { file: 'datasource/sqlite/bulk.ts', table: 'images#curation' },
   { file: 'datasource/sqlite/bulk.ts', table: 'images#evidence' },
   { file: 'datasource/sqlite/bulk.ts', table: 'images#library' },
@@ -44,7 +41,6 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'datasource/sqlite/changeLog.ts', table: 'character_works' },
   { file: 'datasource/sqlite/changeLog.ts', table: 'characters' },
   { file: 'datasource/sqlite/changeLog.ts', table: 'custom_character_matches' },
-  { file: 'datasource/sqlite/changeLog.ts', table: 'image_characters' },
   { file: 'datasource/sqlite/changeLog.ts', table: 'image_copyrights' },
   { file: 'datasource/sqlite/changeLog.ts', table: 'images#curation' },
   { file: 'datasource/sqlite/changeLog.ts', table: 'images#evidence' },
@@ -55,13 +51,11 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'datasource/sqlite/characters.ts', table: 'character_suggestions' },
   { file: 'datasource/sqlite/characters.ts', table: 'character_verified_forms' },
   { file: 'datasource/sqlite/characters.ts', table: 'character_verified_names' },
-  { file: 'datasource/sqlite/characters.ts', table: 'character_vetoes' },
   { file: 'datasource/sqlite/characters.ts', table: 'character_works' },
   { file: 'datasource/sqlite/characters.ts', table: 'characters' },
   { file: 'datasource/sqlite/characters.ts', table: 'collection_characters' },
   { file: 'datasource/sqlite/characters.ts', table: 'custom_character_matches' },
   { file: 'datasource/sqlite/characters.ts', table: 'danbooru_tag_redirects' },
-  { file: 'datasource/sqlite/characters.ts', table: 'image_characters' },
   { file: 'datasource/sqlite/characters.ts', table: 'works' },
   // datasource/sqlite/collections.ts
   { file: 'datasource/sqlite/collections.ts', table: '<dynamic>', note: '手选合集的角色 / 作品：collection_characters、collection_works' },
@@ -76,11 +70,8 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'datasource/sqlite/consolidate.ts', table: 'image_copyrights' },
   { file: 'datasource/sqlite/consolidate.ts', table: 'works' },
   // datasource/sqlite/duplicates.ts
-  { file: 'datasource/sqlite/duplicates.ts', table: '<dynamic>', note: '查重合并时快照 image_characters、image_copyrights、image_artists' },
   { file: 'datasource/sqlite/duplicates.ts', table: 'duplicate_groups' },
   { file: 'datasource/sqlite/duplicates.ts', table: 'image_artists' },
-  { file: 'datasource/sqlite/duplicates.ts', table: 'image_characters' },
-  { file: 'datasource/sqlite/duplicates.ts', table: 'image_copyrights' },
   { file: 'datasource/sqlite/duplicates.ts', table: 'images#?', note: '列名是拼出来的或整行快照' },
   { file: 'datasource/sqlite/duplicates.ts', table: 'images#curation' },
   { file: 'datasource/sqlite/duplicates.ts', table: 'images#evidence' },
@@ -88,8 +79,6 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   // datasource/sqlite/importImages.ts
   { file: 'datasource/sqlite/importImages.ts', table: 'images#library' },
   // datasource/sqlite/kinds.ts
-  { file: 'datasource/sqlite/kinds.ts', table: 'character_suggestions' },
-  { file: 'datasource/sqlite/kinds.ts', table: 'image_characters' },
   { file: 'datasource/sqlite/kinds.ts', table: 'images#analysis' },
   { file: 'datasource/sqlite/kinds.ts', table: 'images#curation' },
   // datasource/sqlite/move.ts
@@ -114,11 +103,7 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   // datasource/sqlite/undo.ts
   { file: 'datasource/sqlite/undo.ts', table: '<dynamic>', note: '撤销回放：按记录的表名还原（UndoTable 里的表）' },
   // datasource/sqlite/unrecognized.ts
-  { file: 'datasource/sqlite/unrecognized.ts', table: 'character_suggestions' },
-  { file: 'datasource/sqlite/unrecognized.ts', table: 'image_characters' },
   { file: 'datasource/sqlite/unrecognized.ts', table: 'images#evidence' },
-  // datasource/sqlite/vetoes.ts
-  { file: 'datasource/sqlite/vetoes.ts', table: 'character_vetoes' },
   // services/aliases.ts
   { file: 'services/aliases.ts', table: 'aliases' },
   // services/catalog/characterCatalog.ts
@@ -128,7 +113,6 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   // services/classify/backfill.ts
   { file: 'services/classify/backfill.ts', table: 'images#analysis' },
   // services/classify/rootMode.ts
-  { file: 'services/classify/rootMode.ts', table: 'image_characters' },
   { file: 'services/classify/rootMode.ts', table: 'images#curation' },
   { file: 'services/classify/rootMode.ts', table: 'images#evidence' },
   // services/danbooru/apply.ts
@@ -161,7 +145,6 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'services/pixiv/cache.ts', table: 'pixiv_artwork_cache' },
   // services/pixiv/sync.ts
   { file: 'services/pixiv/sync.ts', table: 'character_suggestions' },
-  { file: 'services/pixiv/sync.ts', table: 'image_characters' },
   { file: 'services/pixiv/sync.ts', table: 'image_copyrights' },
   { file: 'services/pixiv/sync.ts', table: 'images#curation' },
   { file: 'services/pixiv/sync.ts', table: 'pixiv_artwork_cache' },
@@ -187,7 +170,6 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'services/tagger/tagJob.ts', table: 'images#analysis' },
   // services/tagger/writer.ts
   { file: 'services/tagger/writer.ts', table: 'character_suggestions' },
-  { file: 'services/tagger/writer.ts', table: 'image_characters' },
   { file: 'services/tagger/writer.ts', table: 'image_copyrights' },
   { file: 'services/tagger/writer.ts', table: 'image_tags' },
   { file: 'services/tagger/writer.ts', table: 'images#curation' },

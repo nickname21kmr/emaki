@@ -454,7 +454,7 @@ export type ScoredCoverCandidate = CoverCandidate & { q: number };
 
 /** 候选封面的列（C 自动封面和「换封面」候选共用）；FROM image_characters ic JOIN v_counted_images i，crowd 是同图角色数 */
 export const COVER_CANDIDATE_COLS = `ic.character_id AS cid, i.id AS iid, i.width AS w, i.height AS h, i.file_name AS fileName,
-  i.favorite AS fav, COALESCE(ic.score, 0.9) AS cs, COALESCE(cr.n, 1) - 1 AS others,
+  i.favorite AS fav, COALESCE(ic.evidence_score, 0.9) AS cs, COALESCE(cr.n, 1) - 1 AS others,
   CASE i.rating WHEN 'questionable' THEN 1 WHEN 'explicit' THEN 2 ELSE 0 END + (i.content_kind = 'comic') * 3 AS tier`;
 
 /** 一批图里和封面评分、焦点有关的标签 */

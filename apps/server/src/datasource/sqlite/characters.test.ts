@@ -125,10 +125,10 @@ it('撤销合并只回退合并搬过去的：合并之后识别器给目标新�
   const before = dumpCore(db());
   const r = await ds.mergeCharacter(c('c7'), c('c1'));
   // 合并之后识别器把另一张图归给目标，词典给目标加了别名
-  db().prepare("INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, ?, 'tagger', 0.9, 'x')").run(img, to);
+  db().prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_score, added_at) VALUES (?, ?, 'auto', 'job:tag', 'auto-accept@1', 'tagger', 0.9, 'x')").run(img, to);
   db().prepare("INSERT INTO aliases (owner_type, owner_id, alias, search_key, origin, visible, position) VALUES ('character', ?, 'later', 'later', 'dict', 0, 9)").run(to);
   await ds.undo(r.undoToken!);
-  expect(db().prepare('SELECT origin FROM image_characters WHERE image_id = ? AND character_id = ?').pluck().get(img, to)).toBe('tagger');
+  expect(db().prepare('SELECT decision FROM image_characters WHERE image_id = ? AND character_id = ?').pluck().get(img, to)).toBe('auto');
   expect(db().prepare("SELECT 1 FROM aliases WHERE owner_type = 'character' AND owner_id = ? AND alias = 'later'").get(to)).toBeTruthy();
   // 去掉之后加的两行，其余和合并前完全一样
   db().prepare('DELETE FROM image_characters WHERE image_id = ? AND character_id = ?').run(img, to);
@@ -140,11 +140,11 @@ it('撤销合并时被合并角色的编号已经给了新角色：拒绝撤销�
   // 新建的角色 id 最大，合并删掉后识别器新建角色会拿到同一个 id
   const made = await ds.createCharacter({ name: '临时', workIds: [] });
   const fromId = Number(made.character.id);
-  db().prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (?, ?, 'manual', 'x')").run(Number(env.id('image', 'i24')), fromId);
+  db().prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, added_at) VALUES (?, ?, 'manual', 'user', 'x')").run(Number(env.id('image', 'i24')), fromId);
   const r = await ds.mergeCharacter(made.character.id, c('c1'));
   const g = ds.makeCatalog().catalog.ensureCharacter('test_girl_(emaki_test)', '2026-01-01T00:00:00.000Z');
   expect(g).toMatchObject({ id: fromId, created: true });
-  db().prepare("INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, ?, 'tagger', 0.9, 'x')").run(Number(env.id('image', 'i25')), fromId);
+  db().prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_score, added_at) VALUES (?, ?, 'auto', 'job:tag', 'auto-accept@1', 'tagger', 0.9, 'x')").run(Number(env.id('image', 'i25')), fromId);
   const snap = dumpCore(db());
   await expect(ds.undo(r.undoToken!)).rejects.toMatchObject({ statusCode: 409, message: '无法撤销：「临时」原来的编号已经给了之后新建的角色' });
   expect(dumpCore(db())).toEqual(snap);
@@ -156,7 +156,7 @@ describe('新建的角色被合并掉、编号又给了新角色：撤销更早�
     await ds.mergeCharacter(String(fromId), c('c1'));
     const g = ds.makeCatalog().catalog.ensureCharacter('test_girl_(emaki_test)', '2026-10-01T00:00:00.000Z');
     expect(g).toMatchObject({ id: fromId, created: true });
-    db().prepare("INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, ?, 'tagger', 0.9, 'x')").run(Number(env.id('image', 'i25')), fromId);
+    db().prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_score, added_at) VALUES (?, ?, 'auto', 'job:tag', 'auto-accept@1', 'tagger', 0.9, 'x')").run(Number(env.id('image', 'i25')), fromId);
   };
 
   it('createCharacter', async () => {
@@ -211,7 +211,7 @@ describe('自建角色的自动 Danbooru 关联', () => {
     seed();
     const made = await ds.createCharacter({ name: '倪亚·利斯顿', workIds: [] });
     const imageId = Number(env.id('image', 'i24'));
-    db().prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (?, ?, 'manual', 'x')").run(imageId, Number(made.character.id));
+    db().prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, added_at) VALUES (?, ?, 'manual', 'user', 'x')").run(imageId, Number(made.character.id));
     const before = dumpCore(db());
     const result = await ds.updateCharacter(made.character.id, { aliases: ['ニア・リストン'] });
     expect((await ds.getCharacter(made.character.id))!.character.danbooruTag).toBe('nia_liston');
