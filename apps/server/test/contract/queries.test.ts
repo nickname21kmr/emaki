@@ -3,6 +3,7 @@
  * - 契约夹具：每个数字的推算见 test/fixtures/contract-db.ts 顶部注释；
  * - 演示数据（固定的「现在」）：演示模式打开时看到的统计和合集，和删掉 mock 之前大体一致（差异见各处注释）。
  * 封面具体挑哪张、颜色这类兜底选择不在这里断言。
+ * 「最近 7 天新增」按本地日期分桶（产品行为如此），这里把时区固定成 UTC，固定期望才不随测试机器的时区变。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
@@ -11,6 +12,17 @@ import { EventBus } from '../../src/core/events.ts';
 import { openDemoEngine, type DemoEngine } from '../../src/demo/engine.ts';
 import { makeTmpDir } from '../helpers/tmp.ts';
 import { canon, sqliteFactory, type ContractEnv } from './harness.ts';
+
+// 整个文件按 UTC 分桶：desktop 在北京时间，CI 在 UTC
+let savedTz: string | undefined;
+beforeAll(() => {
+  savedTz = process.env.TZ;
+  process.env.TZ = 'UTC';
+});
+afterAll(() => {
+  if (savedTz === undefined) delete process.env.TZ;
+  else process.env.TZ = savedTz;
+});
 
 describe('契约夹具上的关键查询', () => {
   let env: ContractEnv;
