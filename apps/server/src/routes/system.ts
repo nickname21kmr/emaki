@@ -62,6 +62,8 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
             generalThreshold: z.number().min(0).max(1),
             characterThreshold: z.number().min(0).max(1),
             autoAcceptThreshold: z.number().min(0).max(1),
+            // 按来源的自动阈值：tagger、pixiv，以后的插件来源 plugin:<id>
+            autoAcceptBySource: z.record(z.string().regex(/^(tagger|pixiv|plugin:[\w.-]+)$/), z.number().min(0).max(1)),
             batchSize: z.number().int().min(1).max(64),
             legacyModel: z.string().nullable(),
             legacyBefore: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),

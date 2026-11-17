@@ -200,7 +200,7 @@ export function seedDemoDb(db: Db, demo: DemoDb, opts: { now: number }): IdMap {
       for (const w of c.manualWorkIds) insColWork.run(cid, need(map.works, w, '作品'), c.updatedAt);
     }
 
-    // 「原创」作品：有图归为原创时才建（同 bulk 的「归为原创」：手动挂的关联 score 为 NULL）
+    // 「原创」作品：有图归为原创时才建（图算不算原创作品由 original_at 派生，迁移 035）
     let originalWork: number | null = null;
     const originalWorkId = () => {
       originalWork ??=
@@ -215,7 +215,9 @@ export function seedDemoDb(db: Db, demo: DemoDb, opts: { now: number }): IdMap {
       `INSERT OR IGNORE INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_score, added_at)
        VALUES (?, ?, 'auto', 'system:demo', 'auto-accept@1', 'tagger', 0.95, ?)`,
     );
-    const insIcr = db.prepare('INSERT OR IGNORE INTO image_copyrights (image_id, work_id, score) VALUES (?, ?, NULL)');
+    // 不经角色得到的作品：演示数据当作手动指定的作品（image_copyrights，迁移 035 之后只放手动指定的）
+    const insIcr = db.prepare('INSERT OR IGNORE INTO image_copyrights (image_id, work_id) VALUES (?, ?)');
+    const markOriginal = db.prepare("UPDATE images SET original_decision = 'manual', original_actor = 'user' WHERE id = ?");
     const insTag = db.prepare('INSERT INTO tags (name, category) VALUES (?, ?) ON CONFLICT(name) DO NOTHING');
     const findTag = db.prepare('SELECT id FROM tags WHERE name = ?').pluck();
     // 演示数据有十几万条图片标签，标签 id 记在内存里，每个标签只插一次、查一次
@@ -230,7 +232,8 @@ export function seedDemoDb(db: Db, demo: DemoDb, opts: { now: number }): IdMap {
       return id;
     };
     const insIt = db.prepare('INSERT OR IGNORE INTO image_tags (image_id, tag_id, score) VALUES (?, ?, ?)');
-    const insSug = db.prepare('INSERT OR IGNORE INTO character_suggestions (image_id, danbooru_tag, score) VALUES (?, ?, ?)');
+    // 建议是派生的：演示数据的建议写成模型证据（v_character_suggestions 里还没关联的候选）
+    const insSug = db.prepare("INSERT OR IGNORE INTO character_evidence (image_id, provider, tag, score) VALUES (?, 'tagger', ?, ?)");
     const setTheme = db.prepare('UPDATE images SET theme = ?, art_score = ? WHERE id = ?');
     const insArtist = db.prepare('INSERT OR IGNORE INTO image_artists (image_id, artist, score) VALUES (?, ?, ?)');
     const setArtist = db.prepare('UPDATE images SET artist_checked_at = ?, artist_manual = ? WHERE id = ?');
@@ -244,7 +247,10 @@ export function seedDemoDb(db: Db, demo: DemoDb, opts: { now: number }): IdMap {
       }
       // 不经角色得到的作品（只有 copyright 没角色的图）
       for (const wid of img.copyrightWorkIds) if (!viaChars.has(wid)) insIcr.run(iid, need(map.works, wid, '作品'));
-      if (img.originalAt) insIcr.run(iid, originalWorkId());
+      if (img.originalAt) {
+        originalWorkId();
+        markOriginal.run(iid);
+      }
       for (const t of img.tags) insIt.run(iid, tagId(t.tag, t.category), t.score);
       for (const [tag, score] of img.suggestions) insSug.run(iid, tag, score);
       for (const a of img.artists ?? []) insArtist.run(iid, a.tag, a.score);

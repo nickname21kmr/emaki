@@ -233,11 +233,13 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
     where.push(`(instr(search_key(i.file_name), @qk) > 0
       OR EXISTS (SELECT 1 FROM image_tags it WHERE it.image_id = i.id AND it.tag_id IN (SELECT value FROM json_each(@qtags)))
       OR EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id AND ic.character_id IN (SELECT value FROM json_each(@qchars)))
-      OR EXISTS (SELECT 1 FROM image_copyrights x WHERE x.image_id = i.id AND x.work_id IN (SELECT value FROM json_each(@qworks))))`);
+      OR EXISTS (SELECT 1 FROM image_copyrights x WHERE x.image_id = i.id AND x.work_id IN (SELECT value FROM json_each(@qworks)))
+      OR (i.original_at IS NOT NULL AND EXISTS (SELECT 1 FROM works ow WHERE ow.danbooru_tag = 'original' AND ow.id IN (SELECT value FROM json_each(@qworks)))))`);
     countWhere.push(`(instr(search_key(i.file_name), @qk) > 0
       OR i.id IN (SELECT it.image_id FROM image_tags it WHERE it.tag_id IN (SELECT value FROM json_each(@qtags)))
       OR i.id IN (SELECT ic.image_id FROM image_characters ic WHERE ic.character_id IN (SELECT value FROM json_each(@qchars)))
-      OR i.id IN (SELECT x.image_id FROM image_copyrights x WHERE x.work_id IN (SELECT value FROM json_each(@qworks))))`);
+      OR i.id IN (SELECT x.image_id FROM image_copyrights x WHERE x.work_id IN (SELECT value FROM json_each(@qworks)))
+      OR (i.original_at IS NOT NULL AND EXISTS (SELECT 1 FROM works ow WHERE ow.danbooru_tag = 'original' AND ow.id IN (SELECT value FROM json_each(@qworks)))))`);
   }
 
   const from = 'FROM images i';

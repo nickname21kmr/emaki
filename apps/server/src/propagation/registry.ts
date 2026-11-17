@@ -33,6 +33,12 @@ export interface ReactionInput {
    * 反应删掉了重算不出来的东西（比如过期的证据）时记在这里，撤销时还原
    */
   readonly undo: UndoRecorder | null;
+  /**
+   * 这是撤销在重放原操作声明的变化：事实已经按撤销记录还原了。重算派生数据的反应照常跑；
+   * 做决定的反应（reevaluateAuto：自动关联、自动原创）不再做决定（否则会把用户刚撤销的自动决定又做一遍），
+   * 只把自己可能改过的东西声明成变化，让后面的反应按还原后的事实重算
+   */
+  readonly replay: boolean;
   /** 事务内反应：声明自己引起的变化（会继续传播） */
   emit(c: Change): void;
   /** 把昂贵的全量重算延后：任务结束、启动完成时做一次（key 相同的只做一次） */
@@ -62,6 +68,7 @@ interface Frame {
   set: ChangeSet;
   actor: Actor;
   undo: UndoRecorder | null;
+  replay: boolean;
   snapshots: Map<Reaction, unknown[]>;
 }
 
@@ -136,7 +143,13 @@ export class Propagation {
       const value = fn();
       return { value, declared: outer.set.list.slice(from) };
     }
-    const frame: Frame = { set: new ChangeSet(), actor: opts.actor ?? currentActor(), undo: opts.undo ?? null, snapshots: new Map() };
+    const frame: Frame = {
+      set: new ChangeSet(),
+      actor: opts.actor ?? currentActor(),
+      undo: opts.undo ?? null,
+      replay: opts.replay !== undefined,
+      snapshots: new Map(),
+    };
     this.frame = frame;
     let declared: Change[] = [];
     let value: T;
@@ -162,6 +175,7 @@ export class Propagation {
       all: frame.set,
       actor: frame.actor,
       undo: frame.undo,
+      replay: frame.replay,
       snapshots: frame.snapshots.get(r) ?? [],
       emit: (c) => this.add(frame, c),
       defer: (key) => {

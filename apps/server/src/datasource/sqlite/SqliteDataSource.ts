@@ -123,7 +123,9 @@ import { hydrateImages, IMAGE_COLS, type ImageRow } from './hydrate.ts';
 import { listImages } from './queries/listImages.ts';
 import { loadSuggestions } from './suggestions.ts';
 import { replaceCharacters } from '../../domain/curation/links.ts';
-import { setFavorite, setRating } from '../../domain/curation/marks.ts';
+import { restoreAutoRatings, setFavorite, setRating } from '../../domain/curation/marks.ts';
+import { setManualSource } from '../../domain/curation/source.ts';
+import { snapshotSources } from '../../domain/evidence/source.ts';
 import { manual } from '../../domain/curation/provenance.ts';
 import { clearPendingPixivCache, pendingPixivCount, queuePixivImages, queueUnseenPixivAnimations, resetPixivBackoff, syncPixivCharacters } from '../../services/pixiv/sync.ts';
 import { refreshPixivAliases } from '../../services/pixiv/aliases.ts';
@@ -132,7 +134,7 @@ import { DanbooruClient } from '../../services/danbooru/client.ts';
 import { BulkOps, RATING_LABEL } from './bulk.ts';
 import { CollectionQueries } from './collections.ts';
 import { assertKindValue, KIND_LABEL, setKindInTx, type KindDeps } from './kinds.ts';
-import { countPromotable, promoteSuggestions } from '../../domain/curation/auto.ts';
+import { countLinks, evaluateAuto, promotionScope, reevaluateAutoReaction } from '../../domain/curation/reevaluate.ts';
 import { describeKindReason } from './hydrate.ts';
 import { DuplicateQueries } from './duplicates.ts';
 import { SearchQueries } from './search.ts';
@@ -373,6 +375,13 @@ export class SqliteDataSource implements DataSource {
   private localizer!: Localizer;
   /** 每次新建一个带完整回退链的角色目录（缓存只在一次请求内有效） */
   makeCatalog!: () => { catalog: CharacterCatalog; copyrights: DanbooruCatalog };
+  /**
+   * 现在的角色目录：启动早期（Danbooru 缓存、词库还没接上，启动修补就可能触发 reevaluateAuto）用只带打包作品表的基本目录
+   */
+  private catalogNow(): CharacterCatalog {
+    if (this.makeCatalog) return this.makeCatalog().catalog;
+    return new CharacterCatalog(this.ctx.db, { copyrights: CopyrightResolver.fromAsset(this.ctx.db) });
+  }
   private readonly characters: CharacterMutations;
   private readonly unrecognized: UnrecognizedQueries;
   private readonly bulk: BulkOps;
@@ -436,7 +445,7 @@ export class SqliteDataSource implements DataSource {
     this.collections = new CollectionService(db, this.ctx.clock);
     this.collectionQueries = new CollectionQueries(this.ctx, this.collections, this.derived, () => this.makeCatalog().catalog);
     this.library = new LibraryQueries(this.ctx, this.derived, () => this.collectionQueries.stats());
-    this.kindDeps = { catalog: () => this.makeCatalog().catalog, autoAcceptThreshold: () => readSettings(db).tagger.autoAcceptThreshold };
+    this.kindDeps = { catalog: () => this.catalogNow() };
     this.pendingTrash = new PendingTrash(this.ctx, { trashImpl: this.ports.trashImpl, checkRoot: this.ports.checkRecyclable });
     this.bulk = new BulkOps(this.ctx, (ids) => this.requireVisibleImages(ids), this.kindDeps, this.pendingTrash);
     this.unrecognized = new UnrecognizedQueries(this.ctx, () => this.makeCatalog().catalog, softMs);
@@ -519,6 +528,8 @@ export class SqliteDataSource implements DataSource {
       reparseSourceReaction,
       reclassifyByPathReaction,
       dropStalePixivEvidenceReaction,
+      // 唯一的自动决定规则（decideAuto）：证据、类型、放下、原创、否决、合集、漫画区、编目变了都重新评估（第 4.2 节）
+      reevaluateAutoReaction({ catalog: () => this.catalogNow() }),
       reevaluateExclusionsReaction,
       queuePixivCheckReaction,
       ...collectionReactions(this.collections, p),
@@ -776,19 +787,17 @@ export class SqliteDataSource implements DataSource {
         // 同投稿组的成员和页码要在改来源之前记下（撤销时放回原来的组）
         const oldKey = this.ctx.db.prepare("SELECT source_site || ':' || source_post_id FROM images WHERE id = ?").pluck().get(iid) as string | null;
         if (oldKey) u.columns('images', ['collection_id', 'page_no', 'collection_detached'], this.ctx.db.prepare("SELECT id FROM images WHERE source_site || ':' || source_post_id = ?").pluck().all(oldKey) as number[]);
-        u.columns('images', ['source_site', 'source_post_id', 'source_artist', 'source_url', 'source_manual'], [iid]);
-        const src = sourceEdit.source;
         const before = this.ctx.db.prepare("SELECT COALESCE(source_site, '') || '|' || COALESCE(source_post_id, '') || '|' || COALESCE(source_artist, '') || '|' || COALESCE(source_url, '') FROM images WHERE id = ?").pluck();
         const was = before.get(iid);
-        this.ctx.stmt('UPDATE images SET source_site=?, source_post_id=?, source_artist=?, source_url=?, source_manual=? WHERE id=?')
-          .run(src?.site ?? null, src?.postId ?? null, src?.artist ?? null, src?.url ?? null, sourceEdit.manual ? 1 : 0, iid);
+        // 手动确认 / 清除 / 恢复自动：归类模块记决定（source_manual），来源的值由证据模块写
+        setManualSource(this.ctx, u, iid, sourceEdit.source, sourceEdit.manual);
         // 刷新同投稿组、清过期的 Pixiv 建议、重新登记补充：和其他改来源的路径一样由反应做（附录 #13）
         if (before.get(iid) !== was) this.ctx.changed({ type: 'image.sourceChanged', ids: [iid] });
-        message = sourceEdit.manual ? (src ? '已确认来源' : '已清除来源') : '已恢复自动来源';
+        message = sourceEdit.manual ? (sourceEdit.source ? '已确认来源' : '已清除来源') : '已恢复自动来源';
       }
       if (body.kind !== undefined) {
         const value = body.kind;
-        setKindInTx(this.ctx, u, [iid], value, this.kindDeps);
+        setKindInTx(this.ctx, u, [iid], value);
         message = value === 'auto' ? '已恢复自动判断' : `已标为「${KIND_LABEL[value]}」`;
       }
       if (charIds) {
@@ -1114,7 +1123,7 @@ export class SqliteDataSource implements DataSource {
       this.ctx.db.prepare('SELECT post_id FROM pixiv_artwork_cache WHERE post_id IN (SELECT value FROM json_each(?))').pluck()
         .all(JSON.stringify([...new Set(requeue.map((c) => c.newPixivPost))])) as string[],
     );
-    const hasPixivSug = this.ctx.db.prepare("SELECT 1 FROM character_suggestions WHERE image_id = ? AND source = 'pixiv' LIMIT 1");
+    const hasPixivSug = this.ctx.db.prepare("SELECT 1 FROM v_character_suggestions WHERE image_id = ? AND source = 'pixiv' LIMIT 1");
     return {
       mode,
       changed: changes.length,
@@ -1159,7 +1168,7 @@ export class SqliteDataSource implements DataSource {
     return this.ctx.db
       .prepare(
         `SELECT COUNT(DISTINCT i.id) FROM images i WHERE i.id IN (SELECT value FROM json_each(?)) AND (
-           EXISTS (SELECT 1 FROM character_suggestions cs WHERE cs.image_id = i.id AND cs.source = 'pixiv')
+           EXISTS (SELECT 1 FROM v_character_suggestions cs WHERE cs.image_id = i.id AND cs.source = 'pixiv')
            OR EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id))`,
       )
       .pluck()
@@ -1181,14 +1190,12 @@ export class SqliteDataSource implements DataSource {
     const result = this.ctx.mutate((u) => {
       const changes = diffSources(db, mode);
       changed = changes.length;
-      const ids = JSON.stringify(changes.map((c) => c.id));
-      u.columns('images', ['source_site', 'source_post_id', 'source_artist', 'source_url'], changes.map((c) => c.id));
-      u.set('character_suggestions', "source = 'pixiv' AND image_id IN (SELECT value FROM json_each(?))", [ids]);
-      u.set('pixiv_character_checks', 'image_id IN (SELECT value FROM json_each(?))', [ids]);
+      // 来源的撤销快照；过期的 Pixiv 证据、检查记录、依据它们的自动决定由反应去掉并记撤销
+      snapshotSources(u, changes.map((c) => c.id));
       // 设置只改回这一项，期间改的其他设置不动
       u.sql("UPDATE settings SET value = json_set(value, '$.pixivFilenameMode', ?) WHERE key = 'tagger'", [before]);
       u.sql("INSERT INTO settings (key, value) VALUES ('sourceParserMode', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(before)]);
-      dropped = db.prepare("SELECT COUNT(DISTINCT image_id) FROM character_suggestions WHERE source = 'pixiv' AND image_id IN (SELECT value FROM json_each(?))").pluck().get(
+      dropped = db.prepare("SELECT COUNT(DISTINCT image_id) FROM v_character_suggestions WHERE source = 'pixiv' AND image_id IN (SELECT value FROM json_each(?))").pluck().get(
         JSON.stringify(changes.filter((c) => c.before.site === 'pixiv' && c.pixivPostChanged).map((c) => c.id)),
       ) as number;
       applySettingsPatch(db, { tagger: { pixivFilenameMode: mode } });
@@ -1220,7 +1227,7 @@ export class SqliteDataSource implements DataSource {
         `SELECT COUNT(DISTINCT i.id) FROM images i
          JOIN pixiv_character_checks p ON p.image_id = i.id AND p.checked_at IS NOT NULL AND p.post_id = i.source_post_id
          WHERE i.id IN (SELECT value FROM json_each(?)) AND (
-           EXISTS (SELECT 1 FROM character_suggestions cs WHERE cs.image_id = i.id AND cs.source = 'pixiv')
+           EXISTS (SELECT 1 FROM v_character_suggestions cs WHERE cs.image_id = i.id AND cs.source = 'pixiv')
            OR EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id))`,
       )
       .pluck()
@@ -1259,17 +1266,24 @@ export class SqliteDataSource implements DataSource {
     return settings;
   }
 
-  /** 按当前阈值和角色目录计算可补采纳的建议 */
+  /** 按当前阈值和角色目录计算可补采纳的建议（和补采纳命令同一轮评估，只是不写） */
   async promotableSuggestions(kind?: ContentKind): Promise<PromotableSuggestions> {
     const threshold = readSettings(this.ctx.db).tagger.autoAcceptThreshold;
-    return { ...countPromotable(this.ctx, this.kindDeps, kind), threshold };
+    const db = this.ctx.db;
+    return { ...countLinks(evaluateAuto(db, promotionScope(db, kind), new Map(), this.catalogNow())), threshold };
   }
 
-  /** 用户点按钮：把达标的建议归到角色，可撤销 */
+  /**
+   * 「按当前阈值补采纳」命令：对达标建议所在的图跑一遍 reevaluateAuto（声明 curation.autoRequested，决定只由反应写），
+   * 作为一次可撤销的操作。没有新证据，所以只会新增，不会撤回（D2）
+   */
   async promoteSuggestions(kind?: ContentKind): Promise<MutationResult> {
-    return this.ctx.mutate((u) => {
-      const ids = promoteSuggestions(this.ctx, u, null, this.kindDeps, kind);
-      return { message: ids.length ? `已把 ${ids.length} 张图按达标的建议归到角色` : '没有达标的建议了' };
+    return this.ctx.mutate(() => {
+      const db = this.ctx.db;
+      const ids = promotionScope(db, kind);
+      const { images } = countLinks(evaluateAuto(db, ids, new Map(), this.catalogNow()));
+      if (images) this.ctx.changed({ type: 'curation.autoRequested', ids });
+      return { message: images ? `已把 ${images} 张图按达标的建议归到角色` : '没有达标的建议了' };
     });
   }
 
@@ -1521,7 +1535,7 @@ export class SqliteDataSource implements DataSource {
     );
     const kindCols = ROOT_MODE_COLS.filter((c) => c !== 'rating');
     const setKind = db.prepare(`UPDATE images SET ${kindCols.map((c) => `${c} = @${c}`).join(', ')} WHERE id = @id`);
-    const setRating = db.prepare('UPDATE images SET rating = @rating WHERE id = @id');
+    const ratings: { id: number; rating: Rating }[] = [];
     const recompute: number[] = [];
     for (const s of snap) {
       const n = now.get(s.id);
@@ -1532,8 +1546,10 @@ export class SqliteDataSource implements DataSource {
         continue;
       }
       if (!n.content_kind_manual) setKind.run(s);
-      if (!n.rating_manual) setRating.run(s);
+      if (!n.rating_manual) ratings.push({ id: s.id, rating: s.rating as Rating });
     }
+    // 漫画区给的分级是自动分级（归类模块），手动改过的不动
+    restoreAutoRatings(db, ratings);
     recompute.push(...now.keys());
     // 写回的行也对一遍：不按顺序撤销时（先撤里层的漫画子文件夹，外层的还在），快照里的「插画」已经不对了
     syncRootModes(db, [...recompute, ...snap.map((x) => x.id)], (c) => this.ctx.changed(c));

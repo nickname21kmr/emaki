@@ -99,10 +99,11 @@ describe('consolidateWorkTags', () => {
     );
     img.run(1, '1.png', '1.png', 's1');
     img.run(2, '2.png', '2.png', 's2');
-    const ic = db.prepare('INSERT INTO image_copyrights (image_id, work_id, score) VALUES (?, ?, ?)');
-    ic.run(1, oldId, 0.6);
-    ic.run(2, oldId, 0.4);
-    ic.run(2, newId, null); // 手动挂的：合并后仍是手动
+    // 迁移 035 之后 image_copyrights 只放手动指定的作品（识别器给的作品是证据，按标签记，不用跟着搬）
+    const ic = db.prepare('INSERT INTO image_copyrights (image_id, work_id) VALUES (?, ?)');
+    ic.run(1, oldId);
+    ic.run(2, oldId);
+    ic.run(2, newId); // 两边都挂着：合并后只留一行
     db.prepare(
       "INSERT INTO aliases (owner_type, owner_id, alias, search_key, origin, visible, position) VALUES ('work', ?, '梦游仙境', '梦游仙境', 'user', 1, 50)",
     ).run(oldId);
@@ -111,10 +112,7 @@ describe('consolidateWorkTags', () => {
     const deps = { canonicalize: (t: string) => c.canonicalize(t), localizer: new HumanizeLocalizer() };
     expect(consolidateWorkTags(db, deps)).toEqual({ merged: 1, renamed: 1 });
     expect(db.prepare('SELECT id FROM works WHERE id = ?').get(oldId)).toBeUndefined();
-    expect(db.prepare('SELECT image_id, score FROM image_copyrights WHERE work_id = ? ORDER BY image_id').all(newId)).toEqual([
-      { image_id: 1, score: 0.6 },
-      { image_id: 2, score: null },
-    ]);
+    expect(db.prepare('SELECT image_id FROM image_copyrights WHERE work_id = ? ORDER BY image_id').pluck().all(newId)).toEqual([1, 2]);
     expect(db.prepare("SELECT alias FROM aliases WHERE owner_type = 'work' AND owner_id = ?").pluck().all(newId)).toContain('梦游仙境');
     expect(db.prepare('SELECT danbooru_tag FROM works WHERE id = ?').pluck().get(lonely)).toBe('yuruyuri');
     expect(consolidateWorkTags(db, deps)).toEqual({ merged: 0, renamed: 0 });

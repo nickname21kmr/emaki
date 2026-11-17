@@ -9,41 +9,9 @@ import type { CharacterCatalog } from '../../services/catalog/characterCatalog.t
 import type { Derived } from './derived.ts';
 import { toCharacter, toWork } from './library.ts';
 
-/**
- * tags.image_count = 每个标签在计入张数的图（v_counted_images）里出现几次。
- * 不从图出发联 image_tags 再分组（330 万行进临时 B 树，真实库 3.5–6 秒）：
- * 先沿 idx_image_tags_tag_score 按 tag_id 顺序数总数，再减去不计数的图（排除、回收站、丢失、文件夹停用，几千张）的标签。
- * 只写张数变了的行。真实库约 0.6–1 秒，结果和原来逐个一致
- */
-export function refreshTagCounts(db: Db): void {
-  db.transaction(() => {
-    const n = new Map<number, number>();
-    for (const [id, c] of db.prepare('SELECT tag_id, COUNT(*) FROM image_tags INDEXED BY idx_image_tags_tag_score GROUP BY tag_id').raw().all() as [
-      number,
-      number,
-    ][]) {
-      n.set(id, c);
-    }
-    // 条件是 v_images + excluded_by IS NULL 的反面；LEFT JOIN 是为了文件夹行不在的图也算不计数（视图里是内连接）
-    for (const [id, c] of db
-      .prepare(
-        `SELECT it.tag_id, COUNT(*) FROM images i LEFT JOIN library_roots r ON r.id = i.root_id
-         CROSS JOIN image_tags it ON it.image_id = i.id
-         WHERE NOT (r.id IS NOT NULL AND r.enabled = 1 AND r.removed_at IS NULL
-                    AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL)
-         GROUP BY it.tag_id`,
-      )
-      .raw()
-      .all() as [number, number][]) {
-      n.set(id, (n.get(id) ?? 0) - c);
-    }
-    const update = db.prepare('UPDATE tags SET image_count = ? WHERE id = ?');
-    for (const [id, cur] of db.prepare('SELECT id, image_count FROM tags').raw().all() as [number, number][]) {
-      const v = n.get(id) ?? 0;
-      if (v !== cur) update.run(v, id);
-    }
-  })();
-}
+import { refreshTagCounts } from '../../domain/evidence/tagCounts.ts';
+
+export { refreshTagCounts };
 
 export class SearchQueries {
   private tags: { name: string; key: string; count: number }[] | null = null;
@@ -156,7 +124,7 @@ export class SearchQueries {
       }
       const tags = this.db.prepare(`
         SELECT s.danbooru_tag AS tag, COUNT(*) AS count
-        FROM character_suggestions s JOIN v_counted_images i ON i.id=s.image_id
+        FROM v_character_suggestions s JOIN v_counted_images i ON i.id=s.image_id
         WHERE s.character_id IS NULL AND s.danbooru_tag NOT LIKE 'emaki:%'
         GROUP BY s.danbooru_tag
       `).all() as { tag: string; count: number }[];

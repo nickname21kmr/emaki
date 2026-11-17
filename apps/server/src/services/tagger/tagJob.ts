@@ -20,7 +20,7 @@ import type { HostItemResult, HostThresholds } from './protocol.ts';
 import { IN_COMIC } from '../classify/comicAreas.ts';
 import { NOT_SKIPPED, noteReadFailures, skipIds } from './readBackoff.ts';
 import { ResilientTagger } from './resilient.ts';
-import { TagResultWriter } from './writer.ts';
+import { TagResultWriter } from '../../domain/evidence/tagger.ts';
 import type { Change } from '../../propagation/changes.ts';
 
 export interface TagJobDeps {
@@ -191,8 +191,6 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
     const writer = new TagResultWriter(db, catalog, copyrights, {
       repo: spec.repo,
       generalThreshold: t.generalThreshold,
-      characterThreshold: t.characterThreshold,
-      autoAcceptThreshold: t.autoAcceptThreshold,
       afterBatchInTx: deps.afterBatchInTx,
       now: deps.now,
       artists: !!t.artists && spec.labelsFormat === 'pixai-json',
@@ -251,7 +249,8 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
       if (fallbackNote) ctx.setMessage(fallbackNote);
       const th: HostThresholds = {
         general: t.generalThreshold,
-        character: Math.min(t.characterThreshold, t.autoAcceptThreshold),
+        // 角色候选：达到建议阈值或模型这个来源的自动阈值（较低的那个）的都要，全部记成证据
+        character: Math.min(t.characterThreshold, t.autoAcceptBySource?.tagger ?? t.autoAcceptThreshold),
         ...(t.artists ? { artist: ARTIST_THRESHOLD } : {}),
       };
       const B = tagger.current.batchSize;

@@ -121,12 +121,12 @@ describe('附录 #13：所有改来源的路径走同一个 image.sourceChanged'
     await addImage(env, { id: 1, rel: 'pics/98785437_p0.png', file: true });
     const db = env.ds.ctx.db;
     db.prepare("INSERT INTO pixiv_character_checks (image_id, post_id, modified_at, checked_at, result) VALUES (1, '98785437', ?, ?, 'suggested')").run(OLD.toISOString(), OLD.toISOString());
-    db.prepare("INSERT INTO character_suggestions (image_id, danbooru_tag, score, source) VALUES (1, 'alice_(game_a)', 0, 'pixiv')").run();
+    db.prepare("INSERT INTO character_evidence (image_id, tag, score, provider) VALUES (1, 'alice_(game_a)', 0, 'pixiv')").run();
     return env;
   }
   const outcome = (env: Env) => ({
     post: one(env, 'SELECT source_post_id FROM images WHERE id = 1'),
-    pixivSuggestions: env.ds.ctx.db.prepare("SELECT danbooru_tag FROM character_suggestions WHERE image_id = 1 AND source = 'pixiv'").pluck().all(),
+    pixivSuggestions: env.ds.ctx.db.prepare("SELECT danbooru_tag FROM v_character_suggestions WHERE image_id = 1 AND source = 'pixiv'").pluck().all(),
     check: env.ds.ctx.db.prepare('SELECT post_id, checked_at FROM pixiv_character_checks WHERE image_id = 1').get(),
   });
   const entries: [string, (env: Env) => Promise<unknown>][] = [

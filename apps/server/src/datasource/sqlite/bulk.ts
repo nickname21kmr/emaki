@@ -17,6 +17,8 @@ import { iso, parseId } from './sql.ts';
 import { resolveSuggestedCharacter } from './suggestions.ts';
 import { link, unlinkByUser } from '../../domain/curation/links.ts';
 import { setFavorite, setOriginal, setRating, setShelved } from '../../domain/curation/marks.ts';
+import { resetArtists, setManualArtists } from '../../domain/curation/artists.ts';
+import { ensureOriginalWork } from '../../domain/catalog/original.ts';
 import { manual } from '../../domain/curation/provenance.ts';
 
 export const RATING_LABEL: Record<Rating, string> = { general: '全年龄', sensitive: '轻微', questionable: '较敏感', explicit: '限制级' };
@@ -86,14 +88,10 @@ export class BulkOps {
           return { message: a.value ? `已放下 ${n} 张图，不再出现在未识别` : `已把 ${n} 张图放回未识别` };
         });
       case 'original':
-        // 「原创」作品（标签 original）没有就建；手动挂的关联 score 为 NULL，移出时只删手动挂的（识别器认出的保留）
+        // 手动归为原创 / 移出原创都是用户的决定（D8），之后 Pixiv 的原创信号不再改它；「原创」作品只有编目的这一种建法
         return this.ctx.mutate((u) => {
-          let wid = db.prepare("SELECT id FROM works WHERE danbooru_tag = 'original'").pluck().get() as number | undefined;
-          if (wid === undefined) {
-            wid = Number(db.prepare("INSERT INTO works (name, danbooru_tag, created_at) VALUES ('原创', 'original', ?)").run(now).lastInsertRowid);
-            u.inserted('works', wid);
-          }
-          setOriginal(this.ctx, u, ids, a.value ? now : null, wid);
+          if (a.value) ensureOriginalWork(this.kindDeps.catalog(), u, now);
+          setOriginal(this.ctx, u, ids, a.value ? now : null);
           return { message: a.value ? `已把 ${n} 张图归为原创，不再出现在未识别` : `已把 ${n} 张图移出原创` };
         });
       case 'rating':
@@ -105,51 +103,34 @@ export class BulkOps {
         const value = a.value;
         assertKindValue(value);
         return this.ctx.mutate((u) => {
-          const message = setKindInTx(this.ctx, u, ids, value, this.kindDeps);
+          const message = setKindInTx(this.ctx, u, ids, value);
           return { message };
         });
       }
       case 'trash':
         return this.trash(ids, now);
       case 'artist': {
-        // 手动改画师：改过的图记 artist_manual，之后识别、补跑都不再动它（writeArtists）
+        // 手动改画师：改过的图记 artist_manual，之后识别、补跑都不再动它（归类模块）
         const tags = normArtists(a.mode, a.artists);
         const names = artistNames(db, tags);
-        const tj = JSON.stringify(tags);
+        // 去掉时同一个人的旧名、社团名等标签一起去掉（和按画师筛图的 tagsOfArtist 是同一组）
+        let list = tags;
+        if (a.mode === 'remove') {
+          const groups = artistGroupMap(db);
+          const reps = new Set(tags.map((t) => groups.get(t) ?? t));
+          list = [...new Set([...tags, ...[...groups].filter(([, g]) => reps.has(g)).map(([t]) => t)])];
+        }
         return this.ctx.mutate((u) => {
-          u.set('image_artists', 'image_id IN (SELECT value FROM json_each(?))', [json]);
-          u.columns('images', ['artist_manual', 'artist_checked_at'], ids);
-          if (a.mode === 'set') db.prepare('DELETE FROM image_artists WHERE image_id IN (SELECT value FROM json_each(?))').run(json);
-          if (a.mode === 'remove') {
-            // 同一个人的旧名、社团名等标签一起去掉（和按画师筛图的 tagsOfArtist 是同一组）
-            const groups = artistGroupMap(db);
-            const reps = new Set(tags.map((t) => groups.get(t) ?? t));
-            const all = [...new Set([...tags, ...[...groups].filter(([, g]) => reps.has(g)).map(([t]) => t)])];
-            db.prepare('DELETE FROM image_artists WHERE image_id IN (SELECT value FROM json_each(?)) AND artist IN (SELECT value FROM json_each(?))').run(json, JSON.stringify(all));
-          } else {
-            db.prepare('INSERT OR IGNORE INTO image_artists (image_id, artist, score) SELECT i.value, t.value, 1 FROM json_each(?) i, json_each(?) t').run(json, tj);
-          }
-          db.prepare('UPDATE images SET artist_manual = 1, artist_checked_at = COALESCE(artist_checked_at, ?) WHERE id IN (SELECT value FROM json_each(?))').run(now, json);
-          this.ctx.changed({ type: 'curation.artistsChanged', ids });
+          setManualArtists(this.ctx, u, ids, a.mode, list, now);
           return { message: artistEditMessage(a.mode, n, names) };
         });
       }
-      case 'artist-auto': {
-        // 改回自动：只动手动改过的图，清掉手动改的、artist_checked_at 置空，「识别画师」会重新认；没改过的图不动
-        const edited = db.prepare('SELECT id FROM images WHERE artist_manual = 1 AND id IN (SELECT value FROM json_each(?))').pluck().all(json) as number[];
-        const mj = JSON.stringify(edited);
+      case 'artist-auto':
+        // 改回自动：只动手动改过的图，清掉手动改的、进度置空，「识别画师」会重新认；没改过的图不动
         return this.ctx.mutate((u) => {
-          if (edited.length) {
-            u.set('image_artists', 'image_id IN (SELECT value FROM json_each(?))', [mj]);
-            u.columns('images', ['artist_manual', 'artist_checked_at'], edited);
-            db.prepare('DELETE FROM image_artists WHERE image_id IN (SELECT value FROM json_each(?))').run(mj);
-            db.prepare('UPDATE images SET artist_manual = 0, artist_checked_at = NULL WHERE id IN (SELECT value FROM json_each(?))').run(mj);
-          }
-          // 改回自动的由反应排「识别画师」（撤销手动改画师时也一样，附录 #22）
-          this.ctx.changed({ type: 'curation.artistsChanged', ids: edited });
+          const edited = resetArtists(this.ctx, u, ids);
           return { message: artistAutoMessage(n, edited.length) };
         });
-      }
     }
   }
 

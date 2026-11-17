@@ -23,7 +23,7 @@ const img = (id: string) => env.id('image', id);
 /** 像 pixiv 任务那样写一条自建角色建议 */
 const pixiv = (image: string, characterId: string) =>
   db()
-    .prepare("INSERT INTO character_suggestions (image_id, danbooru_tag, character_id, score, source) VALUES (?, ?, ?, 0, 'pixiv')")
+    .prepare("INSERT INTO character_evidence (image_id, tag, character_id, score, provider) VALUES (?, ?, ?, 0, 'pixiv')")
     .run(Number(img(image)), CharacterCatalog.customTag(Number(characterId)), Number(characterId));
 const sugs = async (image: string) =>
   (await ds.getImage(img(image)))!.characterSuggestions.map((s) => [s.name, s.characterId === null ? null : env.back('character', s.characterId)]);
@@ -32,7 +32,7 @@ const custom = async (name: string) => (await ds.createCharacter({ name, workIds
 it('按显示名、完整别名和片段都能找到未建档建议，批量归入只建一次且可撤销', async () => {
   const tag = 'new_character_(fiction)';
   db().prepare("INSERT INTO tag_i18n(tag,category,zh,aliases) VALUES (?,4,'图鉴显示名',?)").run(tag, '["古都吹寿子"]');
-  db().prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (?,?,0,'pixiv')").run(Number(img('i27')), tag);
+  db().prepare("INSERT INTO character_evidence(image_id,tag,score,provider) VALUES (?,?,0,'pixiv')").run(Number(img('i27')), tag);
   for (const q of ['古都吹寿子', '寿', '图鉴显示名']) {
     expect(await ds.search({q, forAssignment:true})).toContainEqual(expect.objectContaining({
       type:'characterCandidate', danbooruTag:tag, name:'图鉴显示名',
@@ -54,7 +54,7 @@ it('按显示名、完整别名和片段都能找到未建档建议，批量归�
 it('按 character_id 显示真名；没有 character_id 的占位行不显示', async () => {
   const x = await custom('小雪');
   pixiv('i27', x);
-  db().prepare("INSERT INTO character_suggestions (image_id, danbooru_tag, score, source) VALUES (?, 'emaki:character:999', 0, 'pixiv')").run(Number(img('i27')));
+  db().prepare("INSERT INTO character_evidence (image_id, tag, score, provider) VALUES (?, 'emaki:character:999', 0, 'pixiv')").run(Number(img('i27')));
   expect(await sugs('i27')).toEqual([
     ['Test Girl', null],
     ['小雪', x],
@@ -89,7 +89,7 @@ it('合并：自建角色的建议改指向目标（目标是自建角色），�
     ['Test Girl', null],
     ['雪见', 'c7'],
   ]);
-  expect(db().prepare('SELECT danbooru_tag FROM character_suggestions WHERE character_id = ?').pluck().all(Number(c('c7')))).toEqual([
+  expect(db().prepare('SELECT danbooru_tag FROM v_character_suggestions WHERE character_id = ?').pluck().all(Number(c('c7')))).toEqual([
     CharacterCatalog.customTag(Number(c('c7'))),
   ]);
   await ds.undo(r.undoToken!);
@@ -107,9 +107,10 @@ it('合并进 Danbooru 角色：图上已有目标的建议就不重复，撤销
     ['空崎日奈', 'c3'],
   ]);
   expect(await sugs('i28')).toEqual([['空崎日奈', 'c3']]);
-  expect(db().prepare('SELECT count(*) FROM character_suggestions WHERE image_id = ?').pluck().get(Number(img('i28')))).toBe(1);
-  // 目标有 Danbooru 标签：搬过去写成标签，和识别器、之后再跑 Pixiv 写的同一行
-  expect(db().prepare("SELECT danbooru_tag, character_id, source FROM character_suggestions WHERE image_id = ? AND source = 'pixiv'").all(Number(img('i27')))).toEqual([
+  // 迁移 035 之后两个来源的证据各一份（以前共用主键，附录 #9）：看的时候同一个角色只列一条
+  expect(db().prepare('SELECT source FROM v_character_suggestions WHERE image_id = ? ORDER BY source').pluck().all(Number(img('i28')))).toEqual(['pixiv', 'tagger']);
+  // 目标有 Danbooru 标签：搬过去写成标签，和之后再跑 Pixiv 写的同一行
+  expect(db().prepare("SELECT danbooru_tag, character_id, source FROM v_character_suggestions WHERE image_id = ? AND source = 'pixiv'").all(Number(img('i27')))).toEqual([
     { danbooru_tag: 'hina_(blue_archive)', character_id: null, source: 'pixiv' },
   ]);
   await ds.undo(r.undoToken!);
@@ -126,7 +127,7 @@ it('合并：被合并的角色后来补了 Danbooru 标签、目标没有：目
     ['Test Girl', null],
     ['雪见', 'c7'],
   ]);
-  expect(db().prepare("SELECT danbooru_tag, character_id FROM character_suggestions WHERE source = 'pixiv'").all()).toEqual([
+  expect(db().prepare("SELECT danbooru_tag, character_id FROM v_character_suggestions WHERE source = 'pixiv'").all()).toEqual([
     { danbooru_tag: 'koyuki_(emaki_test)', character_id: null },
   ]);
   await ds.undo(r.undoToken!);
@@ -158,13 +159,17 @@ it('撤销新建自建角色：它的建议跟着级联删掉；之后拿占位�
   expect(db().prepare("SELECT count(*) FROM characters WHERE name LIKE 'Emaki%'").pluck().get()).toBe(0);
 });
 
-it('改类型提升建议只看识别器的：Pixiv 建议分数再高也不提升', async () => {
+// 附录 #1、#2（P3b）：以前改类型只按识别器的分数补采纳，Pixiv 的证据不算。现在同一条规则：Pixiv 只是候选（置信度 0）的不关联，
+// 确认对上的（置信度 1，达到 Pixiv 的自动阈值）和模型高分一样关联
+it('改类型重新评估：Pixiv 证据和模型证据同一条规则，只是候选的不关联、确认对上的关联', async () => {
   const x = await custom('小雪');
   pixiv('i24', x);
-  db().prepare("UPDATE character_suggestions SET score = 0.99 WHERE image_id = ? AND source = 'pixiv'").run(Number(img('i24')));
   await ds.bulkImages({ ids: [img('i24')], action: { type: 'kind', value: 'screenshot' } });
   await ds.bulkImages({ ids: [img('i24')], action: { type: 'kind', value: 'illustration' } });
   expect((await ds.getImage(img('i24')))!.characterIds).not.toContain(x);
+  db().prepare("UPDATE character_evidence SET score = 1 WHERE image_id = ? AND provider = 'pixiv'").run(Number(img('i24')));
+  await ds.bulkImages({ ids: [img('i24')], action: { type: 'kind', value: 'screenshot' } });
+  expect((await ds.getImage(img('i24')))!.characterIds).toContain(x);
 });
 
 it.each(['bulk','image'])('人工移除角色后保留其他建议，%s 操作的移除标记也能撤销', async via => {
@@ -178,7 +183,7 @@ it.each(['bulk','image'])('人工移除角色后保留其他建议，%s 操作�
     ? await ds.bulkImages({ids:[img('i27')],action:{type:'unassign',characterId:character}})
     : await ds.updateImage(img('i27'),{characterIds:[]});
   expect(db().prepare('SELECT result FROM pixiv_character_checks WHERE image_id=?').pluck().get(id)).toBe('dismissed');
-  expect(db().prepare('SELECT COUNT(*) FROM character_suggestions WHERE image_id=?').pluck().get(id)).toBeGreaterThan(0);
+  expect(db().prepare('SELECT COUNT(*) FROM v_character_suggestions WHERE image_id=?').pluck().get(id)).toBeGreaterThan(0);
   queuePixivImages(ds.ctx);
   expect(pendingPixivCount(ds.ctx)).toBe(0);
   await ds.undo(removed.undoToken!);

@@ -1,5 +1,5 @@
 import type { Db } from '../../db/connection.ts';
-import type { UndoRecorder } from './undo.ts';
+import type { UndoRecorder } from '../../datasource/sqlite/undo.ts';
 
 /** 用户实际移除角色后，不把其余旧建议在补跑时重新采纳；撤销操作同时恢复这个状态。 */
 export function dismissPixivCharacterChecks(db: Db, undo: UndoRecorder | null, ids: number[], now: string): void {

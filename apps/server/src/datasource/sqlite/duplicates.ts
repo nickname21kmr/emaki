@@ -1,7 +1,7 @@
 /**
  * 重复组的查询与处理（T16）。组本身由 services/dedupe/DedupeService 生成。
  * resolve 把没选中的移到回收站（先在库里标记，晚一点才真的移，见 pendingTrash.ts），可撤销。
- * 删之前把副本上的整理（角色、收藏、原创、分级、放下、画师、来源）并到保留的图上，免得跟着副本一起没了（角色等经归类模块，附录 #12）。
+ * 删之前把副本上的整理（角色、收藏、原创、分级、放下、画师、来源）并到保留的图上，免得跟着副本一起没了（全部经归类模块，附录 #12）。
  */
 import type { Db } from '../../db/connection.ts';
 import type { DuplicateGroup, ID, ListDuplicatesQuery, MutationResult } from '@emaki/shared';
@@ -12,8 +12,10 @@ import { toAbs } from '../../services/fs/paths.ts';
 import type { SqliteContext } from './context.ts';
 import type { PendingTrash } from './pendingTrash.ts';
 import type { UndoRecorder } from './undo.ts';
+import { carryArtists } from '../../domain/curation/artists.ts';
 import { carryLinks } from '../../domain/curation/links.ts';
 import { carryMarks } from '../../domain/curation/marks.ts';
+import { carrySource } from '../../domain/curation/source.ts';
 import { hydrateImages, IMAGE_COLS, type ImageRow } from './hydrate.ts';
 import { iso, parseId, toId } from './sql.ts';
 
@@ -33,47 +35,20 @@ export const SET_MAX_DISTANCE = 16;
 /** 超过这么多张的文件夹（手机备份根目录、QQ 缓存）里「同文件夹」说明不了什么，不归套 */
 export const SET_FOLDER_MAX = 500;
 
-/** carryOver 在这里改的 images 列（撤销时还原）；角色、收藏、原创、分级、放下由归类模块改，自己记撤销 */
-const CARRY_COLS = ['source_site', 'source_post_id', 'source_artist', 'source_url', 'source_manual', 'artist_manual', 'artist_checked_at'];
-
 /**
  * 移到回收站之前，把副本上的整理并到保留的图上（附录 #12）。保留的图自己已有的不动。必须在事务内调用。
- * - 角色关联、收藏、原创、手动分级、放下：归类模块的命令（carryLinks、carryMarks）。手动的关联搬成手动，
- *   自动的搬成自动（规则 dedupe-merge），保留的图上被否决过的不搬；
- * - 手动确认的来源、手动改的画师：还在这里搬（来源和画师的证据 / 决定还没拆开，P3b）。
+ * 全部经归类模块的命令（各自记撤销）：角色关联（carryLinks：手动的搬成手动，自动的搬成自动、规则 dedupe-merge，
+ * 保留的图上被否决过的不搬）、收藏、原创、手动分级、放下（carryMarks）、手动确认的来源（carrySource）、手动改的画师（carryArtists）。
  * 返回各类改了的图（声明变化用）
  */
 function carryOver(ctx: SqliteContext, u: UndoRecorder, keep: number[], gone: number[], now: string) {
   const db = ctx.db;
-  const p = { k: JSON.stringify(keep), g: JSON.stringify(gone), now };
-  const K = 'images.id IN (SELECT value FROM json_each(@k)) AND images.trashed_at IS NULL';
-  const G = 'd.id IN (SELECT value FROM json_each(@g))';
-  const kept = db.prepare('SELECT id FROM images WHERE id IN (SELECT value FROM json_each(?)) AND trashed_at IS NULL').pluck().all(p.k) as number[];
+  const kept = db.prepare('SELECT id FROM images WHERE id IN (SELECT value FROM json_each(?)) AND trashed_at IS NULL').pluck().all(JSON.stringify(keep)) as number[];
   carryLinks(ctx, u, kept, gone);
-  const originalWork = (db.prepare("SELECT id FROM works WHERE danbooru_tag = 'original'").pluck().get() as number | undefined) ?? null;
-  const marks = carryMarks(ctx, u, kept, gone, originalWork);
-  // 来源：取第一张手动确认过的副本（有链接的优先于手动清空的）。保留的图自己确认过的不动，自动解析出来的可以被盖掉。
-  // 要放在画师前面，画师那段没有手动副本时会提前 return
-  const srcId = db
-    .prepare(`SELECT d.id FROM images d WHERE ${G} AND d.source_manual = 1 ORDER BY d.source_url IS NULL, d.id LIMIT 1`)
-    .pluck()
-    .get(p) as number | undefined;
-  if (srcId !== undefined)
-    db.prepare(
-      `UPDATE images SET (source_site, source_post_id, source_artist, source_url, source_manual) =
-         (SELECT source_site, source_post_id, source_artist, source_url, 1 FROM images WHERE id = @srcId)
-       WHERE ${K} AND source_manual = 0`,
-    ).run({ ...p, srcId });
-  // 画师：取第一张手动改过的副本，整组照搬
-  const src = db.prepare(`SELECT d.id FROM images d WHERE ${G} AND d.artist_manual = 1 ORDER BY d.id LIMIT 1`).pluck().get(p) as number | undefined;
-  if (src === undefined) return marks;
-  const targets = db.prepare(`SELECT id FROM images WHERE ${K} AND artist_manual = 0`).pluck().all(p) as number[];
-  for (const t of targets) {
-    db.prepare('DELETE FROM image_artists WHERE image_id = ?').run(t);
-    db.prepare('INSERT INTO image_artists (image_id, artist, score) SELECT ?, artist, score FROM image_artists WHERE image_id = ?').run(t, src);
-    db.prepare('UPDATE images SET artist_manual = 1, artist_checked_at = COALESCE(artist_checked_at, ?) WHERE id = ?').run(now, t);
-  }
-  return marks;
+  const marks = carryMarks(ctx, u, kept, gone);
+  carrySource(ctx, u, kept, gone);
+  const artists = carryArtists(ctx, u, kept, gone, now);
+  return { ...marks, artists };
 }
 
 /** 来源四列拼成一个键：比较合并前后来源有没有变 */
@@ -248,19 +223,16 @@ export class DuplicateQueries {
     let batchId = 0;
     const res = this.ctx.mutate((u) => {
       const db = this.ctx.db;
-      // carryOver 在这里改的画师和来源：先记下来，撤销时还原（归类模块改的自己记撤销）
-      u.set('image_artists', 'image_id IN (SELECT value FROM json_each(?))', [JSON.stringify(kept)]);
-      u.columns('images', CARRY_COLS, kept);
       u.columns('images', ['trashed_at'], gone);
       u.columns('duplicate_groups', ['resolved_at'], [g.id]);
       const sourceBefore = sourceKeys(db, kept);
-      // 角色、收藏、原创、分级、放下由归类模块并过去并声明变化（套排除规则、重新登记 Pixiv 等由反应做）
-      carryOver(this.ctx, u, kept, gone, now);
+      // 角色、收藏、原创、分级、放下、来源、画师由归类模块并过去并声明变化（套排除规则、重新登记 Pixiv 等由反应做）
+      const carried = carryOver(this.ctx, u, kept, gone, now);
       db.prepare('UPDATE images SET trashed_at = ? WHERE id IN (SELECT value FROM json_each(?))').run(now, JSON.stringify(gone));
       // 来源变了：刷新同投稿组、清过期的 Pixiv 建议、重新登记都由反应做（image.sourceChanged）
       const sourceAfter = sourceKeys(db, kept);
       this.ctx.changed({ type: 'image.trashed', ids: gone });
-      this.ctx.changed({ type: 'curation.artistsChanged', ids: kept });
+      this.ctx.changed({ type: 'curation.artistsChanged', ids: carried.artists });
       this.ctx.changed({ type: 'image.sourceChanged', ids: kept.filter((id) => sourceAfter.get(id) !== sourceBefore.get(id)) });
       db.prepare('UPDATE duplicate_groups SET resolved_at = ? WHERE id = ?').run(now, g.id);
       this.ctx.changed({ type: 'duplicates.changed', ids: [...kept, ...gone] });

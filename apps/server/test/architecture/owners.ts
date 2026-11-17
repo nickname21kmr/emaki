@@ -50,10 +50,13 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   // 分析：派生数据
   image_fingerprints: 'analysis',
   'images#analysis': 'analysis',
-  // 证据：模型标签、建议（P3 改成派生视图）、Pixiv 和 Danbooru 的缓存与待查记录、识别进度、文件名解析的来源
+  // 证据：模型标签、按「图片 × 来源」的角色 / 作品候选和原创信号（建议是它派生的视图，P3b）、Pixiv 和 Danbooru 的缓存与待查记录、
+  // 识别进度、文件名解析的来源
   tags: 'evidence',
   image_tags: 'evidence',
-  character_suggestions: 'evidence',
+  image_evidence: 'evidence',
+  character_evidence: 'evidence',
+  work_evidence: 'evidence',
   pixiv_artwork_cache: 'evidence',
   pixiv_character_checks: 'evidence',
   pixiv_unavailable_posts: 'evidence',

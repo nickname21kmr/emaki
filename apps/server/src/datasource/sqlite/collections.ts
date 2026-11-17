@@ -125,7 +125,7 @@ export class CollectionQueries {
       `SELECT i.collection_id AS c, ic.character_id AS x, COUNT(*) AS n FROM v_counted_images i
        JOIN image_characters ic ON ic.image_id = i.id WHERE i.collection_id IS NOT NULL GROUP BY 1, 2`,
     );
-    // 与 v_image_works 同口径（经角色的作品 ∪ image_copyrights），但直接连底表：
+    // 与 v_image_works 同口径（经角色的作品 ∪ 手动指定的作品 ∪ 原创图的「原创」作品），但直接连底表：
     // 连视图时 SQLite 会把整个 UNION 视图对每一行重扫一遍，副本上要 11 秒
     const workHits = hits(
       `SELECT c, x, COUNT(*) AS n FROM (
@@ -135,7 +135,10 @@ export class CollectionQueries {
          UNION
          SELECT i.collection_id, i.id, ico.work_id FROM v_counted_images i
            JOIN image_copyrights ico ON ico.image_id = i.id
-           WHERE i.collection_id IS NOT NULL)
+           WHERE i.collection_id IS NOT NULL AND i.original_at IS NULL
+         UNION
+         SELECT i.collection_id, i.id, ow.id FROM v_counted_images i JOIN works ow ON ow.danbooru_tag = 'original'
+           WHERE i.collection_id IS NOT NULL AND i.original_at IS NOT NULL)
        GROUP BY c, x`,
     );
     const manual = (table: string, col: string) => {

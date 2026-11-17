@@ -6,10 +6,11 @@
  * - 自动（auto）：规则做的，rule 写规则名和版本。自动的永远不覆盖手动的，也不越过用户的否决。
  */
 import { currentActor } from '../../propagation/actor.ts';
+import type { CharacterEvidenceProvider } from '../evidence/store.ts';
 
 export type Decision = 'manual' | 'auto';
-/** 证据来源（模型、Pixiv；以后的插件来源也记在这里） */
-export type EvidenceProvider = 'tagger' | 'pixiv';
+/** 证据来源（模型、Pixiv；以后的插件来源记成 plugin:<id>） */
+export type EvidenceProvider = CharacterEvidenceProvider;
 
 export interface Evidence {
   provider: EvidenceProvider;
@@ -31,16 +32,16 @@ export interface Provenance {
 }
 
 /**
- * 自动决定的规则（名字@版本）。判断本身在 auto.ts；P3b 统一成 decideAuto 之后这里换成它的版本号。
+ * 自动决定的规则（名字@版本）。P3b 起只有一条规则 decideAuto（auto.ts），关联记 auto-accept@2、原创记 auto-original@1，
+ * 首次识别、补采纳、改类型、Pixiv 补充写的都是它；依据哪个来源看来历里的证据。
+ * 下面的旧规则只出现在 P3a 写的数据里（auto-accept@1 识别写入、promote@1 补采纳、pixiv@1 Pixiv 补充）；
  * 迁移 034 转过来的旧关联是 legacy:*（见迁移文件的说明）。
  */
 export const RULES = {
-  /** 识别写入：分数到了自动采纳阈值 */
-  autoAccept: 'auto-accept@1',
-  /** 按当前阈值补采纳留着的建议（设置页的按钮；手动改类型之后也会跑一遍） */
-  promote: 'promote@1',
-  /** Pixiv 补充：投稿标签明确对上了角色 */
-  pixiv: 'pixiv@1',
+  /** 唯一的自动决定规则：证据分数达到这个来源的自动阈值，关联角色 */
+  auto: 'auto-accept@2',
+  /** 同一条规则：证据里有原创信号，标原创 */
+  autoOriginal: 'auto-original@1',
   /** 查重合并：副本上的自动关联搬到保留的图上（证据照搬副本的） */
   dedupeMerge: 'dedupe-merge@1',
 } as const;

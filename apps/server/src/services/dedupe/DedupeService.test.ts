@@ -362,7 +362,9 @@ describe('DedupeService + 接口（:memory:）', () => {
     const [g] = await ds.listDuplicates({});
     await ds.resolveDuplicate(g!.id, [String(a)]);
     const wid = (await ds.getStats()).originalWorkId!;
-    expect(db.prepare('SELECT score FROM image_copyrights WHERE image_id = ? AND work_id = ?').all(a, Number(wid))).toEqual([{ score: null }]);
+    // 原创作品由 original_at 派生（迁移 035）；搬过来的是手动的原创决定
+    expect(db.prepare('SELECT work_id FROM v_image_works WHERE image_id = ?').pluck().all(a)).toEqual([Number(wid)]);
+    expect(db.prepare('SELECT original_decision FROM images WHERE id = ?').pluck().get(a)).toBe('manual');
     expect((await ds.getImage(String(a)))!.original).toBe(true);
     expect((await ds.listImages({ workId: wid })).items.map((x) => x.id)).toEqual([String(a)]);
     expect((await ds.listWorks({})).find((w) => w.id === wid)!.imageCount).toBe(1);

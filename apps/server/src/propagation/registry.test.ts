@@ -93,6 +93,8 @@ describe('反应注册表', () => {
       'reparseSource',
       'reclassifyByPath',
       'dropStalePixivEvidence',
+      // P3b：唯一的自动决定规则（decideAuto）只由这个反应调用
+      'reevaluateAuto',
       'reevaluateExclusions',
       'queuePixivCheck',
       'refreshPostGroups',

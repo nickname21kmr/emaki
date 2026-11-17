@@ -1,6 +1,7 @@
 import type { ImageSource, Settings } from '@emaki/shared';
 import type { Db } from '../../db/connection.ts';
 import { readSettings } from '../../datasource/sqlite/settings.ts';
+import { writeParsedSources } from '../../domain/evidence/source.ts';
 import { parseSource, SOURCE_PARSER_VERSION } from './parseSource.ts';
 
 type Mode = Settings['tagger']['pixivFilenameMode'];
@@ -40,17 +41,12 @@ export function diffSources(db: Db, mode: Mode): SourceChange[] {
   return out;
 }
 
-/** 照 diffSources 的结果写库；投稿号真的变了的才去掉 Pixiv 建议（换了投稿就不再是这张图的证据）。调用方开事务 */
+/**
+ * 照 diffSources 的结果写库（证据模块写来源）。调用方开事务并声明 image.sourceChanged：
+ * 投稿号变了的，过期的 Pixiv 证据和检查记录由反应 dropStalePixivEvidence 去掉（换了投稿就不再是这张图的证据）
+ */
 export function applySourceChanges(db: Db, changes: SourceChange[]): void {
-  const upd = db.prepare(
-    'UPDATE images SET source_site = @site, source_post_id = @postId, source_artist = @artist, source_url = @url WHERE id = @id AND source_manual = 0',
-  );
-  const clearPixiv = db.prepare("DELETE FROM character_suggestions WHERE image_id=? AND source='pixiv'");
-  for (const c of changes) {
-    if (c.before.site === 'pixiv' && c.pixivPostChanged) clearPixiv.run(c.id);
-    const s = c.after;
-    upd.run({ id: c.id, site: s?.site ?? null, postId: s?.postId ?? null, artist: s?.artist ?? null, url: s?.url ?? null });
-  }
+  writeParsedSources(db, changes.map((c) => ({ id: c.id, source: c.after })));
 }
 
 /** 记下这次是按哪个规则版本、哪种模式算的 */

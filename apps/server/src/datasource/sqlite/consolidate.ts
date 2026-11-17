@@ -1,6 +1,7 @@
 import { searchKey } from '@emaki/shared';
 import type { Db } from '../../db/connection.ts';
 import { replaceAutoAliases } from '../../services/aliases.ts';
+import { moveWorkLinks } from '../../domain/curation/works.ts';
 import type { Localizer } from '../../services/i18n/localizer.ts';
 
 /**
@@ -93,10 +94,6 @@ export function consolidateWorkTags(
   const s = {
     chars: db.prepare(`INSERT OR IGNORE INTO character_works (character_id, work_id, position)
       SELECT character_id, @to, position FROM character_works WHERE work_id = @from`),
-    // 同一张图两边都挂着时：手动挂的（score 为 NULL）优先，否则取高分（SQLite 的 MAX 遇到 NULL 返回 NULL）
-    images: db.prepare(`INSERT INTO image_copyrights (image_id, work_id, score)
-      SELECT image_id, @to, score FROM image_copyrights WHERE work_id = @from
-      ON CONFLICT(image_id, work_id) DO UPDATE SET score = MAX(score, excluded.score)`),
     collections: db.prepare(`INSERT OR IGNORE INTO collection_works (collection_id, work_id, added_at)
       SELECT collection_id, @to, added_at FROM collection_works WHERE work_id = @from`),
     aliases: db.prepare(`INSERT OR IGNORE INTO aliases (owner_type, owner_id, alias, search_key, origin, visible, position)
@@ -114,7 +111,8 @@ export function consolidateWorkTags(
       if (to !== undefined) {
         const p = { from: r.id, to };
         s.chars.run(p);
-        s.images.run(p);
+        // 手动指定的作品跟着搬（归类模块）；作品证据按标签记，不用搬
+        moveWorkLinks(db, p.from, p.to);
         s.collections.run(p);
         s.aliases.run(p);
         s.dropAliases.run(r.id);

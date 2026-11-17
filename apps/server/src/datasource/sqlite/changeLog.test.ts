@@ -174,17 +174,17 @@ describe('切换 Pixiv 投稿号识别方式', () => {
     name('hina_(blue_archive)', 'ヒナ');
     queuePixivImages(ds.ctx, [img('i27'), img('i28')]);
     await syncPixivCharacters(ds.ctx, job(), ds.makeCatalog, client, 0);
-    const pixivSugs = (id: string) => db().prepare("SELECT danbooru_tag FROM character_suggestions WHERE image_id = ? AND source = 'pixiv' ORDER BY danbooru_tag").pluck().all(img(id));
+    const pixivSugs = (id: string) => db().prepare("SELECT danbooru_tag FROM v_character_suggestions WHERE image_id = ? AND source = 'pixiv' ORDER BY danbooru_tag").pluck().all(img(id));
     expect(pixivSugs('i27')).toEqual(['hina_(blue_archive)', 'yuuka_(blue_archive)']);
-    // i28 本来就有 hina 的模型建议，Pixiv 只补 yuuka
-    expect(pixivSugs('i28')).toEqual(['yuuka_(blue_archive)']);
+    // i28 本来就有 hina 的模型建议：迁移 035 之后两个来源各一份证据（以前共用主键，Pixiv 只能补 yuuka，附录 #9）
+    expect(pixivSugs('i28')).toEqual(['hina_(blue_archive)', 'yuuka_(blue_archive)']);
 
     expect(await ds.previewSourceMode('strict')).toEqual({ mode: 'strict', changed: 1, suggestionsDropped: 1, requeued: 0, cached: 0 });
     const toStrict = await ds.setSourceMode('strict');
     expect(toStrict.message).toBe('已改为严格：1 张图的来源变了；1 张的 Pixiv 建议先去掉了（投稿号变了，切回来能找回）');
     expect(pixivSugs('i27')).toEqual([]);
     // 投稿号没变的不动
-    expect(pixivSugs('i28')).toEqual(['yuuka_(blue_archive)']);
+    expect(pixivSugs('i28')).toEqual(['hina_(blue_archive)', 'yuuka_(blue_archive)']);
     expect((await ds.getSettings()).tagger.pixivFilenameMode).toBe('strict');
 
     expect(await ds.previewSourceMode('broad')).toEqual({ mode: 'broad', changed: 1, suggestionsDropped: 0, requeued: 1, cached: 1 });

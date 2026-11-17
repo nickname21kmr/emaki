@@ -1,115 +1,193 @@
 /**
- * 自动关联的「判断」（P3a）：三个入口——识别写入、补采纳、Pixiv 补充——各自现有的判断原样搬到这里，作为 judgeAutoLink 一个函数供各入口调用；
- * 达标的再由各入口交给 links.ts 的 link（带 auto 来历）写入。
+ * 唯一的自动决定规则 decideAuto（docs/core-architecture.md 第 4.2 节，P3b；附录 #1、#2、#3，D2、D8）。
  *
- * 现在三个入口的判断还不一样（附录 #1：识别写入能不能建档取决于批次里的先后；补采纳按整批收集新标签；Pixiv 有自己的 automatic），
- * 这是 P3b 的事：P3b 把 judgeAutoLink 换成唯一的纯函数 decideAuto（docs/core-architecture.md 第 4.2 节），由反应 reevaluateAuto 调用，
- * 各入口只产出证据。到时只换这个文件，写入一侧（link 和来历）不用动。
+ * 纯函数：同样的输入一定得到同样的输出，不读库、不看时间。只有反应 reevaluateAuto（reevaluate.ts）调用它并写入结果；
+ * 首次识别、重新识别、补采纳、改类型、Pixiv 补充都经过同一个反应，结果天然一致。
+ *
+ * 规则：
+ * 1. 加关联：图片没放下、没归原创、不在漫画区、没被排除（且可见）时，证据里分数达到这个来源自动阈值的候选
+ *    （阈值按来源取自设置，见 reevaluate.ts 的 autoSettings）都关联上；用户否决过的不加；
+ *    候选还没有角色时，插画、漫画、动图上可以建档，别的类型只在同一轮里别的图会建这个角色时复用（和先后无关，附录 #1）。
+ * 2. 撤回（D2）：只在某个来源的证据刚换过时（fresh：首次识别、重新识别、Pixiv 补充、来源失效）；
+ *    自动的、依据的就是这个来源的关联，新证据里没有这个候选或分数低于这个来源的自动阈值，就撤回。
+ *    手动的、来历不明的（rule 是 legacy）永远不动。阈值调高不会撤回（没有新证据），补采纳只会新增。
+ *    别的来源的证据仍然支持这个角色时不真撤回：同一个决定里撤回再加回，写入时只改来历。
+ * 3. 原创（D8）：证据里有原创信号（Pixiv 投稿标了原创）、图片还没有原创的决定、也还没有角色时，自动标原创（auto / 信号的来源）；
+ *    自动标的原创在依据的来源证据刚换过、信号不在了时撤回。手动标原创、手动取消原创都是决定，自动永远不改。
+ * 4. 所在合集是否整本处理（inBook）现在不影响决定：本子的页照样按证据关联角色（角色在本子里出现的页数按页上的关联算），
+ *    它只影响要不要去查 Pixiv（证据的获取，services/pixiv/sync.ts）。合集类型变了照样重新评估，规则以后要区分时不用再接线。
  */
 import type { ContentKind } from '@emaki/shared';
-import type { SqliteContext } from '../../datasource/sqlite/context.ts';
-import type { UndoRecorder } from '../../datasource/sqlite/undo.ts';
-import { insertDanbooruCharacter } from '../../datasource/sqlite/characters.ts';
-import { iso, UNRECOGNIZED } from '../../datasource/sqlite/sql.ts';
-import { IN_COMIC } from '../../services/classify/comicAreas.ts';
-import type { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
-import { dropSuggestions } from '../evidence/suggestions.ts';
-import { linkEach, vetoChecker, type LinkItem } from './links.ts';
-import { auto, RULES } from './provenance.ts';
+import type { CharacterEvidenceProvider } from '../evidence/store.ts';
+import { LEGACY_RULE_PREFIX, RULES, type Decision } from './provenance.ts';
 
-/** 达标时可复用已有角色；插画、漫画和动图也可建立角色（以前的 services/tagger/characterAcceptance.ts） */
-export function canAutoAcceptCharacter(kind: ContentKind, characterId: number | string | null): boolean {
-  return characterId !== null || kind === 'illustration' || kind === 'comic' || kind === 'animated';
+/** 能自动建档的类型：插画、漫画、动图（截图、文字、照片、表情上认出的新角色只进建议，BI-15） */
+export const AUTO_CREATE_KINDS: ReadonlySet<ContentKind> = new Set<ContentKind>(['illustration', 'comic', 'animated']);
+
+/** 图片上已有的原创决定 */
+export interface OriginalFacts {
+  /** 现在标着原创（original_at 有值） */
+  marked: boolean;
+  /** manual：用户标的或用户取消过的；auto：自动规则标的；null：还没有决定 */
+  decision: Decision | null;
+  rule: string | null;
+  /** 自动标原创依据的证据来源 */
+  provider: string | null;
 }
 
-/** 一个自动关联的候选：哪个入口、哪张图、哪个角色（还没有就是 null） */
-export type AutoCandidate =
-  /** 识别写入：分数已经到了自动采纳阈值；allowed = 图没放下、没归原创 */
-  | { entry: 'recognize'; kind: ContentKind; allowed: boolean; characterId: number | null }
-  /** 补采纳：留着的建议分数到了当前阈值；batchNewTags = 这一批里能建档的新标签（同批别的图能建档，这张也复用） */
-  | { entry: 'promote'; kind: ContentKind; characterId: number | null; tag: string; batchNewTags: ReadonlySet<string> }
-  /** Pixiv 补充：匹配器说能自动关联（投稿标签明确对上了角色） */
-  | { entry: 'pixiv'; automatic: boolean };
-
-/**
- * 能不能自动关联（现有的三套判断，原样）。否决、已有关联由 link 处理，这里不管。
- * P3b 换成 decideAuto
- */
-export function judgeAutoLink(c: AutoCandidate): boolean {
-  switch (c.entry) {
-    case 'recognize':
-      return c.allowed && canAutoAcceptCharacter(c.kind, c.characterId);
-    case 'promote':
-      return canAutoAcceptCharacter(c.kind, c.characterId) || c.batchNewTags.has(c.tag);
-    case 'pixiv':
-      return c.automatic;
-  }
+/** 图片事实 */
+export interface ImageFacts {
+  id: number;
+  /** 最终类型 */
+  kind: ContentKind;
+  shelved: boolean;
+  original: OriginalFacts;
+  /** 所在合集整本处理（本子、画集） */
+  inBook: boolean;
+  /** 在按漫画导入的范围里 */
+  inComicArea: boolean;
+  /** 被排除，或者不可见（文件夹停用、进了回收站、文件不在） */
+  excluded: boolean;
 }
 
-/** 补采纳要用的：角色目录（标签 → 角色）、当前的自动采纳阈值 */
-export interface PromoteDeps {
-  catalog: () => CharacterCatalog;
-  autoAcceptThreshold: () => number;
+/** 一个来源对这张图的证据 */
+export interface Evidence {
+  provider: CharacterEvidenceProvider;
+  /** 这个来源的证据刚换过（或刚被去掉）：只有这时才撤回依据它的自动决定（D2） */
+  fresh: boolean;
+  /** 原创信号 */
+  original: boolean;
+  candidates: readonly { tag: string; characterId: number | null; score: number }[];
+}
+
+/** 图上已有的一条关联和它的来历 */
+export interface CurrentLink {
+  characterId: number;
+  decision: Decision;
+  rule: string | null;
+  /** 依据的证据来源；手动的、来历不明的为空 */
+  provider: string | null;
+  tag: string | null;
+  score: number | null;
+}
+
+/** 当前决定 */
+export interface Decisions {
+  links: readonly CurrentLink[];
+  /** 用户在这张图上否决过的角色 */
+  vetoed: ReadonlySet<number>;
+}
+
+/** 设置：每个来源的自动阈值 */
+export interface AutoSettings {
+  threshold(provider: CharacterEvidenceProvider): number;
+}
+
+/** 编目解析 */
+export interface CatalogView {
+  /** 候选对应的已有角色；没有（或自建角色已经不在了）是 null */
+  resolve(candidate: { tag: string; characterId: number | null }): number | null;
+  /** 这个标签能建档（Danbooru 标签；自建角色的占位标签不能） */
+  canCreate(tag: string): boolean;
+  /** 同一轮里别的图会给这个标签建档 */
+  creating(tag: string): boolean;
+}
+
+/** 一条自动关联：characterId 为空表示要先给 tag 建档 */
+export interface AutoLink {
+  characterId: number | null;
+  tag: string | null;
+  provider: CharacterEvidenceProvider;
+  score: number | null;
+}
+
+export interface CharacterSeed {
+  tag: string;
+}
+
+/** 原创的自动决定：标上（依据哪个来源、哪条规则）或撤回自动标的 */
+export type AutoOriginal = { value: true; provider: CharacterEvidenceProvider; rule: string } | { value: false };
+
+export interface AutoDecision {
+  link: AutoLink[];
+  unlink: AutoLink[];
+  createCharacters: CharacterSeed[];
+  original?: AutoOriginal;
 }
 
 interface Candidate {
-  imageId: number;
   tag: string;
+  characterId: number | null;
+  provider: CharacterEvidenceProvider;
   score: number;
-  kind: ContentKind;
+  accepted: boolean;
 }
 
-/** 预览和执行共用一份计划。同批能建档的角色也可以被其他图片复用。 */
-function planPromotions(ctx: SqliteContext, ids: number[] | null, deps: PromoteDeps, kind?: ContentKind) {
-  const rows = ctx.stmt(`SELECT cs.image_id AS imageId, cs.danbooru_tag AS tag, cs.score, i.content_kind AS kind
-    FROM character_suggestions cs JOIN v_counted_images i ON i.id = cs.image_id
-    WHERE cs.source = 'tagger' AND cs.score >= @threshold AND cs.danbooru_tag NOT LIKE 'emaki:%'
-      AND i.shelved_at IS NULL AND i.original_at IS NULL AND NOT ${IN_COMIC('i')}
-      AND (@ids IS NULL OR i.id IN (SELECT value FROM json_each(@ids)))
-      AND (@kind IS NULL OR (i.content_kind = @kind AND ${UNRECOGNIZED}))
-    ORDER BY cs.score DESC, cs.image_id, cs.danbooru_tag`)
-    .all({ ids: ids === null ? null : JSON.stringify(ids), threshold: deps.autoAcceptThreshold(), kind: kind ?? null }) as Candidate[];
-  const catalog = deps.catalog();
-  const linked = ctx.stmt('SELECT 1 FROM image_characters WHERE image_id = ? AND character_id = ?');
-  const vetoed = vetoChecker(ctx.db);
-  const candidates = rows.map(row => ({ ...row, characterId: catalog.resolveCharacterId(row.tag), normalized: catalog.normalizeTag(row.tag) }));
-  const batchNewTags = new Set(candidates.filter(row => row.characterId === null && canAutoAcceptCharacter(row.kind, null)).map(row => row.normalized));
-  const additions: typeof candidates = [];
-  const remove: Candidate[] = [];
-  const seen = new Set<string>();
-  for (const row of candidates) {
-    const { imageId, characterId, normalized } = row;
-    if (!judgeAutoLink({ entry: 'promote', kind: row.kind, characterId, tag: normalized, batchNewTags })) continue;
-    remove.push(row);
-    if (characterId !== null && (linked.get(imageId, characterId) || vetoed(imageId, characterId))) continue;
-    const key = JSON.stringify([imageId, characterId ?? normalized]);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    additions.push(row);
+const byScore = (a: Candidate, b: Candidate) =>
+  b.score - a.score || (a.provider < b.provider ? -1 : a.provider > b.provider ? 1 : 0) || (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0);
+
+export function decideAuto(image: ImageFacts, evidence: readonly Evidence[], current: Decisions, settings: AutoSettings, catalog: CatalogView): AutoDecision {
+  const out: AutoDecision = { link: [], unlink: [], createCharacters: [] };
+  const cands: Candidate[] = [];
+  for (const e of evidence) {
+    const threshold = settings.threshold(e.provider);
+    for (const c of e.candidates) {
+      const characterId = catalog.resolve(c);
+      // 自建角色已经不在了（合并、删除）：这个候选作废
+      if (characterId === null && c.characterId !== null) continue;
+      cands.push({ tag: c.tag, characterId, provider: e.provider, score: c.score, accepted: c.score >= threshold });
+    }
   }
-  return { catalog, additions, remove };
-}
+  cands.sort(byScore);
+  const supports = (characterId: number, provider?: string) =>
+    cands.find((c) => c.accepted && c.characterId === characterId && (provider === undefined || c.provider === provider));
 
-export function countPromotable(ctx: SqliteContext, deps: PromoteDeps, kind?: ContentKind): { images: number; suggestions: number } {
-  const { additions } = planPromotions(ctx, null, deps, kind);
-  return { images: new Set(additions.map(row => row.imageId)).size, suggestions: additions.length };
-}
+  // 1. 撤回（D2）
+  for (const l of current.links) {
+    if (l.decision !== 'auto' || l.rule === LEGACY_RULE_PREFIX || !l.provider) continue;
+    if (!evidence.some((e) => e.provider === l.provider && e.fresh)) continue;
+    if (supports(l.characterId, l.provider)) continue;
+    out.unlink.push({ characterId: l.characterId, tag: l.tag, provider: l.provider as CharacterEvidenceProvider, score: l.score });
+    const other = supports(l.characterId);
+    if (other) out.link.push({ characterId: l.characterId, tag: other.tag, provider: other.provider, score: other.score });
+  }
 
-/**
- * 按当前阈值补采纳留着的模型建议（设置页的按钮；手动改类型之后也跑一遍）：复用保存过的分数，在调用方的可撤销事务里写关联，
- * 来历是 auto / promote@1，证据是那条建议。返回新关联了角色的图
- */
-export function promoteSuggestions(ctx: SqliteContext, u: UndoRecorder, ids: number[] | null, deps: PromoteDeps, kind?: ContentKind): number[] {
-  const { catalog, additions, remove } = planPromotions(ctx, ids, deps, kind);
-  if (!remove.length) return [];
-  const now = iso(ctx.clock());
-  const items: LinkItem[] = additions.map((row) => ({
-    imageId: row.imageId,
-    characterId: row.characterId ?? insertDanbooruCharacter(u, catalog, row.normalized, { now }).id,
-    provenance: auto(RULES.promote, now, { provider: 'tagger', tag: row.normalized, score: row.score }),
-  }));
-  const { linked } = linkEach(ctx, u, items);
-  // 评估过的建议都去掉（包括已经关联、被否决的）
-  dropSuggestions(ctx.db, u, remove.map((r) => ({ imageId: r.imageId, tag: r.tag })));
-  return [...new Set(linked.map((x) => x.imageId))];
+  // 2. 加关联
+  const linked = new Set(current.links.map((l) => l.characterId));
+  const eligible = !image.shelved && !image.original.marked && !image.inComicArea && !image.excluded;
+  if (eligible) {
+    const seen = new Set<string>();
+    const createHere = AUTO_CREATE_KINDS.has(image.kind);
+    for (const c of cands) {
+      if (!c.accepted) continue;
+      const key = c.characterId !== null ? `#${c.characterId}` : c.tag;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const link = { characterId: c.characterId, tag: c.tag, provider: c.provider, score: c.score };
+      if (c.characterId !== null) {
+        if (!linked.has(c.characterId) && !current.vetoed.has(c.characterId)) out.link.push(link);
+      } else if (catalog.canCreate(c.tag)) {
+        if (createHere) {
+          out.createCharacters.push({ tag: c.tag });
+          out.link.push(link);
+        } else if (catalog.creating(c.tag)) out.link.push(link);
+      }
+    }
+  }
+
+  // 3. 原创（D8）
+  const o = image.original;
+  if (o.decision !== 'manual') {
+    const signal = evidence.find((e) => e.original);
+    if (!o.marked) {
+      // 已经有角色的图不自动标原创（以前 Pixiv 只处理没有角色的图）；同一份证据里一起关联上的自建原创角色不算
+      if (signal && !current.links.length && !image.shelved && !image.inComicArea && !image.excluded) {
+        out.original = { value: true, provider: signal.provider, rule: RULES.autoOriginal };
+      }
+    } else if (o.decision === 'auto' && o.rule !== LEGACY_RULE_PREFIX && o.provider) {
+      const e = evidence.find((x) => x.provider === o.provider && x.fresh);
+      if (e && !e.original) out.original = { value: false };
+    }
+  }
+  return out;
 }

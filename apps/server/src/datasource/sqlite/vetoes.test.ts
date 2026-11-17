@@ -65,7 +65,7 @@ it('合并角色：被合并角色的记录搬到目标上，撤销后还原', a
 it('调低阈值后的采纳按钮：跳过去掉过的角色，那条建议删掉；可撤销', async () => {
   await ds.updateImage('2', { characterIds: [] });
   ds.ctx.db.exec(`
-    INSERT INTO character_suggestions (image_id, danbooru_tag, score) VALUES (2, 'mika_(blue_archive)', 0.7), (2, 'hina_(blue_archive)', 0.7);
+    INSERT INTO character_evidence (image_id, tag, score, provider) VALUES (2, 'mika_(blue_archive)', 0.7, 'tagger'), (2, 'hina_(blue_archive)', 0.7, 'tagger');
   `);
   await ds.updateSettings({ tagger: { autoAcceptThreshold: 0.65 } });
   // 保存设置不会自动归
@@ -73,10 +73,12 @@ it('调低阈值后的采纳按钮：跳过去掉过的角色，那条建议删�
   expect(await ds.promotableSuggestions()).toEqual({ images: 1, suggestions: 1, threshold: 0.65 });
   const r = await ds.promoteSuggestions();
   expect(chars(2)).toEqual([2]);
-  expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM character_suggestions').pluck().get()).toBe(0);
+  expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM v_character_suggestions').pluck().get()).toBe(0);
   await ds.undo(r.undoToken!);
   expect(chars(2)).toEqual([]);
-  expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM character_suggestions').pluck().get()).toBe(2);
+  // 建议是派生的（附录 #9）：去掉过的角色（否决）不再算建议，只剩 hina；证据两条都还在
+  expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM v_character_suggestions').pluck().get()).toBe(1);
+  expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM character_evidence WHERE image_id = 2').pluck().get()).toBe(2);
 });
 
 it('旧建议补采纳支持动图建档和别册复用，合并标签只计一次并保留最高分', async () => {
@@ -87,11 +89,11 @@ it('旧建议补采纳支持动图建档和别册复用，合并标签只计一�
     UPDATE images SET content_kind = 'animated' WHERE id = 1;
     UPDATE images SET content_kind = 'screenshot' WHERE id = 2;
     INSERT INTO danbooru_tag_redirects (tag, character_id) VALUES ('merged_mika', 1);
-    INSERT INTO character_suggestions (image_id, danbooru_tag, score, source) VALUES
+    INSERT INTO character_evidence (image_id, tag, score, provider) VALUES
       (1, 'new_character', 0.91, 'tagger'), (2, 'new_character', 0.96, 'tagger'),
       (2, 'merged_mika', 0.99, 'tagger'), (2, 'hina_(blue_archive)', 0.88, 'tagger'),
       (1, 'merged_hina', 0.92, 'tagger'), (2, 'merged_hina', 0.95, 'tagger'),
-      (2, 'unknown_screenshot', 0.99, 'tagger'), (1, 'pixiv_character', 0.99, 'pixiv');
+      (2, 'unknown_screenshot', 0.99, 'tagger'), (1, 'pixiv_character', 0, 'pixiv');
     INSERT INTO danbooru_tag_redirects (tag, character_id) VALUES ('merged_hina', 2);
   `);
   expect(await ds.promotableSuggestions('animated')).toEqual({ images: 0, suggestions: 0, threshold: 0.85 });
@@ -102,10 +104,12 @@ it('旧建议补采纳支持动图建档和别册复用，合并标签只计一�
   expect(chars(1)).toEqual([2, created]);
   expect(chars(2)).toEqual([2, created]);
   expect(db.prepare('SELECT evidence_score FROM image_characters WHERE image_id = 2 AND character_id = 2').pluck().get()).toBe(0.95);
-  expect(db.prepare('SELECT danbooru_tag FROM character_suggestions ORDER BY danbooru_tag').pluck().all()).toEqual(['pixiv_character', 'unknown_screenshot']);
+  expect(db.prepare('SELECT danbooru_tag FROM v_character_suggestions ORDER BY danbooru_tag').pluck().all()).toEqual(['pixiv_character', 'unknown_screenshot']);
   expect(await ds.promotableSuggestions()).toEqual({ images: 0, suggestions: 0, threshold: 0.85 });
   await ds.undo(r.undoToken!);
   expect(chars(1)).toEqual([2]);
   expect(chars(2)).toEqual([]);
-  expect(db.prepare('SELECT COUNT(*) FROM character_suggestions').pluck().get()).toBe(8);
+  // 证据 8 条原样回来；派生的建议不含已经关联（图 1 的 merged_hina → 日奈）和去掉过（图 2 的 merged_mika → 未花）的角色（附录 #9）
+  expect(db.prepare('SELECT COUNT(*) FROM character_evidence').pluck().get()).toBe(8);
+  expect(db.prepare('SELECT COUNT(*) FROM v_character_suggestions').pluck().get()).toBe(6);
 });

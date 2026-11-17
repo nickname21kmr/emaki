@@ -1,6 +1,6 @@
 /**
- * 识别写入测速（P3a 前后对比用）：在合成的图库上，把 1,000 张图的识别结果交给 TagResultWriter 写库，打印 p50 / p95 / max。
- * 和识别任务一样每批写完调 declareTagged（变更传播：排除规则、Pixiv 排队、合集等反应）。
+ * 识别写入测速（P3a、P3b 前后对比用）：在合成的图库上，把 1,000 张图的识别结果交给 TagResultWriter 写库，打印 p50 / p95 / max。
+ * 和识别任务一样每批写完调 declareTagged（变更传播：自动决定 reevaluateAuto、排除规则、Pixiv 排队、合集等反应）。
  * 不需要真实库、不需要模型：每次运行都在临时目录里新建一个库，灌入合成数据（默认 3 万张图），跑完删掉。
  *
  *   npx tsx apps/server/scripts/bench-tagging.ts [--images 30000] [--runs 5] [--batch 8]
@@ -17,7 +17,7 @@ import { EventBus } from '../src/core/events.ts';
 import { SqliteDataSource } from '../src/datasource/sqlite/SqliteDataSource.ts';
 import type { Db } from '../src/db/connection.ts';
 import { declareTagged } from '../src/domain/evidence/reactions.ts';
-import { TagResultWriter } from '../src/services/tagger/writer.ts';
+import { TagResultWriter } from '../src/domain/evidence/tagger.ts';
 import type { HostItemResult } from '../src/services/tagger/protocol.ts';
 
 const args = process.argv.slice(2);
@@ -34,6 +34,8 @@ const T0 = Date.parse('2026-11-01T00:00:00.000Z');
 
 process.env.EMAKI_LOG_LEVEL ??= 'warn';
 
+/** 迁移 035 之后有证据表 */
+const hasEvidence = (db: Db) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'character_evidence'").get();
 /** 迁移 034 之前的库没有来历列：同一个脚本也能在旧版本上跑（前后对比） */
 const hasProvenance = (db: Db) => (db.prepare("SELECT name FROM pragma_table_info('image_characters')").pluck().all() as string[]).includes('decision');
 
@@ -101,7 +103,8 @@ function reset(): void {
   db.transaction(() => {
     const ids = `SELECT value FROM json_each('${JSON.stringify(results.map((r) => r.id))}')`;
     db.exec(`DELETE FROM image_characters WHERE image_id IN (${ids})`);
-    db.exec(`DELETE FROM character_suggestions WHERE image_id IN (${ids})`);
+    // 迁移 035 之后建议是派生的，删的是证据
+    db.exec(`DELETE FROM ${hasEvidence(db) ? 'character_evidence' : 'character_suggestions'} WHERE image_id IN (${ids})`);
     db.exec(`DELETE FROM character_vetoes WHERE image_id IN (${ids})`);
     db.exec(`DELETE FROM image_tags WHERE image_id IN (${ids})`);
     db.exec(`DELETE FROM pixiv_character_checks WHERE image_id IN (${ids})`);
@@ -122,9 +125,7 @@ function writeAll(batch: number): number {
   const writer = new TagResultWriter(db, catalog, copyrights, {
     repo: 'bench/model',
     generalThreshold: 0.35,
-    characterThreshold: 0.35,
-    autoAcceptThreshold: 0.85,
-    // 和 SqliteDataSource 给识别任务接的一样（旧版本只收第一个参数）
+    // 和 SqliteDataSource 给识别任务接的一样（旧版本只收第一个参数）；P3b 起自动关联由反应 reevaluateAuto 按设置里的阈值做
     afterBatchInTx: (ids, changes) => declareTagged(ds.ctx, ids, changes),
   });
   const t0 = performance.now();

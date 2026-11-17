@@ -7,6 +7,8 @@
  */
 import type { JobRunner } from '../../core/jobs.ts';
 import type { Db } from '../../db/connection.ts';
+import { setAutoArtists } from '../../domain/curation/artists.ts';
+import { markArtistsChecked } from '../../domain/evidence/artists.ts';
 import { toAbs } from '../fs/paths.ts';
 import { acquireTagger, releaseTagger, type TaggerLike, type TaggerStartOptions } from './client.ts';
 import { NOT_SKIPPED, noteReadFailures, skipIds } from './readBackoff.ts';
@@ -24,16 +26,12 @@ export const ARTIST_MODEL = 'A1yCE/pixai-tagger-v1.0-onnx-fp16';
  */
 const IN_FLIGHT = 2;
 
-/** 记下一张图的画师（替换旧的），并标记跑过；用户手动改过画师的图不动。必须在事务里调用 */
+/**
+ * 记下一张图的画师（替换旧的，归类模块的自动画师），并标记跑过（证据模块的进度）；用户手动改过画师的图只标跑过。必须在事务里调用
+ */
 export function writeArtists(db: Db, imageId: number, artists: [string, number][], now: string): void {
-  if (db.prepare('SELECT artist_manual FROM images WHERE id = ?').pluck().get(imageId)) {
-    db.prepare('UPDATE images SET artist_checked_at = ? WHERE id = ? AND artist_checked_at IS NULL').run(now, imageId);
-    return;
-  }
-  db.prepare('DELETE FROM image_artists WHERE image_id = ?').run(imageId);
-  const ins = db.prepare('INSERT INTO image_artists (image_id, artist, score) VALUES (?, ?, ?)');
-  for (const [a, s] of artists) ins.run(imageId, a, s);
-  db.prepare('UPDATE images SET artist_checked_at = ? WHERE id = ?').run(now, imageId);
+  const changed = setAutoArtists(db, imageId, artists);
+  markArtistsChecked(db, null, [imageId], now, !changed);
 }
 
 /**

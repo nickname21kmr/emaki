@@ -241,7 +241,7 @@ describe('sync', () => {
       INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
         VALUES (1, 1, 'a.png', 'a.png', 1, 1, 1, 'png', 's1', 'x', 'x');
       INSERT INTO characters (id, name, source, created_at) VALUES (5, '小雪', 'custom', 'x');
-      INSERT INTO character_suggestions (image_id, danbooru_tag, character_id, score, source) VALUES
+      INSERT INTO character_evidence (image_id, tag, character_id, score, provider) VALUES
         (1, 'emaki:character:5', 5, 0, 'pixiv'), (1, 'emaki:character:9', NULL, 0, 'pixiv'), (1, 'some_girl_(game)', NULL, 0, 'pixiv');`);
     const asked: string[] = [];
     const f = fakeFetch((u) => {

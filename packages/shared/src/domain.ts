@@ -444,6 +444,11 @@ export interface Settings {
     characterThreshold: number;
     /** 达到该分数自动采纳角色，低于则进入「未识别」等人工确认 */
     autoAcceptThreshold: number;
+    /**
+     * 按证据来源的自动阈值（tagger 识别模型、pixiv 投稿标签，以后的插件来源是 plugin:<id>）。
+     * 没设的来源用 autoAcceptThreshold。Pixiv 的证据：确认对上的置信度是 1，只是候选的是 0
+     */
+    autoAcceptBySource?: Partial<Record<string, number>>;
     batchSize: number;
     /**
      * 分流（2026-09-27）：文件时间早于 legacyBefore 的图用 legacyModel 识别——旧模型数据截至 2024-02，
@@ -468,8 +473,8 @@ export interface Settings {
     /** Pixiv 文件名解析：严格识别固定格式；宽泛兼容投稿号_标题。默认严格。 */
     pixivFilenameMode: 'strict' | 'broad';
     /**
-     * 「未识别」里也列出漫画页（content_kind = 'comic'，默认开）。关掉后漫画页不进未识别的列表、计数、侧栏和首页待处理，
-     * 也不自动查 Pixiv；识别照常跑，别册 · 漫画里照样能看
+     * 「未识别」里也列出漫画页（content_kind = 'comic'，默认开）。关掉后漫画页不进未识别的列表、计数、侧栏和首页待处理；
+     * 识别、自动关联、Pixiv 补充照常（和模型一样能自动关联的，Pixiv 也会查，附录 #1），别册 · 漫画里照样能看
      */
     comicInUnrecognized: boolean;
   };

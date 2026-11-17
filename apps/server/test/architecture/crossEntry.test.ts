@@ -5,8 +5,8 @@
  * 结果必须相同：同样的角色关联、同样可辨认的来历、同样的资格判断、同样会套排除规则。
  * 用的是真实的 SqliteDataSource（内存库），图片行直接插进库里，不碰文件。
  *
- * 现在不一致的用例用 it.fails 标出来，注释里写明附录编号（docs/core-architecture-inventory.md）和修好它的阶段。
- * 修好之后把 it.fails 改回 it——it.fails 的用例一旦通过，测试就会失败，提醒去改。
+ * 不一致的用例曾用 it.fails 标出来，注释里写明附录编号（docs/core-architecture-inventory.md）和修好它的阶段；
+ * P3b 之后已经全部改回 it（附录 #1、#2、#3 由唯一的自动决定规则 decideAuto / reevaluateAuto 关闭）。
  *
  * 来历从 image_characters 的统一来历字段读（P3a，迁移 034）：decision 手动 / 自动，evidence_provider 是依据的证据来源。
  */
@@ -18,12 +18,13 @@ import { searchKey } from '@emaki/shared';
 import { EventBus } from '../../src/core/events.ts';
 import { declareTagged } from '../../src/domain/evidence/reactions.ts';
 import { SqliteDataSource } from '../../src/datasource/sqlite/SqliteDataSource.ts';
+import { patchSettingsInternal, readSettings } from '../../src/datasource/sqlite/settings.ts';
 import { backfillClassification } from '../../src/services/classify/backfill.ts';
 import { CharacterCatalog } from '../../src/services/catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../../src/services/catalog/copyrights.ts';
 import type { PixivArtwork } from '../../src/services/pixiv/client.ts';
 import { pendingPixivCount, queuePixivImages, resetPixivBackoff, syncPixivCharacters } from '../../src/services/pixiv/sync.ts';
-import { TagResultWriter } from '../../src/services/tagger/writer.ts';
+import { TagResultWriter } from '../../src/domain/evidence/tagger.ts';
 import { makeTmpDir } from '../helpers/tmp.ts';
 import { scanTree } from './sqlWrites.ts';
 
@@ -106,20 +107,22 @@ function addImage(ds: SqliteDataSource, spec: ImageSpec): number {
 type Scores = [string, number][];
 
 /**
- * 首次识别写入：和识别任务一样用 TagResultWriter 写一批（同一个事务），批后声明证据、角色、类型变了（declareTagged），
- * 套排除规则、登记 Pixiv 由反应做（SqliteDataSource.open 里给识别任务接的 afterBatchInTx 就是这一步）
+ * 首次识别写入：和识别任务一样用 TagResultWriter 写一批（同一个事务），批后声明证据、类型变了（declareTagged），
+ * 自动关联（reevaluateAuto）、套排除规则、登记 Pixiv 由反应做（SqliteDataSource.open 里给识别任务接的 afterBatchInTx 就是这一步）。
+ * P3b 起自动阈值只来自设置：autoAcceptThreshold 是识别那一刻设置里的阈值，写完放回原来的（模拟「识别时阈值是多少，之后又改了」）
  */
 function recognize(ds: SqliteDataSource, batch: { id: number; general?: Scores; character: Scores }[], autoAcceptThreshold = 0.85): void {
+  const before = readSettings(ds.ctx.db).tagger.autoAcceptThreshold;
+  patchSettingsInternal(ds.ctx.db, 'tagger', { autoAcceptThreshold });
   const { catalog, copyrights } = ds.makeCatalog();
   const writer = new TagResultWriter(ds.ctx.db, catalog, copyrights, {
     repo: 'test/model',
     generalThreshold: 0.35,
-    characterThreshold: 0.35,
-    autoAcceptThreshold,
     now: () => NOW,
-    afterBatchInTx: (ids) => declareTagged(ds.ctx, ids),
+    afterBatchInTx: (ids, changes) => declareTagged(ds.ctx, ids, changes),
   });
   writer.writeBatch(batch.map((b) => ({ id: b.id, ok: true as const, rating: null, general: [['1girl', 0.9], ...(b.general ?? [])], character: b.character })));
+  patchSettingsInternal(ds.ctx.db, 'tagger', { autoAcceptThreshold: before });
 }
 
 /** 一张图的角色关联：[角色标签, 手动 / 自动, 有没有依据的证据]，按标签排序 */
@@ -158,9 +161,10 @@ const kindOf = (ds: SqliteDataSource, id: number) => ds.ctx.db.prepare('SELECT c
 const excluded = (ds: SqliteDataSource, id: number) => ds.ctx.db.prepare('SELECT excluded_by IS NOT NULL FROM images WHERE id = ?').pluck().get(id) === 1;
 
 describe('自动关联：同一份模型证据，从哪个入口进来结果都一样', () => {
-  // 附录 #1：识别写入时新角色能不能建档取决于它在批次里的先后（writer.ts 逐张建档），补采纳按整批收集新标签。
-  // 同一批里一张截图、一张插画都认出同一个新角色：截图排在前面时不关联，排在后面时关联。P3（decideAuto）修好
-  it.fails('首次识别写入不取决于批次里的先后，和补采纳一致（附录 #1，P3）', async () => {
+  // 附录 #1（P3b 已关闭）：以前识别写入时新角色能不能建档取决于它在批次里的先后（逐张建档），补采纳按整批收集新标签。
+  // 同一批里一张截图、一张插画都认出同一个新角色：截图排在前面时不关联，排在后面时关联。
+  // 现在都经 reevaluateAuto：一轮里先收集要建档的标签，再让同一轮里不能建档的图复用，结果和先后无关
+  it('首次识别写入不取决于批次里的先后，和补采纳一致（附录 #1，P3b 已关闭）', async () => {
     const batch = (shotFirst: boolean) => {
       const shot = { id: 1, general: [[UI_TAG, 0.9]] as Scores, character: [[NEW_TAG, 0.9]] as Scores };
       const illust = { id: 2, character: [[NEW_TAG, 0.9]] as Scores };
@@ -218,9 +222,10 @@ describe('自动关联：同一份模型证据，从哪个入口进来结果都�
     expect(provenance(changed, 1)).toEqual(provenance(direct, 1));
   });
 
-  // 附录 #3：只有手动改类型会重新评估自动关联（kinds.ts）。帧数检测、相机识别、扫描重判这些自动改类型的路径不会。
-  // 这里模拟缩略图任务的帧数检测：PNG 读出 2 帧 → 自动重判成动图（ThumbnailService.frameMetadata 做的就是这两步）。P2/P3 修好
-  it.fails('自动改类型和手动改类型一样会重新评估（附录 #3，P2/P3）', async () => {
+  // 附录 #3（P3b 已关闭）：以前只有手动改类型会重新评估自动关联（kinds.ts）。帧数检测、相机识别、扫描重判这些自动改类型的路径不会。
+  // 这里模拟缩略图任务的帧数检测：PNG 读出 2 帧 → 自动重判成动图 → 类型真的变了就声明 image.kindChanged
+  // （ThumbnailService.frameMetadata 做的就是这三步）。现在两条路都由 reevaluateAuto 订阅 image.kindChanged
+  it('自动改类型和手动改类型一样会重新评估（附录 #3，P3b 已关闭）', async () => {
     const manual = await engine();
     const auto = await engine();
     for (const ds of [manual, auto]) {
@@ -231,6 +236,7 @@ describe('自动关联：同一份模型证据，从哪个入口进来结果都�
     await manual.updateImage('1', { kind: 'animated' });
     auto.ctx.db.prepare('UPDATE images SET frame_count = 2 WHERE id = 1').run();
     backfillClassification(auto.ctx.db, { ids: [1] });
+    auto.ctx.apply(() => auto.ctx.changed({ type: 'image.kindChanged', ids: [1] }));
 
     expect(kindOf(auto, 1)).toBe('animated');
     expect(linkedTags(manual, 1)).toEqual([NEW_TAG]);
@@ -239,9 +245,9 @@ describe('自动关联：同一份模型证据，从哪个入口进来结果都�
 });
 
 describe('Pixiv 和模型：同样的置信度，同样的资格判断', () => {
-  // 附录 #2：Pixiv 的资格判断写死了 cs.score >= 0.8（pixiv/sync.ts），而模型按设置里的自动采纳阈值（默认 0.85）。
-  // 模型分数没到阈值（没自动关联）的图，应当和没有模型证据的图一样去查 Pixiv；反过来到了阈值的已经关联，不用再查。P3 修好
-  it.fails('模型没自动关联的图都会排进 Pixiv 补充，和分数落在哪一档无关（附录 #2，P3）', async () => {
+  // 附录 #2（P3b 已关闭）：以前 Pixiv 的资格判断写死了 cs.score >= 0.8（pixiv/sync.ts），而模型按设置里的自动采纳阈值（默认 0.85）。
+  // 模型分数没到阈值（没自动关联）的图，应当和没有模型证据的图一样去查 Pixiv；反过来到了阈值的已经关联，不用再查
+  it('模型没自动关联的图都会排进 Pixiv 补充，和分数落在哪一档无关（附录 #2，P3b 已关闭）', async () => {
     const mismatches: string[] = [];
     for (const threshold of [0.75, 0.85, 0.95]) {
       for (const score of [0.78, 0.82, 0.9]) {
@@ -257,8 +263,9 @@ describe('Pixiv 和模型：同样的置信度，同样的资格判断', () => {
     expect(mismatches).toEqual([]);
   });
 
-  // 附录 #1：Pixiv 能不能处理漫画页看设置（comicInUnrecognized，QUEUE_KINDS_SQL），模型的识别写入和补采纳总是允许漫画。P3 修好
-  it.fails('漫画页：模型能自动关联的，Pixiv 也会去查（附录 #1，P3）', async () => {
+  // 附录 #1（P3b 已关闭）：以前 Pixiv 能不能处理漫画页看设置（comicInUnrecognized，QUEUE_KINDS_SQL），模型的识别写入和补采纳总是允许漫画。
+  // 现在 Pixiv 的资格和模型一致：插画、漫画、动图都查
+  it('漫画页：模型能自动关联的，Pixiv 也会去查（附录 #1，P3b 已关闭）', async () => {
     const ds = await engine();
     await ds.updateSettings({ tagger: { comicInUnrecognized: false } });
     addImage(ds, { id: 1 });
@@ -390,24 +397,25 @@ describe('图 ↔ 角色只有归类模块写，每个入口记下同一种来�
     await ds.bulkImages({ ids: ['5'], action: { type: 'assignTag', danbooruTag: KNOWN } });
     await pixivSync(ds, 6, '1006');
     await ds.updateImage('7', { characterIds: [characterId(ds, KNOWN)] });
+    // P3b：识别写入、补采纳、Pixiv 补充都是同一条规则（decideAuto，auto-accept@2），依据哪个来源看证据
     expect([1, 2, 3, 4, 5, 6, 7].map((id) => fullProvenance(ds, id))).toEqual([
-      [[KNOWN, 'auto', 'auto-accept@1', 'tagger']],
-      [[KNOWN, 'auto', 'promote@1', 'tagger']],
+      [[KNOWN, 'auto', 'auto-accept@2', 'tagger']],
+      [[KNOWN, 'auto', 'auto-accept@2', 'tagger']],
       [[KNOWN, 'manual', null, 'tagger']],
       [[KNOWN, 'manual', null, null]],
       [[KNOWN, 'manual', null, null]],
-      [[KNOWN, 'auto', 'pixiv@1', 'pixiv']],
+      [[KNOWN, 'auto', 'auto-accept@2', 'pixiv']],
       [[KNOWN, 'manual', null, null]],
     ]);
-    // 采纳、归类之后，这些图上指向爱丽丝的建议都没了
-    expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM character_suggestions WHERE image_id IN (2, 3)').pluck().get()).toBe(0);
+    // 采纳、归类之后，这些图上指向爱丽丝的建议都没了（建议是派生的：关联上了就不是建议）
+    expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM v_character_suggestions WHERE image_id IN (2, 3)').pluck().get()).toBe(0);
 
     // 角色合并：被合并角色的关联按原来的来历搬给目标
     const dup = addCharacter(ds, 'alice_alt_(game_a)', '爱丽丝（重复）');
     await ds.bulkImages({ ids: ['8'], action: { type: 'assign', characterId: dup } });
     recognize(ds, [{ id: 9, character: [['alice_alt_(game_a)', 0.9]] }]);
     await ds.mergeCharacter(dup, characterId(ds, KNOWN));
-    expect([fullProvenance(ds, 8), fullProvenance(ds, 9)]).toEqual([[[KNOWN, 'manual', null, null]], [[KNOWN, 'auto', 'auto-accept@1', 'tagger']]]);
+    expect([fullProvenance(ds, 8), fullProvenance(ds, 9)]).toEqual([[[KNOWN, 'manual', null, null]], [[KNOWN, 'auto', 'auto-accept@2', 'tagger']]]);
 
     // 查重合并：手动的还是手动，自动的记成 dedupe-merge（证据照搬）
     recognize(ds, [{ id: 11, character: [[KNOWN, 0.9]] }]);
@@ -545,8 +553,8 @@ describe('否决（附录 #39，D3，P3a 已关闭）', () => {
     addImage(ds, { id: 1 });
     await ds.bulkImages({ ids: ['1'], action: { type: 'assign', characterId: characterId(ds, KNOWN) } });
     await ds.bulkImages({ ids: ['1'], action: { type: 'unassign', characterId: characterId(ds, KNOWN) } });
-    // 建议不会再出现，这里直接放一条（例如否决之前留下的）
-    ds.ctx.db.prepare("INSERT INTO character_suggestions (image_id, danbooru_tag, score, source) VALUES (1, ?, 0.6, 'tagger')").run(KNOWN);
+    // 建议不会再出现（派生视图滤掉被否决的），这里直接放一条模型证据（例如否决之前留下的），用户照样能按它采纳
+    ds.ctx.db.prepare("INSERT INTO character_evidence (image_id, provider, tag, score) VALUES (1, 'tagger', ?, 0.6)").run(KNOWN);
     await ds.acceptSuggestion('1', KNOWN);
     expect(fullProvenance(ds, 1)).toEqual([[KNOWN, 'manual', null, 'tagger']]);
     expect(vetoedTags(ds, 1)).toEqual([]);

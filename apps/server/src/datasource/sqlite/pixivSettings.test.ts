@@ -67,10 +67,10 @@ describe('设置：识别后自动查 Pixiv 标签', () => {
     expect((await ds.getImage(id))?.source).toBeNull();
     await ds.updateSettings({tagger:{pixivFilenameMode:'broad'}});
     expect((await ds.getImage(id))?.source).toMatchObject({site:'pixiv',postId:'104714967'});
-    db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (?,'pixiv_role',0,'pixiv'),(?,'model_role',0.7,'tagger')").run(id,id);
+    db.prepare("INSERT INTO character_evidence(image_id,tag,score,provider) VALUES (?,'pixiv_role',0,'pixiv'),(?,'model_role',0.7,'tagger')").run(id,id);
     await ds.updateSettings({tagger:{pixivFilenameMode:'strict'}});
     expect((await ds.getImage(id))?.source).toBeNull();
-    expect(db.prepare('SELECT danbooru_tag FROM character_suggestions WHERE image_id=?').pluck().all(id)).toEqual(['model_role']);
+    expect(db.prepare('SELECT danbooru_tag FROM v_character_suggestions WHERE image_id=?').pluck().all(id)).toEqual(['model_role']);
     expect((await ds.getImage(manualId))?.source?.url).toBe('https://example.com/manual');
     await ds.updateImage(manualId,{source:'auto'});
     expect(await ds.getImage(manualId)).toMatchObject({source:null,sourceManual:false});

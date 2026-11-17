@@ -21,6 +21,8 @@ export function humanizeCharacterTag(tag: string): string {
  * fate_(series) → Fate；fate/grand_order → Fate/Grand Order；honkai:_star_rail → Honkai: Star Rail；pokemon_(anime) → Pokemon (Anime)
  */
 export function humanizeCopyrightTag(tag: string): string {
+  // 「原创」作品（标签 original）：没导入词库时也叫「原创」（和词库一致；手动归为原创、Pixiv 标原创建的是同一部）
+  if (tag === 'original') return '原创';
   return tag
     .replace(/_\(series\)$/, '')
     .replace(/_/g, ' ')

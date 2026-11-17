@@ -160,7 +160,8 @@ export class LibraryQueries {
 
     // 有插画的角色 / 作品数，口径同 Derived 的 imageCount > 0。不用 derived.get()：每次用户操作都会让它整份重建（真实库 1.5 秒以上），
     // 侧栏统计一直在拉，等于每点一次收藏就重建一次。EXISTS 走索引，各几毫秒。
-    // 作品拆成两支 EXISTS，不套 v_image_works（UNION 会被整个物化，约 200 ms）
+    // 作品拆成三支 EXISTS（和 v_image_works 同口径：关联角色的作品、手动指定的作品、原创图的「原创」作品；
+    // 模型给的作品是证据，不算，附录 #8），不套 v_image_works（UNION 会被整个物化，约 200 ms）
     const characterCount = db
       .prepare(
         `SELECT COUNT(*) FROM characters c
@@ -171,9 +172,10 @@ export class LibraryQueries {
     const workCount = db
       .prepare(
         `SELECT COUNT(*) FROM works w
-         WHERE EXISTS (SELECT 1 FROM image_copyrights x JOIN v_illust_images i ON i.id = x.image_id WHERE x.work_id = w.id)
+         WHERE EXISTS (SELECT 1 FROM image_copyrights x JOIN v_illust_images i ON i.id = x.image_id WHERE x.work_id = w.id AND i.original_at IS NULL)
             OR EXISTS (SELECT 1 FROM character_works cw JOIN image_characters ic ON ic.character_id = cw.character_id
-                       JOIN v_illust_images i ON i.id = ic.image_id WHERE cw.work_id = w.id)`,
+                       JOIN v_illust_images i ON i.id = ic.image_id WHERE cw.work_id = w.id)
+            OR (w.danbooru_tag = 'original' AND EXISTS (SELECT 1 FROM v_illust_images i WHERE i.original_at IS NOT NULL))`,
       )
       .pluck()
       .get() as number;

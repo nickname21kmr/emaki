@@ -27,6 +27,8 @@ export const DEFAULT_SETTINGS = {
     generalThreshold: 0.35,
     characterThreshold: 0.35,
     autoAcceptThreshold: 0.85,
+    // 按来源的自动阈值（tagger / pixiv / plugin:<id>）；没设的来源用 autoAcceptThreshold（decideAuto，P3b）
+    autoAcceptBySource: {} as Partial<Record<string, number>>,
     batchSize: 8,
     legacyModel: 'SmilingWolf/wd-eva02-large-tagger-v3' as string | null,
     legacyBefore: '2024-03-01' as string | null,

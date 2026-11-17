@@ -31,7 +31,7 @@ it('边翻页边采纳每页第一张：遍历到的图集合 = 初始未识别�
 /** 「没认出」按像插画的程度排：分数相同按 id 倒序；键集分页不重不漏（T34a） */
 it('没认出：按 art_score 倒序、同分 id 倒序，翻页不重不漏', async () => {
   const db = (env.ds as unknown as { ctx: { db: import('better-sqlite3').Database } }).ctx.db;
-  db.exec('DELETE FROM character_suggestions');
+  db.exec('DELETE FROM character_evidence');
   const six = ['i24', 'i25', 'i26', 'i27', 'i28', 'i29'].map((x) => Number(env.id('image', x)));
   const scores = [10, 10, 5, 5, 5, 0];
   six.forEach((id, k) => db.prepare("UPDATE images SET theme = 'legs', rating = 'general', art_score = ? WHERE id = ?").run(scores[k], id));

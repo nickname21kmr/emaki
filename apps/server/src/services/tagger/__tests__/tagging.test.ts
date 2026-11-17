@@ -15,7 +15,13 @@ import { shutdownTagger, TaggerClient, TaggerCrashedError, type TaggerLike, type
 import type { HostItemResult } from '../protocol.ts';
 import { resetIoBackoff } from '../readBackoff.ts';
 import { createTagJobRunner, createTagStage, type TagJobDeps } from '../tagJob.ts';
-import { TagResultWriter } from '../writer.ts';
+import { TagResultWriter } from '../../../domain/evidence/tagger.ts';
+import { createContext } from '../../../datasource/sqlite/context.ts';
+import { patchSettingsInternal } from '../../../datasource/sqlite/settings.ts';
+import { UndoStack } from '../../../core/undo.ts';
+import { JobQueue } from '../../../core/jobs.ts';
+import { reevaluateAutoReaction } from '../../../domain/curation/reevaluate.ts';
+import { declareTagged } from '../../../domain/evidence/reactions.ts';
 
 const REPO = 'SmilingWolf/wd-eva02-large-tagger-v3';
 const OFFLINE = { 'mika_(blue_archive)': ['blue_archive'], 'hina_(blue_archive)': ['blue_archive'] };
@@ -56,6 +62,18 @@ const ok = (id: number, character: [string, number][], rating?: 'sensitive'): Ho
   character,
 });
 
+/**
+ * 引擎里给识别任务接的 afterBatchInTx（P3b：识别写入只写证据，自动关联由反应 reevaluateAuto 决定）：
+ * 一个只注册了 reevaluateAuto 的变更传播
+ */
+function autoAfterBatch(catalog?: () => CharacterCatalog): NonNullable<TagJobDeps['afterBatchInTx']> {
+  const bus = new EventBus();
+  const ctx = createContext({ db, bus, dataDir: '.', clock: () => 0, undo: new UndoStack(), jobs: new JobQueue(bus, () => async () => {}) });
+  const copyrights = new CopyrightResolver(db, OFFLINE);
+  ctx.propagation.register(reevaluateAutoReaction({ catalog: catalog ?? (() => new CharacterCatalog(db, { copyrights })) }));
+  return (ids, changes) => declareTagged(ctx, ids, changes);
+}
+
 describe('CharacterCatalog', () => {
   beforeEach(() => freshDb(1));
 
@@ -76,20 +94,45 @@ describe('CharacterCatalog', () => {
   });
 });
 
+/**
+ * 识别写入只写证据（P3b）：自动关联由反应 reevaluateAuto 决定。这里用一个只注册了 reevaluateAuto 的变更传播，
+ * 和引擎里给识别任务接的 afterBatchInTx 一样把这批的变化交给它
+ */
 describe('TagResultWriter', () => {
   beforeEach(() => freshDb(3));
-  const writer = (localizer = new HumanizeLocalizer()) => {
+  const writer = (localizer = new HumanizeLocalizer(), opts: { threshold?: number; artists?: boolean } = {}) => {
     const copyrights = new CopyrightResolver(db, OFFLINE);
-    return new TagResultWriter(db, new CharacterCatalog(db, { copyrights, localizer }), copyrights, { repo: REPO, ...TH });
+    const catalog = new CharacterCatalog(db, { copyrights, localizer });
+    if (opts.threshold !== undefined) patchSettingsInternal(db, 'tagger', { autoAcceptThreshold: opts.threshold });
+    return new TagResultWriter(db, catalog, copyrights, {
+      repo: REPO,
+      generalThreshold: TH.generalThreshold,
+      artists: opts.artists,
+      afterBatchInTx: autoAfterBatch(() => catalog),
+    });
   };
+  /** 派生的建议 */
+  const suggestions = (where = '') => db.prepare(`SELECT image_id, danbooru_tag, score FROM v_character_suggestions ${where} ORDER BY image_id, danbooru_tag`).all();
 
   it('80% threshold accepts the exact boundary and keeps 79.89% as a suggestion', () => {
-    const copyrights = new CopyrightResolver(db, OFFLINE);
-    const catalog = new CharacterCatalog(db, { copyrights });
-    const w = new TagResultWriter(db, catalog, copyrights, { repo: REPO, ...TH, autoAcceptThreshold: 0.8 });
+    const w = writer(undefined, { threshold: 0.8 });
     w.writeBatch([ok(1, [['mika_(blue_archive)', 0.7989]]), ok(2, [['mika_(blue_archive)', 0.8]])]);
-    expect(db.prepare('SELECT image_id, score FROM character_suggestions').all()).toEqual([{ image_id: 1, score: 0.7989 }]);
+    expect(db.prepare('SELECT image_id, score FROM v_character_suggestions').all()).toEqual([{ image_id: 1, score: 0.7989 }]);
     expect(db.prepare('SELECT image_id, evidence_score AS score FROM image_characters').all()).toEqual([{ image_id: 2, score: 0.8 }]);
+  });
+
+  it('全部候选（包括自动关联了的）都记成模型证据，按「图片 × 来源」整体替换', () => {
+    const w = writer();
+    w.writeBatch([ok(1, [['mika_(blue_archive)', 0.95], ['hina_(blue_archive)', 0.5]])]);
+    expect(db.prepare("SELECT image_id, provider, tag, score FROM character_evidence ORDER BY tag").all()).toEqual([
+      { image_id: 1, provider: 'tagger', tag: 'hina_(blue_archive)', score: 0.5 },
+      { image_id: 1, provider: 'tagger', tag: 'mika_(blue_archive)', score: 0.95 },
+    ]);
+    w.writeBatch([ok(1, [['hina_(blue_archive)', 0.6]])]);
+    expect(db.prepare('SELECT tag, score FROM character_evidence').all()).toEqual([{ tag: 'hina_(blue_archive)', score: 0.6 }]);
+    // 识别失败不动证据
+    w.writeBatch([{ id: 1, ok: false, code: 'DECODE', message: 'x' }]);
+    expect(db.prepare('SELECT tag, score FROM character_evidence').all()).toEqual([{ tag: 'hina_(blue_archive)', score: 0.6 }]);
   });
 
   it('按规则写：自动采纳、建议、作品、分级', () => {
@@ -99,12 +142,12 @@ describe('TagResultWriter', () => {
     expect(work.name).toBe('Blue Archive');
     expect(count('SELECT position FROM character_works')).toBe(0);
     expect(db.prepare('SELECT image_id, decision, rule, evidence_provider, evidence_tag, evidence_score FROM image_characters').all()).toEqual([
-      { image_id: 1, decision: 'auto', rule: 'auto-accept@1', evidence_provider: 'tagger', evidence_tag: 'mika_(blue_archive)', evidence_score: 0.95 },
+      { image_id: 1, decision: 'auto', rule: 'auto-accept@2', evidence_provider: 'tagger', evidence_tag: 'mika_(blue_archive)', evidence_score: 0.95 },
     ]);
-    expect(db.prepare('SELECT image_id, danbooru_tag, score FROM character_suggestions').all()).toEqual([
-      { image_id: 1, danbooru_tag: 'hina_(blue_archive)', score: 0.5 },
-    ]);
-    expect(db.prepare('SELECT image_id, work_id, score FROM image_copyrights').all()).toEqual([{ image_id: 1, work_id: work.id, score: 0.5 }]);
+    expect(suggestions()).toEqual([{ image_id: 1, danbooru_tag: 'hina_(blue_archive)', score: 0.5 }]);
+    // 候选角色的主作品记成作品证据（按标签记，不算进图的作品，附录 #8）
+    expect(db.prepare('SELECT image_id, tag, score FROM work_evidence').all()).toEqual([{ image_id: 1, tag: 'blue_archive', score: 0.95 }]);
+    expect(db.prepare('SELECT COUNT(*) FROM image_copyrights').pluck().get()).toBe(0);
     expect(db.prepare('SELECT rating, tagger_model, tagged_at IS NOT NULL AS t FROM images WHERE id = 1').get()).toEqual({ rating: 'sensitive', tagger_model: REPO, t: 1 });
     // HumanizeLocalizer 下 mika_(blue_archive) 和 Mika 的 key 相同 → 只剩标签原文（不可见）被去重掉
     expect(count("SELECT count(*) FROM aliases WHERE owner_type = 'character' AND visible = 1")).toBe(0);
@@ -125,7 +168,7 @@ describe('TagResultWriter', () => {
     db.prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, added_at) VALUES (3, 5, 'manual', 'user', 'x')").run();
     writer().writeBatch([ok(2, [], 'sensitive'), ok(3, [['hina_(blue_archive)', 0.5]])]);
     expect(count('SELECT rating = \'explicit\' FROM images WHERE id = 2')).toBe(1);
-    expect(count('SELECT count(*) FROM character_suggestions WHERE image_id = 3')).toBe(0);
+    expect(count('SELECT count(*) FROM v_character_suggestions WHERE image_id = 3')).toBe(0);
   });
 
   it('DECODE 标记已处理，ENOENT 不写', () => {
@@ -137,10 +180,8 @@ describe('TagResultWriter', () => {
   });
 
   it('顺便解码画师时，识别失败的图也标画师跑过（画师补跑不再单独跑它）；没解码画师时不标', () => {
-    const copyrights = new CopyrightResolver(db, OFFLINE);
-    const catalog = new CharacterCatalog(db, { copyrights, localizer: new HumanizeLocalizer() });
-    new TagResultWriter(db, catalog, copyrights, { repo: REPO, ...TH }).writeBatch([{ id: 1, ok: false, code: 'DECODE', message: 'x' }]);
-    new TagResultWriter(db, catalog, copyrights, { repo: REPO, ...TH, artists: true }).writeBatch([
+    writer().writeBatch([{ id: 1, ok: false, code: 'DECODE', message: 'x' }]);
+    writer(undefined, { artists: true }).writeBatch([
       { id: 2, ok: false, code: 'DECODE', message: '识别时子进程崩溃，已跳过' },
       { id: 3, ok: false, code: 'ENOENT', message: 'x' },
     ]);
@@ -151,7 +192,7 @@ describe('TagResultWriter', () => {
   it('幂等', () => {
     const batch = [ok(1, [['mika_(blue_archive)', 0.95], ['hina_(blue_archive)', 0.5]], 'sensitive')];
     writer().writeBatch(batch);
-    const tables = ['characters', 'works', 'image_characters', 'character_suggestions', 'image_copyrights', 'image_tags', 'tags', 'aliases'];
+    const tables = ['characters', 'works', 'image_characters', 'character_evidence', 'work_evidence', 'image_tags', 'tags', 'aliases'];
     const before = tables.map((t) => count(`SELECT count(*) FROM ${t}`));
     writer().writeBatch(batch);
     expect(tables.map((t) => count(`SELECT count(*) FROM ${t}`))).toEqual(before);
@@ -186,7 +227,7 @@ describe('TagResultWriter', () => {
     expect(db.prepare('SELECT image_id, evidence_score AS score FROM image_characters ORDER BY image_id').all()).toEqual([
       { image_id: 1, score: 0.85 }, { image_id: 2, score: 0.91 },
     ]);
-    expect(db.prepare('SELECT image_id, score FROM character_suggestions').all()).toEqual([{ image_id: 3, score: 0.98 }]);
+    expect(db.prepare('SELECT image_id, score FROM v_character_suggestions').all()).toEqual([{ image_id: 3, score: 0.98 }]);
   });
 
   it('用户去掉过的角色：重新识别不加回、不建议；别的图照常', () => {
@@ -198,7 +239,7 @@ describe('TagResultWriter', () => {
     w.writeBatch([ok(1, [['mika_(blue_archive)', 0.95]])]);
     expect(count('SELECT count(*) FROM image_characters WHERE image_id = 1')).toBe(0);
     w.writeBatch([ok(1, [['mika_(blue_archive)', 0.5]])]);
-    expect(count('SELECT count(*) FROM character_suggestions WHERE image_id = 1')).toBe(0);
+    expect(count('SELECT count(*) FROM v_character_suggestions WHERE image_id = 1')).toBe(0);
     w.writeBatch([ok(2, [['mika_(blue_archive)', 0.95]])]);
     expect(count('SELECT count(*) FROM image_characters WHERE image_id = 2')).toBe(1);
   });
@@ -245,6 +286,7 @@ describe('tagJob', () => {
       },
       clientFactory: factory,
       ensureFiles: async () => ({ dir: 'X:', modelPath: 'X:/m.onnx', labelsPath: 'X:/l.csv' }),
+      afterBatchInTx: autoAfterBatch(),
     });
   const pending = () => count('SELECT count(*) FROM images WHERE tagged_at IS NULL');
 
@@ -442,6 +484,7 @@ describe('tagJob', () => {
       },
       clientFactory: factory,
       ensureFiles: async () => ({ dir: 'X:', modelPath: 'X:/m.onnx', labelsPath: 'X:/l.csv' }),
+      afterBatchInTx: autoAfterBatch(),
       log: (m) => log.push(m),
     });
     await run(ctxOf());

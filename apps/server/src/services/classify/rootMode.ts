@@ -11,9 +11,11 @@
 import type { Db } from '../../db/connection.ts';
 import type { UndoRecorder } from '../../datasource/sqlite/undo.ts';
 import { snapshotAutoLinks, unlinkEach } from '../../domain/curation/links.ts';
+import { rateComicPages } from '../../domain/curation/marks.ts';
+import { markComicRetag, snapshotRetag } from '../../domain/evidence/retag.ts';
 import type { Change } from '../../propagation/changes.ts';
 import { backfillClassification } from './backfill.ts';
-import { COMIC_RATING, IN_COMIC } from './comicAreas.ts';
+import { IN_COMIC } from './comicAreas.ts';
 import { COMIC_ROOT_EVIDENCE } from './rules.ts';
 
 /**
@@ -28,20 +30,10 @@ export function syncRootModes(db: Db, ids?: number[], changed: (c: Change) => vo
     .pluck()
     .all(p) as number[];
   if (stale.length) backfillClassification(db, { ids: stale });
-  const rated = db
-    .prepare(
-      `UPDATE images AS i SET rating = ${COMIC_RATING('i')}
-       WHERE i.tagged_at IS NULL AND i.rating_manual = 0 AND ${IN_COMIC('i')} AND i.rating <> ${COMIC_RATING('i')} ${scope}`,
-    )
-    .run(p).changes;
-  // 要清角色的页先标重新识别（只标真被清掉的，本来就没认出角色的不用重跑）
-  const retagged = db
-    .prepare(
-      `UPDATE images AS i SET retag = 1
-       WHERE i.retag = 0 AND ${IN_COMIC('i')} ${scope}
-         AND EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id AND ic.decision = 'auto')`,
-    )
-    .run(p).changes;
+  // 自动分级（归类模块）：没识别过、没手动改过分级的页用范围选的分级
+  const rated = rateComicPages(db, ids);
+  // 要清角色的页先标重新识别（证据模块；只标真被清掉的，本来就没认出角色的不用重跑）
+  const retagged = markComicRetag(db, ids);
   const autoLinks = db
     .prepare(
       `SELECT image_id AS imageId, character_id AS characterId FROM image_characters
@@ -57,5 +49,5 @@ export function syncRootModes(db: Db, ids?: number[], changed: (c: Change) => vo
 export function recordRootModeUndo(u: UndoRecorder, ids: number[]): void {
   if (!ids.length) return;
   snapshotAutoLinks(u, ids);
-  u.columns('images', ['retag'], ids);
+  snapshotRetag(u, ids);
 }

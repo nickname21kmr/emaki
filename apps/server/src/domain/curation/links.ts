@@ -9,39 +9,21 @@
  * - moveCharacterLinks：角色合并时把关联和否决搬到目标角色上。
  * - carryLinks：查重合并时把副本的关联搬到保留的图上（手动的还是手动，自动的记成 dedupe-merge）。
  *
- * 每个命令都：写来历；清掉对应的建议（证据模块的 dropSuggestionsForLinks）；声明 curation.charactersChanged / vetoesChanged
- * （排除规则、合集、Pixiv 排队等由反应做）；有撤销记录器时记下撤销。
+ * 每个命令都：写来历；声明 curation.charactersChanged / vetoesChanged（排除规则、合集、Pixiv 排队、自动决定的重新评估等由反应做）；
+ * 有撤销记录器时记下撤销。建议是派生视图（v_character_suggestions），关联上的角色自然不再是建议，不用另外清。
  * 调用方在 ctx.mutate / ctx.apply 里调用（tx 就是 ctx）；反应里传 { db, changed: emit }；
  * 识别写入这种自己开事务的，传一个收集变化的 tx，批后再交给 ctx.apply 声明。
  */
-import type { Db, Statement } from '../../db/connection.ts';
+import type { Db } from '../../db/connection.ts';
 import type { UndoRecorder } from '../../datasource/sqlite/undo.ts';
-import { dismissPixivCharacterChecks } from '../../datasource/sqlite/pixivChecks.ts';
+import { dismissPixivCharacterChecks } from '../evidence/pixivChecks.ts';
 import { currentActor } from '../../propagation/actor.ts';
-import type { Change } from '../../propagation/changes.ts';
-import { dropSuggestionsForLinks } from '../evidence/suggestions.ts';
+import { collectingTx, stmt, type DomainTx } from '../tx.ts';
 import { fromRow, RULES, toColumns, type LinkRow, type Provenance } from './provenance.ts';
 
 /** 写归类事实需要的：数据库 + 声明变化 */
-export interface CurationTx {
-  readonly db: Db;
-  changed(c: Change): void;
-}
-
-/** 收集变化的 tx：自己开事务的写入（识别写入）先收着，批后交给 ctx.apply 声明 */
-export function collectingTx(db: Db): CurationTx & { changes: Change[] } {
-  const changes: Change[] = [];
-  return { db, changes, changed: (c) => void changes.push(c) };
-}
-
-const cache = new WeakMap<Db, Map<string, Statement>>();
-export function stmt(db: Db, sql: string): Statement {
-  let m = cache.get(db);
-  if (!m) cache.set(db, (m = new Map()));
-  let s = m.get(sql);
-  if (!s) m.set(sql, (s = db.prepare(sql)));
-  return s;
-}
+export type CurationTx = DomainTx;
+export { collectingTx, stmt };
 
 type Pair = { imageId: number; characterId: number };
 
@@ -166,12 +148,6 @@ export function linkEach(tx: CurationTx, u: UndoRecorder | null, items: LinkItem
       ]);
     }
   }
-  // 关联上了的角色不再作为这张图的建议
-  dropSuggestionsForLinks(
-    db,
-    u,
-    [...out.linked, ...out.existing].map((x) => ({ imageId: x.imageId, characterId: x.characterId, tag: x.provenance.evidence?.tag })),
-  );
   tx.changed({ type: 'curation.charactersChanged', ids: uniqueImages(out.linked) });
   tx.changed({ type: 'curation.vetoesChanged', ids: uniqueImages(out.unvetoed) });
   return out;
@@ -320,6 +296,24 @@ export function carryLinks(tx: CurationTx, u: UndoRecorder | null, keep: number[
     }),
   );
   return linkEach(tx, u, items, { vetoes: 'respect' }).linked;
+}
+
+/**
+ * 改已有自动关联的来历（reevaluateAuto：依据的来源证据换了，但别的来源仍然支持这个角色）。只改自动的，关联本身不变
+ */
+export function rebaseLinks(tx: CurationTx, u: UndoRecorder | null, items: LinkItem[]): void {
+  if (!items.length) return;
+  const w = pairWhere(items);
+  u?.set('image_characters', `decision = 'auto' AND ${w.sql}`, w.params);
+  const upd = stmt(
+    tx.db,
+    `UPDATE image_characters SET actor = @actor, rule = @rule, evidence_provider = @evidence_provider, evidence_tag = @evidence_tag,
+       evidence_score = @evidence_score WHERE image_id = @image AND character_id = @character AND decision = 'auto'`,
+  );
+  for (const x of items) {
+    const c = toColumns(x.provenance);
+    upd.run({ image: x.imageId, character: x.characterId, actor: c.actor, rule: c.rule, evidence_provider: c.evidence_provider, evidence_tag: c.evidence_tag, evidence_score: c.evidence_score });
+  }
 }
 
 /** 这些图上的自动关联（撤销快照用：漫画区同步会去掉它们） */

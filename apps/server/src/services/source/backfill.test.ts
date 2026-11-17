@@ -24,10 +24,12 @@ it.each([
   ]);
   expect(backfillSources(db)).toHaveLength(0);
   db.prepare("UPDATE settings SET value=? WHERE key='tagger'").run(JSON.stringify({pixivFilenameMode:'strict'}));
-  db.exec("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (1,'old_pixiv',0,'pixiv'),(1,'model_role',0.7,'tagger')");
+  db.exec("INSERT INTO character_evidence(image_id,tag,score,provider) VALUES (1,'old_pixiv',0,'pixiv'),(1,'model_role',0.7,'tagger')");
   expect(backfillSources(db)).toHaveLength(1);
   expect(db.prepare('SELECT source_site,source_post_id FROM images WHERE id=1').get()).toEqual({source_site:null,source_post_id:null});
-  expect(db.prepare('SELECT danbooru_tag FROM character_suggestions').pluck().all()).toEqual(['model_role']);
+  // 过期的 Pixiv 证据由反应 dropStalePixivEvidence 去掉（调用方声明 image.sourceChanged，见 changes.closure.test.ts 附录 #13）；
+  // 这里只改来源，证据不动
+  expect(db.prepare('SELECT danbooru_tag FROM v_character_suggestions ORDER BY danbooru_tag').pluck().all()).toEqual(['model_role', 'old_pixiv']);
   expect(db.prepare('SELECT source_site FROM images WHERE id=2').pluck().get()).toBe('other');
   expect(backfillSources(db)).toHaveLength(0);
   db.prepare("UPDATE settings SET value=? WHERE key='tagger'").run(JSON.stringify({pixivFilenameMode:'broad'}));
@@ -45,14 +47,15 @@ it('upgrades hashed Pixiv names and incorrect hash-tail IDs while keeping manual
     VALUES (1,?,?,1,1,1,'jpg',?,'x','x',?,?,?)`);
   insert.run(name,name,'a','pixiv','2574',0);
   insert.run(`copy/${name}`,name,'b','other','manual-id',1);
-  db.exec(`INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES
+  db.exec(`INSERT INTO character_evidence(image_id,tag,score,provider) VALUES
     (1,'stale_pixiv_character',0,'pixiv'),(1,'model_character',0.75,'tagger'),(2,'manual_source_suggestion',0,'pixiv')`);
   expect(backfillSources(db)).toHaveLength(1);
   expect(db.prepare('SELECT source_site,source_post_id FROM images ORDER BY id').all()).toEqual([
     {source_site:'pixiv',source_post_id:'147194731'}, {source_site:'other',source_post_id:'manual-id'},
   ]);
   expect(backfillSources(db)).toHaveLength(0);
-  expect(db.prepare('SELECT danbooru_tag FROM character_suggestions ORDER BY danbooru_tag').pluck().all()).toEqual(['manual_source_suggestion','model_character']);
+  // 只改来源；过期的 Pixiv 证据由反应去掉（见上）
+  expect(db.prepare('SELECT danbooru_tag FROM v_character_suggestions ORDER BY danbooru_tag').pluck().all()).toEqual(['manual_source_suggestion','model_character','stale_pixiv_character']);
   db.close();
 });
 

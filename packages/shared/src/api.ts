@@ -310,9 +310,10 @@ export interface MovePreview {
  * 最近的改动（GET /api/changes?group=auto|move）：后台自动做的改动和「移动到文件夹」，重启后也能撤回。
  * - auto-associate：自建角色自动绑上了 Danbooru 标签
  * - pixiv-sync：一轮 Pixiv 补充加的角色和原创标记
+ * - auto-retract：证据不再支持（重新识别没再认出、来源失效）时撤回的自动关联和自动原创（D2）
  * - move：一次移动到文件夹
  */
-export type ChangeKind = 'auto-associate' | 'pixiv-sync' | 'move';
+export type ChangeKind = 'auto-associate' | 'pixiv-sync' | 'auto-retract' | 'move';
 
 export interface ChangeEntry {
   id: ID;
@@ -331,7 +332,7 @@ export interface ChangeEntry {
   revertable: boolean;
 }
 
-/** GET /api/changes 的 group：auto = 自动关联和 Pixiv 补充，move = 移动到文件夹 */
+/** GET /api/changes 的 group：auto = 自动关联、Pixiv 补充和证据不再支持时的撤回，move = 移动到文件夹 */
 export type ChangeGroup = 'auto' | 'move';
 
 /** SSE：后台刚做了一次自动改动（前端弹提示、刷新「最近的自动改动」） */

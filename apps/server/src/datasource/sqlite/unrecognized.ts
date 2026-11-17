@@ -24,7 +24,7 @@ import { acceptMessage } from '../acceptMessage.ts';
 import { insertDanbooruCharacter } from './characters.ts';
 import { linkEach, type LinkItem } from '../../domain/curation/links.ts';
 import { manual } from '../../domain/curation/provenance.ts';
-import { dropSuggestions } from '../../domain/evidence/suggestions.ts';
+import { markRetag } from '../../domain/evidence/retag.ts';
 import type { SqliteContext } from './context.ts';
 import { loadImageItems } from './hydrate.ts';
 import { ANNEX_KINDS_SQL, QUEUE_KINDS_SQL, IN_COMIC_I, NOT_IN_BOOK, decodeCursor, encodeCursor, iso, parseId, QUEUE, THEME_EXPR, UNRECOGNIZED } from './sql.ts';
@@ -35,7 +35,7 @@ import { loadSuggestions } from './suggestions.ts';
  * s 像插画的程度（没识别 = -999）、th 主题（查询时叠加漫画 / 不像插画 / 敏感）
  */
 const COLS = `i.id, i.added_at AS a, i.tagged_at AS tg, i.shelved_at AS sh, (i.content_kind = 'comic') AS c,
-    COALESCE((SELECT MAX(s.score) FROM character_suggestions s WHERE s.image_id = i.id), -1) AS t,
+    COALESCE((SELECT MAX(s.score) FROM v_character_suggestions s WHERE s.image_id = i.id), -1) AS t,
     COALESCE(i.art_score, -999) AS s, ${THEME_EXPR} AS th`;
 /** 插画和漫画（漫画页看设置）：没有角色、不在合集里（合集整本处理）、不在按漫画导入的文件夹里，放下的也在这里（由分段区分） */
 const ROW_ART = `SELECT ${COLS} FROM v_counted_images i WHERE ${QUEUE_KINDS_SQL} AND ${UNRECOGNIZED} AND ${NOT_IN_BOOK} AND NOT ${IN_COMIC_I}`;
@@ -132,7 +132,7 @@ export class UnrecognizedQueries {
         `SELECT i.content_kind AS ck, CASE
             WHEN i.content_kind NOT IN ('illustration','comic') THEN i.content_kind
             WHEN i.shelved_at IS NOT NULL THEN 'shelved'
-            WHEN EXISTS (SELECT 1 FROM character_suggestions s WHERE s.image_id = i.id) THEN 'suggested'
+            WHEN EXISTS (SELECT 1 FROM v_character_suggestions s WHERE s.image_id = i.id) THEN 'suggested'
             WHEN i.content_kind = 'comic' THEN 'comic'
             WHEN i.tagged_at IS NULL THEN 'untagged'
             ELSE ${THEME_EXPR} END AS k, COUNT(*) AS n
@@ -167,9 +167,9 @@ export class UnrecognizedQueries {
     };
   }
 
-  /** 把「用主模型重新识别」范围里的图标记为 retag = 1，返回张数；识别任务写库时清零 */
+  /** 把「用主模型重新识别」范围里的图标记为 retag = 1（证据模块），返回张数；识别任务写库时清零 */
   markRetag(): number {
-    return this.ctx.stmt(`UPDATE images SET retag = 1 WHERE id IN (SELECT i.id ${RETAGGABLE}) AND retag = 0`).run().changes;
+    return markRetag(this.ctx.db, this.ctx.stmt(`SELECT i.id ${RETAGGABLE}`).pluck().all() as number[]);
   }
 
   list(q: ListUnrecognizedQuery): ListUnrecognizedResponse {
@@ -279,7 +279,7 @@ export class UnrecognizedQueries {
     if (!tags.length || tags.some((t) => !t)) throw new BadRequestError('标签不能为空');
     const rows = tags.map((tag) => {
       const row = this.ctx
-        .stmt('SELECT score, character_id, source FROM character_suggestions WHERE image_id = ? AND danbooru_tag = ?')
+        .stmt('SELECT score, character_id, provider AS source FROM character_evidence WHERE image_id = ? AND tag = ? ORDER BY score DESC LIMIT 1')
         .get(imageId, tag) as { score: number; character_id: number | null; source: 'tagger' | 'pixiv' } | undefined;
       // 自建角色的建议只认 character_id：角色合并 / 删除后这行已级联删掉，不能按编号再找（编号可能给了别的角色）
       if (CharacterCatalog.isCustomTag(tag) && row?.character_id == null) throw new ConflictError('这条建议已失效，请刷新');
@@ -304,10 +304,8 @@ export class UnrecognizedQueries {
         items.push({ imageId, characterId, provenance: manual(now, { provider: r.source, tag: r.tag, score: r.source === 'pixiv' ? null : r.score }) });
         names.push(db.prepare('SELECT name FROM characters WHERE id = ?').pluck().get(characterId) as string);
       }
-      // 归类模块写关联、清掉否决和对应的建议、声明变化（新角色命中「角色」排除规则由反应处理）
+      // 归类模块写关联、清掉否决、声明变化（新角色命中「角色」排除规则由反应处理）；关联上了的候选自然不再是建议
       linkEach(this.ctx, u, items);
-      // 采纳的这几条建议本身也去掉（标签没解析到这个角色时上面清不到）
-      dropSuggestions(db, u, rows.map((r) => ({ imageId, tag: r.tag })));
       return { message: acceptMessage(names, created) };
     });
   }

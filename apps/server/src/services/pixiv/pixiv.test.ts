@@ -10,7 +10,8 @@ import { CharacterCatalog } from '../catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../catalog/copyrights.ts';
 import { OfflineCharacterIndex, identityKey } from '../catalog/offlineCharacters.ts';
 import { DanbooruCatalog } from '../danbooru/catalog.ts';
-import { TagResultWriter } from '../tagger/writer.ts';
+import { TagResultWriter } from '../../domain/evidence/tagger.ts';
+import { reevaluateAutoReaction } from '../../domain/curation/reevaluate.ts';
 import { PixivAccessError, PixivClient, type PixivArtwork } from './client.ts';
 import { createPixivMatcher } from './match.ts';
 import { clearPendingPixivCache, pendingPixivCount, queuePixivImages, queueUnseenPixivAnimations, resetPixivBackoff, syncPixivCharacters } from './sync.ts';
@@ -43,6 +44,8 @@ beforeEach(() => {
     VALUES (?,1,?,?,1,1,1,'png',?,'x','x','illustration','pixiv','123')`).run(id, `123_p${id-1}.png`, `123_p${id-1}.png`, `s${id}`);
   const bus = new EventBus();
   ctx = createContext({ db, bus, dataDir: '.', clock: () => 0, undo: new UndoStack(), jobs: new JobQueue(bus, () => async () => {}) });
+  // P3b：Pixiv 补充只写证据，关联、原创由反应 reevaluateAuto 决定（引擎里也是这样接的）
+  ctx.propagation.register(reevaluateAutoReaction({ catalog: () => makeCatalog().catalog }));
   controller = new AbortController();
   job = { signal: controller.signal, setTotal: vi.fn(), advance: vi.fn(), setMessage: vi.fn(), shouldYield: () => false, requeue: vi.fn(), yielded: false };
   name(A, 'アリス'); name(A, 'Alice'); name(B, 'ボブ'); name('game_a', 'ゲームA', 3); name('game_b', 'ゲームB', 3);
@@ -163,7 +166,7 @@ it('首次模型低置信度候选自动登记，页面角色不同仍可关联�
   db.exec('DELETE FROM pixiv_character_checks');
   const {catalog,copyrights} = makeCatalog();
   const writer = new TagResultWriter(db,catalog,copyrights,{
-    repo:'test',autoAcceptThreshold:0.85,characterThreshold:0.35,generalThreshold:0.35,
+    repo:'test',generalThreshold:0.35,
     afterBatchInTx:(ids)=>queuePixivImages(ctx,ids),
   });
   writer.writeBatch([{id:1,ok:true,rating:null,general:[['1girl',0.9]],character:[[A,0.79]]}]);
@@ -195,7 +198,7 @@ it('网络返回前改成手动角色、或文件改变，不会应用过期的�
   }};
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
   expect(links()).toHaveLength(1);
-  expect(db.prepare('SELECT * FROM character_suggestions').all()).toHaveLength(0);
+  expect(db.prepare('SELECT * FROM v_character_suggestions').all()).toHaveLength(0);
 });
 
 it.each([
@@ -208,17 +211,17 @@ it.each([
   await syncPixivCharacters(ctx, job, makeCatalog, client, 0);
   expect(client.artwork).toHaveBeenCalledTimes(1);
   expect(links()).toHaveLength(automatic ? count : 0);
-  expect(db.prepare('SELECT * FROM character_suggestions').all()).toHaveLength(automatic ? 0 : count);
+  expect(db.prepare('SELECT * FROM v_character_suggestions').all()).toHaveLength(automatic ? 0 : count);
   await syncPixivCharacters(ctx, job, makeCatalog, client, 0);
   expect(links()).toHaveLength(automatic ? count : 0);
-  expect(db.prepare('SELECT * FROM character_suggestions').all()).toHaveLength(automatic ? 0 : count);
+  expect(db.prepare('SELECT * FROM v_character_suggestions').all()).toHaveLength(automatic ? 0 : count);
 });
 
 it('只有一张本地图片也按投稿总页数生成多角色建议', async () => {
   db.exec('DELETE FROM images WHERE id=2');
   await syncPixivCharacters(ctx, job, makeCatalog, { artwork: async () => art(8, ['アリス', 'ボブ']) }, 0);
   expect(links()).toHaveLength(0);
-  expect(db.prepare('SELECT * FROM character_suggestions').all()).toHaveLength(2);
+  expect(db.prepare('SELECT * FROM v_character_suggestions').all()).toHaveLength(2);
 });
 
 it('翻译里的服饰普通词与角色同名时不会误关联；原文匹配优先于翻译', () => {
@@ -279,9 +282,9 @@ it('同一标签的译名可消除原文别名歧义，不把真正的多角色�
 it('重新识别仍保留 Pixiv 来源候选', async () => {
   await syncPixivCharacters(ctx, job, makeCatalog, { artwork: async () => art(2, ['アリス','ボブ']) }, 0);
   const { catalog, copyrights } = makeCatalog();
-  const writer = new TagResultWriter(db, catalog, copyrights, { repo:'test', autoAcceptThreshold:0, characterThreshold:0, generalThreshold:0 });
+  const writer = new TagResultWriter(db, catalog, copyrights, { repo:'test', generalThreshold:0 });
   writer.writeBatch([{id:1,ok:true,rating:null,general:[],character:[]}]);
-  expect(db.prepare("SELECT * FROM character_suggestions WHERE source='pixiv'").all()).toHaveLength(4);
+  expect(db.prepare("SELECT * FROM v_character_suggestions WHERE source='pixiv'").all()).toHaveLength(4);
 });
 
 it('解析 Pixiv 响应、校验 ID；404 跳过，403 不重试', async () => {
@@ -313,15 +316,16 @@ it('明确的原文角色名不会被普通译名屏蔽，单独的普通词仍�
   expect(match(art(1,['Iris'])).tags).toEqual([]);
 });
 
-it.each([0.79,0.8,0.95])('模型候选分数 %f 仅在低于80%时允许页面关联不同角色', async score => {
+// 附录 #2（P3b）：以前模型候选分数到 0.8 就不查 Pixiv（写死的 0.8）。现在模型没自动关联的图都查，和分数落在哪一档无关
+it.each([0.79,0.8,0.84])('模型候选分数 %f（没到自动阈值、没自动关联）不挡 Pixiv，页面角色照常关联', async score => {
   db.exec('DELETE FROM pixiv_character_checks');
-  db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (1,?,?,'tagger')").run(A,score);
+  db.prepare("INSERT INTO character_evidence(image_id,tag,score,provider) VALUES (1,?,?,'tagger')").run(A,score);
   queuePixivImages(ctx,[1]);
   const client={artwork:vi.fn().mockResolvedValue(art(3,['ボブ']))};
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
-  expect(links()).toHaveLength(score<0.8?1:0);
-  if(score<0.8) expect(db.prepare('SELECT c.danbooru_tag FROM image_characters ic JOIN characters c ON c.id=ic.character_id WHERE ic.image_id=1').pluck().get()).toBe(B);
-  else expect(client.artwork).not.toHaveBeenCalled();
+  expect(client.artwork).toHaveBeenCalledTimes(1);
+  expect(links()).toHaveLength(1);
+  expect(db.prepare('SELECT c.danbooru_tag FROM image_characters ic JOIN characters c ON c.id=ic.character_id WHERE ic.image_id=1').pluck().get()).toBe(B);
 });
 
 it('已有模型关联不登记，联网期间新增模型关联也不追加', async () => {
@@ -391,7 +395,10 @@ it('明确原创字段映射到原创状态和作品，重复运行不重复写�
   const summary=await syncPixivCharacters(ctx,job,makeCatalog,client,0);
   expect(summary).toContain('原创 2 张');
   expect(db.prepare('SELECT COUNT(*) FROM images WHERE original_at IS NOT NULL').pluck().get()).toBe(2);
-  expect(db.prepare("SELECT COUNT(*) FROM image_copyrights ic JOIN works w ON w.id=ic.work_id WHERE w.danbooru_tag='original'").pluck().get()).toBe(2);
+  // 原创作品由 original_at 派生（迁移 035）；来历是自动 / Pixiv（D8）
+  expect(db.prepare("SELECT COUNT(*) FROM v_image_works x JOIN works w ON w.id=x.work_id WHERE w.danbooru_tag='original'").pluck().get()).toBe(2);
+  expect(db.prepare("SELECT DISTINCT original_decision, original_evidence_provider, original_rule FROM images").all())
+    .toEqual([{ original_decision: 'auto', original_evidence_provider: 'pixiv', original_rule: 'auto-original@1' }]);
   expect(links()).toHaveLength(0);
   queuePixivImages(ctx);
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
@@ -403,12 +410,13 @@ it.each([false,undefined])('原创字段 %s 不会设置原创状态', async isO
   expect(db.prepare('SELECT COUNT(*) FROM images WHERE original_at IS NOT NULL').pluck().get()).toBe(0);
 });
 
-it.each([true,false])('原创字段/标签仍保护已有角色和80%以上候选（字段 %s）', async isOriginal => {
+// 附录 #2（P3b）：以前「80% 以上的模型候选」也挡住原创标记（写死的 0.8）。现在只有已有角色挡住；没到自动阈值、没自动关联的模型候选不挡
+it.each([true,false])('原创字段/标签仍保护已有角色；没到自动阈值的模型候选不挡（字段 %s）', async isOriginal => {
   const character=makeCatalog().catalog.ensureCharacter(A,'now');
   db.prepare("INSERT INTO image_characters(image_id,character_id,decision,actor,added_at) VALUES (1,?,'manual','user','now')").run(character.id);
-  db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (2,?,0.8,'tagger')").run(B);
+  db.prepare("INSERT INTO character_evidence(image_id,tag,score,provider) VALUES (2,?,0.8,'tagger')").run(B);
   await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>({...art(2,['オリジナル']),isOriginal})},0);
-  expect(db.prepare('SELECT COUNT(*) FROM images WHERE original_at IS NOT NULL').pluck().get()).toBe(0);
+  expect(db.prepare('SELECT id FROM images WHERE original_at IS NOT NULL').pluck().all()).toEqual([2]);
 });
 
 it('陌生名称在线查询失败时保留队列，不写半成品建议', async () => {
@@ -420,7 +428,7 @@ it('陌生名称在线查询失败时保留队列，不写半成品建议', asyn
   expect(summary).toContain('失败 1');
   resetPixivBackoff();
   expect(pendingPixivCount(ctx)).toBe(2);
-  expect(db.prepare('SELECT COUNT(*) FROM character_suggestions').pluck().get()).toBe(0);
+  expect(db.prepare('SELECT COUNT(*) FROM v_character_suggestions').pluck().get()).toBe(0);
 });
 
 it('自定义原创角色可按名字关联，多角色投稿的建议显示真实名字', async () => {
@@ -430,7 +438,7 @@ it('自定义原创角色可按名字关联，多角色投稿的建议显示真�
   const {loadSuggestions}=await import('../../datasource/sqlite/suggestions.ts');
   expect(loadSuggestions(ctx,[1],makeCatalog().catalog).get(1)?.map(s=>s.name)).toEqual(['原创角色甲','原创角色乙']);
   // 自建角色的建议带真外键
-  expect(db.prepare("SELECT danbooru_tag,character_id FROM character_suggestions WHERE image_id=1 ORDER BY character_id").all())
+  expect(db.prepare("SELECT danbooru_tag,character_id FROM v_character_suggestions WHERE image_id=1 ORDER BY character_id").all())
     .toEqual(ids.map((id)=>({danbooru_tag:`emaki:character:${id}`,character_id:id})));
   // 自动识别不重复查；保留着的自建角色建议也可以显式补跑。
   queuePixivImages(ctx,[1,2]);
@@ -635,11 +643,11 @@ it('刷新服装变体保留同一身份的其他名称，移除变体的过期�
 
 it('完整姓名与低分模型一致时直接写入角色并移除旧建议', async () => {
   const tag=takina();
-  db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (1,?,0.7549,'tagger')").run(tag);
+  db.prepare("INSERT INTO character_evidence(image_id,tag,score,provider) VALUES (1,?,0.7549,'tagger')").run(tag);
   const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(1,['井ノ上たきな'],'123',[])},0);
   expect(summary).toContain('关联 2 张');
   expect(links()).toHaveLength(2);
-  expect(db.prepare("SELECT COUNT(*) FROM character_suggestions WHERE danbooru_tag=?").pluck().get(tag)).toBe(0);
+  expect(db.prepare("SELECT COUNT(*) FROM v_character_suggestions WHERE danbooru_tag=?").pluck().get(tag)).toBe(0);
 });
 
 it.each(['井上たきな','井の上たきな','井ノ上たきな'])('有作品标签时可匹配姓名中连接字的有无：%s', raw => {
@@ -693,15 +701,17 @@ it('历史未匹配的多页单角色投稿可按姓名变体补充，已有角�
   addImage(3,'123'); addImage(4,'123');
   const ch=makeCatalog().catalog.ensureCharacter(A,'now');
   db.prepare("INSERT INTO image_characters(image_id,character_id,decision,actor,added_at) VALUES (3,?,'manual','user','now')").run(ch.id);
-  db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (1,?,0.7971,'tagger'),(4,?,0.9,'tagger')").run(tag,B);
+  db.prepare("INSERT INTO character_evidence(image_id,tag,score,provider) VALUES (1,?,0.7971,'tagger'),(4,?,0.9,'tagger')").run(tag,B);
+  // 高分模型结果：识别时就自动关联了（P3b 起由 reevaluateAuto 关联，这里直接放好关联），有角色的图不再查 Pixiv
+  const bob=makeCatalog().catalog.ensureCharacter(B,'now');
+  db.prepare("INSERT INTO image_characters(image_id,character_id,decision,actor,rule,evidence_provider,evidence_tag,evidence_score,added_at) VALUES (4,?,'auto','job:tag','auto-accept@2','tagger',?,0.9,'now')").run(bob.id,B);
   db.exec("UPDATE pixiv_character_checks SET result='unmatched',checked_at='before'");
   queuePixivImages(ctx);
   const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(5,['井上たきな'])},0);
   expect(summary).toContain('关联 2 张');
   expect(db.prepare('SELECT c.danbooru_tag FROM image_characters ic JOIN characters c ON c.id=ic.character_id WHERE image_id=1').pluck().get()).toBe(tag);
   expect(db.prepare('SELECT character_id FROM image_characters WHERE image_id=3').pluck().get()).toBe(ch.id);
-  expect(db.prepare('SELECT COUNT(*) FROM image_characters WHERE image_id=4').pluck().get()).toBe(0);
-  expect(db.prepare("SELECT score FROM character_suggestions WHERE image_id=4 AND danbooru_tag=?").pluck().get(B)).toBe(0.9);
+  expect(db.prepare('SELECT character_id FROM image_characters WHERE image_id=4').pluck().all()).toEqual([bob.id]);
 });
 
 it('只有原创字段和同名短标签时，仍归为原创', async () => {
@@ -709,7 +719,7 @@ it('只有原创字段和同名短标签时，仍归为原创', async () => {
   expect(summary).toContain('原创 2 张');
   expect(links()).toHaveLength(0);
   expect(db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0);
-  expect(db.prepare("SELECT danbooru_tag,character_id FROM character_suggestions WHERE source='pixiv' AND image_id=1").all())
+  expect(db.prepare("SELECT danbooru_tag,character_id FROM v_character_suggestions WHERE source='pixiv' AND image_id=1").all())
     .toEqual([{danbooru_tag:A,character_id:null}]);
 });
 
@@ -721,7 +731,7 @@ it.each(['field', 'tag', 'both'] as const)('角色标签自带作品限定时，
 
   expect(db.prepare('SELECT COUNT(*) FROM images WHERE original_at IS NOT NULL').pluck().get()).toBe(0);
   expect(links()).toHaveLength(2);
-  expect(db.prepare("SELECT danbooru_tag FROM character_suggestions WHERE source='pixiv'").pluck().all()).toEqual([]);
+  expect(db.prepare("SELECT danbooru_tag FROM v_character_suggestions WHERE source='pixiv'").pluck().all()).toEqual([]);
   expect(db.prepare('SELECT DISTINCT result FROM pixiv_character_checks').pluck().all()).toEqual(['linked']);
 });
 
@@ -732,7 +742,7 @@ it.each([false, true])('多个非原创角色的多图投稿仍给建议（含�
 
   expect(db.prepare('SELECT COUNT(*) FROM images WHERE original_at IS NOT NULL').pluck().get()).toBe(0);
   expect(links()).toHaveLength(0);
-  expect(db.prepare("SELECT DISTINCT danbooru_tag FROM character_suggestions WHERE source='pixiv' ORDER BY danbooru_tag").pluck().all())
+  expect(db.prepare("SELECT DISTINCT danbooru_tag FROM v_character_suggestions WHERE source='pixiv' ORDER BY danbooru_tag").pluck().all())
     .toEqual([A, B]);
   expect(db.prepare('SELECT DISTINCT result FROM pixiv_character_checks').pluck().all()).toEqual(['suggested']);
 });
@@ -758,13 +768,14 @@ it('用户撤掉的 Pixiv 关联和原创不再写回；未匹配的投稿复用
 
 it.each(['pixiv','tagger'])('手动补跑按新词库重算旧建议（来源 %s），不重复请求 Pixiv', async source => {
   if(source==='tagger') for(const id of [1,2]) {
-    db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (?,?,0.75,'tagger')").run(id,A);
+    db.prepare("INSERT INTO character_evidence(image_id,tag,score,provider) VALUES (?,?,0.75,'tagger')").run(id,A);
   }
   const client={artwork:vi.fn().mockResolvedValue(art(1,['アリス'],'123',['新ゲーム名']))};
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
   expect(links()).toHaveLength(0);
   expect(db.prepare('SELECT DISTINCT result FROM pixiv_character_checks').pluck().all()).toEqual(['suggested']);
-  expect(db.prepare('SELECT DISTINCT source FROM character_suggestions').pluck().all()).toEqual([source]);
+  // 迁移 035 之前两个来源的建议共用一个主键，Pixiv 的写不进去（附录 #9）；现在各来源各有一份证据
+  expect(db.prepare('SELECT DISTINCT source FROM v_character_suggestions ORDER BY source').pluck().all()).toEqual(source === 'tagger' ? ['pixiv', 'tagger'] : ['pixiv']);
   queuePixivImages(ctx,[1,2]);
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
   expect(client.artwork).toHaveBeenCalledTimes(1);
@@ -774,12 +785,12 @@ it.each(['pixiv','tagger'])('手动补跑按新词库重算旧建议（来源 %s
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
   expect(client.artwork).toHaveBeenCalledTimes(1);
   expect(links()).toHaveLength(2);
-  expect(db.prepare('SELECT COUNT(*) FROM character_suggestions').pluck().get()).toBe(0);
+  expect(db.prepare('SELECT COUNT(*) FROM v_character_suggestions').pluck().get()).toBe(0);
 });
 
 it('旧建议已经清空、或实际移除过角色时不因手动补跑写回', async () => {
   await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(1,['アリス'],'123',[])},0);
-  db.exec("DELETE FROM character_suggestions WHERE image_id=1; UPDATE pixiv_character_checks SET result='dismissed' WHERE image_id=2");
+  db.exec("DELETE FROM character_evidence WHERE image_id=1; UPDATE pixiv_character_checks SET result='dismissed' WHERE image_id=2");
   queuePixivImages(ctx);
   expect(pendingPixivCount(ctx)).toBe(0);
   const client={artwork:vi.fn().mockResolvedValue(art(1,['アリス']))};
@@ -848,7 +859,8 @@ it('缓存复算只修正 Pixiv 加过的原创标记，并保留多角色投稿
   const artwork={...art(5,['アリス','ボブ'],'123',[]),isOriginal:true};
   const client={artwork:vi.fn().mockResolvedValue(artwork)};
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
-  db.prepare("UPDATE images SET original_at='manual' WHERE id=2").run();
+  // 用户后来手动重标了第 2 张（手动的原创决定，D8）
+  db.prepare("UPDATE images SET original_at='manual',original_decision='manual',original_actor='user',original_rule=NULL,original_evidence_provider=NULL WHERE id=2").run();
   cacheArtwork(db,{...artwork,tags:art(5,['アリス','ボブ']).tags},'updated');
   const updated={...ctx,clock:()=>1000};
   await syncPixivCharacters(updated,job,makeCatalog,client,0,undefined,{imageIds:[1,2],recheckCached:true});
@@ -856,7 +868,10 @@ it('缓存复算只修正 Pixiv 加过的原创标记，并保留多角色投稿
   expect(links()).toHaveLength(0);
   expect(db.prepare("SELECT image_id FROM pixiv_character_checks WHERE result='suggested'").pluck().all()).toEqual([1]);
   expect(db.prepare('SELECT original_at FROM images ORDER BY id').pluck().all()).toEqual([null,'manual']);
-  expect(db.prepare('SELECT image_id FROM image_copyrights ORDER BY image_id').pluck().all()).toEqual([2]);
+  // 原创作品由 original_at 派生
+  expect(db.prepare("SELECT x.image_id FROM v_image_works x JOIN works w ON w.id=x.work_id WHERE w.danbooru_tag='original' ORDER BY x.image_id").pluck().all()).toEqual([2]);
+  // 撤回自动标的原创记进审计（D2 / D8），设置里能撤回
+  expect(db.prepare("SELECT kind FROM change_log WHERE kind='auto-retract'").pluck().all()).toEqual(['auto-retract']);
 });
 
 it('离线扩展库按作品查同名角色，已知名称无需请求 Danbooru', async () => {
@@ -892,15 +907,16 @@ it('离线扩展库按作品查同名角色，已知名称无需请求 Danbooru'
 
 it('补跑成功后替换旧 Pixiv 建议，保留模型原分数；请求失败时保留原建议', async () => {
   await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(2,['アリス','ボブ'])},0);
-  db.prepare("UPDATE character_suggestions SET source='tagger',score=0.75 WHERE image_id=1 AND danbooru_tag=?").run(A);
+  // 模型也给了第 1 张 A（0.75，没到自动阈值）：各来源各有一份证据
+  db.prepare("INSERT INTO character_evidence(image_id,tag,score,provider) VALUES (1,?,0.75,'tagger')").run(A);
   queuePixivImages(ctx);
   clearPendingPixivCache(ctx);
   await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>{throw new Error('offline');}},0);
-  expect(db.prepare("SELECT COUNT(*) FROM character_suggestions WHERE source='pixiv'").pluck().get()).toBe(3);
+  expect(db.prepare("SELECT COUNT(*) FROM v_character_suggestions WHERE source='pixiv'").pluck().get()).toBe(4);
   resetPixivBackoff();
   const summary=await syncPixivCharacters(ctx,job,makeCatalog,{artwork:async()=>art(2,[])},0);
   expect(summary).toContain('未匹配角色 1');
-  expect(db.prepare('SELECT image_id,danbooru_tag,score,source FROM character_suggestions').all()).toEqual([{image_id:1,danbooru_tag:A,score:0.75,source:'tagger'}]);
+  expect(db.prepare('SELECT image_id,danbooru_tag,score,source FROM v_character_suggestions').all()).toEqual([{image_id:1,danbooru_tag:A,score:0.75,source:'tagger'}]);
 });
 
 it('移除标记不阻止换投稿后首次补充，也不覆盖请求期间的人工移除', async () => {
@@ -1089,7 +1105,7 @@ it('补作品失败后已验证名称仍保留，但不绕过作品校验自动�
   const mk=()=>({catalog:new CharacterCatalog(db,{copyrights:dc}),copyrights:dc});
   const summary=await syncPixivCharacters(ctx,job,mk,{artwork:async()=>art(1,['確かな原名'])},0,discover);
   expect(summary).toContain('建议 2'); expect(links()).toHaveLength(0);
-  expect(db.prepare('SELECT DISTINCT danbooru_tag FROM character_suggestions').pluck().all()).toEqual([tag]);
+  expect(db.prepare('SELECT DISTINCT danbooru_tag FROM v_character_suggestions').pluck().all()).toEqual([tag]);
 });
 
 it('已知名字但缺少作品元数据时会补齐，失败后下一轮仍可恢复', async () => {
@@ -1157,18 +1173,16 @@ it('召回多个经别名验证的同名角色时仍保持歧义，不自动关�
   const mk=()=>({catalog:new CharacterCatalog(db,{copyrights:dc}),copyrights:dc});
   await syncPixivCharacters(ctx,job,mk,{artwork:async()=>art(1,['共享名字'])},0,createPixivDiscovery(db,dc,client));
   expect(links()).toHaveLength(0);
-  expect(db.prepare('SELECT DISTINCT danbooru_tag FROM character_suggestions ORDER BY danbooru_tag').pluck().all()).toEqual(tags);
+  expect(db.prepare('SELECT DISTINCT danbooru_tag FROM v_character_suggestions ORDER BY danbooru_tag').pluck().all()).toEqual(tags);
 });
 
-it('设置关掉「未识别里也列出漫画页」时漫画页不查 Pixiv，打开后照常', async () => {
+// 附录 #1（P3b）：以前关掉「未识别里也列出漫画页」时漫画页不查 Pixiv，而模型总能自动关联漫画页。现在 Pixiv 和模型的资格一致
+it('关掉「未识别里也列出漫画页」时漫画页照样查 Pixiv（和模型的资格一致）', async () => {
   db.exec("UPDATE images SET content_kind='comic' WHERE id=2");
   expect(pendingPixivCount(ctx)).toBe(2);
   db.exec(`INSERT INTO settings(key,value) VALUES ('tagger','{"comicInUnrecognized":false}')`);
-  expect(pendingPixivCount(ctx)).toBe(1);
+  expect(pendingPixivCount(ctx)).toBe(2);
   const client = { artwork: async () => art(2, ['アリス']) };
   await syncPixivCharacters(ctx, job, makeCatalog, client, 0);
-  expect(links().map((r) => (r as { image_id: number }).image_id)).toEqual([1]);
-  db.exec(`UPDATE settings SET value='{"comicInUnrecognized":true}' WHERE key='tagger'`);
-  // 打开后漫画页回到待查
-  expect(pendingPixivCount(ctx)).toBe(1);
+  expect(links().map((r) => (r as { image_id: number }).image_id)).toEqual([1, 2]);
 });

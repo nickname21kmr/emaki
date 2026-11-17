@@ -3,8 +3,9 @@
  *
  * - reparseSource：图移动了（扫描发现、应用内移动、整理到子文件夹、撤回移动都一样），没手动确认来源的按新路径重新解析；
  *   来源变了就声明 image.sourceChanged。
- * - dropStalePixivEvidence：来源变了的图，Pixiv 建议和检查记录是按旧投稿号查的就去掉（换了投稿就不再是这张图的证据）。
+ * - dropStalePixivEvidence：来源变了的图，Pixiv 证据和检查记录是按旧投稿号查的就去掉（换了投稿就不再是这张图的证据，来源失效）。
  *   所有改来源的路径（改识别方式、手动改来源、扫描、查重合并、启动修补）都走这里，不再各做各的。
+ *   去掉证据声明 evidence.changed（pixiv），依据它的自动决定由 reevaluateAuto 撤回（D2）。
  * - queuePixivCheck：影响 Pixiv 补充资格的变化（来源、类型、放下、原创、角色、排除、识别结果、漫画设置）之后重新登记待查。
  *   登记（pixiv_character_checks）就是持久化的队列；要不要马上开一轮补充，由提交后的排队反应决定（propagation/engine.ts）。
  */
@@ -12,8 +13,9 @@ import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import { readSettings } from '../../datasource/sqlite/settings.ts';
 import type { Change } from '../../propagation/changes.ts';
 import type { Reaction } from '../../propagation/registry.ts';
-import { queuePixivImages } from '../../services/pixiv/sync.ts';
 import { parseSource } from '../../services/source/parseSource.ts';
+import { queuePixivImages } from './pixiv.ts';
+import { dropEvidence } from './store.ts';
 
 export const reparseSourceReaction: Reaction = {
   name: 'reparseSource',
@@ -55,33 +57,32 @@ export const dropStalePixivEvidenceReaction: Reaction = {
   phase: 'tx',
   emits: ['evidence.changed'],
   run({ ctx, changes, undo, emit }) {
-    // Pixiv 建议对应的投稿 = 这张图的检查记录里的投稿号；和现在的来源对不上（或者已经不是 Pixiv）就是过期的
-    const stale = ctx.db
-      .prepare(
-        `SELECT DISTINCT cs.image_id FROM character_suggestions cs JOIN images i ON i.id = cs.image_id
-         WHERE cs.source = 'pixiv' AND cs.image_id IN (SELECT value FROM json_each(?))
-           AND NOT EXISTS (SELECT 1 FROM pixiv_character_checks p WHERE p.image_id = i.id AND i.source_site = 'pixiv' AND p.post_id = i.source_post_id)`,
-      )
-      .pluck()
-      .all(JSON.stringify(changes.ids())) as number[];
-    // 检查记录对应的投稿也不是现在的了：去掉，切回原来的投稿号时重新登记、从缓存找回（以前是删了再登记）
+    const json = JSON.stringify(changes.ids());
+    // 检查记录对应的投稿不是现在的了：去掉，切回原来的投稿号时重新登记、从缓存找回（以前是删了再登记）
     const staleChecks = ctx.db
       .prepare(
         `SELECT p.image_id FROM pixiv_character_checks p JOIN images i ON i.id = p.image_id
          WHERE p.image_id IN (SELECT value FROM json_each(?)) AND NOT (i.source_site IS 'pixiv' AND p.post_id IS i.source_post_id)`,
       )
       .pluck()
-      .all(JSON.stringify(changes.ids())) as number[];
+      .all(json) as number[];
+    // Pixiv 证据对应的投稿 = 检查记录里的投稿号；和现在的来源对不上（或者已经不是 Pixiv）就是过期的（来源失效）
+    const stale = ctx.db
+      .prepare(
+        `SELECT i.id FROM images i WHERE i.id IN (SELECT value FROM json_each(?))
+           AND (EXISTS (SELECT 1 FROM image_evidence e WHERE e.image_id = i.id AND e.provider = 'pixiv')
+             OR EXISTS (SELECT 1 FROM character_evidence e WHERE e.image_id = i.id AND e.provider = 'pixiv'))
+           AND NOT EXISTS (SELECT 1 FROM pixiv_character_checks p WHERE p.image_id = i.id AND i.source_site = 'pixiv' AND p.post_id = i.source_post_id)`,
+      )
+      .pluck()
+      .all(json) as number[];
     if (staleChecks.length) {
-      const json = JSON.stringify(staleChecks);
-      undo?.set('pixiv_character_checks', 'image_id IN (SELECT value FROM json_each(?))', [json]);
-      ctx.db.prepare('DELETE FROM pixiv_character_checks WHERE image_id IN (SELECT value FROM json_each(?))').run(json);
+      const sj = JSON.stringify(staleChecks);
+      undo?.set('pixiv_character_checks', 'image_id IN (SELECT value FROM json_each(?))', [sj]);
+      ctx.db.prepare('DELETE FROM pixiv_character_checks WHERE image_id IN (SELECT value FROM json_each(?))').run(sj);
     }
-    if (!stale.length) return;
-    const json = JSON.stringify(stale);
-    undo?.set('character_suggestions', "source = 'pixiv' AND image_id IN (SELECT value FROM json_each(?))", [json]);
-    ctx.db.prepare("DELETE FROM character_suggestions WHERE source = 'pixiv' AND image_id IN (SELECT value FROM json_each(?))").run(json);
-    emit({ type: 'evidence.changed', provider: 'pixiv', ids: stale });
+    // 去掉过期的 Pixiv 证据（声明 evidence.changed pixiv）：依据它的自动关联、自动原创由 reevaluateAuto 撤回（D2）
+    dropEvidence({ db: ctx.db, changed: emit }, undo, 'pixiv', stale);
   },
 };
 
@@ -92,6 +93,7 @@ export const queuePixivCheckReaction: Reaction = {
     'image.kindChanged',
     'curation.shelvedChanged',
     'curation.originalChanged',
+    'curation.autoOriginalChanged',
     'curation.charactersChanged',
     'visibility.changed',
     'evidence.changed',
@@ -103,19 +105,18 @@ export const queuePixivCheckReaction: Reaction = {
     const ids = changes.ids();
     if (!ids.length) return;
     undo?.set('pixiv_character_checks', 'image_id IN (SELECT value FROM json_each(?))', [JSON.stringify(ids)]);
-    queuePixivImages(ctx, ids);
+    queuePixivImages(ctx.db, ids);
   },
 };
 
 /**
- * 识别任务写完一批（在 writer 的事务里调用）：模型证据变了，按标签重判的类型也可能变了；
- * linkChanges 是归类模块写自动关联时声明的变化（哪些图加了角色），原样转交。
- * 套排除规则、登记 Pixiv 补充、合集（任务结束时全量）都由反应做
+ * 识别任务写完一批（在 writer 的事务里调用）：evidenceChanges 是证据模块替换模型证据时声明的变化（只有识别成功的图），原样转交；
+ * 按标签重判的类型也可能变了（识别失败的图也按空标签重判过）。
+ * 自动关联（reevaluateAuto）、套排除规则、登记 Pixiv 补充、合集（任务结束时全量）都由反应做
  */
-export function declareTagged(ctx: SqliteContext, ids: number[], linkChanges: readonly Change[] = []): void {
+export function declareTagged(ctx: SqliteContext, ids: number[], evidenceChanges: readonly Change[] = []): void {
   ctx.apply(() => {
-    ctx.changed({ type: 'evidence.changed', provider: 'tagger', ids });
-    for (const c of linkChanges) ctx.changed(c);
+    for (const c of evidenceChanges) ctx.changed(c);
     ctx.changed({ type: 'image.kindChanged', ids });
   });
 }

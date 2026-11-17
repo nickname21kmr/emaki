@@ -8,8 +8,8 @@
 
 /** 移动的来由：扫描发现 / 应用内移动 / 整理到子文件夹 / 撤回移动 / 图库文件夹合并或接管 */
 export type MoveReason = 'scan' | 'move' | 'organize' | 'revertMove' | 'root';
-/** 证据的来源 */
-export type EvidenceProvider = 'tagger' | 'pixiv' | 'artists';
+/** 证据的来源：识别模型、Pixiv 投稿标签、识别画师；以后的插件来源记成 plugin:<id> */
+export type EvidenceProvider = 'tagger' | 'pixiv' | 'artists' | `plugin:${string}`;
 
 type ImageChange<T extends string, X = unknown> = { type: T; ids: number[] } & X;
 
@@ -35,6 +35,13 @@ export type Change =
   // 归类
   | ImageChange<'curation.charactersChanged'>
   | ImageChange<'curation.originalChanged'>
+  /**
+   * 自动决定（reevaluateAuto）改了原创标记。和 curation.originalChanged 是同一个事实，分开声明只是为了
+   * reevaluateAuto 订阅「原创变化」时不订阅到自己的输出（反应之间不能有环）；关心原创的反应两个都订阅
+   */
+  | ImageChange<'curation.autoOriginalChanged'>
+  /** 请求按当前规则重新评估这些图的自动决定（「按当前阈值补采纳」命令） */
+  | ImageChange<'curation.autoRequested'>
   | ImageChange<'curation.shelvedChanged'>
   | ImageChange<'curation.ratingChanged'>
   | ImageChange<'curation.favoriteChanged'>
@@ -75,6 +82,8 @@ const IMAGE_SCOPED = new Set<ChangeType>([
   'evidence.changed',
   'curation.charactersChanged',
   'curation.originalChanged',
+  'curation.autoOriginalChanged',
+  'curation.autoRequested',
   'curation.shelvedChanged',
   'curation.ratingChanged',
   'curation.favoriteChanged',

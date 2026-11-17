@@ -30,7 +30,7 @@ describe('migrate', () => {
     expect(migrate(db)).toEqual({ from: 0, to: latest });
     expect(db.pragma('user_version', { simple: true })).toBe(latest);
     const views = db.prepare("SELECT name FROM sqlite_master WHERE type = 'view' ORDER BY name").pluck().all();
-    expect(views).toEqual(['v_counted_images', 'v_illust_images', 'v_image_works', 'v_images']);
+    expect(views).toEqual(['v_character_suggestions', 'v_counted_images', 'v_illust_images', 'v_image_works', 'v_images']);
     const cols = (db.prepare('PRAGMA table_info(images)').all() as { name: string }[]).map((c) => c.name);
     expect(cols).toEqual(expect.arrayContaining(['content_kind', 'content_kind_manual', 'camera', 'theme', 'art_score', 'shelved_at']));
   });
@@ -77,7 +77,8 @@ describe('migrate', () => {
         (1, 'emaki:character:5', 0, 'pixiv'), (1, 'emaki:character:9', 0, 'pixiv'), (1, 'hina_(blue_archive)', 0.4, 'tagger');
       INSERT INTO pixiv_character_checks (image_id, post_id, modified_at) VALUES (1, '123', 'x');`);
     migrate(db);
-    const rows = () => db.prepare('SELECT danbooru_tag, character_id FROM character_suggestions ORDER BY danbooru_tag').all();
+    // 迁移 035 之后建议原样转成了角色证据（character_evidence）
+    const rows = () => db.prepare('SELECT tag AS danbooru_tag, character_id FROM character_evidence ORDER BY tag').all();
     expect(rows()).toEqual([
       { danbooru_tag: 'emaki:character:5', character_id: 5 },
       { danbooru_tag: 'hina_(blue_archive)', character_id: null },
@@ -96,7 +97,7 @@ describe('migrate', () => {
       INSERT INTO characters (id, name, danbooru_tag, source, created_at) VALUES (7, '后来新建的', 'reused_(x)', 'danbooru', 'x');
       INSERT INTO character_suggestions (image_id, danbooru_tag, score, source) VALUES (1, 'emaki:character:7', 0, 'pixiv');`);
     migrate(db);
-    expect(db.prepare('SELECT COUNT(*) FROM character_suggestions').pluck().get()).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) FROM character_evidence').pluck().get()).toBe(0);
   });
 });
 

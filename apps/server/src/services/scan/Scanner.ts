@@ -25,6 +25,8 @@ import { parseSource } from '../source/parseSource.ts';
 import { htmlAnimationCache, readHtmlAnimation } from '../image/htmlAnimation.ts';
 import type { ScanRequests, ScanScope } from './ScanRequests.ts';
 import type { Change } from '../../propagation/changes.ts';
+import { resetRecognitionStatement } from '../../domain/evidence/retag.ts';
+import { movedSourceStatement } from '../../domain/evidence/source.ts';
 
 export interface ScanSummary {
   added: number;
@@ -353,7 +355,7 @@ export class Scanner {
       insert: db.prepare(INSERT_IMAGE_SQL),
       // 内容变了要重新识别：标签、主题、质量分都清空；手动改过的类型保留（BI-14 ②：按没有标签重判）
       content: db.prepare(`UPDATE images SET width=@width, height=@height, bytes=@bytes, format=@format, sha256=@sha256, modified_at=@modifiedAt, frame_count=@frameCount,
-          dhash=NULL, dominant_color=NULL, thumb_at=NULL, decode_error=NULL, tagged_at=NULL, tagger_model=NULL,
+          dhash=NULL, dominant_color=NULL, thumb_at=NULL, decode_error=NULL,
           missing=0, trashed_at=NULL, camera=@camera, theme=NULL, art_score=NULL, content_kind_version=@kindVersion,
           content_kind=CASE WHEN content_kind_manual=1 THEN content_kind ELSE @kind END,
           content_kind_source=CASE WHEN content_kind_manual=1 THEN content_kind_source ELSE @kindSource END,
@@ -361,13 +363,14 @@ export class Scanner {
         WHERE id=@id`),
       meta: db.prepare('UPDATE images SET bytes=@bytes, modified_at=@modifiedAt, missing=0, trashed_at=NULL WHERE id=@id'),
       // 来源按新路径重新解析，和应用内移动、整理到子文件夹、撤回移动一样（附录 #13：以前用 COALESCE 留着旧来源）；手动确认的不动
-      move: db.prepare(`UPDATE images SET root_id=@rootId, rel_path=@relPath, file_name=@fileName, modified_at=@modifiedAt, missing=0, trashed_at=NULL,
-          source_site=CASE WHEN source_manual=1 THEN source_site ELSE @site END, source_post_id=CASE WHEN source_manual=1 THEN source_post_id ELSE @postId END,
-          source_artist=CASE WHEN source_manual=1 THEN source_artist ELSE @artist END, source_url=CASE WHEN source_manual=1 THEN source_url ELSE @url END
+      move: db.prepare(`UPDATE images SET root_id=@rootId, rel_path=@relPath, file_name=@fileName, modified_at=@modifiedAt, missing=0, trashed_at=NULL
         WHERE id=@id`),
       error: db.prepare(`INSERT INTO scan_errors (root_id, rel_path, bytes, modified_at, error, at) VALUES (@rootId, @relPath, @bytes, @modifiedAt, @error, @at)
         ON CONFLICT(root_id, rel_path) DO UPDATE SET bytes=excluded.bytes, modified_at=excluded.modified_at, error=excluded.error, at=excluded.at`),
     };
+    // 证据模块的列：内容变了识别作废（等重新识别）；移动了来源按新路径重新解析（附录 #13：以前用 COALESCE 留着旧来源），手动确认的不动
+    const resetRecognition = resetRecognitionStatement(db);
+    const movedSource = movedSourceStatement(db);
     // 以前读失败、这次成功入库的文件：清掉失败记录
     const clearError = db.prepare('DELETE FROM scan_errors WHERE root_id = @rootId AND rel_path = @relPath');
 
@@ -391,7 +394,10 @@ export class Scanner {
           if (op.t === 'insert') {
             newIds.push(Number(info.lastInsertRowid));
             clearError.run({ rootId: op.p.rootId, relPath: op.p.relPath });
-          } else if (op.t === 'content') contentIds.push(op.p.id as number);
+          } else if (op.t === 'content') {
+            resetRecognition.run({ id: op.p.id });
+            contentIds.push(op.p.id as number);
+          } else if (op.t === 'move') movedSource.run(op.p);
         }
         // 移动后路径变了：用已有的标签按新路径重判类型（BI-14 ①）
         if (movedIds.length) backfillClassification(db, { ids: movedIds });
