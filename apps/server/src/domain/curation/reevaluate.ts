@@ -119,22 +119,10 @@ export function evaluateAuto(db: Db, ids: number[], fresh: ReadonlyMap<number, R
       ? (stmt(db, 'SELECT id FROM characters WHERE id IN (SELECT value FROM json_each(?))').pluck().all(JSON.stringify([...customIds])) as number[])
       : [],
   );
-  // 证据里的标签已经规范化过：先一条语句按标签找角色（角色自己的标签、合并重定向），找不到的再交给角色目录（规范化、核验过的变体）。
-  // 识别任务每批都要评估一次，逐个走角色目录的规范化要慢上一截
-  const resolved = new Map<string, number | null>();
+  // 证据里的标签已经规范化过：角色目录一次按标签找完，找不到的再逐个规范化（resolveNormalized）
   const tags = new Set<string>();
   for (const list of evidence.values()) for (const e of list) for (const c of e.candidates) if (c.characterId === null) tags.add(c.tag);
-  if (tags.size) {
-    for (const [tag, id] of stmt(
-      db,
-      `SELECT j.value, COALESCE((SELECT c.id FROM characters c WHERE c.danbooru_tag = j.value),
-         (SELECT r.character_id FROM danbooru_tag_redirects r WHERE r.tag = j.value)) FROM json_each(?) j`,
-    )
-      .raw()
-      .all(JSON.stringify([...tags])) as [string, number | null][]) {
-      if (id !== null) resolved.set(tag, id);
-    }
-  }
+  const resolved = catalog.resolveNormalized(tags);
   const resolve = (c: { tag: string; characterId: number | null }) => {
     if (c.characterId !== null) return alive.has(c.characterId) ? c.characterId : null;
     if (!resolved.has(c.tag)) resolved.set(c.tag, catalog.resolveCharacterId(c.tag));

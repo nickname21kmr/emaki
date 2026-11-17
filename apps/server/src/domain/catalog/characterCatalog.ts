@@ -125,6 +125,27 @@ export class CharacterCatalog {
     return null;
   }
 
+  /**
+   * 一批已经规范化过的标签（证据里的候选）→ 角色。先一条语句按标签找（角色自己的标签、合并重定向），找不到的再走 resolveCharacterId
+   * （规范化、核验过的变体）。证据里的标签写入时已经规范化，逐个再规范化一遍要慢上一截（reevaluateAuto 每批识别都要解析）
+   */
+  resolveNormalized(tags: Iterable<string>): Map<string, number | null> {
+    const out = new Map<string, number | null>();
+    const list = [...new Set(tags)].filter((t) => !CharacterCatalog.isCustomTag(t));
+    if (list.length) {
+      const rows = this.db
+        .prepare(
+          `SELECT j.value, COALESCE((SELECT c.id FROM characters c WHERE c.danbooru_tag = j.value),
+             (SELECT r.character_id FROM danbooru_tag_redirects r WHERE r.tag = j.value)) FROM json_each(?) j`,
+        )
+        .raw()
+        .all(JSON.stringify(list)) as [string, number | null][];
+      for (const [tag, id] of rows) if (id !== null) out.set(tag, id);
+    }
+    for (const tag of list) if (!out.has(tag)) out.set(tag, this.resolveCharacterId(tag));
+    return out;
+  }
+
   private lookup(tag: string): number | null {
     if (this.cache.has(tag)) return this.cache.get(tag)!;
     const row = this.s.resolve!.get({ tag }) as { id: number } | undefined;
