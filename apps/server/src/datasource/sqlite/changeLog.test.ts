@@ -69,6 +69,30 @@ describe('自动关联 Danbooru 标签', () => {
     expect((await ds.listChanges('auto'))[0]).toMatchObject({ revertable: true, revertedAt: null });
   });
 
+  // 附录 #6（P3a 已关闭）：以前撤回时去掉绑定之后所有 origin = 'tagger' 的关联，Pixiv 按名字对上的、按别的标签补采纳的也一起删了
+  it('撤回只去掉这次绑定造成的：依据这个标签的自动关联；Pixiv 按名字对上的、依据别的标签的、迁移前的 Pixiv 关联都留着', async () => {
+    name('hoshino_(blue_archive)', '小鸟游星野', 4, { zh: '小鸟游星野', copyright: 'blue_archive' });
+    const cid = Number(db().prepare("INSERT INTO characters (name, source, created_at) VALUES ('小鸟游星野', 'custom', ?)").run(NOW_ISO()).lastInsertRowid);
+    db().prepare('INSERT INTO character_works (character_id, work_id) VALUES (?, ?)').run(cid, Number(env.id('work', 'w1')));
+    (ds as unknown as { characters: { associateAutomatic(): void } }).characters.associateAutomatic();
+    const link = db().prepare(
+      `INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_tag, evidence_score, added_at)
+       VALUES (?, ?, 'auto', ?, ?, ?, ?, ?, ?)`,
+    );
+    // 绑定之后：识别器按这个标签认的（去掉）、迁移前的模型关联（不知道标签，按以前的办法算这次绑定的，去掉）
+    link.run(img('i27'), cid, 'job:tag', 'auto-accept@1', 'tagger', 'hoshino_(blue_archive)', 0.9, NOW_ISO());
+    link.run(img('i28'), cid, 'system:migration', 'legacy:tagger', 'tagger', null, 0.9, NOW_ISO());
+    // Pixiv 按自建角色的名字对上的、依据合并重定向的另一个标签补采纳的、迁移前的 Pixiv 关联：都不是这次绑定造成的
+    link.run(img('i29'), cid, 'job:pixiv-tags', 'pixiv@1', 'pixiv', `emaki:character:${cid}`, null, NOW_ISO());
+    link.run(img('i30'), cid, 'user', 'promote@1', 'tagger', 'hoshino_(swimsuit)_(blue_archive)', 0.88, NOW_ISO());
+    link.run(img('i31'), cid, 'system:migration', 'legacy:pixiv', 'pixiv', null, null, NOW_ISO());
+    const [entry] = await ds.listChanges('auto');
+    expect(entry).toMatchObject({ kind: 'auto-associate', count: 2 });
+    await ds.revertChange(entry!.id);
+    expect(links(cid).map((l) => (l as { image_id: number }).image_id)).toEqual([img('i29'), img('i30'), img('i31')]);
+    expect(db().prepare('SELECT image_id FROM character_vetoes WHERE character_id = ? ORDER BY image_id').pluck().all(cid)).toEqual([img('i27'), img('i28')]);
+  });
+
   it('角色之后改过标签就不能自动撤回', async () => {
     name('hoshino_(blue_archive)', '小鸟游星野', 4, { zh: '小鸟游星野', copyright: 'blue_archive' });
     const cid = Number(db().prepare("INSERT INTO characters (name, source, created_at) VALUES ('小鸟游星野', 'custom', ?)").run(NOW_ISO()).lastInsertRowid);

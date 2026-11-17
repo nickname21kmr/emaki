@@ -25,6 +25,7 @@ import type { PixivArtwork } from '../../src/services/pixiv/client.ts';
 import { pendingPixivCount, queuePixivImages, resetPixivBackoff, syncPixivCharacters } from '../../src/services/pixiv/sync.ts';
 import { TagResultWriter } from '../../src/services/tagger/writer.ts';
 import { makeTmpDir } from '../helpers/tmp.ts';
+import { scanTree } from './sqlWrites.ts';
 
 const NOW = Date.parse('2026-11-17T12:00:00.000Z');
 /** 图库里已有的角色（有作品） */
@@ -45,7 +46,14 @@ afterEach(async () => {
 /** 一个全新的引擎：内存库、固定时钟、不跑后台任务；一个图库文件夹（路径不存在，这里不碰文件） */
 async function engine(): Promise<SqliteDataSource> {
   const dir = makeTmpDir('cross-entry');
-  const ds = await SqliteDataSource.open(new EventBus(), path.join(dir, 'data'), { memory: true, clock: () => NOW, autoJobs: false, importDict: false });
+  const ds = await SqliteDataSource.open(new EventBus(), path.join(dir, 'data'), {
+    memory: true,
+    clock: () => NOW,
+    autoJobs: false,
+    importDict: false,
+    checkRecyclable: async () => {},
+    trashImpl: async () => {},
+  });
   opened.push({ ds, dir });
   const db = ds.ctx.db;
   db.prepare("INSERT INTO library_roots (id, path, last_scan_at) VALUES (1, '//emaki-test/cross-entry', ?)").run(new Date(NOW).toISOString());
@@ -126,6 +134,24 @@ function provenance(ds: SqliteDataSource, imageId: number): [string, 'manual' | 
 }
 
 const linkedTags = (ds: SqliteDataSource, imageId: number) => provenance(ds, imageId).map(([tag]) => tag);
+
+/** Pixiv 补充：这张图（投稿号 post）的投稿标签是「アリス」「ゲームA」，补充任务认成爱丽丝并自动关联 */
+async function pixivSync(ds: SqliteDataSource, imageId: number, post: string): Promise<void> {
+  queuePixivImages(ds.ctx, [imageId]);
+  resetPixivBackoff();
+  const artwork: PixivArtwork = { id: post, pageCount: 1, tags: { tags: [{ tag: 'アリス' }, { tag: 'ゲームA' }] } };
+  const copyrights = new CopyrightResolver(ds.ctx.db, { [KNOWN]: ['game_a'] });
+  const job: JobContext = {
+    signal: new AbortController().signal,
+    setTotal: vi.fn(),
+    advance: vi.fn(),
+    setMessage: vi.fn(),
+    shouldYield: () => false,
+    requeue: vi.fn(),
+    yielded: false,
+  };
+  await syncPixivCharacters(ds.ctx, job, () => ({ catalog: new CharacterCatalog(ds.ctx.db, { copyrights }), copyrights }), { artwork: async () => artwork }, 0);
+}
 const characterId = (ds: SqliteDataSource, tag: string) =>
   String(ds.ctx.db.prepare('SELECT id FROM characters WHERE danbooru_tag = ?').pluck().get(tag) as number);
 const kindOf = (ds: SqliteDataSource, id: number) => ds.ctx.db.prepare('SELECT content_kind FROM images WHERE id = ?').pluck().get(id) as string;
@@ -253,20 +279,7 @@ describe('Pixiv 和模型：同样的置信度，同样的资格判断', () => {
     addImage(ds, { id: 1, post: '1003' });
     addImage(ds, { id: 2 });
     recognize(ds, [{ id: 2, character: [[KNOWN, 0.9]] }]);
-    queuePixivImages(ds.ctx, [1]);
-    resetPixivBackoff();
-    const artwork: PixivArtwork = { id: '1003', pageCount: 1, tags: { tags: [{ tag: 'アリス' }, { tag: 'ゲームA' }] } };
-    const copyrights = new CopyrightResolver(ds.ctx.db, { [KNOWN]: ['game_a'] });
-    const job: JobContext = {
-      signal: new AbortController().signal,
-      setTotal: vi.fn(),
-      advance: vi.fn(),
-      setMessage: vi.fn(),
-      shouldYield: () => false,
-      requeue: vi.fn(),
-      yielded: false,
-    };
-    await syncPixivCharacters(ds.ctx, job, () => ({ catalog: new CharacterCatalog(ds.ctx.db, { copyrights }), copyrights }), { artwork: async () => artwork }, 0);
+    await pixivSync(ds, 1, '1003');
     expect(linkedTags(ds, 1)).toEqual([KNOWN]);
     expect(provenance(ds, 1)).toEqual(provenance(ds, 2));
   });
@@ -318,5 +331,243 @@ describe('新增关联之后都会套排除规则', () => {
   // 现在所有入口都声明 curation.charactersChanged，由反应 reevaluateExclusions 重新判定
   it('所有入口新增关联后都会套排除规则（附录 #14）', async () => {
     expect(await run(entries.map(([n]) => n))).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------- P3a：归类收口（附录 #4、#6、#12、#39）
+
+/** 一张图的关联和完整来历：[角色标签, 手动 / 自动, 规则, 证据来源]，按标签排序 */
+function fullProvenance(ds: SqliteDataSource, imageId: number): [string, string, string | null, string | null][] {
+  return (
+    ds.ctx.db
+      .prepare(
+        `SELECT COALESCE(c.danbooru_tag, c.name) AS tag, ic.decision, ic.rule, ic.evidence_provider AS provider
+         FROM image_characters ic JOIN characters c ON c.id = ic.character_id WHERE ic.image_id = ? ORDER BY tag`,
+      )
+      .all(imageId) as { tag: string; decision: string; rule: string | null; provider: string | null }[]
+  ).map((r) => [r.tag, r.decision, r.rule, r.provider]);
+}
+/** 这张图上被用户否决过的角色（标签） */
+const vetoedTags = (ds: SqliteDataSource, imageId: number) =>
+  ds.ctx.db
+    .prepare('SELECT COALESCE(c.danbooru_tag, c.name) FROM character_vetoes v JOIN characters c ON c.id = v.character_id WHERE v.image_id = ? ORDER BY 1')
+    .pluck()
+    .all(imageId) as string[];
+/** 再建一个图库里已有的角色（属于作品 game_a） */
+function addCharacter(ds: SqliteDataSource, tag: string, name: string): string {
+  const db = ds.ctx.db;
+  const id = db.prepare("INSERT INTO characters (name, danbooru_tag, source, created_at) VALUES (?, ?, 'danbooru', '2000-01-01')").run(name, tag).lastInsertRowid;
+  db.prepare("INSERT INTO character_works (character_id, work_id, position) SELECT ?, id, 0 FROM works WHERE danbooru_tag = 'game_a'").run(id);
+  return String(id);
+}
+/** 一个重复组：keep 和 gone 两张，处理时保留 keep */
+function duplicateGroup(ds: SqliteDataSource, keep: number, gone: number): string {
+  const db = ds.ctx.db;
+  const gid = db.prepare("INSERT INTO duplicate_groups (kind, similarity, suggested_keep_id, created_at) VALUES ('exact', 1, ?, '2026-01-01')").run(keep).lastInsertRowid;
+  db.prepare('INSERT INTO duplicate_members (group_id, image_id) VALUES (?, ?), (?, ?)').run(gid, keep, gid, gone);
+  return String(gid);
+}
+
+describe('图 ↔ 角色只有归类模块写，每个入口记下同一种来历（附录 #4，P3a 已关闭）', () => {
+  it('源码里写 image_characters、character_vetoes 的只有 domain/curation/（演示数据灌入除外）', () => {
+    const tables = new Set(['image_characters', 'character_vetoes']);
+    const writes = scanTree(path.resolve(import.meta.dirname, '../../src'), tables).filter((w) => tables.has(w.table));
+    expect(writes.filter((w) => !w.file.startsWith('domain/curation/') && !w.file.startsWith('demo/')).map((w) => `${w.file}:${w.line} ${w.snippet}`)).toEqual([]);
+    // 扫描器确实看到了归类模块里的写入（不是什么都没扫到）
+    expect([...new Set(writes.filter((w) => w.file.startsWith('domain/curation/')).map((w) => w.table))].sort()).toEqual(['character_vetoes', 'image_characters']);
+  });
+
+  it('13 个入口：识别写入、补采纳、单张采纳、批量归类（角色 / 标签）、整组替换、Pixiv、角色合并、查重合并……都记下来历', async () => {
+    const ds = await engine();
+    const bob = addCharacter(ds, 'bob_(game_a)', '鲍勃');
+    for (let id = 1; id <= 11; id++) addImage(ds, { id, post: id === 6 ? '1006' : undefined });
+    recognize(ds, [{ id: 1, character: [[KNOWN, 0.9]] }]);
+    recognize(ds, [{ id: 2, character: [[KNOWN, 0.9]] }], 0.95);
+    await ds.promoteSuggestions();
+    recognize(ds, [{ id: 3, character: [[KNOWN, 0.6]] }]);
+    await ds.acceptSuggestion('3', KNOWN);
+    await ds.bulkImages({ ids: ['4'], action: { type: 'assign', characterId: characterId(ds, KNOWN) } });
+    await ds.bulkImages({ ids: ['5'], action: { type: 'assignTag', danbooruTag: KNOWN } });
+    await pixivSync(ds, 6, '1006');
+    await ds.updateImage('7', { characterIds: [characterId(ds, KNOWN)] });
+    expect([1, 2, 3, 4, 5, 6, 7].map((id) => fullProvenance(ds, id))).toEqual([
+      [[KNOWN, 'auto', 'auto-accept@1', 'tagger']],
+      [[KNOWN, 'auto', 'promote@1', 'tagger']],
+      [[KNOWN, 'manual', null, 'tagger']],
+      [[KNOWN, 'manual', null, null]],
+      [[KNOWN, 'manual', null, null]],
+      [[KNOWN, 'auto', 'pixiv@1', 'pixiv']],
+      [[KNOWN, 'manual', null, null]],
+    ]);
+    // 采纳、归类之后，这些图上指向爱丽丝的建议都没了
+    expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM character_suggestions WHERE image_id IN (2, 3)').pluck().get()).toBe(0);
+
+    // 角色合并：被合并角色的关联按原来的来历搬给目标
+    const dup = addCharacter(ds, 'alice_alt_(game_a)', '爱丽丝（重复）');
+    await ds.bulkImages({ ids: ['8'], action: { type: 'assign', characterId: dup } });
+    recognize(ds, [{ id: 9, character: [['alice_alt_(game_a)', 0.9]] }]);
+    await ds.mergeCharacter(dup, characterId(ds, KNOWN));
+    expect([fullProvenance(ds, 8), fullProvenance(ds, 9)]).toEqual([[[KNOWN, 'manual', null, null]], [[KNOWN, 'auto', 'auto-accept@1', 'tagger']]]);
+
+    // 查重合并：手动的还是手动，自动的记成 dedupe-merge（证据照搬）
+    recognize(ds, [{ id: 11, character: [[KNOWN, 0.9]] }]);
+    await ds.bulkImages({ ids: ['11'], action: { type: 'assign', characterId: bob } });
+    await ds.resolveDuplicate(duplicateGroup(ds, 10, 11), ['10']);
+    expect(fullProvenance(ds, 10)).toEqual([
+      [KNOWN, 'auto', 'dedupe-merge@1', 'tagger'],
+      ['bob_(game_a)', 'manual', null, null],
+    ]);
+  });
+});
+
+describe('撤回一批自动关联只按来历精确删除（附录 #6，P3a 已关闭）', () => {
+  it('漫画区同步只去掉自动的：识别写入、补采纳、Pixiv 的去掉，单张采纳和手动归的留着；撤销放回', async () => {
+    const ds = await engine();
+    for (let id = 1; id <= 5; id++) addImage(ds, { id, post: id === 4 ? '1004' : undefined });
+    recognize(ds, [{ id: 1, character: [[KNOWN, 0.9]] }]);
+    recognize(ds, [{ id: 2, character: [[KNOWN, 0.9]] }], 0.95);
+    await ds.promoteSuggestions();
+    recognize(ds, [{ id: 3, character: [[KNOWN, 0.6]] }]);
+    await ds.acceptSuggestion('3', KNOWN);
+    await pixivSync(ds, 4, '1004');
+    await ds.bulkImages({ ids: ['5'], action: { type: 'assign', characterId: characterId(ds, KNOWN) } });
+    const before = [1, 2, 3, 4, 5].map((id) => fullProvenance(ds, id));
+    expect(before.every((l) => l.length === 1)).toBe(true);
+
+    const r = await ds.updateLibraryRoot('1', { comicFolder: { relDir: 'pics' } });
+    expect([1, 2, 3, 4, 5].map((id) => linkedTags(ds, id).length)).toEqual([0, 0, 1, 0, 1]);
+    expect(fullProvenance(ds, 3)).toEqual([[KNOWN, 'manual', null, 'tagger']]);
+    // 规则去掉的不记否决
+    expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM character_vetoes').pluck().get()).toBe(0);
+    await ds.undo(r.undoToken!);
+    expect([1, 2, 3, 4, 5].map((id) => fullProvenance(ds, id))).toEqual(before);
+  });
+
+  it('撤回 Pixiv 补充只去掉这轮 Pixiv 加的；之后用户手动确认过的（改成手动）留着', async () => {
+    const ds = await engine();
+    addImage(ds, { id: 1, post: '1001' });
+    addImage(ds, { id: 2, post: '1001', fileName: '1001_p1.png' });
+    queuePixivImages(ds.ctx, [2]);
+    await pixivSync(ds, 1, '1001');
+    expect([linkedTags(ds, 1), linkedTags(ds, 2)]).toEqual([[KNOWN], [KNOWN]]);
+    // 用户之后在 2 上去掉又手动加回：现在是手动的
+    await ds.updateImage('2', { characterIds: [] });
+    await ds.updateImage('2', { characterIds: [characterId(ds, KNOWN)] });
+    const [entry] = await ds.listChanges('auto');
+    await ds.revertChange(entry!.id);
+    expect(fullProvenance(ds, 1)).toEqual([]);
+    expect(vetoedTags(ds, 1)).toEqual([KNOWN]);
+    expect(fullProvenance(ds, 2)).toEqual([[KNOWN, 'manual', null, null]]);
+  });
+});
+
+describe('查重合并经归类命令（附录 #12，P3a 已关闭）', () => {
+  it('按来历搬关联、放下也搬、保留的图上否决过的不搬、搬来的角色套排除规则；撤销全部还原', async () => {
+    const ds = await engine();
+    const bob = addCharacter(ds, 'bob_(game_a)', '鲍勃');
+    const carol = addCharacter(ds, 'carol_(game_a)', '卡罗尔');
+    addImage(ds, { id: 1 });
+    addImage(ds, { id: 2 });
+    // 副本：模型认的爱丽丝，手动归的鲍勃、卡罗尔，放下了
+    recognize(ds, [{ id: 2, character: [[KNOWN, 0.9]] }]);
+    await ds.bulkImages({ ids: ['2'], action: { type: 'assign', characterId: bob } });
+    await ds.bulkImages({ ids: ['2'], action: { type: 'assign', characterId: carol } });
+    await ds.bulkImages({ ids: ['2'], action: { type: 'shelve', value: true } });
+    // 保留的图：用户去掉过卡罗尔
+    await ds.bulkImages({ ids: ['1'], action: { type: 'assign', characterId: carol } });
+    await ds.bulkImages({ ids: ['1'], action: { type: 'unassign', characterId: carol } });
+    await ds.createExclusion({ kind: 'character', target: bob });
+    expect(excluded(ds, 2)).toBe(true);
+    const snap = () => ({
+      links: fullProvenance(ds, 1),
+      vetoes: vetoedTags(ds, 1),
+      shelved: ds.ctx.db.prepare('SELECT shelved_at FROM images WHERE id = 1').pluck().get(),
+      excluded: excluded(ds, 1),
+    });
+    const before = snap();
+    expect(before).toEqual({ links: [], vetoes: ['carol_(game_a)'], shelved: null, excluded: false });
+
+    // 被排除的副本也照样处理（重复组里可见的成员才会被移到回收站，这里先恢复副本）
+    await ds.bulkImages({ ids: ['2'], action: { type: 'restore' } });
+    const r = await ds.resolveDuplicate(duplicateGroup(ds, 1, 2), ['1']);
+    expect(snap()).toEqual({
+      links: [
+        [KNOWN, 'auto', 'dedupe-merge@1', 'tagger'],
+        ['bob_(game_a)', 'manual', null, null],
+      ],
+      vetoes: ['carol_(game_a)'],
+      shelved: expect.any(String),
+      excluded: true,
+    });
+    await ds.undo(r.undoToken!);
+    expect(snap()).toEqual(before);
+  });
+
+  it('副本上手动确认的来源搬过来时声明 image.sourceChanged：保留的图重新登记 Pixiv 补充', async () => {
+    const ds = await engine();
+    addImage(ds, { id: 1 });
+    addImage(ds, { id: 2 });
+    await ds.updateImage('2', { source: { url: 'https://www.pixiv.net/artworks/98785437' } });
+    await ds.resolveDuplicate(duplicateGroup(ds, 1, 2), ['1']);
+    expect(ds.ctx.db.prepare('SELECT source_post_id, source_manual FROM images WHERE id = 1').get()).toEqual({ source_post_id: '98785437', source_manual: 1 });
+    expect(ds.ctx.db.prepare('SELECT post_id FROM pixiv_character_checks WHERE image_id = 1').pluck().get()).toBe('98785437');
+  });
+});
+
+describe('否决（附录 #39，D3，P3a 已关闭）', () => {
+  /** 各个「用户手动加回」的入口 */
+  const addBack: [string, (ds: SqliteDataSource) => Promise<{ undoToken: string | null }>][] = [
+    ['批量归类', (ds) => ds.bulkImages({ ids: ['1'], action: { type: 'assign', characterId: characterId(ds, KNOWN) } })],
+    ['按标签批量归类', (ds) => ds.bulkImages({ ids: ['1'], action: { type: 'assignTag', danbooruTag: KNOWN } })],
+    ['整组替换', (ds) => ds.updateImage('1', { characterIds: [characterId(ds, KNOWN)] })],
+  ];
+
+  it.each(addBack)('用户手动加回去掉过的角色（%s）：清掉否决，之后识别也照常认；撤销加回时否决回来', async (_name, add) => {
+    const ds = await engine();
+    addImage(ds, { id: 1 });
+    recognize(ds, [{ id: 1, character: [[KNOWN, 0.9]] }]);
+    await ds.updateImage('1', { characterIds: [] });
+    expect(vetoedTags(ds, 1)).toEqual([KNOWN]);
+    // 否决挡住重新识别
+    recognize(ds, [{ id: 1, character: [[KNOWN, 0.9]] }]);
+    expect(linkedTags(ds, 1)).toEqual([]);
+
+    const r = await add(ds);
+    expect(fullProvenance(ds, 1)).toEqual([[KNOWN, 'manual', null, null]]);
+    expect(vetoedTags(ds, 1)).toEqual([]);
+    await ds.undo(r.undoToken!);
+    expect(linkedTags(ds, 1)).toEqual([]);
+    expect(vetoedTags(ds, 1)).toEqual([KNOWN]);
+  });
+
+  it('单张采纳被否决过的角色的建议：同样清掉否决', async () => {
+    const ds = await engine();
+    addImage(ds, { id: 1 });
+    await ds.bulkImages({ ids: ['1'], action: { type: 'assign', characterId: characterId(ds, KNOWN) } });
+    await ds.bulkImages({ ids: ['1'], action: { type: 'unassign', characterId: characterId(ds, KNOWN) } });
+    // 建议不会再出现，这里直接放一条（例如否决之前留下的）
+    ds.ctx.db.prepare("INSERT INTO character_suggestions (image_id, danbooru_tag, score, source) VALUES (1, ?, 0.6, 'tagger')").run(KNOWN);
+    await ds.acceptSuggestion('1', KNOWN);
+    expect(fullProvenance(ds, 1)).toEqual([[KNOWN, 'manual', null, 'tagger']]);
+    expect(vetoedTags(ds, 1)).toEqual([]);
+  });
+
+  it('角色合并：目标在这张图上被否决过，被合并角色的关联（手动的、自动的）都不搬过去；否决留着', async () => {
+    const ds = await engine();
+    addImage(ds, { id: 1 });
+    addImage(ds, { id: 2 });
+    const dup = addCharacter(ds, 'alice_alt_(game_a)', '爱丽丝（重复）');
+    for (const id of ['1', '2']) {
+      await ds.bulkImages({ ids: [id], action: { type: 'assign', characterId: characterId(ds, KNOWN) } });
+      await ds.bulkImages({ ids: [id], action: { type: 'unassign', characterId: characterId(ds, KNOWN) } });
+    }
+    await ds.bulkImages({ ids: ['1'], action: { type: 'assign', characterId: dup } });
+    recognize(ds, [{ id: 2, character: [['alice_alt_(game_a)', 0.9]] }]);
+    expect([linkedTags(ds, 1), linkedTags(ds, 2)]).toEqual([['alice_alt_(game_a)'], ['alice_alt_(game_a)']]);
+    const r = await ds.mergeCharacter(dup, characterId(ds, KNOWN));
+    expect([linkedTags(ds, 1), linkedTags(ds, 2)]).toEqual([[], []]);
+    expect([vetoedTags(ds, 1), vetoedTags(ds, 2)]).toEqual([[KNOWN], [KNOWN]]);
+    await ds.undo(r.undoToken!);
+    expect([linkedTags(ds, 1), linkedTags(ds, 2)]).toEqual([['alice_alt_(game_a)'], ['alice_alt_(game_a)']]);
   });
 });

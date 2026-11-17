@@ -157,6 +157,49 @@ describe('移动到文件夹（真的移动文件）', () => {
     expect(state(1)).toEqual({ kind: before[0]!.kind, retag: 1, chars: ['7manual'] });
   });
 
+  // 附录 #39（P3a 已关闭）：以前移回时不看否决，用户在漫画文件夹里去掉过的角色会被放回来
+  it('移回原处按原来的来历放回自动关联；用户这期间否决过的不放回，那页留着重新识别', async () => {
+    const db = ds.ctx.db;
+    db.prepare("INSERT INTO comic_folders (root_id, rel_dir, comic_rating, created_at) VALUES (1, 'C', 'general', 'x')").run();
+    db.prepare("INSERT INTO characters (id, name, source, created_at) VALUES (8, 'A', 'custom', 'x'), (9, 'B', 'custom', 'x')").run();
+    db.prepare(
+      `INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_score, added_at) VALUES
+         (1, 8, 'auto', 'job:tag', 'auto-accept@1', 'tagger', 0.9, 'x'), (1, 9, 'auto', 'job:pixiv-tags', 'pixiv@1', 'pixiv', NULL, 'y')`,
+    ).run();
+    const r = await ds.moveImages({ ids: ['1'], rootId: '1', dir: 'C' });
+    expect(db.prepare('SELECT character_id FROM image_characters WHERE image_id = 1').pluck().all()).toEqual([7]);
+    // 在漫画文件夹里，用户手动加上 A 又去掉：记了否决
+    await ds.bulkImages({ ids: ['1'], action: { type: 'assign', characterId: '8' } });
+    await ds.bulkImages({ ids: ['1'], action: { type: 'unassign', characterId: '8' } });
+    await ds.undo(r.undoToken!);
+    expect(db.prepare('SELECT character_id, decision, rule, evidence_provider, added_at FROM image_characters WHERE image_id = 1 ORDER BY character_id').all()).toEqual([
+      { character_id: 7, decision: 'manual', rule: null, evidence_provider: null, added_at: 'x' },
+      { character_id: 9, decision: 'auto', rule: 'pixiv@1', evidence_provider: 'pixiv', added_at: 'y' },
+    ]);
+    expect(db.prepare('SELECT character_id FROM character_vetoes WHERE image_id = 1').pluck().all()).toEqual([8]);
+    expect(db.prepare('SELECT retag FROM images WHERE id = 1').pluck().get()).toBe(1);
+  });
+
+  it('迁移 034 之前记的移动（快照是 origin / score）也能移回，按迁移的规则转成来历', async () => {
+    const db = ds.ctx.db;
+    db.prepare("INSERT INTO comic_folders (root_id, rel_dir, comic_rating, created_at) VALUES (1, 'C', 'general', 'x')").run();
+    db.prepare("INSERT INTO characters (id, name, source, created_at) VALUES (8, 'A', 'custom', 'x')").run();
+    db.prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_score, added_at) VALUES (1, 8, 'auto', 'job:tag', 'auto-accept@1', 'tagger', 0.9, 'x')").run();
+    await ds.moveImages({ ids: ['1'], rootId: '1', dir: 'C' });
+    const log = db.prepare("SELECT id, payload FROM change_log WHERE kind = 'move'").get() as { id: number; payload: string };
+    const p = JSON.parse(log.payload) as { charSnap: unknown[] };
+    p.charSnap = [{ image_id: 1, character_id: 8, origin: 'tagger', score: 0.9, added_at: 'x' }];
+    db.prepare('UPDATE change_log SET payload = ? WHERE id = ?').run(JSON.stringify(p), log.id);
+    await ds.revertChange(String(log.id));
+    expect(db.prepare('SELECT decision, actor, rule, evidence_provider, evidence_score FROM image_characters WHERE image_id = 1 AND character_id = 8').get()).toEqual({
+      decision: 'auto',
+      actor: 'system:migration',
+      rule: 'legacy:tagger',
+      evidence_provider: 'tagger',
+      evidence_score: 0.9,
+    });
+  });
+
   it('停用的图库文件夹不能当目标', async () => {
     ds.ctx.db.prepare('UPDATE library_roots SET enabled = 0 WHERE id = 2').run();
     await expect(ds.moveImages({ ids: ['1'], rootId: '2', dir: '' })).rejects.toThrow('停用');
