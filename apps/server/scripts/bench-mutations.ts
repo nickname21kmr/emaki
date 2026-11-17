@@ -52,7 +52,14 @@ function seed(db: Db): void {
        VALUES (@id, 1, @rel, @name, 1200, 1700, 100000, 'png', @sha, @at, @at, 'illustration', 'default', @at, 'general', @dhash)`,
     );
     const it = db.prepare('INSERT OR IGNORE INTO image_tags (image_id, tag_id, score) VALUES (?, ?, 0.8)');
-    const ic = db.prepare("INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, ?, 'tagger', 0.9, ?)");
+    // 迁移 034 之前的库没有来历列：同一个脚本也能在旧版本上跑（前后对比）
+    const provenance = (db.prepare("SELECT name FROM pragma_table_info('image_characters')").pluck().all() as string[]).includes('decision');
+    const ic = provenance
+      ? db.prepare(
+          `INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_score, added_at)
+           VALUES (?, ?, 'auto', 'job:tag', 'auto-accept@1', 'tagger', 0.9, ?)`,
+        )
+      : db.prepare("INSERT INTO image_characters (image_id, character_id, origin, score, added_at) VALUES (?, ?, 'tagger', 0.9, ?)");
     for (let id = 1; id <= IMAGES; id++) {
       const dir = Math.floor((id - 1) / PER_DIR);
       const book = dir % 3 === 0;
@@ -127,7 +134,6 @@ const single = ids1000[0]!;
 type Scenario = { name: string; run: () => Promise<Res> };
 const scenarios: Scenario[] = [
   { name: '批量归类 1000 张（按角色）', run: () => call('POST', '/api/images/bulk', { ids: ids1000, action: { type: 'assign', characterId: '7' } }) },
-  { name: '批量移出角色 1000 张', run: () => call('POST', '/api/images/bulk', { ids: ids1000b, action: { type: 'unassign', characterId: String((Number(ids1000b[0]) % CHARACTERS) + 1) } }) },
   { name: '批量改类型 1000 张', run: () => call('POST', '/api/images/bulk', { ids: ids1000, action: { type: 'kind', value: 'comic' } }) },
   { name: '本子页改类型 200 张', run: () => call('POST', '/api/images/bulk', { ids: book200, action: { type: 'kind', value: 'screenshot' } }) },
   { name: '单张改类型', run: () => call('PATCH', `/api/images/${single}`, { kind: 'photo' }) },
@@ -157,6 +163,24 @@ for (const s of scenarios) {
     undoMs.push(t2 - t1);
   }
   console.log([s.name, fmt(pct(doMs, 0.5)), fmt(pct(doMs, 0.95)), fmt(Math.max(...doMs)), fmt(pct(undoMs, 0.5)), fmt(pct(undoMs, 0.95)), fmt(Math.max(...undoMs))].join('\t'));
+}
+// 先把 1000 张归到一个角色（不计时），测从这个角色移出和移出的撤销（以前这个场景移出的角色几乎不在这些图上，测的是空操作）
+{
+  const doMs: number[] = [];
+  const undoMs: number[] = [];
+  for (let i = 0; i <= RUNS; i++) {
+    const as = await call('POST', '/api/images/bulk', { ids: ids1000b, action: { type: 'assign', characterId: '8' } });
+    const t0 = performance.now();
+    const r = await call('POST', '/api/images/bulk', { ids: ids1000b, action: { type: 'unassign', characterId: '8' } });
+    const t1 = performance.now();
+    await undo(r.undoToken);
+    const t2 = performance.now();
+    await undo(as.undoToken);
+    if (i === 0) continue;
+    doMs.push(t1 - t0);
+    undoMs.push(t2 - t1);
+  }
+  console.log(['批量移出角色 1000 张', fmt(pct(doMs, 0.5)), fmt(pct(doMs, 0.95)), fmt(Math.max(...doMs)), fmt(pct(undoMs, 0.5)), fmt(pct(undoMs, 0.95)), fmt(Math.max(...undoMs))].join('\t'));
 }
 // 排除之后再恢复（restore）：先排除一次不计时，测恢复和恢复的撤销
 {

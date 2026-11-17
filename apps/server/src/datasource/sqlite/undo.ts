@@ -103,19 +103,22 @@ export class UndoRecorder {
 
     const apply = (op: Op) => {
       switch (op.t) {
-        case 'columns':
-          for (const row of op.rows) {
-            const cols = Object.keys(row).filter((c) => c !== 'id');
-            db.prepare(`UPDATE ${op.table} SET ${cols.map((c) => `${c} = @${c}`).join(', ')} WHERE id = @id`).run(row);
-          }
+        case 'columns': {
+          // 一批行的列都一样：语句只准备一次（逐行准备在 1,000 行时要多花十来毫秒）
+          if (!op.rows.length) break;
+          const cols = Object.keys(op.rows[0]!).filter((c) => c !== 'id');
+          const upd = db.prepare(`UPDATE ${op.table} SET ${cols.map((c) => `${c} = @${c}`).join(', ')} WHERE id = @id`);
+          for (const row of op.rows) upd.run(row);
           break;
-        case 'set':
+        }
+        case 'set': {
           db.prepare(`DELETE FROM ${op.table} WHERE ${op.where}`).run(...op.params);
-          for (const row of op.rows) {
-            const cols = Object.keys(row);
-            db.prepare(`INSERT INTO ${op.table} (${cols.join(', ')}) VALUES (${cols.map((c) => `@${c}`).join(', ')})`).run(row);
-          }
+          if (!op.rows.length) break;
+          const cols = Object.keys(op.rows[0]!);
+          const ins = db.prepare(`INSERT INTO ${op.table} (${cols.join(', ')}) VALUES (${cols.map((c) => `@${c}`).join(', ')})`);
+          for (const row of op.rows) ins.run(row);
           break;
+        }
         case 'inserted':
           db.prepare(`DELETE FROM ${op.table} WHERE id IN (SELECT value FROM json_each(?))`).run(JSON.stringify(op.ids));
           break;

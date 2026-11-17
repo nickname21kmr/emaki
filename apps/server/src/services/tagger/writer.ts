@@ -149,12 +149,12 @@ export class TagResultWriter {
     const { kind, allowed } = s.acceptance!.get(r.id) as { kind: ContentKind; allowed: number };
 
     // 角色标签按图库身份去重，保留得分最高的一条。
-    const chars = new Map<string | number, { tag: string; score: number }>();
+    const chars = new Map<string | number, { tag: string; norm: string; score: number }>();
     for (const [raw, score] of r.character) {
       const tag = catalog.normalizeTag(raw);
       const id = catalog.resolveCharacterId(raw);
       const key = id ?? tag;
-      if (score > (chars.get(key)?.score ?? -1)) chars.set(key, { tag: id === null ? tag : raw, score });
+      if (score > (chars.get(key)?.score ?? -1)) chars.set(key, { tag: id === null ? tag : raw, norm: tag, score });
     }
     const sorted = [...chars.values()].sort((a, b) => b.score - a.score);
     s.delSuggestions!.run(r.id);
@@ -163,7 +163,7 @@ export class TagResultWriter {
     const pending = new Set<string>();
     const linked = new Set(s.linkedIds!.all(r.id) as number[]);
     const actor = currentActor();
-    for (const { tag, score } of sorted) {
+    for (const { tag, norm, score } of sorted) {
       if (score < o.autoAcceptThreshold) continue;
       const known = catalog.resolveCharacterId(tag);
       if (known !== null && this.vetoed(r.id, known)) continue;
@@ -178,7 +178,7 @@ export class TagResultWriter {
       this.batchLinks.push({
         imageId: r.id,
         characterId: id,
-        provenance: auto(RULES.autoAccept, now, { provider: 'tagger', tag: catalog.normalizeTag(tag), score }, actor),
+        provenance: auto(RULES.autoAccept, now, { provider: 'tagger', tag: norm, score }, actor),
       });
     }
 

@@ -43,10 +43,36 @@ export function stmt(db: Db, sql: string): Statement {
   return s;
 }
 
+type Pair = { imageId: number; characterId: number };
+
 /** json_each 里的 [图, 角色] 对 */
 const PAIRS = '(image_id, character_id) IN (SELECT value ->> 0, value ->> 1 FROM json_each(?))';
-const pairsJson = (xs: { imageId: number; characterId: number }[]) => JSON.stringify(xs.map((x) => [x.imageId, x.characterId]));
+const pairsJson = (xs: Pair[]) => JSON.stringify(xs.map((x) => [x.imageId, x.characterId]));
 const uniqueImages = (xs: { imageId: number }[]) => [...new Set(xs.map((x) => x.imageId))];
+const pairKey = (imageId: number, characterId: number) => `${imageId}:${characterId}`;
+
+/**
+ * 「这些图 × 角色对」的 WHERE 条件。只有一个角色（批量归类、移出、角色合并）或只有一张图（看图器）时走索引列的写法，
+ * 1,000 对时比逐对拆 JSON 快一倍多；其余用行值 IN（也走主键）
+ */
+function pairWhere(pairs: Pair[]): { sql: string; params: unknown[] } {
+  const first = pairs[0]!;
+  if (pairs.every((p) => p.characterId === first.characterId)) {
+    return { sql: 'character_id = ? AND image_id IN (SELECT value FROM json_each(?))', params: [first.characterId, JSON.stringify(pairs.map((p) => p.imageId))] };
+  }
+  if (pairs.every((p) => p.imageId === first.imageId)) {
+    return { sql: 'image_id = ? AND character_id IN (SELECT value FROM json_each(?))', params: [first.imageId, JSON.stringify(pairs.map((p) => p.characterId))] };
+  }
+  return { sql: PAIRS, params: [pairsJson(pairs)] };
+}
+
+/** 这些对里已经在表里的（关联或否决） */
+function present(db: Db, table: 'image_characters' | 'character_vetoes', pairs: Pair[]): Set<string> {
+  if (!pairs.length) return new Set();
+  const w = pairWhere(pairs);
+  const rows = stmt(db, `SELECT image_id, character_id FROM ${table} WHERE ${w.sql}`).raw().all(...w.params) as [number, number][];
+  return new Set(rows.map(([i, c]) => pairKey(i, c)));
+}
 
 export interface LinkItem {
   imageId: number;
@@ -72,7 +98,7 @@ export interface LinkResult {
   vetoed: LinkItem[];
   /** 加的时候清掉了否决的（也在 linked 里） */
   unvetoed: LinkItem[];
-  /** 图或角色已经不在了 */
+  /** 角色已经不在了 */
   missing: LinkItem[];
 }
 
@@ -88,40 +114,57 @@ export function linkEach(tx: CurationTx, u: UndoRecorder | null, items: LinkItem
   });
   if (!list.length) return out;
   const db = tx.db;
-  const state = stmt(
-    db,
-    `SELECT CAST(j.key AS INTEGER) AS k,
-       EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = j.value ->> 0 AND ic.character_id = j.value ->> 1) AS linked,
-       EXISTS (SELECT 1 FROM character_vetoes v WHERE v.image_id = j.value ->> 0 AND v.character_id = j.value ->> 1) AS vetoed,
-       EXISTS (SELECT 1 FROM images i WHERE i.id = j.value ->> 0) AND EXISTS (SELECT 1 FROM characters c WHERE c.id = j.value ->> 1) AS alive
-     FROM json_each(?) j`,
-  ).all(pairsJson(list)) as { k: number; linked: number; vetoed: number; alive: number }[];
-  for (const s of state) {
-    const it = list[s.k]!;
-    if (!s.alive) out.missing.push(it);
-    else if (s.linked) out.existing.push(it);
-    else if (s.vetoed && (opts.vetoes === 'respect' || it.provenance.decision === 'auto')) out.vetoed.push(it);
+  // 角色这期间被删掉、合并掉的（撤回移动时会有）：跳过。图片由外键保证
+  const alive = new Set(
+    stmt(db, 'SELECT id FROM characters WHERE id IN (SELECT value FROM json_each(?))')
+      .pluck()
+      .all(JSON.stringify([...new Set(list.map((x) => x.characterId))])) as number[],
+  );
+  const linked = present(db, 'image_characters', list);
+  const vetoed = present(db, 'character_vetoes', list);
+  for (const it of list) {
+    const k = pairKey(it.imageId, it.characterId);
+    if (!alive.has(it.characterId)) out.missing.push(it);
+    else if (linked.has(k)) out.existing.push(it);
+    else if (vetoed.has(k) && (opts.vetoes === 'respect' || it.provenance.decision === 'auto')) out.vetoed.push(it);
     else {
-      if (s.vetoed) out.unvetoed.push(it);
+      if (vetoed.has(k)) out.unvetoed.push(it);
       out.linked.push(it);
     }
   }
   if (out.unvetoed.length) {
-    const json = pairsJson(out.unvetoed);
-    u?.set('character_vetoes', PAIRS, [json]);
-    stmt(db, `DELETE FROM character_vetoes WHERE ${PAIRS}`).run(json);
+    const w = pairWhere(out.unvetoed);
+    u?.set('character_vetoes', w.sql, w.params);
+    stmt(db, `DELETE FROM character_vetoes WHERE ${w.sql}`).run(...w.params);
   }
   if (out.linked.length) {
-    const ins = stmt(
-      db,
-      `INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_tag, evidence_score, added_at)
-       VALUES (@image_id, @character_id, @decision, @actor, @rule, @evidence_provider, @evidence_tag, @evidence_score, @added_at)`,
-    );
-    for (const it of out.linked) ins.run({ image_id: it.imageId, character_id: it.characterId, ...toColumns(it.provenance) });
+    // 同一个来历的一批用一条语句插（批量归类 1,000 张逐行插要多花一倍时间）；零散的逐行插
+    const groups = new Map<string, { c: ReturnType<typeof toColumns>; pairs: [number, number][] }>();
+    for (const x of out.linked) {
+      const c = toColumns(x.provenance);
+      const k = JSON.stringify(c);
+      const g = groups.get(k);
+      if (g) g.pairs.push([x.imageId, x.characterId]);
+      else groups.set(k, { c, pairs: [[x.imageId, x.characterId]] });
+    }
+    const cols = 'image_id, character_id, decision, actor, rule, evidence_provider, evidence_tag, evidence_score, added_at';
+    const many = stmt(db, `INSERT INTO image_characters (${cols}) SELECT value ->> 0, value ->> 1, ?, ?, ?, ?, ?, ?, ? FROM json_each(?)`);
+    const one = stmt(db, `INSERT INTO image_characters (${cols}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const { c, pairs } of groups.values()) {
+      const p = [c.decision, c.actor, c.rule, c.evidence_provider, c.evidence_tag, c.evidence_score, c.added_at];
+      if (pairs.length >= 8) many.run(...p, JSON.stringify(pairs));
+      else for (const [i, ch] of pairs) one.run(i, ch, ...p);
+    }
     // 撤销只删这次加的（同一对、同一个时间），之后别的入口再加的不动
-    u?.sql('DELETE FROM image_characters WHERE (image_id, character_id, added_at) IN (SELECT value ->> 0, value ->> 1, value ->> 2 FROM json_each(?))', [
-      JSON.stringify(out.linked.map((x) => [x.imageId, x.characterId, x.provenance.at])),
-    ]);
+    const at = out.linked[0]!.provenance.at;
+    if (out.linked.every((x) => x.provenance.at === at)) {
+      const w = pairWhere(out.linked);
+      u?.sql(`DELETE FROM image_characters WHERE added_at = ? AND ${w.sql}`, [at, ...w.params]);
+    } else {
+      u?.sql('DELETE FROM image_characters WHERE (image_id, character_id, added_at) IN (SELECT value ->> 0, value ->> 1, value ->> 2 FROM json_each(?))', [
+        JSON.stringify(out.linked.map((x) => [x.imageId, x.characterId, x.provenance.at])),
+      ]);
+    }
   }
   // 关联上了的角色不再作为这张图的建议
   dropSuggestionsForLinks(
@@ -159,36 +202,27 @@ export interface UnlinkOptions {
 export function unlinkEach(tx: CurationTx, u: UndoRecorder | null, pairs: { imageId: number; characterId: number }[], opts: UnlinkOptions): LinkRow[] {
   if (!pairs.length) return [];
   const db = tx.db;
-  const rows = (
-    stmt(
-      db,
-      `SELECT ic.* FROM json_each(?) j JOIN image_characters ic ON ic.image_id = j.value ->> 0 AND ic.character_id = j.value ->> 1`,
-    ).all(pairsJson(pairs)) as LinkRow[]
-  ).filter((r) => !opts.only || opts.only(r));
+  const where = pairWhere(pairs);
+  const rows = (stmt(db, `SELECT * FROM image_characters WHERE ${where.sql}`).all(...where.params) as LinkRow[]).filter((r) => !opts.only || opts.only(r));
   if (!rows.length) return [];
   if ((opts.veto || opts.dismissPixiv) && !opts.at) throw new Error('记否决要给时间');
   const at = opts.at ?? '';
   const removed = rows.map((r) => ({ imageId: r.image_id, characterId: r.character_id }));
-  const json = pairsJson(removed);
+  const w = pairWhere(removed);
   const images = uniqueImages(removed);
-  u?.set('image_characters', PAIRS, [json]);
+  u?.set('image_characters', w.sql, w.params);
   if (opts.dismissPixiv) dismissPixivCharacterChecks(db, u, images, at);
-  let vetoed: { imageId: number; characterId: number }[] = [];
+  let vetoed: Pair[] = [];
   if (opts.veto) {
-    vetoed = (
-      stmt(
-        db,
-        `SELECT j.value ->> 0 AS imageId, j.value ->> 1 AS characterId FROM json_each(?) j
-         WHERE NOT EXISTS (SELECT 1 FROM character_vetoes v WHERE v.image_id = j.value ->> 0 AND v.character_id = j.value ->> 1)`,
-      ).all(json) as { imageId: number; characterId: number }[]
-    );
+    const already = present(db, 'character_vetoes', removed);
+    vetoed = removed.filter((p) => !already.has(pairKey(p.imageId, p.characterId)));
     if (vetoed.length) {
-      const vj = pairsJson(vetoed);
-      u?.sql(`DELETE FROM character_vetoes WHERE ${PAIRS}`, [vj]);
-      stmt(db, 'INSERT INTO character_vetoes (image_id, character_id, created_at) SELECT value ->> 0, value ->> 1, ? FROM json_each(?)').run(at, vj);
+      const vw = pairWhere(vetoed);
+      u?.sql(`DELETE FROM character_vetoes WHERE ${vw.sql}`, vw.params);
+      stmt(db, 'INSERT INTO character_vetoes (image_id, character_id, created_at) SELECT value ->> 0, value ->> 1, ? FROM json_each(?)').run(at, pairsJson(vetoed));
     }
   }
-  stmt(db, `DELETE FROM image_characters WHERE ${PAIRS}`).run(json);
+  stmt(db, `DELETE FROM image_characters WHERE ${w.sql}`).run(...w.params);
   tx.changed({ type: 'curation.charactersChanged', ids: images });
   tx.changed({ type: 'curation.vetoesChanged', ids: uniqueImages(vetoed) });
   return rows;
