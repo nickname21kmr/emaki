@@ -170,13 +170,15 @@ export class ThumbnailService {
     const known = this.d.db.prepare('SELECT frame_count FROM images WHERE id=?').pluck().get(row.id);
     if (known != null) return;
     const probe = await probeImage(input);
-    this.apply((emit) => {
+    // 看图时（HTTP 生成缩略图）也会走到这里：类型真的变了才声明变化，免得每张新图都让前端整页重新拉取
+    const changed = this.d.db.transaction(() => {
       this.d.db.prepare('UPDATE images SET frame_count=? WHERE sha256=?').run(probe.pages,row.sha256);
       if ((probe.pages > 1 && probe.format !== 'gif') || probe.format === 'html') {
-        const ids = this.d.db.prepare('SELECT id FROM images WHERE sha256=?').pluck().all(row.sha256) as number[];
-        emit({ type: 'image.kindChanged', ids: this.reclassify(ids) });
+        return this.reclassify(this.d.db.prepare('SELECT id FROM images WHERE sha256=?').pluck().all(row.sha256) as number[]);
       }
-    });
+      return [];
+    })();
+    if (changed.length) this.apply((emit) => emit({ type: 'image.kindChanged', ids: changed }));
   }
 
   /** 还没做过像素处理的图数量（Pipeline 用来决定要不要排缩略图任务） */

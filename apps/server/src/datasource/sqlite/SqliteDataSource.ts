@@ -477,17 +477,18 @@ export class SqliteDataSource implements DataSource {
   private registerReactions(): void {
     const db = this.ctx.db;
     const p = this.ctx.propagation;
+    const visible = (rootId: number) => !!db.prepare('SELECT 1 FROM library_roots WHERE id = ? AND enabled = 1 AND removed_at IS NULL').get(rootId);
     const hooks: EngineHooks = {
       requestTag: () => this.requestTag(),
       // 新图、换了文件：接着做像素处理和识别，标记要查重（任务链的 afterImport，不重复扫描）
       requestThumbnails: () => this.pipeline.afterImport(),
       requestArtists: () => this.pipeline.requestArtists(),
       requestPixiv: () => this.pipeline.requestPixivAuto(),
-      requestDedupe: () => {
-        if (readSettings(db).dedupe.lastRunAt !== null) this.ctx.jobs.enqueue('dedupe');
+      requestDedupe: (rootIds) => {
+        if (rootIds.some(visible) && readSettings(db).dedupe.lastRunAt !== null) this.ctx.jobs.enqueue('dedupe');
       },
       rescanRoots: (ids) => {
-        for (const id of ids) if (db.prepare('SELECT 1 FROM library_roots WHERE id = ? AND enabled = 1 AND removed_at IS NULL').get(id)) this.rescanRoot(id);
+        for (const id of ids) if (visible(id)) this.rescanRoot(id);
       },
       rematchPixiv: (ids) => this.rematchCachedPixiv(ids),
       settingsChanged: () => {

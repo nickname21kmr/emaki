@@ -21,8 +21,8 @@ export interface EngineHooks {
   requestArtists(): void;
   /** 有新登记的 Pixiv 补充：设置里打开了自动补充才排（不清用户的暂停） */
   requestPixiv(): void;
-  /** 图库文件夹重新显示：查过重的话马上排一次查重（隐藏期间的查重删掉了它的未处理重复组） */
-  requestDedupe(): void;
+  /** 这些图库文件夹里有重新显示的：查过重的话马上排一次查重（隐藏期间的查重删掉了它的未处理重复组） */
+  requestDedupe(rootIds: number[]): void;
   /** 这些图库文件夹重新显示了：整个扫一遍（停用、移除期间的变化监听器收不到） */
   rescanRoots(rootIds: number[]): void;
   /** 有缓存的 Pixiv 投稿马上在本地重新匹配（不联网） */
@@ -110,7 +110,7 @@ export function engineReactions(hooks: EngineHooks, events: ChangeEvents): { que
       phase: 'queue',
       run({ ctx, changes, actor }) {
         markWork(ctx.db, 'dedupe', new Date(ctx.clock()).toISOString());
-        if (isInteractive(actor) && changes.has('root.visibilityChanged')) hooks.requestDedupe();
+        if (isInteractive(actor) && changes.has('root.visibilityChanged')) hooks.requestDedupe(changes.of('root.visibilityChanged').flatMap((c) => c.rootIds));
       },
     },
     {
