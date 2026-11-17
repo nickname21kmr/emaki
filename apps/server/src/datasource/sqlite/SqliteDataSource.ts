@@ -21,7 +21,6 @@ import type {
   GetCharacterResponse,
   ID,
   ImageDetail,
-  ImageFormat,
   ImageItem,
   ImportImagesBody,
   ImportImagesResult,
