@@ -239,3 +239,52 @@ describe('#37-3 整理名字看 name_locked', () => {
     expect(work(locked)).toEqual({ name: 'Old Game', tag: 'new_game' });
   });
 });
+
+describe('#37-4 合并 / 收拢留下的旧名字记成 auto，不再把自动别名都藏起来', () => {
+  const MIKA = 'mika_(blue_archive)';
+  /** 目标角色：按词库建（自动别名里「Mika」是显示的），再把一个自建角色合并进来 */
+  async function mergedPair() {
+    const ds = await engine((db) => db.prepare("INSERT INTO tag_i18n (tag, category, zh, aliases) VALUES (?, 4, '圣园未花', '[]')").run(MIKA));
+    const db = ds.ctx.db;
+    const to = ds.makeCatalog().catalog.ensureCharacter(MIKA, T).id;
+    const from = insChar(db, '未花（自建）', null);
+    expect(aliasRows(ds, 'character', to)).toContainEqual({ alias: 'Mika', origin: 'dict', visible: 1 });
+    await ds.mergeCharacter(String(from), String(to));
+    return { ds, to };
+  }
+
+  it('合并：被合并角色的名字记 auto；刷新自动别名（Danbooru 同步落库）后它还在，词库别名照样显示', async () => {
+    const { ds, to } = await mergedPair();
+    expect(aliasRows(ds, 'character', to)).toContainEqual({ alias: '未花（自建）', origin: 'auto', visible: 1 });
+    await syncDanbooru(ds);
+    const rows = aliasRows(ds, 'character', to);
+    expect(rows).toContainEqual({ alias: '未花（自建）', origin: 'auto', visible: 1 });
+    expect(rows).toContainEqual({ alias: 'Mika', origin: 'dict', visible: 1 });
+    expect((await ds.getCharacter(String(to)))!.character.aliases).toEqual(expect.arrayContaining(['未花（自建）', 'Mika']));
+  });
+
+  it('用户真的整理过别名才藏自动别名：机器留下的名字也跟着改成只供搜索，但不会被刷新删掉', async () => {
+    const { ds, to } = await mergedPair();
+    await ds.updateCharacter(String(to), { aliases: ['小未花'] });
+    await syncDanbooru(ds);
+    const rows = aliasRows(ds, 'character', to);
+    expect(rows).toContainEqual({ alias: '小未花', origin: 'user', visible: 1 });
+    expect(rows).toContainEqual({ alias: 'Mika', origin: 'dict', visible: 0 });
+    expect(rows).toContainEqual({ alias: '未花（自建）', origin: 'auto', visible: 0 });
+  });
+
+  it('收拢改标签：原来的名字记 auto', async () => {
+    let id = 0;
+    const ds = await engine((db) => {
+      rename(db, 'old_girl', 'new_girl');
+      id = insChar(db, '旧名字', 'old_girl');
+    });
+    expect(aliasRows(ds, 'character', id)).toContainEqual({ alias: '旧名字', origin: 'auto', visible: 1 });
+  });
+
+  it('写 user 别名的只有用户编辑别名一处', () => {
+    expect(sourcesMatching(/'user', 1, \?\)|'user', 1, 50\)/)).toEqual(['domain/catalog/aliases.ts']);
+    const src = readFileSync(path.join(SRC, 'domain/catalog/aliases.ts'), 'utf8');
+    expect(src.match(/'user', 1, /g)).toHaveLength(1);
+  });
+});

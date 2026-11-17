@@ -111,7 +111,7 @@ export function consolidateWorkTags(db: Db, deps: Pick<ConsolidateDeps, 'catalog
       ON CONFLICT(image_id, work_id) DO UPDATE SET score = MAX(score, excluded.score)`),
     aliases: db.prepare(`INSERT OR IGNORE INTO aliases (owner_type, owner_id, alias, search_key, origin, visible, position)
       SELECT owner_type, @to, alias, search_key, origin, visible, position FROM aliases
-      WHERE owner_type = 'work' AND owner_id = @from AND origin = 'user'`),
+      WHERE owner_type = 'work' AND owner_id = @from AND origin IN ('user', 'auto')`),
     dropAliases: db.prepare("DELETE FROM aliases WHERE owner_type = 'work' AND owner_id = ?"),
     drop: db.prepare('DELETE FROM works WHERE id = ?'),
     rename: db.prepare('UPDATE works SET danbooru_tag = ?, name = ? WHERE id = ?'),
