@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Job, JobKind } from '@emaki/shared';
 import type { EventBus } from './events.ts';
+import { jobActor, runAs } from '../propagation/actor.ts';
 
 /**
  * 一个后台任务的执行体。通过 ctx 汇报进度、检查取消。
@@ -60,6 +61,11 @@ export class JobQueue {
   constructor(
     private readonly bus: EventBus,
     private readonly resolveRunner: (kind: JobKind) => JobRunner,
+    /**
+     * 任务结束时（完成、让出、取消、失败都算）：变更传播做掉延后的全量重算、推 library-changed（reason 是任务种类，附录 #20）。
+     * 不给时直接推一条 library-changed（单元测试）
+     */
+    private readonly onFinished?: (kind: JobKind) => void,
   ) {}
 
   list(): Job[] {
@@ -168,7 +174,9 @@ export class JobQueue {
     };
 
     try {
-      const result = await this.runners.get(job.id)!(ctx);
+      // 执行体里的写操作都记在 job:<任务种类> 名下（弱刷新、事件节流）；不继承排队时那个请求的 actor
+      const run = this.runners.get(job.id)!;
+      const result = await runAs(jobActor(job.kind), () => run(ctx));
       job.status = controller.signal.aborted ? 'cancelled' : 'done';
       job.message =
         typeof result === 'string' && job.status === 'done'
@@ -186,7 +194,8 @@ export class JobQueue {
       this.controllers.delete(job.id);
       this.runners.delete(job.id);
       this.publish(job);
-      this.bus.emit({ type: 'library-changed', reason: job.kind === 'tag' ? 'tag' : 'scan' });
+      if (this.onFinished) this.onFinished(job.kind);
+      else this.bus.emit({ type: 'library-changed', reason: job.kind });
       this.running[lane] = false;
       void this.pump();
     }

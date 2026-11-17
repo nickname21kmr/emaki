@@ -4,8 +4,8 @@
  * 输出含真实文件夹名，只放在本机（F:/Claude/.work），不要进仓库。
  */
 import Database from 'better-sqlite3';
-import { autoKind, decideCollection, dirFeatures, isJudged, orderPages, type DirPage } from '../src/services/collections/detect.ts';
-import { parseFolderName } from '../src/services/collections/parseName.ts';
+import { autoKind, decideCollection, dirFeatures, isJudged, orderPages, type DirPage } from '../src/domain/collections/detect.ts';
+import { parseFolderName } from '../src/domain/collections/parseName.ts';
 
 const file = process.argv[2];
 if (!file) throw new Error('用法：detect-collections.ts <emaki.sqlite>');

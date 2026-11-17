@@ -24,6 +24,7 @@ import { backfillSources } from '../source/backfill.ts';
 import { parseSource } from '../source/parseSource.ts';
 import { htmlAnimationCache, readHtmlAnimation } from '../image/htmlAnimation.ts';
 import type { ScanRequests, ScanScope } from './ScanRequests.ts';
+import type { Change } from '../../propagation/changes.ts';
 
 export interface ScanSummary {
   added: number;
@@ -64,7 +65,6 @@ const fileKey = (rootId: number, relPath: string) => `${rootId}\n${relPath}`;
 const MAX_BUFFERED = 64 * 1024 * 1024; // 64 MiB 以内整个读进内存（sha + probe 共用一份）
 const FLUSH_ROWS = 200;
 const FLUSH_MS = 1000;
-const EMIT_MS = 3000;
 /** Windows 找文件不分大小写：Pixiv/one.png 和 pixiv/one.png 是同一个文件，库里按磁盘上的写法记 */
 const NOCASE = process.platform === 'win32';
 
@@ -136,8 +136,11 @@ export class Scanner {
       bus: EventBus;
       dataDir: string;
       requests: ScanRequests;
-      /** T17：在每批写入的同一个事务里，对新插入的图应用排除规则 */
-      onNewImagesInTx?: (ids: number[]) => void;
+      /**
+       * 变更传播（P2）：每批写入在 apply 里执行，用 emit 声明 image.added / moved / fileChanged / gone / returned / sourceChanged，
+       * 排除规则、合集、查重标记、缓存和事件都由反应处理。不给时（单元测试）只开事务、不传播
+       */
+      changes?: { apply<T>(fn: (emit: (c: Change) => void) => T): T };
       /** 「刚修改过、可能还在写入」的判定窗口，默认 2000 ms；单元测试传 0 */
       settleMs?: number;
       now?: () => number;
@@ -147,6 +150,11 @@ export class Scanner {
   ) {
     this.settleMs = d.settleMs ?? 2000;
     this.now = d.now ?? Date.now;
+  }
+
+  /** 一个事务 + 变更传播（没接变更传播时只开事务） */
+  private apply<T>(fn: (emit: (c: Change) => void) => T): T {
+    return this.d.changes ? this.d.changes.apply(fn) : this.d.db.transaction(() => fn(() => {}))();
   }
 
   /** 从 goneIds 里去掉其实还在、或者这时判断不了的（根不可访问、读出错但不是 ENOENT） */
@@ -352,9 +360,10 @@ export class Scanner {
           content_kind_evidence=CASE WHEN content_kind_manual=1 THEN content_kind_evidence ELSE @kindEvidence END
         WHERE id=@id`),
       meta: db.prepare('UPDATE images SET bytes=@bytes, modified_at=@modifiedAt, missing=0, trashed_at=NULL WHERE id=@id'),
+      // 来源按新路径重新解析，和应用内移动、整理到子文件夹、撤回移动一样（附录 #13：以前用 COALESCE 留着旧来源）；手动确认的不动
       move: db.prepare(`UPDATE images SET root_id=@rootId, rel_path=@relPath, file_name=@fileName, modified_at=@modifiedAt, missing=0, trashed_at=NULL,
-          source_site=CASE WHEN source_manual=1 THEN source_site ELSE COALESCE(@site, source_site) END, source_post_id=CASE WHEN source_manual=1 THEN source_post_id ELSE COALESCE(@postId, source_post_id) END,
-          source_artist=CASE WHEN source_manual=1 THEN source_artist ELSE COALESCE(@artist, source_artist) END, source_url=CASE WHEN source_manual=1 THEN source_url ELSE COALESCE(@url, source_url) END
+          source_site=CASE WHEN source_manual=1 THEN source_site ELSE @site END, source_post_id=CASE WHEN source_manual=1 THEN source_post_id ELSE @postId END,
+          source_artist=CASE WHEN source_manual=1 THEN source_artist ELSE @artist END, source_url=CASE WHEN source_manual=1 THEN source_url ELSE @url END
         WHERE id=@id`),
       error: db.prepare(`INSERT INTO scan_errors (root_id, rel_path, bytes, modified_at, error, at) VALUES (@rootId, @relPath, @bytes, @modifiedAt, @error, @at)
         ON CONFLICT(root_id, rel_path) DO UPDATE SET bytes=excluded.bytes, modified_at=excluded.modified_at, error=excluded.error, at=excluded.at`),
@@ -363,32 +372,39 @@ export class Scanner {
     const clearError = db.prepare('DELETE FROM scan_errors WHERE root_id = @rootId AND rel_path = @relPath');
 
     let lastFlush = Date.now();
-    let lastEmit = Date.now();
+    const sourceOf = db.prepare(
+      `SELECT id, COALESCE(source_site, '') || '|' || COALESCE(source_post_id, '') || '|' || COALESCE(source_artist, '') || '|' || COALESCE(source_url, '') AS k
+       FROM images WHERE id IN (SELECT value FROM json_each(?))`,
+    );
+    const sourceKeys = (ids: number[]) => new Map((sourceOf.all(JSON.stringify(ids)) as { id: number; k: string }[]).map((r) => [r.id, r.k]));
     const flush = async () => {
       if (!ops.length) return;
       const batch = ops.splice(0, ops.length);
-      db.transaction(() => {
+      // 缓存、事件由变更传播按 actor（job:scan）弱刷新、节流推送
+      this.apply((emit) => {
         const newIds: number[] = [];
-        const movedIds: number[] = [];
+        const movedIds = batch.filter((op) => op.t === 'move').map((op) => op.p.id as number);
+        const contentIds: number[] = [];
+        const sourceBefore = movedIds.length ? sourceKeys(movedIds) : null;
         for (const op of batch) {
           const info = stmts[op.t].run(op.p);
           if (op.t === 'insert') {
             newIds.push(Number(info.lastInsertRowid));
             clearError.run({ rootId: op.p.rootId, relPath: op.p.relPath });
-          } else if (op.t === 'move') movedIds.push(op.p.id as number);
+          } else if (op.t === 'content') contentIds.push(op.p.id as number);
         }
         // 移动后路径变了：用已有的标签按新路径重判类型（BI-14 ①）
         if (movedIds.length) backfillClassification(db, { ids: movedIds });
-        if (newIds.length) {
-          summary.newIds.push(...newIds);
-          this.d.onNewImagesInTx?.(newIds); // TODO(T17)：排除规则
+        if (newIds.length) summary.newIds.push(...newIds);
+        emit({ type: 'image.added', ids: newIds });
+        emit({ type: 'image.moved', ids: movedIds, reason: 'scan' });
+        emit({ type: 'image.fileChanged', ids: contentIds, reason: 'scan' });
+        if (sourceBefore) {
+          const after = sourceKeys(movedIds);
+          emit({ type: 'image.sourceChanged', ids: movedIds.filter((id) => after.get(id) !== sourceBefore.get(id)) });
         }
-      })();
+      });
       lastFlush = Date.now();
-      if (Date.now() - lastEmit >= EMIT_MS) {
-        lastEmit = Date.now();
-        this.d.bus.emit({ type: 'library-changed', reason: 'scan' });
-      }
       await new Promise((r) => setImmediate(r)); // 让出事件循环，HTTP / SSE 别卡住
     };
 
@@ -505,19 +521,23 @@ export class Scanner {
       await this.confirmGone(goneIds, c.gone, rootById);
     }
     const aborted = ctx.signal.aborted;
-    db.transaction(() => {
+    this.apply((emit) => {
       if (!aborted && goneIds.size) {
-        summary.missing = db
-          .prepare('UPDATE images SET missing=1 WHERE id IN (SELECT value FROM json_each(?)) AND missing=0')
-          .run(JSON.stringify([...goneIds])).changes;
+        const gone = db
+          .prepare('SELECT id FROM images WHERE id IN (SELECT value FROM json_each(?)) AND missing=0')
+          .pluck()
+          .all(JSON.stringify([...goneIds])) as number[];
+        summary.missing = db.prepare('UPDATE images SET missing=1 WHERE id IN (SELECT value FROM json_each(?))').run(JSON.stringify(gone)).changes;
+        emit({ type: 'image.gone', ids: gone });
       }
       if (c.restored.length) {
         db.prepare('UPDATE images SET missing=0, trashed_at=NULL WHERE id IN (SELECT value FROM json_each(?))').run(
           JSON.stringify(c.restored),
         );
         summary.restored = c.restored.length;
+        emit({ type: 'image.returned', ids: c.restored });
       }
-    })();
+    });
 
     // ---- 阶段 9：收尾
     if (!aborted) {
@@ -539,8 +559,8 @@ export class Scanner {
         if (covered) delErr.run(rootId, relPath);
       }
     }
-    backfillSources(db);
-    this.d.bus.emit({ type: 'library-changed', reason: 'scan' });
+    // 规则版本或识别方式变了：重算来源（来源变了的由反应清掉过期的 Pixiv 建议、重新登记补充）
+    this.apply((emit) => emit({ type: 'image.sourceChanged', ids: backfillSources(db).map((x) => x.id) }));
     return summary;
   }
 

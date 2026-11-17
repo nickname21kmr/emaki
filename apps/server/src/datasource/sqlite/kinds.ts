@@ -13,7 +13,6 @@ import { canAutoAcceptCharacter } from '../../services/tagger/characterAcceptanc
 import type { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
 import { insertDanbooruCharacter } from './characters.ts';
 import type { SqliteContext } from './context.ts';
-import { applyExclusionRulesTracked, revertNewlyExcluded } from './exclusions.ts';
 import { iso, UNRECOGNIZED } from './sql.ts';
 import type { UndoRecorder } from './undo.ts';
 import { vetoChecker } from './vetoes.ts';
@@ -41,6 +40,8 @@ export interface KindDeps {
 export function setKindInTx(ctx: SqliteContext, u: UndoRecorder, ids: number[], value: ContentKind | 'auto', deps: KindDeps): string {
   const db = ctx.db;
   const json = JSON.stringify(ids);
+  const kinds = () => new Map((db.prepare('SELECT id, content_kind FROM images WHERE id IN (SELECT value FROM json_each(?))').all(json) as { id: number; content_kind: string }[]).map((r) => [r.id, r.content_kind]));
+  const before = kinds();
   u.columns(
     'images',
     ['content_kind', 'content_kind_source', 'content_kind_evidence', 'content_kind_manual', 'content_kind_version', 'theme', 'art_score'],
@@ -55,6 +56,9 @@ export function setKindInTx(ctx: SqliteContext, u: UndoRecorder, ids: number[], 
        WHERE id IN (SELECT value FROM json_each(?))`,
     ).run(value, json);
   }
+  // 最终类型变了就声明（合集、Pixiv 资格由反应处理）
+  const after = kinds();
+  ctx.changed({ type: 'image.kindChanged', ids: ids.filter((id) => before.get(id) !== after.get(id)) });
   promoteSuggestionsInTx(ctx, u, ids, deps);
   const n = ids.length;
   return value === 'auto' ? `已恢复自动判断（${n} 张）` : `已把 ${n} 张图标为「${KIND_LABEL[value]}」`;
@@ -105,7 +109,6 @@ export function countPromotable(ctx: SqliteContext, deps: KindDeps, kind?: Conte
 
 /** 复用保存过的模型分数，在一个可撤销事务里写角色关联。 */
 export function promoteSuggestionsInTx(ctx: SqliteContext, u: UndoRecorder, ids: number[] | null, deps: KindDeps, kind?: ContentKind): number[] {
-  const db = ctx.db;
   const { catalog, additions, remove } = planPromotions(ctx, ids, deps, kind);
   if (!remove.length) return [];
   const now = iso(ctx.clock());
@@ -123,7 +126,7 @@ export function promoteSuggestionsInTx(ctx: SqliteContext, u: UndoRecorder, ids:
     u.set('character_suggestions', 'image_id = ? AND danbooru_tag = ?', [r.imageId, r.tag]);
     drop.run(r.imageId, r.tag);
   }
-  const excluded = applyExclusionRulesTracked(ctx, [...linked]);
-  if (excluded.length) u.onUndo(() => db.transaction(() => revertNewlyExcluded(ctx, excluded))());
+  // 新关联的角色可能命中「角色」排除规则：反应重新判定，撤销时重放同一条变化，排除自然放出来
+  ctx.changed({ type: 'curation.charactersChanged', ids: [...linked] });
   return [...linked];
 }

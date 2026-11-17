@@ -12,7 +12,6 @@ import { toAbs } from '../../services/fs/paths.ts';
 import type { SqliteContext } from './context.ts';
 import type { PendingTrash } from './pendingTrash.ts';
 import { hydrateImages, IMAGE_COLS, type ImageRow } from './hydrate.ts';
-import type { CollectionsHook } from '../../services/collections/CollectionService.ts';
 import { iso, parseId, toId } from './sql.ts';
 
 interface GroupRow {
@@ -99,12 +98,21 @@ function carryOver(db: Db, keep: number[], gone: number[], now: string): void {
   }
 }
 
+/** 来源四列拼成一个键：比较合并前后来源有没有变 */
+function sourceKeys(db: Db, ids: number[]): Map<number, string> {
+  const rows = db
+    .prepare(
+      `SELECT id, COALESCE(source_site, '') || '|' || COALESCE(source_post_id, '') || '|' || COALESCE(source_artist, '') || '|' || COALESCE(source_url, '') AS k
+       FROM images WHERE id IN (SELECT value FROM json_each(?))`,
+    )
+    .all(JSON.stringify(ids)) as { id: number; k: string }[];
+  return new Map(rows.map((r) => [r.id, r.k]));
+}
+
 export class DuplicateQueries {
   constructor(
     private readonly ctx: SqliteContext,
     private readonly pending: PendingTrash,
-    /** 移到回收站之后重算合集（T38b） */
-    private readonly collections: CollectionsHook = () => {},
   ) {}
 
   private members(groupIds: number[]): Map<number, MemberRow[]> {
@@ -250,6 +258,7 @@ export class DuplicateQueries {
       return this.ctx.mutate((u) => {
         u.columns('duplicate_groups', ['resolved_at'], [g.id]);
         this.ctx.db.prepare('UPDATE duplicate_groups SET resolved_at = ? WHERE id = ?').run(now, g.id);
+        this.ctx.changed({ type: 'duplicates.changed', ids: [...keep].filter((x): x is number => x !== null) });
         return { message: `已保留 ${keep.size} 张，0 张移到回收站` };
       });
     }
@@ -266,11 +275,20 @@ export class DuplicateQueries {
       for (const t of ['image_characters', 'image_copyrights', 'image_artists'] as const) u.set(t, 'image_id IN (SELECT value FROM json_each(?))', [kj]);
       u.columns('images', [...CARRY_COLS, 'trashed_at'], [...kept, ...gone]);
       u.columns('duplicate_groups', ['resolved_at'], [g.id]);
+      const sourceBefore = sourceKeys(db, kept);
       carryOver(db, kept, gone, now);
       db.prepare('UPDATE images SET trashed_at = ? WHERE id IN (SELECT value FROM json_each(?))').run(now, JSON.stringify(gone));
-      // 保留的图可能刚并进了角色，它所在的合集也要重算
-      this.collections(u, [...gone, ...kept]);
+      // 保留的图并进了角色、原创、分级、画师、来源：套排除规则、重新登记 Pixiv、刷新同投稿组都由反应做（附录 #12 里能在 P2 补的部分）
+      const sourceAfter = sourceKeys(db, kept);
+      this.ctx.changed({ type: 'image.trashed', ids: gone });
+      this.ctx.changed({ type: 'curation.charactersChanged', ids: kept });
+      this.ctx.changed({ type: 'curation.originalChanged', ids: kept });
+      this.ctx.changed({ type: 'curation.ratingChanged', ids: kept });
+      this.ctx.changed({ type: 'curation.favoriteChanged', ids: kept });
+      this.ctx.changed({ type: 'curation.artistsChanged', ids: kept });
+      this.ctx.changed({ type: 'image.sourceChanged', ids: kept.filter((id) => sourceAfter.get(id) !== sourceBefore.get(id)) });
       db.prepare('UPDATE duplicate_groups SET resolved_at = ? WHERE id = ?').run(now, g.id);
+      this.ctx.changed({ type: 'duplicates.changed', ids: [...kept, ...gone] });
       batchId = this.pending.record(u, toTrash.map((m) => ({ id: m.id, abs: toAbs(m.root_path, m.rel_path) })), batch);
       return { message: `已保留 ${keep.size} 张，${gone.length} 张移到回收站` };
     });
@@ -283,6 +301,7 @@ export class DuplicateQueries {
     return this.ctx.mutate((u) => {
       u.columns('duplicate_groups', ['ignored', 'resolved_at'], [g.id]);
       this.ctx.db.prepare('UPDATE duplicate_groups SET ignored = 1, resolved_at = ? WHERE id = ?').run(now, g.id);
+      this.ctx.changed({ type: 'duplicates.changed', ids: [] });
       return { message: '已标记为「不是重复」' };
     });
   }

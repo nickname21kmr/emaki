@@ -109,7 +109,6 @@ interface Row {
  * 所以要提前多发几个；一张一批的模型（PixAI）每个请求只有一张，多给一个
  */
 const inFlight = (batchSize: number) => (batchSize === 1 ? 4 : 3);
-const EMIT_MS = 5000;
 /** 识别胶卷的 job-item 最短间隔（每秒最多 4 条） */
 const ITEM_MS = 250;
 
@@ -260,7 +259,6 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
       let done = 0;
       let skipped = 0;
       const t0 = performance.now();
-      let lastEmit = t0;
       let lastItem = 0;
 
       // 识别胶卷（SEL-19）：这一批里挑一张（优先认出了角色的），限流每秒最多 4 条
@@ -352,10 +350,6 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
           rows.length,
           `${tag}${done} / ${total} · ${deviceLabel} · ${rate.toFixed(1)} 张/秒 · 这一轮剩余约 ${formatEta((total - done) / rate)}${later ? ` · 之后还有 ${later} 张用新模型` : ''}`,
         );
-        if (performance.now() - lastEmit > EMIT_MS) {
-          deps.bus.emit({ type: 'library-changed', reason: 'tag' });
-          lastEmit = performance.now();
-        }
       }
       if (yielded && !ctx.signal.aborted) return { message: null, yielded: true };
       const s = writer.stats;

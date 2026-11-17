@@ -12,6 +12,7 @@ import type { Db } from '../../db/connection.ts';
 import { writeFileAtomic } from '../fs/atomicWrite.ts';
 import { toAbs } from '../fs/paths.ts';
 import { backfillClassification } from '../classify/backfill.ts';
+import type { Change } from '../../propagation/changes.ts';
 import { computeDHash } from './dhash.ts';
 import { readCameraFromExif, readJpegExifHead } from './exif.ts';
 import { computeDominantColor, fitBox, openSharp, processPixels, thumbPath, WEBP } from './pixels.ts';
@@ -46,10 +47,31 @@ export class ThumbnailService {
       db: Db;
       thumbsRoot: string;
       now?: () => number;
-      /** EXIF 回填每写完一批调用（发 library-changed，RV-T-9） */
-      onCamerasUpdated?: () => void;
+      /**
+       * 变更传播（P2）：帧数、相机让类型变了时声明 image.kindChanged（合集、Pixiv 资格由反应处理，附录 #3、#17），
+       * 缓存和 library-changed 由变更传播按 job:thumbnail 弱刷新、节流推送（RV-T-9）。不给时（单元测试）只开事务
+       */
+      changes?: { apply<T>(fn: (emit: (c: Change) => void) => T): T };
     },
   ) {}
+
+  private apply<T>(fn: (emit: (c: Change) => void) => T): T {
+    return this.d.changes ? this.d.changes.apply(fn) : this.d.db.transaction(() => fn(() => {}))();
+  }
+
+  /** 重判类型，返回最终类型真的变了的图 */
+  private reclassify(ids: number[]): number[] {
+    const kinds = () =>
+      new Map(
+        (this.d.db.prepare('SELECT id, content_kind FROM images WHERE id IN (SELECT value FROM json_each(?))').all(JSON.stringify(ids)) as { id: number; content_kind: string }[]).map(
+          (r) => [r.id, r.content_kind],
+        ),
+      );
+    const before = kinds();
+    backfillClassification(this.d.db, { ids });
+    const after = kinds();
+    return ids.filter((id) => before.get(id) !== after.get(id));
+  }
 
   /** 按需生成：HTTP 用 priority 10，后台任务用 0。返回缓存文件路径；原图解不了时返回 null */
   ensure(row: ThumbRow, width: ThumbWidth, priority = 10): Promise<string | null> {
@@ -148,11 +170,13 @@ export class ThumbnailService {
     const known = this.d.db.prepare('SELECT frame_count FROM images WHERE id=?').pluck().get(row.id);
     if (known != null) return;
     const probe = await probeImage(input);
-    this.d.db.prepare('UPDATE images SET frame_count=? WHERE sha256=?').run(probe.pages,row.sha256);
-    if ((probe.pages > 1 && probe.format !== 'gif') || probe.format === 'html') {
-      const ids = this.d.db.prepare('SELECT id FROM images WHERE sha256=?').pluck().all(row.sha256) as number[];
-      backfillClassification(this.d.db,{ids});
-    }
+    this.apply((emit) => {
+      this.d.db.prepare('UPDATE images SET frame_count=? WHERE sha256=?').run(probe.pages,row.sha256);
+      if ((probe.pages > 1 && probe.format !== 'gif') || probe.format === 'html') {
+        const ids = this.d.db.prepare('SELECT id FROM images WHERE sha256=?').pluck().all(row.sha256) as number[];
+        emit({ type: 'image.kindChanged', ids: this.reclassify(ids) });
+      }
+    });
   }
 
   /** 还没做过像素处理的图数量（Pipeline 用来决定要不要排缩略图任务） */
@@ -192,13 +216,12 @@ export class ThumbnailService {
         cams.push([r.id, cam]);
       }
       const hits = cams.filter(([, c]) => c).map(([id]) => id);
-      db.transaction(() => {
+      this.apply((emit) => {
         for (const [id, cam] of cams) upd.run(cam, id);
-        if (hits.length) backfillClassification(db, { ids: hits });
-      })();
+        if (hits.length) emit({ type: 'image.kindChanged', ids: this.reclassify(hits) });
+      });
       found += hits.length;
       ctx.advance(rows.length);
-      this.d.onCamerasUpdated?.();
       await new Promise((r) => setImmediate(r));
     }
     return found;
@@ -248,7 +271,8 @@ export class ThumbnailService {
       }
     }
     await this.queue.onIdle();
-    this.d.onCamerasUpdated?.();
+    // 缩略图、主色写完了：让列表和统计刷新（弱刷新）
+    this.apply(() => {});
     const cams = await this.backfillCameras(ctx);
     return `生成缩略图：完成 ${ok} 张，失败 ${failed} 张${cams ? `；认出 ${cams} 张相机照片` : ''}`;
   }

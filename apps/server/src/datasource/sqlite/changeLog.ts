@@ -7,11 +7,8 @@ import { done } from '../../core/undo.ts';
 import type { EventBus } from '../../core/events.ts';
 import type { Db } from '../../db/connection.ts';
 import { ConflictError, NotFoundError } from '../../http/errors.ts';
-import { syncRootModes } from '../../services/classify/rootMode.ts';
-import type { CollectionsHook } from '../../services/collections/CollectionService.ts';
 import { dismissPixivCharacterChecks } from './pixivChecks.ts';
 import type { SqliteContext } from './context.ts';
-import { revertNewlyExcluded, type NewlyExcluded } from './exclusions.ts';
 import { moveBack, type MoveBackFailure, type Moved } from './move.ts';
 import { iso, parseId } from './sql.ts';
 import { vetoRemovedCharacter } from './vetoes.ts';
@@ -46,7 +43,8 @@ export interface MovePayload {
   items: Moved[];
   charSnap: { image_id: number; character_id: number; origin: string; score: number | null; added_at: string }[];
   retagSnap: { id: number; retag: number }[];
-  excluded: NewlyExcluded;
+  /** P2 之前记的「移动时新排除的图」；现在排除结果由反应按新位置重算，不再用它（旧记录里可能还有） */
+  excluded?: unknown;
 }
 
 interface Row {
@@ -86,12 +84,6 @@ export function recordChange(
   return id;
 }
 
-export interface ChangeLogDeps {
-  collectionsHook: CollectionsHook;
-  /** 撤回自动关联后重算「自建角色能对上 Danbooru」 */
-  recomputeCustomMatches: (ids: number[]) => void;
-}
-
 const fileList = (failed: MoveBackFailure[]) =>
   `${failed.slice(0, 5).map((f) => `${f.name}（${f.reason}）`).join('、')}${failed.length > 5 ? ` 等 ${failed.length} 张` : ''}`;
 
@@ -99,10 +91,7 @@ export class ChangeLog {
   /** 移动批次 → 进程内的撤销 token：在列表里移回后让 toast 里的撤销失效 */
   private readonly moveTokens = new Map<number, string>();
 
-  constructor(
-    private readonly ctx: SqliteContext,
-    private readonly deps: ChangeLogDeps,
-  ) {}
+  constructor(private readonly ctx: SqliteContext) {}
 
   private get db(): Db {
     return this.ctx.db;
@@ -224,11 +213,12 @@ export class ChangeLog {
          ON CONFLICT(character_id) DO UPDATE SET danbooru_tag = excluded.danbooru_tag, dismissed = 1`,
       ).run(cid, a.tag, now);
       this.markReverted(u, r.id, now, null);
-      if (removed.length) this.deps.collectionsHook(u, removed);
-      u.onUndo(() => this.deps.recomputeCustomMatches([cid]));
+      // 排除结果、合集、「自建角色能对上 Danbooru」都由反应重算；撤销这次撤回时同样重放
+      this.ctx.changed({ type: 'curation.charactersChanged', ids: removed });
+      this.ctx.changed({ type: 'curation.vetoesChanged', ids: removed });
+      this.ctx.changed({ type: 'catalog.bindingChanged', characterIds: [cid], ids: removed });
       return { message: `已撤回自动关联：「${a.name}」不再绑 ${a.tag}${removed.length ? `，去掉了 ${removed.length} 张自动归进来的图` : ''}` };
     });
-    this.deps.recomputeCustomMatches([a.characterId]);
     return result;
   }
 
@@ -291,7 +281,9 @@ export class ChangeLog {
         }
       }
       this.markReverted(u, r.id, now, null);
-      this.deps.collectionsHook(u, all);
+      this.ctx.changed({ type: 'curation.charactersChanged', ids: linkImgs });
+      this.ctx.changed({ type: 'curation.vetoesChanged', ids: linkImgs });
+      this.ctx.changed({ type: 'curation.originalChanged', ids: [...origImgs, ...correctedOriginals.map((o) => o[0])] });
       const removed = [links.length && `${links.length} 个角色关联`, originals.length && `${originals.length} 张原创标记`].filter(Boolean).join('、');
       const parts = [removed && `去掉了${removed}`, correctedOriginals.length && `恢复 ${correctedOriginals.length} 张的原创标记`].filter(Boolean).join('，');
       return { message: `已撤回 Pixiv 补充：${parts}（${all.length} 张图）` };
@@ -320,22 +312,27 @@ export class ChangeLog {
     const back = moveBack(this.db, m.items);
     const restored = new Set(back.restoredIds);
     const now = iso(this.ctx.clock());
-    this.db.transaction(() => {
+    // 移回原位也是一次移动：来源、路径相关的分类、排除规则、合集都由反应按原位置重算（附录 #17）
+    this.ctx.apply(() => {
       if (restored.size) {
+        const ids = [...restored];
+        this.ctx.changed({ type: 'image.moved', ids, reason: 'revertMove' });
         // 角色这期间被删掉、合并掉的不插（外键会报错），这几页留着重新识别
         const ins = this.db.prepare(
           `INSERT OR IGNORE INTO image_characters (image_id, character_id, origin, score, added_at)
            SELECT @image_id, @character_id, @origin, @score, @added_at WHERE EXISTS (SELECT 1 FROM characters WHERE id = @character_id)`,
         );
         const lost = new Set<number>();
-        for (const c of m.charSnap) if (restored.has(c.image_id) && !ins.run(c).changes && !this.hasLink(c)) lost.add(c.image_id);
-        const ids = [...restored];
-        syncRootModes(this.db, ids);
-        // 重新识别的标记最后按移动前写回（同步可能刚标过）
+        const back: number[] = [];
+        for (const c of m.charSnap) {
+          if (!restored.has(c.image_id)) continue;
+          if (ins.run(c).changes) back.push(c.image_id);
+          else if (!this.hasLink(c)) lost.add(c.image_id);
+        }
+        this.ctx.changed({ type: 'curation.charactersChanged', ids: back });
+        // 重新识别的标记按移动前写回（移回原位后漫画文件夹的同步不会再标：它只标漫画文件夹里还挂着识别器角色的页）
         const setRetag = this.db.prepare('UPDATE images SET retag = @retag WHERE id = @id');
         for (const s of m.retagSnap) if (restored.has(s.id)) setRetag.run({ id: s.id, retag: lost.has(s.id) ? 1 : s.retag });
-        // 移动时按规则排除的：移回原位不再命中就放出来
-        revertNewlyExcluded(this.ctx, m.excluded.filter((e) => restored.has(e.id)));
       }
       const left = m.items.filter((it) => !restored.has(it.id));
       const note = back.failed.length ? `没能移回：${fileList(back.failed)}` : null;
@@ -344,8 +341,7 @@ export class ChangeLog {
       } else {
         this.db.prepare('UPDATE change_log SET note = ?, payload = ? WHERE id = ?').run(note, JSON.stringify({ ...m, items: left }), id);
       }
-    })();
-    if (restored.size) this.ctx.touch();
+    });
     const token = this.moveTokens.get(id);
     if (token && !strict) {
       this.ctx.undo.expire(token, '这批已经在「最近的移动」里移回原处了');

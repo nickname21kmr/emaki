@@ -1,6 +1,7 @@
 /**
  * 批量操作（T18）。assign / unassign / exclude / restore / favorite / rating / kind / artist 可撤销；
  * trash 先只在库里标记、记一批待移（pendingTrash.ts），最近几次可撤销；挤出窗口后才真的移到系统回收站（绝不永久删除）。
+ * 每个操作只写自己的事实并声明变化；套排除规则、重算合集、Pixiv 排队、画师补跑等连带处理由反应完成（P2）。
  */
 import type { BulkImagesBody, MutationResult, Rating } from '@emaki/shared';
 import { NotFoundError } from '../../http/errors.ts';
@@ -9,9 +10,8 @@ import type { SqliteContext } from './context.ts';
 import type { PendingTrash } from './pendingTrash.ts';
 import { artistAutoMessage, artistEditMessage, normArtists } from '../artistEdits.ts';
 import { artistGroupMap, artistNames } from './artists.ts';
-import { applyExclusionRules, createExclusionInTx } from './exclusions.ts';
+import { createExclusionInTx, restoreImagesInTx } from '../../domain/visibility/exclusions.ts';
 import { assertKindValue, setKindInTx, type KindDeps } from './kinds.ts';
-import type { CollectionsHook } from '../../services/collections/CollectionService.ts';
 import { iso, parseId } from './sql.ts';
 import { dismissPixivCharacterChecks } from './pixivChecks.ts';
 import { vetoRemovedCharacter } from './vetoes.ts';
@@ -26,8 +26,6 @@ export class BulkOps {
     private readonly requireVisible: (ids: string[]) => number[],
     private readonly kindDeps: KindDeps,
     private readonly pending: PendingTrash,
-    /** 排除 / 恢复 / 改类型 / 回收站之后重算合集（T38b） */
-    private readonly collections: CollectionsHook = () => {},
   ) {}
 
   private characterName(idStr: string): { id: number; name: string } {
@@ -59,10 +57,8 @@ export class BulkOps {
             "INSERT OR IGNORE INTO image_characters (image_id, character_id, origin, score, added_at) SELECT value, ?, 'manual', NULL, ? FROM json_each(?)",
           ).run(ch.id, now, json);
           if (fresh.length) u.sql('DELETE FROM image_characters WHERE character_id = ? AND image_id IN (SELECT value FROM json_each(?))', [ch.id, JSON.stringify(fresh)]);
-          if (a.type === 'assignTag' && fresh.length) {
-            u.columns('images', ['excluded_by'], fresh);
-            applyExclusionRules(this.ctx, { imageIds: fresh });
-          }
+          // 按角色、按标签都一样：新关联的图由反应套排除规则（附录 #14）
+          this.ctx.changed({ type: 'curation.charactersChanged', ids: fresh });
           return { message: `已将 ${n} 张图归到「${ch.name}」` };
         });
       }
@@ -76,6 +72,8 @@ export class BulkOps {
           // 手动去掉的角色，重新识别时不再加回来
           vetoRemovedCharacter(db, u, ch.id, removed, now);
           db.prepare('DELETE FROM image_characters WHERE character_id = ? AND image_id IN (SELECT value FROM json_each(?))').run(ch.id, json);
+          this.ctx.changed({ type: 'curation.charactersChanged', ids: removed });
+          this.ctx.changed({ type: 'curation.vetoesChanged', ids: removed });
           return { message: `已从「${ch.name}」移除 ${n} 张图` };
         });
       }
@@ -83,36 +81,18 @@ export class BulkOps {
         return this.ctx.mutate((u) => {
           const todo = db.prepare('SELECT id FROM images WHERE id IN (SELECT value FROM json_each(?)) AND excluded_by IS NULL').pluck().all(json) as number[];
           for (const id of todo) createExclusionInTx(this.ctx, u, 'image', String(id));
-          this.collections(u, ids);
           return { message: `已排除 ${n} 张图` };
         });
       case 'restore':
         return this.ctx.mutate((u) => {
-          u.columns('images', ['excluded_by', 'exclude_exempt'], ids);
-          const rows = db
-            .prepare(
-              `SELECT i.id, i.excluded_by, e.kind FROM images i LEFT JOIN exclusions e ON e.id = i.excluded_by
-               WHERE i.id IN (SELECT value FROM json_each(?)) AND i.excluded_by IS NOT NULL`,
-            )
-            .all(json) as { id: number; excluded_by: number; kind: string | null }[];
-          for (const r of rows) {
-            if (r.kind === 'image') {
-              u.set('exclusions', 'id = ?', [r.excluded_by]);
-              db.prepare('UPDATE images SET excluded_by = NULL WHERE excluded_by = ?').run(r.excluded_by);
-              db.prepare('DELETE FROM exclusions WHERE id = ?').run(r.excluded_by);
-            } else {
-              // 被文件夹 / 标签 / 角色规则排除：以后规则重新应用时也不再排除它
-              db.prepare('UPDATE images SET exclude_exempt = 1 WHERE id = ?').run(r.id);
-            }
-          }
-          db.prepare('UPDATE images SET excluded_by = NULL WHERE id IN (SELECT value FROM json_each(?))').run(json);
-          this.collections(u, ids);
+          restoreImagesInTx(this.ctx, u, ids);
           return { message: `已恢复 ${n} 张图` };
         });
       case 'favorite':
         return this.ctx.mutate((u) => {
           u.columns('images', ['favorite'], ids);
           db.prepare('UPDATE images SET favorite = ? WHERE id IN (SELECT value FROM json_each(?))').run(a.value ? 1 : 0, json);
+          this.ctx.changed({ type: 'curation.favoriteChanged', ids });
           return { message: a.value ? `已收藏 ${n} 张图` : `已取消收藏 ${n} 张图` };
         });
       case 'shelve': {
@@ -120,6 +100,7 @@ export class BulkOps {
         return this.ctx.mutate((u) => {
           u.columns('images', ['shelved_at'], ids);
           db.prepare('UPDATE images SET shelved_at = ? WHERE id IN (SELECT value FROM json_each(?))').run(a.value ? now : null, json);
+          this.ctx.changed({ type: 'curation.shelvedChanged', ids });
           return { message: a.value ? `已放下 ${n} 张图，不再出现在未识别` : `已把 ${n} 张图放回未识别` };
         });
       }
@@ -140,6 +121,7 @@ export class BulkOps {
           } else {
             db.prepare('DELETE FROM image_copyrights WHERE work_id = ? AND score IS NULL AND image_id IN (SELECT value FROM json_each(?))').run(wid, json);
           }
+          this.ctx.changed({ type: 'curation.originalChanged', ids });
           return { message: a.value ? `已把 ${n} 张图归为原创，不再出现在未识别` : `已把 ${n} 张图移出原创` };
         });
       }
@@ -147,6 +129,7 @@ export class BulkOps {
         return this.ctx.mutate((u) => {
           u.columns('images', ['rating', 'rating_manual'], ids);
           db.prepare('UPDATE images SET rating = ?, rating_manual = 1 WHERE id IN (SELECT value FROM json_each(?))').run(a.value, json);
+          this.ctx.changed({ type: 'curation.ratingChanged', ids });
           return { message: `已把 ${n} 张图设为「${RATING_LABEL[a.value]}」` };
         });
       case 'kind': {
@@ -154,7 +137,6 @@ export class BulkOps {
         assertKindValue(value);
         return this.ctx.mutate((u) => {
           const message = setKindInTx(this.ctx, u, ids, value, this.kindDeps);
-          this.collections(u, ids);
           return { message };
         });
       }
@@ -179,6 +161,7 @@ export class BulkOps {
             db.prepare('INSERT OR IGNORE INTO image_artists (image_id, artist, score) SELECT i.value, t.value, 1 FROM json_each(?) i, json_each(?) t').run(json, tj);
           }
           db.prepare('UPDATE images SET artist_manual = 1, artist_checked_at = COALESCE(artist_checked_at, ?) WHERE id IN (SELECT value FROM json_each(?))').run(now, json);
+          this.ctx.changed({ type: 'curation.artistsChanged', ids });
           return { message: artistEditMessage(a.mode, n, names) };
         });
       }
@@ -193,6 +176,8 @@ export class BulkOps {
             db.prepare('DELETE FROM image_artists WHERE image_id IN (SELECT value FROM json_each(?))').run(mj);
             db.prepare('UPDATE images SET artist_manual = 0, artist_checked_at = NULL WHERE id IN (SELECT value FROM json_each(?))').run(mj);
           }
+          // 改回自动的由反应排「识别画师」（撤销手动改画师时也一样，附录 #22）
+          this.ctx.changed({ type: 'curation.artistsChanged', ids: manual });
           return { message: artistAutoMessage(n, manual.length) };
         });
       }
@@ -212,7 +197,7 @@ export class BulkOps {
     const res = this.ctx.mutate((u) => {
       u.columns('images', ['trashed_at'], ids);
       this.ctx.db.prepare('UPDATE images SET trashed_at = ? WHERE id IN (SELECT value FROM json_each(?))').run(now, JSON.stringify(ids));
-      this.collections(u, ids);
+      this.ctx.changed({ type: 'image.trashed', ids });
       batch = this.pending.record(u, rows.map((r) => ({ id: r.id, abs: toAbs(r.root, r.rel_path) })));
       return { message: `已把 ${ids.length} 张图移到回收站` };
     });

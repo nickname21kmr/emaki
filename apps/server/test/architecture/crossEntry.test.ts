@@ -17,7 +17,7 @@ import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { searchKey } from '@emaki/shared';
 import { EventBus } from '../../src/core/events.ts';
-import { applyExclusionRules } from '../../src/datasource/sqlite/exclusions.ts';
+import { declareTagged } from '../../src/domain/evidence/reactions.ts';
 import { SqliteDataSource } from '../../src/datasource/sqlite/SqliteDataSource.ts';
 import { backfillClassification } from '../../src/services/classify/backfill.ts';
 import { CharacterCatalog } from '../../src/services/catalog/characterCatalog.ts';
@@ -99,8 +99,8 @@ function addImage(ds: SqliteDataSource, spec: ImageSpec): number {
 type Scores = [string, number][];
 
 /**
- * 首次识别写入：和识别任务一样用 TagResultWriter 写一批（同一个事务），批后同样套排除规则、登记 Pixiv。
- * （SqliteDataSource.open 里给识别任务接的 afterBatchInTx 就是这两步）
+ * 首次识别写入：和识别任务一样用 TagResultWriter 写一批（同一个事务），批后声明证据、角色、类型变了（declareTagged），
+ * 套排除规则、登记 Pixiv 由反应做（SqliteDataSource.open 里给识别任务接的 afterBatchInTx 就是这一步）
  */
 function recognize(ds: SqliteDataSource, batch: { id: number; general?: Scores; character: Scores }[], autoAcceptThreshold = 0.85): void {
   const { catalog, copyrights } = ds.makeCatalog();
@@ -110,10 +110,7 @@ function recognize(ds: SqliteDataSource, batch: { id: number; general?: Scores; 
     characterThreshold: 0.35,
     autoAcceptThreshold,
     now: () => NOW,
-    afterBatchInTx: (ids) => {
-      applyExclusionRules(ds.ctx, { imageIds: ids });
-      queuePixivImages(ds.ctx, ids);
-    },
+    afterBatchInTx: (ids) => declareTagged(ds.ctx, ids),
   });
   writer.writeBatch(batch.map((b) => ({ id: b.id, ok: true as const, rating: null, general: [['1girl', 0.9], ...(b.general ?? [])], character: b.character })));
 }
@@ -319,8 +316,9 @@ describe('新增关联之后都会套排除规则', () => {
     expect(await run(['首次识别写入', '补采纳', '单张采纳建议', '批量归类（按标签）'])).toEqual([]);
   });
 
-  // 附录 #14：批量 assign、updateImage 整组替换（还有角色合并、查重合并）新增关联后不套排除规则。P2（reevaluateExclusions）修好
-  it.fails('所有入口新增关联后都会套排除规则（附录 #14，P2）', async () => {
+  // 附录 #14（P2 已关闭）：以前批量 assign、updateImage 整组替换（还有角色合并、查重合并）新增关联后不套排除规则。
+  // 现在所有入口都声明 curation.charactersChanged，由反应 reevaluateExclusions 重新判定
+  it('所有入口新增关联后都会套排除规则（附录 #14）', async () => {
     expect(await run(entries.map(([n]) => n))).toEqual([]);
   });
 });

@@ -717,13 +717,20 @@ export interface StartJobBody {
 }
 
 /**
+ * library-changed 的来由（按 actor 定，docs/core-architecture.md 第 5.2 节）：
+ * 'mutation' 是用户或 AI 助手的操作（后端已经硬失效缓存）；任务种类是那个后台任务写的库；'system' 是启动修补。
+ * 后两种后端只软失效（旧结果最多再用几秒），前端也可以按需节流。
+ */
+export type LibraryChangedReason = 'mutation' | 'system' | JobKind;
+
+/**
  * GET /api/events —— Server-Sent Events
  * 事件类型见 ServerEvent；前端收到后让对应的 query 失效。
  */
 export type ServerEvent =
   | { type: 'job'; job: Job }
   | JobItemEvent
-  | { type: 'library-changed'; reason: 'scan' | 'tag' | 'mutation' }
+  | { type: 'library-changed'; reason: LibraryChangedReason }
   | { type: 'stats'; stats: LibraryStats }
   | AutoChangeEvent;
 

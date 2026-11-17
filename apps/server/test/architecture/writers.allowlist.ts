@@ -31,14 +31,12 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'pixiv_character_checks' },
   { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'settings' },
   // datasource/sqlite/bulk.ts
-  { file: 'datasource/sqlite/bulk.ts', table: 'exclusions' },
   { file: 'datasource/sqlite/bulk.ts', table: 'image_artists' },
   { file: 'datasource/sqlite/bulk.ts', table: 'image_characters' },
   { file: 'datasource/sqlite/bulk.ts', table: 'image_copyrights' },
   { file: 'datasource/sqlite/bulk.ts', table: 'images#curation' },
   { file: 'datasource/sqlite/bulk.ts', table: 'images#evidence' },
   { file: 'datasource/sqlite/bulk.ts', table: 'images#library' },
-  { file: 'datasource/sqlite/bulk.ts', table: 'images#visibility' },
   { file: 'datasource/sqlite/bulk.ts', table: 'works' },
   // datasource/sqlite/changeLog.ts
   { file: 'datasource/sqlite/changeLog.ts', table: 'aliases' },
@@ -87,9 +85,6 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'datasource/sqlite/duplicates.ts', table: 'images#curation' },
   { file: 'datasource/sqlite/duplicates.ts', table: 'images#evidence' },
   { file: 'datasource/sqlite/duplicates.ts', table: 'images#library' },
-  // datasource/sqlite/exclusions.ts
-  { file: 'datasource/sqlite/exclusions.ts', table: 'exclusions' },
-  { file: 'datasource/sqlite/exclusions.ts', table: 'images#visibility' },
   // datasource/sqlite/importImages.ts
   { file: 'datasource/sqlite/importImages.ts', table: 'images#library' },
   // datasource/sqlite/kinds.ts
@@ -122,7 +117,6 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'datasource/sqlite/unrecognized.ts', table: 'character_suggestions' },
   { file: 'datasource/sqlite/unrecognized.ts', table: 'image_characters' },
   { file: 'datasource/sqlite/unrecognized.ts', table: 'images#evidence' },
-  { file: 'datasource/sqlite/unrecognized.ts', table: 'images#visibility' },
   // datasource/sqlite/vetoes.ts
   { file: 'datasource/sqlite/vetoes.ts', table: 'character_vetoes' },
   // services/aliases.ts
@@ -137,9 +131,6 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'services/classify/rootMode.ts', table: 'image_characters' },
   { file: 'services/classify/rootMode.ts', table: 'images#curation' },
   { file: 'services/classify/rootMode.ts', table: 'images#evidence' },
-  // services/collections/CollectionService.ts
-  { file: 'services/collections/CollectionService.ts', table: 'collections' },
-  { file: 'services/collections/CollectionService.ts', table: 'images#collections' },
   // services/danbooru/apply.ts
   { file: 'services/danbooru/apply.ts', table: 'characters' },
   // services/danbooru/catalog.ts

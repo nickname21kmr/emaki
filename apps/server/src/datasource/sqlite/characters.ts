@@ -1,6 +1,6 @@
 /**
- * 角色编辑、合并、自建角色（T14）。所有写操作都在 ctx.mutate 里（一个事务 + 撤销记录）；
- * 编辑之后重算「自建角色能对上 Danbooru」（recomputeCustomMatches 自己开事务，放在 mutate 之后）。
+ * 角色编辑、合并、自建角色（T14）。所有写操作都在 ctx.mutate 里（一个事务 + 撤销记录），声明 catalog.* 变化；
+ * 之后重算「自建角色能对上 Danbooru」由提交后的反应做（domain/catalog/reactions.ts），撤销时重放同样的变化。
  */
 import { searchKey, type Character, type CreateCharacterBody, type ID, type MutationResult, type UpdateCharacterBody } from '@emaki/shared';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
@@ -9,12 +9,12 @@ import type { CharacterVerification } from '../../services/catalog/characterVeri
 import type { Localizer } from '../../services/i18n/localizer.ts';
 import { replaceAutoAliases } from '../../services/aliases.ts';
 import type { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
-import { automaticCustomMatches, recomputeCustomMatches } from '../../services/danbooru/matcher.ts';
+import { automaticCustomMatches } from '../../services/danbooru/matcher.ts';
 import type { SqliteContext } from './context.ts';
 import type { Derived } from './derived.ts';
 import { toCharacter } from './library.ts';
 import { iso, parseId } from './sql.ts';
-import type { UndoRecorder } from './undo.ts';
+import { UndoRecorder } from './undo.ts';
 import { recordChange, type AssociatePayload } from './changeLog.ts';
 
 /** 可撤销地按标签新建 danbooru 角色（必要时新建作品）。调用方必须在 ctx.mutate 里调用 */
@@ -135,24 +135,26 @@ export class CharacterMutations {
     return out;
   }
 
-  /** 后台自动关联（启动时、同步 Danbooru 后）：每个角色记一条「自动改动」，在设置里能撤回 */
+  /**
+   * 后台自动关联（启动时、同步 Danbooru 后）：每个角色记一条「自动改动」，在设置里能撤回（change_log，跨重启）。
+   * 不往用户的撤销栈里放令牌（以前每次都占一个没人用的名额，附录 #22）
+   */
   associateAutomatic(): void {
-    if (!automaticCustomMatches(this.db, this.danbooru()).length) {
-      recomputeCustomMatches(this.db, this.danbooru());
-      return;
-    }
-    this.ctx.mutate((u) => {
-      const done = this.autoAssociateInTx(u);
-      for (const a of done) {
-        recordChange(this.ctx, 'auto-associate', `「${a.name}」自动绑上了 Danbooru 标签 ${a.tag}`, a, {
-          count: 0,
-          hint: `解除「${a.name}」和 ${a.tag} 的绑定。手动归的图不动，以后也不再自动绑这个标签。`,
-        });
+    const auto = automaticCustomMatches(this.db, this.danbooru()).length > 0;
+    this.ctx.apply(() => {
+      if (auto) {
+        // 撤回走 change_log 里的记录，这里的撤销记录用不上
+        const done = this.autoAssociateInTx(new UndoRecorder(this.db));
+        for (const a of done) {
+          recordChange(this.ctx, 'auto-associate', `「${a.name}」自动绑上了 Danbooru 标签 ${a.tag}`, a, {
+            count: 0,
+            hint: `解除「${a.name}」和 ${a.tag} 的绑定。手动归的图不动，以后也不再自动绑这个标签。`,
+          });
+        }
       }
-      u.onUndo(() => recomputeCustomMatches(this.db, this.danbooru()));
-      return { message: `已自动关联 ${done.length} 个角色的 Danbooru 标签` };
+      // 角色为空 = 全部重算「自建角色能对上 Danbooru」
+      this.ctx.changed({ type: 'catalog.bindingChanged', characterIds: [], ids: [] });
     });
-    recomputeCustomMatches(this.db, this.danbooru());
   }
 
   create(body: CreateCharacterBody): MutationResult & { character: Character } {
@@ -179,10 +181,9 @@ export class CharacterMutations {
       this.writeCharacterWorks(id, workIds);
       this.writeUserAliases(id, normalizeAliases(body.aliases));
       if (!tag) this.autoAssociateInTx(u, [id]);
-      u.onUndo(() => recomputeCustomMatches(this.db, this.danbooru(), [id]));
+      this.ctx.changed({ type: 'catalog.characterChanged', characterIds: [id], ids: [] });
       return { message: `已新建角色「${name}」` };
     });
-    recomputeCustomMatches(this.db, this.danbooru(), [id]);
     return { ...result, character: this.toCharacter(id) };
   }
 
@@ -224,18 +225,19 @@ export class CharacterMutations {
       if (body.coverFocus !== undefined) set('cover_focus_x = ?, cover_focus_y = ?', body.coverFocus?.x ?? null, body.coverFocus?.y ?? null);
       if (body.pinned !== undefined) set('pinned = ?', body.pinned ? 1 : 0);
       if (body.danbooruTag === undefined && (body.name !== undefined || body.aliases !== undefined || workIds)) this.autoAssociateInTx(u, [id]);
-      u.onUndo(() => recomputeCustomMatches(this.db, this.danbooru(), [id]));
+      this.ctx.changed({ type: 'catalog.characterChanged', characterIds: [id], ids: [] });
       return { message: `已更新「${newName}」` };
     });
-    recomputeCustomMatches(this.db, this.danbooru(), [id]);
     return result;
   }
 
   markSeen(idStr: ID): void {
     const { id } = this.requireCharacter(idStr);
     if ((this.derived.get().characters.get(id)?.newCount ?? 0) === 0) return; // 没有新图：不发事件
-    this.db.prepare('UPDATE characters SET last_seen_at = ? WHERE id = ?').run(iso(this.ctx.clock()), id);
-    this.ctx.touch();
+    this.ctx.apply(() => {
+      this.db.prepare('UPDATE characters SET last_seen_at = ? WHERE id = ?').run(iso(this.ctx.clock()), id);
+      this.ctx.changed({ type: 'catalog.characterChanged', characterIds: [id], ids: [] });
+    });
   }
 
   verify(body: CharacterVerification, localizer: Localizer): MutationResult {
@@ -275,6 +277,18 @@ export class CharacterMutations {
     };
     try {
       return this.ctx.mutate((u) => {
+        // 撤销时（核验表已还原）：重新载入核验、按还原后的词库改回名字和自动别名。撤销逆序执行：最先记录，所以在核验表还原之后最后执行
+        u.custom(() => {
+          refresh();
+          for (const row of getAffected()) {
+            if (body.type === 'name' && row.tag === tag && !row.name_locked &&
+                !rows.some(before => before.id === row.id && before.created_at === row.created_at) && row.name === body.name) {
+              row.name = localizer.characterName(tag).name;
+              this.db.prepare('UPDATE characters SET name = ? WHERE id = ?').run(row.name, row.id);
+            }
+            replaceAutoAliases(this.db, 'character', row.id, localizer.aliasesFor(row.tag, 'character', row.name));
+          }
+        });
         const table = body.type === 'identity' ? 'character_verified_forms' : 'character_verified_names';
         u.set(table, 'tag = ?', [tag]);
         if (body.type === 'identity') {
@@ -307,19 +321,7 @@ export class CharacterMutations {
           if (name !== row.name) this.db.prepare('UPDATE characters SET name = ? WHERE id = ?').run(name, row.id);
           replaceAutoAliases(this.db, 'character', row.id, localizer.aliasesFor(row.tag, 'character', name));
         }
-        u.onUndo(() => {
-          refresh();
-          this.db.transaction(() => {
-            for (const row of getAffected()) {
-              if (body.type === 'name' && row.tag === tag && !row.name_locked &&
-                  !rows.some(before => before.id === row.id && before.created_at === row.created_at) && row.name === body.name) {
-                row.name = localizer.characterName(tag).name;
-                this.db.prepare('UPDATE characters SET name = ? WHERE id = ?').run(row.name, row.id);
-              }
-              replaceAutoAliases(this.db, 'character', row.id, localizer.aliasesFor(row.tag, 'character', row.name));
-            }
-          })();
-        });
+        this.ctx.changed({ type: 'catalog.characterChanged', characterIds: rows.map((r) => r.id), ids: [] });
         return { message: body.type === 'identity' ? `已记录 ${tag} → ${base}` : `已记录常用名「${body.name}」` };
       });
     } catch (error) {
@@ -444,10 +446,12 @@ export class CharacterMutations {
       this.db.prepare('DELETE FROM characters WHERE id = ?').run(from.id);
       // id 不是 AUTOINCREMENT：删掉的是最大 id 时，识别器之后新建的角色会拿到它。撤销时最先查，被占了就整个拒绝，免得删掉新角色
       u.guard('SELECT 1 FROM characters WHERE id = ?', [from.id], `无法撤销：「${from.name}」原来的编号已经给了之后新建的角色`);
-      u.onUndo(() => recomputeCustomMatches(this.db, this.danbooru(), [from.id, to.id]));
+      // 搬到目标的关联要套排除规则（附录 #14）；「自建角色能对上 Danbooru」由反应重算
+      const moved = JSON.parse(movedImages) as number[];
+      this.ctx.changed({ type: 'curation.charactersChanged', ids: moved });
+      this.ctx.changed({ type: 'catalog.merged', characterIds: [from.id, to.id], ids: moved });
       return { message: `已把「${from.name}」合并进「${to.name}」（${n} 张）` };
     });
-    recomputeCustomMatches(this.db, this.danbooru(), [to.id]);
     return result;
   }
 }

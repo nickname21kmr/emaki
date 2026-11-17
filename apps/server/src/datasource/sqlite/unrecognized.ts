@@ -23,7 +23,6 @@ import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
 import { acceptMessage } from '../acceptMessage.ts';
 import { insertDanbooruCharacter } from './characters.ts';
 import type { SqliteContext } from './context.ts';
-import { applyExclusionRules } from './exclusions.ts';
 import { loadImageItems } from './hydrate.ts';
 import { ANNEX_KINDS_SQL, QUEUE_KINDS_SQL, IN_COMIC_I, NOT_IN_BOOK, decodeCursor, encodeCursor, iso, parseId, QUEUE, THEME_EXPR, UNRECOGNIZED } from './sql.ts';
 import { loadSuggestions } from './suggestions.ts';
@@ -287,7 +286,6 @@ export class UnrecognizedQueries {
     const db = this.ctx.db;
     const now = iso(this.ctx.clock());
     return this.ctx.mutate((u) => {
-      u.columns('images', ['excluded_by'], [imageId]);
       const names: string[] = [];
       let created = 0;
       for (const r of rows) {
@@ -306,7 +304,8 @@ export class UnrecognizedQueries {
         db.prepare('DELETE FROM character_suggestions WHERE image_id = ? AND danbooru_tag = ?').run(imageId, r.tag);
         names.push(db.prepare('SELECT name FROM characters WHERE id = ?').pluck().get(characterId) as string);
       }
-      applyExclusionRules(this.ctx, { imageIds: [imageId] }); // 新角色可能命中「角色」排除规则
+      // 新角色可能命中「角色」排除规则：由反应重新判定（撤销时重放，排除自然放出来）
+      this.ctx.changed({ type: 'curation.charactersChanged', ids: [imageId] });
       return { message: acceptMessage(names, created) };
     });
   }

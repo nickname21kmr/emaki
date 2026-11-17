@@ -9,6 +9,7 @@ import type { AssistantCard, AssistantContext, ImportImagesResult, ReplaceImageR
 import type { DataSource } from '../datasource/DataSource.ts';
 import { queryLibrary } from './query.ts';
 import { characterVerificationSchema } from '../services/catalog/characterVerification.ts';
+import { ACTOR_HEADER, ASSISTANT_HEADER_VALUE } from '../propagation/actor.ts';
 
 export interface ToolHost {
   assertEnabled(): void;
@@ -36,7 +37,13 @@ export function createLibraryMcp(app: FastifyInstance, ds: DataSource, file: str
   const read = { readOnlyHint: true, destructiveHint: false, idempotentHint: true };
   const invoke = async (method: string, url: string, payload?: unknown) => {
     host.assertEnabled();
-    const response = await app.inject({ method: method as any, url, headers: { host: 'localhost', 'content-type': 'application/json' }, payload: payload as any });
+    // 带内部令牌：这次写操作记在助手名下（只认 inject 进来的请求，HTTP 进来的不知道令牌）
+    const response = await app.inject({
+      method: method as any,
+      url,
+      headers: { host: 'localhost', 'content-type': 'application/json', [ACTOR_HEADER]: ASSISTANT_HEADER_VALUE },
+      payload: payload as any,
+    });
     const body = response.json(); if (response.statusCode >= 400) throw new Error(body.error ?? `HTTP ${response.statusCode}`);
     return body;
   };

@@ -82,7 +82,10 @@ function swap(ctx:SqliteContext,id:number,from:string,to:string,bytes:Buffer,pre
   } finally {if(existsSync(tmp)) unlinkSync(tmp);}
 }
 
-export async function replaceImage(ctx:SqliteContext,id:ID,body:ReplaceImageBody,afterChange:(ids:number[])=>void):Promise<ReplaceImageResult> {
+/** 文件换好、行写好之后声明内容变了（缩略图、查重标记、合集、缓存由反应处理）。D1 统一两种内容变化的语义是 P4 的事 */
+const fileChanged=(ctx:SqliteContext,id:number)=>ctx.apply(()=>ctx.changed({type:'image.fileChanged',ids:[id],reason:'replace'}));
+
+export async function replaceImage(ctx:SqliteContext,id:ID,body:ReplaceImageBody):Promise<ReplaceImageResult> {
   const bytes=await imageBytes(body.path), probe=await probeImage(bytes), sha=sha256Buffer(bytes);
   if(probe.format==='html') await htmlAnimationCache(bytes,ctx.dataDir,sha);
   let old=target(ctx,id);
@@ -112,7 +115,7 @@ export async function replaceImage(ctx:SqliteContext,id:ID,body:ReplaceImageBody
     dhash:null,dominant_color:null,thumb_at:null,decode_error:null};
   swap(ctx,old.row.id,old.abs,abs,bytes,previous,oldMtime,media);
   const previousSize=previous.length,replacementSize=bytes.length;
-  ctx.touch();afterChange([old.row.id]);
+  fileChanged(ctx,old.row.id);
   return {...ctx.undo.result('已替换图片',()=>{
     idleScanner(ctx);
     const current=target(ctx,id);
@@ -121,6 +124,6 @@ export async function replaceImage(ctx:SqliteContext,id:ID,body:ReplaceImageBody
     if(abs!==old.abs && existsSync(old.abs)) throw new ConflictError('原文件位置已有其他文件，请先处理重名文件');
     if(!unchangedFile(backup,previousSize,String(before.sha256))) throw new ConflictError('原版本备份无法读取');
     swap(ctx,old.row.id,abs,old.abs,readFileSync(backup),readFileSync(abs),statSync(abs).mtime,before,oldMtime);
-    ctx.touch();afterChange([old.row.id]);
+    fileChanged(ctx,old.row.id);
   }),imageId:id,absPath:abs};
 }

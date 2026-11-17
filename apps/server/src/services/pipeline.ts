@@ -53,6 +53,11 @@ export interface PipelineDeps {
   dedupe?: DedupeStage;
   artists?: ArtistStage;
   pixiv?: PixivStage;
+  /**
+   * 「要查重」的标记（P2：持久化在 pending_work 里，可见性和文件内容变化的反应会标记，重启不丢）。
+   * 不给时只在内存里（单元测试）。查重开始时 peek() 记下标记，跑完 done(那个值) 只清掉那之前的标记
+   */
+  dedupeWork?: { pending(): boolean; mark(): void; peek(): string | null; done(seen: string | null): void };
   /** T20：refreshTagCounts */
   afterTag?: () => void;
   /** 扫描完成（没被取消）后的钩子，例如 T08 重新同步监听 */
@@ -65,7 +70,19 @@ const DEFERRED_RETRY_MS = 3000;
 export type PipelineStages = Partial<Pick<PipelineDeps, 'tag' | 'danbooru' | 'dedupe' | 'artists' | 'pixiv' | 'afterTag' | 'afterScan'>>;
 
 export class Pipeline {
-  private dedupeDirty = false;
+  private memoryDedupe = false;
+  private get dedupeDirty(): boolean {
+    return this.d.dedupeWork ? this.d.dedupeWork.pending() : this.memoryDedupe;
+  }
+  private set dedupeDirty(v: boolean) {
+    if (!v) throw new Error('清掉查重标记用 dedupeDone');
+    if (this.d.dedupeWork) this.d.dedupeWork.mark();
+    else this.memoryDedupe = true;
+  }
+  private dedupeDone(seen: string | null): void {
+    if (this.d.dedupeWork) this.d.dedupeWork.done(seen);
+    else this.memoryDedupe = false;
+  }
   /** 用户取消了识别：之后不再自动续跑，直到用户手动开始（进程内状态，重启后恢复自动） */
   private tagPaused = false;
   /** 用户取消了画师补跑：之后不自动续跑，直到手动点「补跑」或重新打开开关 */
@@ -149,8 +166,9 @@ export class Pipeline {
         }
         case 'dedupe': {
           if (!this.d.dedupe) throw new NotImplementedError('T16', '查重');
+          const seen = this.d.dedupeWork?.peek() ?? null;
           const msg = await this.d.dedupe.run(ctx);
-          if (!ctx.signal.aborted) this.dedupeDirty = false;
+          if (!ctx.signal.aborted) this.dedupeDone(seen);
           return msg;
         }
         case 'danbooru-sync': {
@@ -235,6 +253,14 @@ export class Pipeline {
   requestPixiv(): void {
     this.pixivPaused = false;
     this.pixivFailed = false;
+    this.maybePixiv(false);
+  }
+
+  /**
+   * 用户或助手的操作让一些图重新登记了 Pixiv 补充（资格变了）：设置里打开了自动补充、用户没暂停、没失败时排一轮。
+   * 和 requestPixiv 不同，不清用户的暂停
+   */
+  requestPixivAuto(): void {
     this.maybePixiv(false);
   }
 

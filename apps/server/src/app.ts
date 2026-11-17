@@ -13,6 +13,7 @@ import { imageRoutes } from './routes/images.ts';
 import { libraryRoutes } from './routes/library.ts';
 import { systemRoutes } from './routes/system.ts';
 import { assistantRoutes } from './assistant/routes.ts';
+import { actorFromHeaders, runAs } from './propagation/actor.ts';
 
 /** 这次启动的 id：撤销栈只在内存里，前端看到它变了就丢掉旧的撤销记录 */
 const bootId = randomUUID();
@@ -33,6 +34,9 @@ export async function buildApp(ds: DataSource, bus: EventBus) {
   //   fastify 默认也解析 text/plain，不拦的话没有 body 的 POST（撤销、标记已看过）可以被任意网页触发。
   //   不看路径：req.url 是没解码的原始路径，'/%61pi/...' 照样会路由到 /api/...
   const allowedHosts = new Set(['127.0.0.1', 'localhost', '[::1]', config.host, ...config.allowedHosts]);
+  // actor（docs/core-architecture.md 第 5.2 节）：HTTP 请求默认是用户；AI 助手经 app.inject 调接口时带本进程的内部令牌，记成助手。
+  // 放在最前面：后面的钩子和处理函数（包括其中的异步续体）都在这个 actor 下执行
+  app.addHook('onRequest', (req, _reply, done) => runAs(actorFromHeaders(req.headers), done));
   app.addHook('onRequest', async (req, reply) => {
     const hostHeader = (req.headers.host ?? '').toLowerCase();
     if (!allowedHosts.has(hostHeader.replace(/:\d+$/, ''))) {

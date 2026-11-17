@@ -50,6 +50,7 @@ export function organizeCollection(ctx: SqliteContext, collectionId: number, pre
   }
   const moved: Moved[] = [],
     failed: string[] = [];
+  // 文件和行一张张地挪（同步，扫描插不进来）；挪完在一个事务里声明移动，来源、分类、排除、合集由反应按新位置重算（附录 #17）
   for (const xs of parents.values()) {
     const first = xs[0]!;
     const parent = path.posix.dirname(first.rel_path);
@@ -70,17 +71,18 @@ export function organizeCollection(ctx: SqliteContext, collectionId: number, pre
     (moved.length ? `，已整理 ${moved.length} 张到子文件夹` : '，文件位置无需调整') +
     (failed.length ? `；${failed.length} 张移动失败：${failed.slice(0, 3).join('、')}` : '');
   if (!moved.length) return { ...previous, message };
-  const logId = recordChange(ctx, 'move', `组图整理：${moved.length} 张收进「${folder}」`, {
-    where: `子文件夹「${folder}」`,
-    items: moved,
-    charSnap: [],
-    retagSnap: [],
-    excluded: [],
+  const logId = ctx.apply(() => {
+    ctx.changed({ type: 'image.moved', ids: moved.map((m) => m.id), reason: 'organize' });
+    return recordChange(ctx, 'move', `组图整理：${moved.length} 张收进「${folder}」`, {
+      where: `子文件夹「${folder}」`,
+      items: moved,
+      charSnap: [],
+      retagSnap: [],
+    });
   });
-  ctx.touch();
   return ctx.undo.result(message, async () => {
     const out = moveBack(ctx.db, moved);
-    ctx.touch();
+    ctx.apply(() => ctx.changed({ type: 'image.moved', ids: out.restoredIds, reason: 'revertMove' }));
     if (out.failed.length)
       throw new ConflictError(`已移回 ${out.restored} 张；${out.failed.length} 张位置发生变化，可在设置的最近移动中继续处理`);
     ctx.db.prepare('UPDATE change_log SET reverted_at = ? WHERE id = ?').run(new Date(ctx.clock()).toISOString(), logId);

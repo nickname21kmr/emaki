@@ -14,7 +14,6 @@ import { INSERT_IMAGE_SQL, imageClassification } from '../../services/scan/image
 import { assertRecyclable } from '../../services/trash/driveType.ts';
 import { moveToRecycleBin, type TrashImpl } from '../../services/trash/recycleBin.ts';
 import type { SqliteContext } from './context.ts';
-import { applyExclusionRules } from './exclusions.ts';
 import { normalizeSubdir } from './move.ts';
 import { readSettings } from './settings.ts';
 import { parseId } from './sql.ts';
@@ -73,7 +72,6 @@ export async function imageBytes(file: string) {
 
 /** File publication and INSERT run without yielding, like the existing move API. */
 export async function importImages(ctx: SqliteContext, body: ImportImagesBody, options: {
-  afterImport(ids: number[]): void;
   trashImpl?: TrashImpl;
 }): Promise<ImportImagesResult> {
   if (!body.files.length || body.files.length > 20) throw new BadRequestError('每次可导入 1–20 张图片');
@@ -141,15 +139,16 @@ export async function importImages(ctx: SqliteContext, body: ImportImagesBody, o
         const now = new Date(ctx.clock()).toISOString();
         const source = parseSource(rel, readSettings(ctx.db).tagger.pixivFilenameMode);
         const comic = ComicAreas.load(ctx.db).of(root.id,rel);
-        const id = ctx.db.transaction(() => {
+        // 入库即声明 image.added：排除规则、合集、缩略图和识别排队、查重标记由反应处理
+        const id = ctx.apply(() => {
           const result = ctx.db.prepare(INSERT_IMAGE_SQL).run({ rootId:root.id,relPath:rel,fileName:path.basename(target),
             width:probe.width,height:probe.height,frameCount:probe.pages,format:probe.format,bytes:bytes.length,sha256:sha,
             modifiedAt:statSync(target).mtime.toISOString(),addedAt:now,rating:comic?.rating ?? 'general',
             ...imageClassification(probe,rel,!!comic),site:source?.site ?? null,postId:source?.postId ?? null,artist:source?.artist ?? null,url:source?.url ?? null });
           const id=Number(result.lastInsertRowid);
-          applyExclusionRules(ctx,{imageIds:[id]});
+          ctx.changed({type:'image.added',ids:[id]});
           return id;
-        })();
+        });
         created.push({id,rootId:root.id,rel,abs:target,sha,bytes:bytes.length});
         items.push({path:file.path,status:'imported',imageId:String(id),absPath:target});
       } catch (error) {
@@ -163,8 +162,6 @@ export async function importImages(ctx: SqliteContext, body: ImportImagesBody, o
   const failed=items.filter(i=>i.status==='failed' && i.code!=='needs_confirm').length;
   const message=`已入库 ${imported} 张${existing ? `，${existing} 张已在图库` : ''}${pending ? `，${pending} 张待选择保存方式` : ''}${failed ? `，${failed} 张失败` : ''}`;
   if (!created.length) return {ok:true,message,undoToken:null,items};
-  ctx.touch();
-  options.afterImport(created.map(r=>r.id));
   return {...ctx.undo.result(message,async()=>{
     for (const root of new Set(created.map(r=>path.parse(r.abs).root))) await assertRecyclable(root);
     if (ctx.jobs.list().some(j=>j.kind==='scan' && j.status==='running')) throw new ConflictError('正在扫描图库，请扫描结束后再撤销导入');
@@ -177,8 +174,11 @@ export async function importImages(ctx: SqliteContext, body: ImportImagesBody, o
     }
     const result=await moveToRecycleBin(created.map(r=>r.abs),options.trashImpl);
     const done=new Set([...result.trashed,...result.alreadyGone]);
-    ctx.db.transaction(()=>{for(const r of created) if(done.has(r.abs)) ctx.db.prepare('UPDATE images SET trashed_at=? WHERE id=?').run(new Date(ctx.clock()).toISOString(),r.id);})();
-    ctx.touch(); options.afterImport([]);
+    ctx.apply(()=>{
+      const gone=created.filter(r=>done.has(r.abs)).map(r=>r.id);
+      for(const id of gone) ctx.db.prepare('UPDATE images SET trashed_at=? WHERE id=?').run(new Date(ctx.clock()).toISOString(),id);
+      ctx.changed({type:'image.trashed',ids:gone});
+    });
     if(result.failed.length) throw new ConflictError(`${result.failed.length} 张图片未能移到系统回收站`);
   }),items};
 }

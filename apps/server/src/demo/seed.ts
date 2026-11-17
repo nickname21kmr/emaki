@@ -13,7 +13,7 @@ import type { Db } from '../db/connection.ts';
 import { mockDominantColor, workColorFromHue } from '../util/color.ts';
 import { CLASSIFIER_VERSION } from '../services/classify/rules.ts';
 import { artScore, classifyTheme } from '../services/classify/theme.ts';
-import { DETECTOR_VERSION } from '../services/collections/detect.ts';
+import { DETECTOR_VERSION } from '../domain/collections/detect.ts';
 import { markSourcesCurrent } from '../services/source/backfill.ts';
 import { patchSettingsInternal, type SettingsSection } from '../datasource/sqlite/settings.ts';
 import type { DemoDb } from './fixtures.ts';

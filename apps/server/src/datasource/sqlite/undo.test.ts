@@ -23,11 +23,12 @@ function setup(): Db {
   return db;
 }
 
-/** 在一个事务里执行 fn（fn 负责记录撤销数据 + 真正修改），返回撤销函数 */
+/** 在一个事务里执行 fn（fn 负责记录撤销数据 + 真正修改），返回撤销函数（和 ctx.mutate 一样在一个事务里还原） */
 function act(db: Db, fn: (u: UndoRecorder) => void): () => Promise<void> {
   const u = new UndoRecorder(db);
   db.transaction(() => fn(u))();
-  return u.build();
+  const restore = u.build();
+  return async () => db.transaction(restore)();
 }
 
 describe('UndoRecorder', () => {
@@ -81,28 +82,19 @@ describe('UndoRecorder', () => {
     expect(dumpCore(db)).toEqual(before);
   });
 
-  it('onUndo 在数据库撤销之后按逆序执行', async () => {
+  // P2：撤销后的连带处理改由反应重算（ctx.mutate 重放变化），记录器不再有 onUndo / onUndoLast；
+  // 快照表达不了的还原步骤用 custom，和其他记录一起在撤销事务里逆序执行
+  it('custom 和其他记录一起逆序执行，在同一个事务里', async () => {
     const calls: string[] = [];
     const u = new UndoRecorder(db);
-    u.onUndo(() => void calls.push('a'));
-    u.onUndo(() => void calls.push('b'));
+    u.custom(() => void calls.push('a'));
+    u.sql('UPDATE images SET favorite = 1 WHERE id = 1');
+    u.custom(() => void calls.push(`b:${String(db.prepare('SELECT favorite FROM images WHERE id = 1').pluck().get())}`));
     expect(u.isEmpty).toBe(false);
-    await u.build()();
-    expect(calls).toEqual(['b', 'a']);
-  });
-
-  it('onUndoLast 等所有 onUndo 跑完再按记录顺序执行', async () => {
-    const calls: string[] = [];
-    const u = new UndoRecorder(db);
-    u.onUndoLast(() => void calls.push('last1'));
-    u.onUndo(() => void calls.push('a'));
-    u.onUndoLast(() => void calls.push('last2'));
-    u.onUndo(() => void calls.push('b'));
-    await u.build()();
-    expect(calls).toEqual(['b', 'a', 'last1', 'last2']);
-    const only = new UndoRecorder(db);
-    only.onUndoLast(() => {});
-    expect(only.isEmpty).toBe(false);
+    db.transaction(u.build())();
+    // 逆序：先 b（这时 sql 还没执行），再执行 sql，最后 a
+    expect(calls).toEqual(['b:0', 'a']);
+    expect(db.prepare('SELECT favorite FROM images WHERE id = 1').pluck().get()).toBe(1);
   });
 
   it('撤销时约束冲突 → ConflictError，库保持撤销前状态', async () => {

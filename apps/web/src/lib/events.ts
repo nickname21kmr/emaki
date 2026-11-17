@@ -1,4 +1,4 @@
-import type { Job, JobItemEvent, ServerEvent } from '@emaki/shared';
+import type { Job, JobItemEvent, LibraryChangedReason, ServerEvent } from '@emaki/shared';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { toast } from 'sonner';
@@ -75,7 +75,8 @@ export function createInvalidator(client: QueryClient) {
     lastRankRefresh = Date.now();
     void client.invalidateQueries({ predicate: (q) => isRankQuery(q.queryKey) });
   };
-  const invalidate = (reason?: 'scan' | 'tag' | 'mutation') => {
+  // reason：'mutation' 是用户或助手的操作，任务种类（scan、tag、thumbnail…）是那个后台任务写的库，'system' 是启动修补
+  const invalidate = (reason?: LibraryChangedReason) => {
     clearTimeout(timer);
     timer = setTimeout(() => {
       const throttleRanks = reason === 'tag' && Date.now() - lastRankRefresh < 60_000;

@@ -421,11 +421,22 @@ export function buildDemoDb(now = Date.now()): DemoDb {
     for (const img of images.values()) if (!img.excludedBy && predicate(img)) img.excludedBy = row.id;
   };
   addExclusion('folder', `${DEMO_ROOT_PREFIX}/插画/twitter/表情包`, '文件夹 · 推特/表情包', 40, (img) => img.source?.site === 'twitter' && r() < 0.04);
-  addExclusion('tag', 'comic', '标签 · comic（漫画分镜）', 22, (img) => r() < 0.006);
+  addExclusion('tag', 'comic_strip', '标签 · comic_strip（漫画分镜）', 22, (img) => r() < 0.006);
   addExclusion('tag', 'ai-generated', '标签 · ai-generated', 9, (img) => r() < 0.005);
   const excludedImages = [...images.values()].filter((img) => !img.excludedBy).slice(40, 46);
   for (const img of excludedImages) {
     addExclusion('image', img.id, `单张 · ${img.fileName}`, Math.floor(r() * 20), (x) => x.id === img.id);
+  }
+  // 排除结果是派生的（P2：启动时按规则重新判定一遍）：让上面随机挑中的图真的命中规则——
+  // 文件夹规则排除的放进那个文件夹，标签规则排除的带上那个标签。不调用 r()，不打乱后面的随机序列
+  for (const img of images.values()) {
+    const rule = exclusions.find((e) => e.id === img.excludedBy);
+    if (rule?.kind === 'folder') {
+      img.libraryRootId = 'root1';
+      img.relPath = `twitter/表情包/${img.fileName}`;
+    } else if (rule?.kind === 'tag' && !img.tags.some((t) => t.tag === rule.target)) {
+      img.tags.push({ tag: rule.target, category: 'general', score: 0.9 });
+    }
   }
 
   // 重复组

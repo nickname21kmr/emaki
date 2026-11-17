@@ -1,7 +1,7 @@
 import { assertOrganizeReady, organizeCollection } from './organizeCollection.ts';
 import { randomUUID } from 'node:crypto';
 /**
- * 合集的查询与修改（T38c）。摘要统一由 loadSummaries 算（口径在 services/collections/summary.ts）。
+ * 合集的查询与修改（T38c）。摘要统一由 loadSummaries 算（口径在 domain/collections/summary.ts）。
  * 写操作全部走 ctx.mutate，任何写都把合集转成 origin='manual'（自动判定不会再删它）。
  */
 import {
@@ -20,11 +20,11 @@ import {
   type UpdateCollectionBody,
 } from '@emaki/shared';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
-import type { CollectionRow, CollectionService } from '../../services/collections/CollectionService.ts';
-import { autoKind, bookLeaf, decideCollection, dirFeatures, isJudged, type DirPage } from '../../services/collections/detect.ts';
-import { parseBookDir, parseComicDir } from '../../services/collections/parseName.ts';
+import type { CollectionRow, CollectionService } from '../../domain/collections/CollectionService.ts';
+import { autoKind, bookLeaf, decideCollection, dirFeatures, isJudged, type DirPage } from '../../domain/collections/detect.ts';
+import { parseBookDir, parseComicDir } from '../../domain/collections/parseName.ts';
 import { ComicAreas } from '../../services/classify/comicAreas.ts';
-import { summarize } from '../../services/collections/summary.ts';
+import { summarize } from '../../domain/collections/summary.ts';
 import type { SqliteContext } from './context.ts';
 import type { Derived } from './derived.ts';
 import { toCharacter, toWork } from './library.ts';
@@ -364,9 +364,9 @@ export class CollectionQueries {
     return this.ctx.db.prepare('SELECT DISTINCT collection_id FROM images WHERE id IN (SELECT value FROM json_each(?)) AND collection_id IS NOT NULL').pluck().all(JSON.stringify(ids)) as number[];
   }
 
-  private reorderWithUndo(u: UndoRecorder, collections: number[]): void {
-    const run = () => { for (const id of collections) this.service.assignPages(id); };
-    run(); u.onUndoLast(run);
+  /** 成员变了的合集（包括成员被挪走的那几本）：声明变化，由反应按页序重新编号；撤销时重放，还原后再编一次 */
+  private renumber(collections: number[]): void {
+    this.ctx.changed({ type: 'collections.changed', ids: [], collectionIds: collections });
   }
 
   private selectedImages(ids: ID[]): number[] {
@@ -395,7 +395,7 @@ export class CollectionQueries {
       u.inserted('collections', id);
       db.prepare('UPDATE images SET collection_id = ?, collection_detached = 1 WHERE id IN (SELECT value FROM json_each(?))').run(id, JSON.stringify(ids));
       this.service.assignPages(id);
-      this.reorderWithUndo(u, donors);
+      this.renumber(donors);
       return { message: `已新建${KIND_LABEL[body.kind]}「${body.title?.trim() || '新组图'}」，收进 ${ids.length} 张` };
     });
     return { ...(body.organizeFiles ? organizeCollection(this.ctx, id, r) : r), collection: this.loadAll().get(id)!.summary };
@@ -512,7 +512,7 @@ export class CollectionQueries {
         u.columns('images', ['collection_id', 'page_no'], db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(c.id) as number[]);
         this.service.assignPages(c.id);
       }
-      if (add.length || remove.length) this.reorderWithUndo(u, [...new Set([...donors, c.id])]);
+      if (add.length || remove.length) this.renumber([...new Set([...donors, c.id])]);
       return { message: notes.join('，') };
     });
     return body.organizeFiles ? organizeCollection(this.ctx, c.id, result) : result;

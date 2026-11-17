@@ -3,7 +3,6 @@ import { setTimeout as sleep, setImmediate as yieldToEventLoop } from 'node:time
 import type { JobContext } from '../../core/jobs.ts';
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import { IN_COMIC_I, QUEUE, QUEUE_KINDS_SQL } from '../../datasource/sqlite/sql.ts';
-import { applyExclusionRules } from '../../datasource/sqlite/exclusions.ts';
 import type { CharacterCatalog } from '../catalog/characterCatalog.ts';
 import type { CopyrightSource } from '../catalog/copyrights.ts';
 import { DanbooruError } from '../danbooru/client.ts';
@@ -231,7 +230,8 @@ export async function syncPixivCharacters(
     const added: Required<PixivPayload> = { links: [], originals: [], correctedOriginals: [] };
     const correctsOriginal = options.recheckCached && !isOriginal && result.tags.length > 0
       && (artwork.isOriginal === true || hasOriginalTag(artwork));
-    db.transaction(() => {
+    // 角色、原创、建议的变化由反应套排除规则、重新登记、刷新缓存（job:pixiv-tags 弱刷新）
+    ctx.apply(() => {
       const rows = current.all({...scopeParams,postId:post.id}) as { id: number; original_at: string | null }[];
       const now = new Date(ctx.clock()).toISOString();
       for (const row of rows) {
@@ -288,12 +288,13 @@ export async function syncPixivCharacters(
         if (suggestionChanges) suggested++;
         complete.run(now,outcome,row.id);
       }
-      if (ids.length) applyExclusionRules(ctx, { imageIds: ids });
-    })();
+      ctx.changed({ type: 'evidence.changed', provider: 'pixiv', ids });
+      ctx.changed({ type: 'curation.charactersChanged', ids });
+      ctx.changed({ type: 'curation.originalChanged', ids });
+    });
     round.links.push(...added.links);
     round.originals.push(...added.originals);
     round.correctedOriginals.push(...added.correctedOriginals);
-    if (ids.length) ctx.touch();
     if (noMatch) unmatched++;
     job.advance(1, summary());
   }

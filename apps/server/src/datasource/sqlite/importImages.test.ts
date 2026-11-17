@@ -182,7 +182,7 @@ it('collection pages expose the current file revision and dimensions after repla
   const {utimes}=await import('node:fs/promises');
   await utimes(original.absPath,new Date('2026-01-01T00:00:00Z'),new Date('2026-01-01T00:00:00Z'));
   ds.ctx.db.prepare('UPDATE images SET modified_at=? WHERE id=?').run((await stat(original.absPath)).mtime.toISOString(),id);
-  ds.ctx.touch();
+  ds.ctx.invalidate('all'); // 测试直接写了库：手动让缓存失效
   const oldVersion=(await ds.getCollection(collection.id))!.pages[0]!.modifiedAt;
   const result=await ds.replaceImage(id,{path:hd});
   const replaced=(await ds.getCollection(collection.id))!.pages[0]!;

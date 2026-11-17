@@ -63,21 +63,20 @@ export function markSourcesCurrent(db: Db, mode: Mode): void {
 }
 
 /**
- * 规则版本或解析模式变化时重算未人工确认的来源；返回来源真的变了的行数。
- * onChanged 拿到变了的图（例如重新登记 Pixiv 补充，旧投稿号回来时能从缓存找回建议）
+ * 规则版本或解析模式变化时重算未人工确认的来源；返回来源真的变了的图。
+ * 调用方在 ctx.apply 里调用并声明 image.sourceChanged（清过期的 Pixiv 建议、重新登记补充由反应做）
  */
-export function backfillSources(db: Db, onChanged?: (changes: SourceChange[]) => void): number {
+export function backfillSources(db: Db): SourceChange[] {
   const mode = readSettings(db).tagger.pixivFilenameMode;
   const cur = db.prepare("SELECT value FROM settings WHERE key = 'sourceParserVersion'").pluck().get() as string | undefined;
   const previousMode = db.prepare("SELECT value FROM settings WHERE key = 'sourceParserMode'").pluck().get();
-  if (cur !== undefined && Number(JSON.parse(cur)) === SOURCE_PARSER_VERSION && previousMode === JSON.stringify(mode)) return 0;
+  if (cur !== undefined && Number(JSON.parse(cur)) === SOURCE_PARSER_VERSION && previousMode === JSON.stringify(mode)) return [];
   let changes: SourceChange[] = [];
   // 纯字符串处理，10 万行也不到 1 秒，放在一个事务里
   db.transaction(() => {
     changes = diffSources(db, mode);
     applySourceChanges(db, changes);
     markSourcesCurrent(db, mode);
-    if (changes.length) onChanged?.(changes);
   })();
-  return changes.length;
+  return changes;
 }

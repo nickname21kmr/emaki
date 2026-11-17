@@ -1,8 +1,9 @@
 /**
  * 合集的重算（T38b）：把 detect.ts 的判定结果落进 collections 表，并给页编 page_no。
  *
- * - refreshAll：全量（启动时、扫描有变化后、识别结束后）。一个同步事务，副本上约 0.1–0.3 秒。
- * - refreshDirs：只重算涉及的目录（改类型、排除 / 恢复、回收站、排除规则、文件夹启停之后，RV-C-9）。
+ * - refreshAll：全量（启动时、文件夹启停、后台任务结束时）。一个同步事务，副本上约 0.1–0.3 秒。
+ * - refreshDirs：只重算涉及的目录（用户改类型、排除 / 恢复、回收站、移动之后，RV-C-9）。
+ * 什么时候重算由变更传播的反应决定（reactions.ts），其他地方不直接调用。
  * - assignPages：只重排一本（T38c 的新建和改页序用）。
  *
  * 约定：
@@ -28,7 +29,7 @@ import {
   type PageOrder,
 } from './detect.ts';
 import { parseBookDir, parseComicDir, type parseFolderName } from './parseName.ts';
-import { ComicAreas, type ComicArea } from '../classify/comicAreas.ts';
+import { ComicAreas, type ComicArea } from '../../services/classify/comicAreas.ts';
 
 interface Row {
   id: number;
@@ -88,13 +89,6 @@ interface Group {
   /** 在按漫画导入的范围里：每个子文件夹都成一本（范围的根目录直接放页的也算一本） */
   comic: ComicArea | null;
 }
-
-/**
- * 写操作之后重算合集（RV-C-8）：在 ctx.mutate 回调里调用（同一事务），并用 undo.onUndoLast 让撤销之后再算一次。
- * 用 onUndoLast：要等放出排除等其他补偿都做完再算，不然撤销改类型时页会被踢出合集。
- * ids = 'all' 走全量（排除规则、文件夹启停这类影响面不定的操作）。
- */
-export type CollectionsHook = (undo: { onUndoLast(fn: () => void): void } | null, ids: number[] | 'all') => void;
 
 export interface RefreshResult {
   active: number;
@@ -167,12 +161,16 @@ export class CollectionService {
     if (!imageIds.length) return { active: 0, created: 0, removed: 0, updated: 0, pagesChanged: 0, ms: 0 };
     const res = transact(this.db, () => {
       const sourceChanges = this.refreshPosts(false, imageIds);
+      // 图现在所在的目录，加上它们还挂着的文件夹合集的目录：移走的页要从原来那本里出来（P2，附录 #17）
       const dirs = this.db
         .prepare(
-          `SELECT DISTINCT root_id AS rootId, substr(rel_path, 1, length(rel_path) - length(file_name) - 1) AS dir
-           FROM images WHERE id IN (SELECT value FROM json_each(?))`,
+          `SELECT root_id AS rootId, substr(rel_path, 1, length(rel_path) - length(file_name) - 1) AS dir
+             FROM images WHERE id IN (SELECT value FROM json_each(@ids))
+           UNION
+           SELECT c.root_id, c.rel_dir FROM collections c
+             WHERE c.membership = 'folder' AND c.id IN (SELECT collection_id FROM images WHERE id IN (SELECT value FROM json_each(@ids)))`,
         )
-        .all(JSON.stringify(imageIds)) as { rootId: number; dir: string }[];
+        .all({ ids: JSON.stringify(imageIds) }) as { rootId: number; dir: string }[];
       // 按漫画导入的文件夹根目录直接放页时，根目录也是一本
       const comics = ComicAreas.load(this.db);
       const books = dirs.filter((d) => d.dir || comics.of(d.rootId, ''));

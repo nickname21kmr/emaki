@@ -85,7 +85,7 @@ describe('搜索的标签张数', () => {
     expect(await hit()).toBe(3);
 
     db.prepare("UPDATE images SET trashed_at = 'x' WHERE id = 1").run();
-    bus.emit({ type: 'library-changed', reason: 'scan' });
+    ds.ctx.invalidate('all', { soft: true }); // 后台任务写库后，变更传播的提交后反应就是这样让缓存失效的
     expect(stored()).toBe(3); // 只是标记了
     expect(await hit()).toBe(2); // 不用等计时器，下一次搜索就是新的
     expect(stored()).toBe(2);

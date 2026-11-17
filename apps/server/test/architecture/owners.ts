@@ -18,7 +18,8 @@ export type ModuleId =
   | 'collections'
   | 'duplicates'
   | 'settings'
-  | 'commands';
+  | 'commands'
+  | 'propagation';
 
 /** 模块的中文名和目录（相对 apps/server/src，以 / 结尾） */
 export const MODULES: Record<ModuleId, { name: string; dir: string }> = {
@@ -33,6 +34,8 @@ export const MODULES: Record<ModuleId, { name: string; dir: string }> = {
   settings: { name: '设置', dir: 'domain/settings/' },
   // 命令层：撤销记录的回放（按表名拼 SQL）和改动记录（change_log）
   commands: { name: '命令层', dir: 'commands/' },
+  // 变更传播（P2）：变化集、反应注册表；排队状态（pending_work）
+  propagation: { name: '变更传播', dir: 'propagation/' },
 };
 
 /** 表（images 是 images#<列组>）→ 主人 */
@@ -93,6 +96,8 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   // 命令层
   change_log: 'commands',
   [DYNAMIC_TABLE]: 'commands',
+  // 变更传播：交给后台任务、还没做完的工作（迁移 033）
+  pending_work: 'propagation',
 };
 
 /**
