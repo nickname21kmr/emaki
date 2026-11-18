@@ -254,15 +254,19 @@ export async function settleRefresh(client: QueryClient, meta: CommandMeta | und
   await client.invalidateQueries(roots ? { predicate: (q) => roots.has(String(q.queryKey[0])) } : undefined);
 }
 
-/** AI 助手做的、可撤销的修改：放进网页的撤销栈（按 boot 认领，后端重启过的不要；已经有这条的不重复） */
+/**
+ * AI 助手做的、可撤销的修改：放进网页的撤销栈（按 boot 认领，后端重启过的不要；已经有这条的不重复）。
+ * 只认助手：用户自己的从 HTTP 响应拿令牌；手机（device:<id>）的操作由手机上的页面从它自己的响应拿，
+ * 电脑上的页面不该把手机的操作放进自己的撤销栈（docs/mobile.md 2.5）
+ */
 export function adoptCommand(event: CommandEvent) {
-  if (event.actor === 'user' || event.undo !== 'token' || !event.undoToken) return;
+  if (event.actor !== 'assistant' || event.undo !== 'token' || !event.undoToken) return;
   const store = useUndoStore.getState();
   if (store.boot && event.boot !== store.boot) return;
   if (store.entries.some((e) => e.token === event.undoToken)) return;
   store.push({
     token: event.undoToken,
-    label: `${event.actor === 'assistant' ? '助手：' : ''}${event.message}`,
+    label: `助手：${event.message}`,
     by: event.actor,
     ...(event.imageIds?.length ? { focus: { images: event.imageIds } } : {}),
   });
