@@ -9,6 +9,7 @@ import { useGlobalHotkeys } from './useGlobalHotkeys';
 import { ScrollContainerContext } from './ScrollContainer';
 import { Sidebar } from './Sidebar';
 import { AssistantLauncher, AssistantSpacer } from '@/features/assistant/AssistantLauncher';
+import { AccessPrompts } from '@/features/access/AccessPrompts';
 
 /**
  * 整体布局：暖灰「桌面」上左边一条窄导航，右边一张圆角「纸」（主内容，独立滚动）。
@@ -73,6 +74,8 @@ export function AppShell() {
       <CommandPalette />
       <HelpDialog />
       <AssistantLauncher />
+      {/* 手机发来连接请求时，任何页面都弹出批准提示 */}
+      <AccessPrompts />
     </ScrollContainerContext.Provider>
   );
 }

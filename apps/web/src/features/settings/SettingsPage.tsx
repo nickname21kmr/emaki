@@ -16,6 +16,7 @@ import { TaggerSection } from './components/TaggerSection';
 import { useSectionNav } from './hooks';
 import { isSectionId, type SectionId } from './sections';
 import { AssistantSettingsSection } from '@/features/assistant/AssistantSettingsSection';
+import { PhoneAccessSection } from '@/features/access/PhoneAccessSection';
 
 /**
  * 设置：左侧吸顶小目录 + 右侧分组卡片。修改即时保存（滑块松手时才保存）。
@@ -27,7 +28,7 @@ export function SettingsPage() {
   const ready = settings.isSuccess;
   const { active, jump } = useSectionNav(ready);
   const navigate = useNavigate();
-  const { hash } = useLocation();
+  const { hash, key, state } = useLocation();
 
   // 首次加载完成后按 hash 定位一次；之后 hash 由点击目录写入，不再反向触发滚动
   const didInitialJump = useRef(false);
@@ -37,6 +38,15 @@ export function SettingsPage() {
     const id = decodeURIComponent(hash.slice(1));
     if (isSectionId(id)) requestAnimationFrame(() => jump(id, 'auto'));
   }, [ready, hash, jump]);
+
+  // 已经在设置页时，别处带着 state.section 跳过来（比如批准提示的「设置…」）：hash 定位只在首次加载时做，这里补上
+  const mountKey = useRef(key);
+  const wanted = (state as { section?: string } | null)?.section;
+  useEffect(() => {
+    if (!ready || key === mountKey.current || !wanted || !isSectionId(wanted)) return;
+    mountKey.current = key;
+    requestAnimationFrame(() => jump(wanted));
+  }, [ready, key, wanted, jump]);
 
   const onJump = useCallback(
     (id: SectionId) => {
@@ -70,6 +80,7 @@ export function SettingsPage() {
               <DedupeSection dedupe={settings.data.dedupe} groupCount={stats?.duplicateGroupCount} />
               <AppearanceSection ui={settings.data.ui} />
               <JobsSection />
+              <PhoneAccessSection />
               <AssistantSettingsSection />
               <AboutSection stats={stats} />
             </div>

@@ -6,6 +6,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Button, Progress, Segmented, Skeleton, Switch } from '@/components/ui';
 import { useUndoHotkey } from '@/components/layout/useGlobalHotkeys';
+import { AccessPrompts } from '@/features/access/AccessPrompts';
 import { LibraryRootsEditor } from '@/features/settings/components/LibraryRootsEditor';
 import { useMergedJobs } from '@/features/settings/hooks';
 import { isActiveJob, jobFraction, JOB_LABEL } from '@/features/settings/jobMeta';
@@ -69,6 +70,8 @@ export function WelcomePage() {
           </section>
         </div>
       </div>
+      {/* 手机发来连接请求时也弹出批准提示（这一页在 AppShell 之外） */}
+      <AccessPrompts />
     </div>
   );
 }

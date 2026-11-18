@@ -3,6 +3,10 @@
  * 接口定义见 packages/shared/src/api.ts。
  */
 import type {
+  AccessStatus,
+  AccessTicket,
+  DeviceInfo,
+  Scope,
   AcceptSuggestionBody,
   DomainChange,
   UndoKind,
@@ -79,6 +83,7 @@ import type {
   UpdateArtistLinksBody,
   Work,
 } from '@emaki/shared';
+import { noteResponse } from './deviceAuth';
 import { uuid } from './random';
 
 /**
@@ -174,6 +179,8 @@ export async function request<T>(method: string, path: string, body?: unknown): 
   const data = text ? (JSON.parse(text) as unknown) : undefined;
   if (!res.ok) {
     const err = data as Partial<ApiError> | undefined;
+    // 局域网入口上没有凭证 / 被电脑移除了：整页换成「连接到电脑」（lib/deviceAuth.ts）
+    noteResponse(res.status, err?.code);
     throw new ApiRequestError(res.status, err?.code ?? 'internal', err?.error ?? `请求失败（${res.status}）`);
   }
   const meta = readMeta(res);
@@ -291,4 +298,20 @@ export const api = {
   revertChange: (id: ID) => post<MutationResult>(`/changes/${encodeURIComponent(id)}/revert`),
   /** 连一下 Danbooru、Hugging Face 和国内镜像，排查同步失败 */
   checkNetwork: () => get<NetworkCheckResponse>('/system/network-check'),
+
+  // 手机访问（docs/mobile.md 第 2 节）：scope 是 devices，只有本机入口能用（局域网入口上是 403）；都不可撤销、不占撤销栈
+  accessStatus: () => get<AccessStatus>('/access'),
+  /** 打开 / 关闭局域网入口、改端口、改电脑名称（name 为 null 恢复成计算机名），立即生效 */
+  configureAccess: (body: { enabled?: boolean; port?: number; name?: string | null }) =>
+    patch<{ ok: true; message: string; status: AccessStatus }>('/access', body),
+  /** 批准连接请求：scopes 不给是默认权限 */
+  approveDevice: (id: string, body: { scopes?: Scope[]; name?: string } = {}) =>
+    post<{ ok: true; message: string; device: DeviceInfo }>(`/access/requests/${encodeURIComponent(id)}/approve`, body),
+  rejectDevice: (id: string) => post<{ ok: true; message: string }>(`/access/requests/${encodeURIComponent(id)}/reject`),
+  updateDevice: (id: string, body: { name?: string; scopes?: Scope[] }) =>
+    patch<{ ok: true; message: string; device: DeviceInfo }>(`/devices/${encodeURIComponent(id)}`, body),
+  /** 移除设备：它立即断开，要用的话得重新请求 */
+  revokeDevice: (id: string) => del<{ ok: true; message: string }>(`/devices/${encodeURIComponent(id)}`),
+  /** 扫码添加用的一次性口令（2 分钟有效，用一次就失效）；局域网入口没开时 409 */
+  createAccessTicket: () => post<AccessTicket>('/access/tickets'),
 };

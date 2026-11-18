@@ -7,6 +7,7 @@
  */
 import { showResultToast, undoViaToast } from '@/components/ui/Toast';
 import type {
+  AccessStatus,
   UndoTokenStatus,
   Character,
   CustomTheme,
@@ -72,6 +73,8 @@ export const qk = {
   taggerModels: ['tagger-models'] as const,
   jobs: ['jobs'] as const,
   health: ['health'] as const,
+  /** 设置 →「手机访问」和批准提示（GET /api/access）；null = 这个入口上看不了（局域网入口的设备没有 devices 权限） */
+  access: ['access'] as const,
 };
 
 // ------------------------------------------------------------------ 读取
@@ -252,6 +255,24 @@ export function useCustomThemes(): CustomTheme[] {
 export const useTaggerModels = () => useQuery({ queryKey: qk.taggerModels, queryFn: api.taggerModels });
 
 export const useJobs = () => useQuery({ queryKey: qk.jobs, queryFn: api.jobs });
+
+/**
+ * 手机访问的状态：开关、端口、地址、等批准的请求、已批准的设备。变化靠 SSE 的 access 事件（lib/events.ts）。
+ * 只有本机入口能看：局域网入口上的设备调用是 403，这时返回 null（不报错、不重试，批准提示也就不出现）
+ */
+export const useAccessStatus = (enabled = true) =>
+  useQuery({
+    queryKey: qk.access,
+    queryFn: async (): Promise<AccessStatus | null> => {
+      try {
+        return await api.accessStatus();
+      } catch (err) {
+        if (err instanceof ApiRequestError && err.status === 403) return null;
+        throw err;
+      }
+    },
+    enabled,
+  });
 
 /** 后端版本、数据源（demo / sqlite）、数据目录；进程内不会变 */
 export const useHealth = () => useQuery({ queryKey: qk.health, queryFn: api.health, staleTime: Infinity });

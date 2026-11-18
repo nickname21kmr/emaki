@@ -1,4 +1,13 @@
-import type { CommandEvent, DomainChange, Job, JobItemEvent, LibraryChangedReason, ServerEvent } from '@emaki/shared';
+import type {
+  AccessEvent,
+  AccessStatus,
+  CommandEvent,
+  DomainChange,
+  Job,
+  JobItemEvent,
+  LibraryChangedReason,
+  ServerEvent,
+} from '@emaki/shared';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { toast } from 'sonner';
@@ -124,6 +133,12 @@ const BY_COMMAND: Record<string, readonly string[]> = {
   'jobs.cancel': ['jobs'],
   'unrecognized.retag': ['jobs', 'unrecognized'],
   'history.undo': ['undo-status'],
+  // 手机访问：不推 changed，SSE 的 access 事件会让它重新取；SSE 断着时靠这里
+  'access.configure': ['access'],
+  'devices.approve': ['access'],
+  'devices.reject': ['access'],
+  'devices.update': ['access'],
+  'devices.revoke': ['access'],
 };
 
 /** 这些变化要刷新的查询（第一段）；null 是全部 */
@@ -272,6 +287,20 @@ export function adoptCommand(event: CommandEvent) {
   });
 }
 
+/**
+ * access 事件（只推给本机入口，docs/mobile.md 2.3）：requested 是手机发来了请求、算出了校验码，先把它放进缓存，
+ * 批准提示马上就能弹出来；不管哪种都让 GET /api/access 重新取（批准、拒绝、过期、撤销、改配置都是 changed）。
+ * 不编号、不补发：SSE 连上（hello）时也重新取一次
+ */
+export function handleAccessEvent(client: QueryClient, event: AccessEvent) {
+  const req = event.request;
+  if (event.reason === 'requested' && req)
+    client.setQueryData<AccessStatus | null>(qk.access, (s) =>
+      s && !s.requests.some((r) => r.id === req.id) ? { ...s, requests: [...s.requests, req] } : s,
+    );
+  void client.invalidateQueries({ queryKey: qk.access });
+}
+
 /** 重新建连接时带上收到的最后一条的 id（浏览器自己重连时会带 Last-Event-ID，这里补上手动重建的情况） */
 const eventsUrl = () =>
   position.boot && position.last ? `/api/events?lastEventId=${encodeURIComponent(`${position.boot}.${position.last}`)}` : '/api/events';
@@ -284,7 +313,13 @@ const CLOSED = 2;
  * EventSource 收到非 200 就直接关掉、再也不连，这里退避着重新建一个。
  */
 export function openEventStream(
-  on: { open: () => void; message: (data: string) => void; error?: () => void },
+  on: {
+    open: () => void;
+    message: (data: string) => void;
+    error?: () => void;
+    /** 连接被关掉、要退避重连时（EventSource 拿不到状态码：局域网入口上凭证没了也是这样，调用方去探一下） */
+    closed?: () => void;
+  },
   make: () => EventSource = () => new EventSource(eventsUrl()),
 ): () => void {
   let source: EventSource | undefined;
@@ -302,6 +337,7 @@ export function openEventStream(
       on.error?.();
       if (s.readyState !== CLOSED) return; // 还在 CONNECTING：浏览器自己会重连
       s.close();
+      on.closed?.();
       retry = setTimeout(connect, delay);
       delay = Math.min(delay * 2, 10_000);
     };
@@ -323,6 +359,11 @@ export function handleServerEvent(client: QueryClient, invalidate: ReturnType<ty
       // 后端重启过：位置从头算（resync 已经让前端全部刷新）
       if (position.boot !== event.boot) resetEventPosition(event.boot, event.lastId);
       else noteEvent(event.lastId);
+      // access 事件不补发：连上时重新取一次手机访问的状态（局域网入口上取过一次是 null（403），不再取）
+      if (client.getQueryData(qk.access) !== null) void client.invalidateQueries({ queryKey: qk.access });
+      break;
+    case 'access':
+      handleAccessEvent(client, event);
       break;
     case 'resync':
       void invalidate(undefined, null);
@@ -385,7 +426,13 @@ export function useServerEvents() {
     };
     const onMessage = (data: string) => handleServerEvent(client, invalidate, JSON.parse(data) as ServerEvent);
     // 断开期间记下的撤销不知道是哪次启动的，等重新连上再认领
-    const close = openEventStream({ open: onOpen, message: onMessage, error: () => useUndoStore.getState().setBoot(null) });
+    const close = openEventStream({
+      open: onOpen,
+      message: onMessage,
+      error: () => useUndoStore.getState().setBoot(null),
+      // 连不上：是不是局域网入口上凭证没了（没批准过 / 被电脑移除了）？探一下，401 时 request() 会切到配对页（lib/deviceAuth.ts）
+      closed: () => void api.health().catch(() => {}),
+    });
     return () => {
       dispose();
       close();
