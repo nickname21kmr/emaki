@@ -5,6 +5,8 @@
  * （main.tsx → features/access/PairingPage）。本机入口没有这两种 401，不会出现这个页面。
  *
  * 403 forbidden 另外通知订阅者（onForbidden）：权限可能刚在电脑上被改了，lib/capabilities.ts 据此重新取 GET /api/me。
+ * 在安卓 App 里（App 给 WebView 注入了 `window.EmakiApp`，docs/mobile.md 第 3 节）不显示这个页面（它是给浏览器用的）：
+ * 交给 App 的 `unpaired(code)`，App 回到自己的「已被电脑移除」页面。
  */
 import { create } from 'zustand';
 
@@ -24,13 +26,25 @@ export function onForbidden(fn: (path: string) => void): () => void {
   return () => void forbiddenListeners.delete(fn);
 }
 
+/** 安卓 App 注入的接口（apps/android 的 WebScreen.kt） */
+interface EmakiAppBridge {
+  unpaired(code: DeviceAuthLost): void;
+}
+
+const appBridge = (): EmakiAppBridge | undefined => (globalThis as { EmakiApp?: EmakiAppBridge }).EmakiApp;
+
 /**
- * 收到一个失败的响应时调用：是那两种 401 就切到配对页（被移除的说法优先，不会被后来的 unauthorized 盖掉）；
+ * 收到一个失败的响应时调用：是那两种 401 就切到配对页（被移除的说法优先，不会被后来的 unauthorized 盖掉），在 App 里交给 App；
  * 403 forbidden 通知订阅者
  */
 export function noteResponse(status: number, code: string | undefined, path = ''): void {
   if (status === 403 && code === 'forbidden') for (const fn of forbiddenListeners) fn(path);
   if (!isDeviceAuthFailure(status, code)) return;
+  const app = appBridge();
+  if (app) {
+    app.unpaired(code);
+    return;
+  }
   const cur = useDeviceAuth.getState().lost;
   if (cur === code || cur === 'device_revoked') return;
   useDeviceAuth.setState({ lost: code });

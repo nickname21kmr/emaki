@@ -39,6 +39,27 @@ const respond = (status: number, body: unknown) =>
     vi.fn(async () => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })),
   );
 
+describe('在安卓 App 里（有 window.EmakiApp）：交给 App，不显示网页的配对页', () => {
+  it('两种 401 都调 unpaired(code)；别的错误不调', () => {
+    const unpaired = vi.fn();
+    vi.stubGlobal('EmakiApp', { unpaired });
+    noteResponse(403, 'forbidden');
+    noteResponse(401, 'device_revoked');
+    noteResponse(401, 'unauthorized');
+    expect(unpaired.mock.calls).toEqual([['device_revoked'], ['unauthorized']]);
+    expect(useDeviceAuth.getState().lost).toBeNull();
+  });
+
+  it('request() 收到 401 device_revoked：照常抛错，交给 App', async () => {
+    const unpaired = vi.fn();
+    vi.stubGlobal('EmakiApp', { unpaired });
+    respond(401, { ok: false, code: 'device_revoked', error: '这台设备已经被电脑移除，请重新请求连接' });
+    await expect(request('GET', '/summary')).rejects.toMatchObject({ status: 401, code: 'device_revoked' });
+    expect(unpaired).toHaveBeenCalledWith('device_revoked');
+    expect(useDeviceAuth.getState().lost).toBeNull();
+  });
+});
+
 describe('request()：任何请求收到这两种 401 都切到配对页', () => {
   it('401 device_revoked：照常抛错，同时记下', async () => {
     respond(401, { ok: false, code: 'device_revoked', error: '这台设备已经被电脑移除，请重新请求连接' });
