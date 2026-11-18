@@ -1,5 +1,6 @@
 /**
- * 合集接口的测速：在和真实图库同样规模的合成数据上测合集列表、单个合集（直接调用和经 HTTP）、统计里的合集计数，打印 p50 / p95。
+ * 合集接口的测速：在和真实图库同样规模的合成数据上测合集页、「收进组图」弹窗实际发的那组请求（总耗时、响应大小），
+ * 以及合集列表、单个合集（直接调用和经 HTTP）、统计里的合集计数，打印 p50 / p95。
  * 规模照 2026-11 一份真实库：3.6 万张图（计入统计约 3.56 万），3509 个「同一投稿」组图（每组 2–10 张）和 1 本按文件夹成册的本子，
  * 有合集的图约 1.75 万；1580 个角色、450 部作品，图 ↔ 角色约 2.57 万条（关联到角色的图约 2.09 万张）；原创图约 2800 张，
  * 作品证据约 2700 行、角色证据约 4800 行。
@@ -231,7 +232,46 @@ const get = async (url: string) => {
 const pct = (xs: number[], p: number) => [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor((xs.length - 1) * p))]!;
 const fmt = (n: number) => (n < 10 ? n.toFixed(1) : n.toFixed(0));
 
+/**
+ * 合集页、「收进组图」弹窗实际发的那组请求：按顺序发，时间、响应大小加起来（浏览器里是并发的，但服务端一次只处理一个）。
+ * 改前（没有 /api/collections/counts）每处都是一次 GET /api/collections 拉全部合集，弹窗的搜索在前端筛、不再请求；
+ * 改后见 CollectionsPage 的 shelfQueries 和 CollectionControls 的 GroupPickerPanel。搜索用 9000（约 270 组同投稿的投稿号里有它）
+ */
+const lazy = (await app.inject({ method: 'GET', url: '/api/collections/counts' })).statusCode === 200;
+const SEARCH = '9000';
+const nonPost = 'kind=group&membership=folder,selection';
+const picker = (q: string) => [
+  `/api/collections?${nonPost}&sort=recent&limit=51${q ? `&q=${q}` : ''}`,
+  `/api/collections?kind=group&membership=post&sort=recent&limit=51${q ? `&q=${q}` : ''}`,
+];
+const PAGE_REQUESTS: [string, string[]][] = lazy
+  ? [
+      ['合集页「全部」打开', ['/api/collections?kind=doujin,artbook', `/api/collections?${nonPost}`, '/api/collections/counts']],
+      ['合集页「全部」点「显示」', ['/api/collections?kind=group&membership=post']],
+      ['合集页切到「组图」（都没拉过）', [`/api/collections?${nonPost}`, '/api/collections?kind=group&membership=post']],
+      [
+        `合集页搜索 ${SEARCH}`,
+        [`/api/collections?kind=doujin,artbook&q=${SEARCH}`, `/api/collections?${nonPost}&q=${SEARCH}`, `/api/collections/counts?q=${SEARCH}`],
+      ],
+      ['「收进组图」弹窗打开', picker('')],
+      [`「收进组图」搜索 ${SEARCH}`, picker(SEARCH)],
+    ]
+  : [
+      ['合集页「全部」打开', ['/api/collections']],
+      ['合集页「全部」点「显示」', []],
+      ['合集页切到「组图」（都没拉过）', ['/api/collections']],
+      [`合集页搜索 ${SEARCH}`, [`/api/collections?q=${SEARCH}`]],
+      ['「收进组图」弹窗打开', ['/api/collections']],
+      [`「收进组图」搜索 ${SEARCH}`, []],
+    ];
+const getAll = async (urls: string[]) => {
+  let bytes = 0;
+  for (const url of urls) bytes += await get(url);
+  return bytes;
+};
+
 const scenarios: [string, () => unknown][] = [
+  ...PAGE_REQUESTS.map(([name, urls]): [string, () => unknown] => [`${name}（${urls.length} 个请求）`, () => getAll(urls)]),
   ['合集列表（直接调用）', () => engine.collectionQueries.list({})],
   ['GET /api/collections', () => get('/api/collections')],
   ['GET /api/collections?characterId=…', () => get(`/api/collections?characterId=${firstCharacter}`)],
