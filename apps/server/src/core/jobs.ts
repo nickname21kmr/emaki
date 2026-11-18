@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { JOB_LABEL as JOB_LABELS, type Job, type JobKind } from '@emaki/shared';
+import { JOB_KINDS, JOB_LABEL as JOB_LABELS, type Job, type JobKind } from '@emaki/shared';
 import type { EventBus } from './events.ts';
 import { jobActor, runAs } from '../propagation/actor.ts';
 
@@ -28,17 +28,17 @@ export interface JobContext {
   readonly yielded: boolean;
 }
 
-/** 数字越小越先跑：新放进来的图要先扫描、出缩略图，别被一个多小时的打标签堵住 */
-const PRIORITY: Record<JobKind, number> = { scan: 0, thumbnail: 1, dedupe: 2, tag: 3, 'danbooru-sync': 4, artists: 5, 'pixiv-tags': 6 };
+/** 数字越小越先跑（任务种类的注册表 packages/shared/src/jobs.ts） */
+const PRIORITY = (kind: JobKind): number => JOB_KINDS[kind].priority;
 
 /** 已结束的任务最多保留这么多条（queued / running 永远不删） */
 const KEEP_FINISHED = 100;
 
 /**
  * 两条道（2026-09-28）：识别主要吃显卡，单独一条 gpu 道；扫描、缩略图、查重、同步吃 CPU / 硬盘，在 io 道里串行。
- * 两条道同时跑，所以缩略图不会再把识别堵在后面。
+ * 两条道同时跑，所以缩略图不会再把识别堵在后面。每种任务在哪条道登记在任务种类的注册表里
  */
-const LANE: Record<JobKind, 'io' | 'gpu'> = { scan: 'io', thumbnail: 'io', dedupe: 'io', tag: 'gpu', 'danbooru-sync': 'io', artists: 'gpu', 'pixiv-tags': 'io' };
+const LANE = (kind: JobKind): 'io' | 'gpu' => JOB_KINDS[kind].lane;
 
 /**
  * 任务队列：每条道同一时间只跑一个任务，道内按优先级出队，同优先级先进先出。
@@ -93,7 +93,7 @@ export class JobQueue {
 
   cancel(id: string): void {
     const job = this.jobs.find((j) => j.id === id);
-    if (!job) return;
+    if (!job || !JOB_KINDS[job.kind].cancellable) return;
     if (job.status === 'queued') {
       job.status = 'cancelled';
       job.finishedAt = new Date().toISOString();
@@ -114,8 +114,8 @@ export class JobQueue {
   private pickNext(lane: 'io' | 'gpu'): Job | undefined {
     let best: Job | undefined;
     for (const j of this.jobs) {
-      if (j.status !== 'queued' || LANE[j.kind] !== lane) continue;
-      if (!best || PRIORITY[j.kind] < PRIORITY[best.kind]) best = j;
+      if (j.status !== 'queued' || LANE(j.kind) !== lane) continue;
+      if (!best || PRIORITY(j.kind) < PRIORITY(best.kind)) best = j;
     }
     return best;
   }
@@ -159,7 +159,7 @@ export class JobQueue {
         job.etaSeconds = seconds !== null && Number.isFinite(seconds) && seconds >= 0 ? Math.round(seconds) : null;
       },
       // 只让给同一条道里更急的任务（另一条道本来就在并行跑）
-      shouldYield: () => this.jobs.some((j) => j.status === 'queued' && LANE[j.kind] === lane && PRIORITY[j.kind] < PRIORITY[job.kind]),
+      shouldYield: () => this.jobs.some((j) => j.status === 'queued' && LANE(j.kind) === lane && PRIORITY(j.kind) < PRIORITY(job.kind)),
       requeue: () => {
         yielded = true;
         this.enqueue(job.kind, { requeueIfRunning: true });

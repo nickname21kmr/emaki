@@ -1,4 +1,4 @@
-import type { Job } from '@emaki/shared';
+import { JOB_KINDS, type Job } from '@emaki/shared';
 import { Ban, BookCopy, LibraryBig, CircleHelp, Copy, House, Images, Settings, Sparkles, UsersRound, type LucideIcon } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { NavLink } from 'react-router';
@@ -197,8 +197,6 @@ function SidebarLinkInner({ item, ...rest }: { item: NavItem }) {
   );
 }
 
-const JOB_GLYPH: Record<Job['kind'], string> = { scan: '扫', thumbnail: '图', tag: '识', dedupe: '重', 'danbooru-sync': '同', artists: '画', 'pixiv-tags': 'P' };
-
 /** 后台任务进度环（TR-7）：环里是任务类型字，下面是百分比；点一下去设置页的后台任务 */
 function JobRing({ kind, progress, label }: { kind: Job['kind']; progress: number | null; label: string }) {
   const r = 13;
@@ -211,7 +209,7 @@ function JobRing({ kind, progress, label }: { kind: Job['kind']; progress: numbe
       <NavLink to="/settings#jobs" className="group mb-2 flex w-[64px] flex-col items-center gap-0.5 py-1">
         <span className="relative flex size-9 items-center justify-center">
         <span className="absolute inset-0 flex items-center justify-center font-display text-[11px] leading-none text-fg-muted">
-          {JOB_GLYPH[kind]}
+          {JOB_KINDS[kind].glyph}
         </span>
         <svg viewBox="0 0 32 32" className={cn('size-8 -rotate-90', progress === null && 'animate-spin')}>
           <circle cx="16" cy="16" r={r} fill="none" stroke="var(--c-line-strong)" strokeWidth="2.5" />

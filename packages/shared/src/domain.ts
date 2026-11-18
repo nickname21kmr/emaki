@@ -7,6 +7,7 @@
  * - 「张数」一律指计入统计（可见、没被排除）的图片数量；口径的唯一定义在服务端 readmodel/terms.ts。
  */
 
+import type { JobKind } from './jobs.ts';
 import type { TriageQueue } from './rules.ts';
 
 export type ID = string;
@@ -526,8 +527,8 @@ export interface Settings {
   };
 }
 
-/** artists：给还没识别过画师的图补跑 PixAI，只记画师（2026-10-04） */
-export type JobKind = 'scan' | 'thumbnail' | 'tag' | 'danbooru-sync' | 'dedupe' | 'artists' | 'pixiv-tags';
+/** 任务种类登记在 jobs.ts（JOB_KINDS） */
+export type { JobKind };
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 
 export interface Job {

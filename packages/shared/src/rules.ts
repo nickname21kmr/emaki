@@ -6,6 +6,7 @@
  * 不要在别处再写一份。
  */
 import type { CollectionKind, ContentKind, JobKind, Rating } from './domain.ts';
+import { JOB_KIND_LIST, JOB_KINDS } from './jobs.ts';
 
 // ------------------------------------------------------------------ 名称和说明
 
@@ -47,16 +48,8 @@ export const RATING_LABEL: Record<Rating, string> = {
   explicit: '限制级',
 };
 
-/** 后台任务名（设置页的任务列表、首页横幅、命令面板、服务端的任务消息） */
-export const JOB_LABEL: Record<JobKind, string> = {
-  scan: '扫描图库',
-  thumbnail: '生成缩略图',
-  tag: '识别角色',
-  'danbooru-sync': '同步 Danbooru',
-  dedupe: '查找重复',
-  artists: '识别画师',
-  'pixiv-tags': '补充 Pixiv 角色',
-};
+/** 后台任务名（设置页的任务列表、首页横幅、命令面板、服务端的任务消息）：取自任务种类的注册表（jobs.ts） */
+export const JOB_LABEL = Object.fromEntries(JOB_KIND_LIST.map((k) => [k, JOB_KINDS[k].label])) as Record<JobKind, string>;
 
 /** 合集类型（T38）：名称、量词、书名印上的字、一句说明 */
 export const COLLECTION_KIND_META: Record<CollectionKind, { label: string; unit: string; glyph: string; hint: string }> = {

@@ -376,7 +376,7 @@ export class SqliteDataSource implements DataSource {
     const lastThumb = db.prepare('SELECT MAX(thumb_at) FROM images').pluck().get() as string | null;
     if (lastThumb !== null && (lastRunAt === null || lastThumb > lastRunAt || ds.dedupe.needsRecheck())) ds.pipeline.markDedupeDirty();
     // 搜索的标签张数（T20）：打标签结束标记过期，下次搜索时刷新
-    // register 是覆盖式的：扫描结束后的钩子写在这一处。识别、扫描结束后的合集重算由变更传播在任务结束时做
+    // 扫描结束后的钩子（register 支持多个注册者，钩子按注册顺序都调用）。识别、扫描结束后的合集重算由变更传播在任务结束时做
     // （有变化才做，RV-C-9：延后重扫大约 3 秒一次，没变化时不要全量读库）
     ds.pipeline.register({
       afterScan: () => {

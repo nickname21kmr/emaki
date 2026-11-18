@@ -22,7 +22,7 @@ import {
   formatDuration,
   isActiveJob,
   JOB_ICON,
-  JOB_KINDS,
+  JOB_MENU,
   JOB_LABEL,
   JOB_STATUS,
   jobFraction,
@@ -56,7 +56,7 @@ export function JobsSection() {
           }
         >
           <MenuLabel>手动运行</MenuLabel>
-          {JOB_KINDS.map((kind) => {
+          {JOB_MENU.map((kind) => {
             const Icon = JOB_ICON[kind];
             return (
               <MenuItem

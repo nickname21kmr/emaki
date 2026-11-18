@@ -1,17 +1,9 @@
-import type { Job, JobKind, JobStatus } from '@emaki/shared';
+import { JOB_KIND_LIST, JOB_KINDS, type Job, type JobKind, type JobStatus } from '@emaki/shared';
 export { JOB_LABEL } from '@emaki/shared';
 import { CloudDownload, Copy, FolderSearch, Image as ImageIcon, Palette, ScanFace, type LucideIcon } from 'lucide-react';
 
-/** 进度条旁边的动词，比「进行中」更具体 */
-export const JOB_VERB: Record<JobKind, string> = {
-  scan: '扫描中',
-  thumbnail: '生成中',
-  tag: '识别中',
-  'danbooru-sync': '同步中',
-  dedupe: '查找中',
-  artists: '识别中',
-  'pixiv-tags': '查询中',
-};
+/** 进度条旁边的动词，比「进行中」更具体（任务种类的注册表 packages/shared/src/jobs.ts） */
+export const JOB_VERB = Object.fromEntries(JOB_KIND_LIST.map((k) => [k, JOB_KINDS[k].verb])) as Record<JobKind, string>;
 
 export const JOB_ICON: Record<JobKind, LucideIcon> = {
   scan: FolderSearch,
@@ -23,8 +15,8 @@ export const JOB_ICON: Record<JobKind, LucideIcon> = {
   'pixiv-tags': CloudDownload,
 };
 
-/** 「运行任务」菜单里的顺序：按日常使用频率 */
-export const JOB_KINDS: JobKind[] = ['scan', 'tag', 'dedupe', 'danbooru-sync', 'thumbnail'];
+/** 「运行任务」菜单里的顺序：按日常使用频率（只列能手动启动的） */
+export const JOB_MENU: JobKind[] = (['scan', 'tag', 'dedupe', 'danbooru-sync', 'thumbnail'] as const).filter((k) => JOB_KINDS[k].startable);
 
 type Tone = 'neutral' | 'shu' | 'ok' | 'warn' | 'danger';
 
