@@ -8,25 +8,27 @@
 ┌─────────────────────────────── 浏览器 http://localhost:5173 ───────────────────────────────┐
 │  apps/web  (React 19 · Vite · Tailwind v4 · TanStack Query · zustand · motion · radix)      │
 │                                                                                              │
-│  features/<页面>  ──用──▶  components/{ui,layout,media,overlays}                              │
+│  features/<页面> → blocks/registry.ts（区块） → components/{ui,layout,media,overlays}         │
 │        │                                                                                     │
 │        └──▶ lib/queries.ts (hooks) ──▶ lib/api.ts (fetch /api/*)      lib/events.ts (SSE)    │
 └────────────────────────────────────────────┬─────────────────────────────────▲───────────────┘
-                                             │ JSON over HTTP                   │ text/event-stream
+                                             │ JSON over HTTP                   │ text/event-stream（带 id，可补发）
 ┌────────────────────────────────────────────▼─────────────────────────────────┴───────────────┐
 │  apps/server  (Fastify 5 · zod)                              http://127.0.0.1:5174            │
 │                                                                                              │
-│  routes/{library,images,system}.ts   ← 只做参数校验 + 调用 DataSource                           │
-│              │                                                                               │
-│              ▼                                                                               │
-│  DataSource 接口 (datasource/DataSource.ts)                                                    │
-│      └── SqliteDataSource  唯一的业务实现：SQLite + 文件系统                                     │
-│              │   演示模式 / 测试：同一个引擎，换掉 infra/ports.ts 里的可替换部件（demo/）           │
-│              ├── domain/  领域模块（主人）与它们的反应   propagation/  变化集 · 反应注册表 · actor  │
-│              ├── core/  JobQueue（io / gpu 两条通道） UndoStack（撤销） EventBus（→ SSE）         │
-│              └── services/  scanner · thumbnails · tagger(ONNX) · pixiv · danbooru · dedupe     │
+│  http/   路由从注册表生成 · 旧地址的兼容层 · SSE      assistant/  MCP 工具从注册表生成          │
+│              │                                              │                                │
+│              ▼                                              ▼                                │
+│  commands/   命令 / 查询注册表：校验、scope、事务和撤销、operationId、审计、事件               │
+│              │  只调用 ↓                                                                     │
+│  domain/<模块>  领域模块（表的主人）和它们的反应      readmodel/  命名口径 · 汇总 · 设置的读模型  │
+│  propagation/   变化集 · 反应注册表 · actor        core/  任务队列（io / gpu）· 撤销栈 · 事件总线 │
+│  services/      扫描 · 缩略图 · 识别(ONNX) · Pixiv · Danbooru · 查重      infra/ports.ts 可替换部件 │
+│                                                                                              │
+│  SqliteDataSource（引擎）：装配上面这些，启动修补、生命周期；不是接口（P6 删掉了 DataSource）    │
 └──────────────────────────────────────────────────────────────────────────────────────────────┘
-                     packages/shared  —— 领域类型 + API 契约 + 搜索归一化 + 共用的展示规则（前后端共用）
+       packages/shared —— 领域类型 · 输入 schema（schemas.ts）· 任务种类（jobs.ts）· 事件（events.ts）· 权限范围（commands.ts）
+                         · 搜索归一化 · 共用的展示规则（前后端共用）
 ```
 
 ## 目录
@@ -35,31 +37,34 @@
 emaki/
 ├─ packages/shared/src/
 │  ├─ domain.ts        领域模型：Work / Character / ImageItem / DuplicateGroup / Exclusion / Settings / Job …
-│  ├─ api.ts           HTTP 契约：每个接口的路径、查询参数、请求体、响应类型
+│  ├─ api.ts           HTTP 契约：请求体、查询参数、响应类型
+│  ├─ schemas.ts       命令 / 查询的输入 schema（zod，入口 @emaki/shared/schemas）：HTTP、MCP、前端共用（P6）
+│  ├─ commands.ts      权限范围 SCOPES、AI 助手能用的范围 ASSISTANT_SCOPES、命令清单的类型（P6）
+│  ├─ jobs.ts          任务种类的注册表 JOB_KINDS：名称、通道、优先级、能否取消……（P6）
+│  ├─ events.ts        对外事件：changed / command / resync / hello，公开的变化类型 DOMAIN_CHANGES（P6）
 │  ├─ search.ts        searchKey() / matchesQuery() / searchRank()：「未花 / ミカ / mika / Mika_(Blue_Archive)」归一化，前后端一致
 │  └─ rules.ts         共用的展示规则（P5）：名称和说明、能否不打码显示、在哪个待处理队列、话 / 册、无题、排除标签归一化、剩余时间
 ├─ apps/server/src/
 │  ├─ index.ts         启动：打开引擎（真实图库或演示数据）→ buildApp → listen
-│  ├─ app.ts           Fastify 实例、错误处理、生产模式托管前端
+│  ├─ app.ts           Fastify 实例、本机安全、错误处理、健康检查、生产模式托管前端
 │  ├─ config.ts        环境变量
-│  ├─ routes/          HTTP 路由（zod 校验）
-│  ├─ http/            错误类型（NotImplementedError 带任务编号）、校验工具
-│  ├─ core/            JobQueue / UndoStack / EventBus
-│  ├─ datasource/
-│  │  ├─ DataSource.ts          接口（P6 换成命令 / 查询注册表后删掉）
-│  │  └─ sqlite/                唯一的实现（context.ts：写入的唯一入口 ctx.mutate / ctx.apply）
-│  ├─ domain/<模块>/   领域模块：表的主人（test/architecture/owners.ts）和它们的反应（P2 起逐步搬进来）；
-│  │                   domain/evidence/ 证据、domain/curation/ 归类（含唯一的自动决定规则 decideAuto）、domain/catalog/ 编目（P3）；
-│  │                   domain/library/ 图库与文件、domain/analysis/ 分析（P4a）
-│  ├─ propagation/     变更传播：变化（changes.ts）、反应注册表和三个阶段（registry.ts）、actor、引擎层的反应、排队状态
-│  ├─ readmodel/       读模型（P5）：唯一的命名口径（terms.ts）、汇总接口（summary.ts）
+│  ├─ commands/        命令 / 查询注册表（P6）：registry.ts（defineCommand / defineQuery、命令层）、audit.ts（command_log）、
+│  │                   curation / catalog / library / system / queries.ts（定义）、index.ts（全部列在这里）
+│  ├─ http/            routes.ts（从注册表生成路由、通用入口）、compat.ts（旧地址 → 命令）、events.ts（SSE、补发）、错误类型、校验
+│  ├─ core/            JobQueue / UndoStack / EventBus（事件 id、最近 500 条）/ 启动 id
+│  ├─ datasource/sqlite/  引擎 SqliteDataSource（装配）和还没搬进领域模块的查询、写入（context.ts：ctx.mutate / ctx.apply）
+│  ├─ domain/<模块>/   领域模块：表的主人（test/architecture/owners.ts）和它们的反应——
+│  │                   library 图库与文件、analysis 分析、evidence 证据、catalog 编目、curation 归类（含 decideAuto）、visibility 可见性、collections 合集
+│  ├─ propagation/     变更传播：变化（changes.ts）、反应注册表和三个阶段（registry.ts）、actor 和调用上下文、引擎层的反应、排队状态
+│  ├─ readmodel/       读模型：唯一的命名口径（terms.ts）、汇总接口（summary.ts）、设置的读模型（settings.ts）
+│  ├─ assistant/       AI 助手：会话、Agent 后端、MCP 工具（tools.ts，从注册表生成）
 │  ├─ infra/ports.ts   可替换部件：时钟、回收站、图片文件、图库文件夹、后台任务（扫描 / 模型 / 联网）
 │  ├─ demo/            演示数据（fixtures、种子、占位图）、灌数据、演示用的假部件
 │  └─ db/              迁移（schema.sql 是 v1，migrations/ 是之后的版本）
 └─ apps/web/src/
    ├─ main.tsx / router.tsx
    ├─ styles/index.css          设计 token（亮 / 暗）
-   ├─ lib/                      api · queries · stores · events · format · hotkeys · urlPrefs
+   ├─ lib/                      api（命令的说明从响应头读）· queries · stores · events（按事件类型刷新）· format · hotkeys · urlPrefs
    ├─ blocks/                   页面区块注册表（P5）：每页由带稳定 id 的区块组成
    ├─ components/
    │  ├─ ui/                    基础组件（Button / Chip / Segmented / Dialog / Menu …）
@@ -68,6 +73,52 @@ emaki/
    │  └─ overlays/              ⌘K 命令面板 · 帮助
    └─ features/<页面>/          首页 · 图库 · 角色 · 角色详情 · 作品 · 未识别 · 重复 · 已排除 · 设置
 ```
+
+## 写代码时先看这里（P6 起的结构）
+
+[core-architecture.md](core-architecture.md) 是设计；这里是「要做某件事，改哪里」。
+
+**加一个命令（改数据）**：在 `commands/` 里对应模块的文件写一个 `defineCommand`，列进 `commands/index.ts`：
+
+```ts
+defineCommand({
+  name: 'curation.setFavorite',             // 「模块.动作」，MCP 工具名自动是 curation_set_favorite
+  summary: '收藏 / 取消收藏',                // GET /api/commands、MCP 的说明
+  input: SetFavoriteInput,                  // zod，写在 packages/shared/src/schemas.ts
+  scope: 'curate',                          // 权限范围（packages/shared/src/commands.ts）；在 ASSISTANT_SCOPES 里的助手就能用
+  undoable: true,                           // false：不可撤销，前端在撤销栈里放屏障
+  idempotent: true,                         // 收 operationId（Idempotency-Key）
+  http: [{ method: 'POST', path: '/api/…' }], // 可以不写：POST /api/commands/curation.setFavorite 总是有
+  images: byIds,                            // 涉及的图（命令事件里给前端，撤销后指给用户看）
+  tx(e, input, u) {                         // 同步：命令层开事务和撤销记录，u 是撤销记录
+    const ids = e.requireVisibleImages(input.ids);
+    setFavorite(e.ctx, u, ids, input.value); // 只调用领域模块（主人）
+    return { message: '已收藏' };
+  },
+  // 要动文件、跑任务的写 run(e, input)（异步，自己管撤销）
+});
+```
+
+- 执行函数只调用领域模块和读模型，不在里面写别人的表（`singleWriter.test.ts`）。actor、事务、撤销令牌、operationId、审计、事件都由命令层做，不用管。
+- 一件事一个命令：单张和批量是同一个命令（`ids` 只有一张）。旧地址要兼容时在 `http/compat.ts` 把参数转成命令，不要在那里写逻辑。
+- 改了助手能用的命令（scope 在 `ASSISTANT_SCOPES` 里），`test/architecture/__snapshots__/mcp-tools.json` 会变：确认是有意的，用 `npx vitest run -u` 更新快照并在提交里说明。
+
+**加一个查询（读数据）**：`commands/queries.ts` 里 `defineQuery({ name, summary, input, scope: 'read', http: [{ method: 'GET', path }], run })`。
+条件从 `readmodel/terms.ts` 引用（不要内联「可见」「计入统计」「队列」这些口径，`terms.test.ts` 会失败），界面上的数读 `library.summary`。
+scope 是 `read` 的查询助手的 `read_library` 都能读；设置类的用 `settings`。
+
+**声明变化**：领域模块写完一笔，在同一个事务里 `ctx.changed({ type: 'curation.favoriteChanged', ids })`（类型在 `propagation/changes.ts`）。
+加新的变化类型时，同时在 `PUBLIC_CHANGE` 里写它对外叫什么（`packages/shared/src/events.ts` 的 `DOMAIN_CHANGES`），并在网页 `lib/events.ts` 的 `REFRESH` 里写它要刷新哪些查询——
+两处都是完整的映射，漏了过不了类型检查。
+
+**注册反应**：见下面「变更传播」：写在主人模块的 `reactions.ts`，在 `SqliteDataSource.registerReactions` 里按顺序注册。
+
+**加一种后台任务**：`packages/shared/src/jobs.ts` 的 `JOB_KINDS` 登记一行（名称、通道、优先级、能否取消、能否手动启动、可暂停、联网、动词、侧栏的字），
+在 `services/pipeline.ts` 的 `runner` 里接上执行体（或者 `pipeline.register` 一个阶段；钩子可以有多个注册者，同一阶段只能注册一次）。网页的图标在 `features/settings/jobMeta.ts`。
+
+**口径和区块在哪**：命名口径 `apps/server/src/readmodel/terms.ts`；汇总 `readmodel/summary.ts`；页面区块 `apps/web/src/blocks/registry.ts`（区块登记的查询必须是注册表里真实的 GET 地址，`blocks.test.ts` 检查）。
+
+**测试**：引擎测试经 `test/helpers/client.ts` 调注册表（`ds.run('命令', 输入)`、`ds.ask('查询', 输入)`；旧的方法名也映射在那里）；HTTP 冒烟 `test/http.smoke.test.ts` 要覆盖每个路由。
 
 ## 关键设计决策
 
@@ -82,10 +133,13 @@ Node 后端 + 浏览器前端，`npm run dev` 就能用。以后要做成桌面�
 - **测试**：引擎测试和契约测试都是「真实引擎 + 一次性的库 + 固定的测试数据」；HTTP 冒烟和 AI 助手的路由测试用演示部件。原来「两套实现互相对照」由固定的期望结果和跨入口一致性测试代替。
 
 ### 3. 契约放在 packages/shared
-类型只写一遍。改接口的顺序：`shared/api.ts` → 后端 `routes/` → 前端 `lib/api.ts`。TypeScript 会把漏改的地方全部标红。
+类型和输入 schema 只写一遍。改接口的顺序：`shared/schemas.ts`（输入）、`shared/api.ts`（响应）→ 后端注册表里的定义（`commands/`）→ 前端 `lib/api.ts`。TypeScript 会把漏改的地方全部标红。
+HTTP 路由、MCP 工具的参数校验都用注册表里的 schema（`http/routes.ts`、`assistant/tools.ts`），不再另写。
 
 ### 4. 服务端数据走 TanStack Query，UI 状态走 zustand
-- 服务端数据只存在 Query 缓存里，失效策略极简：**任何修改成功 / 收到 SSE `library-changed` → 全部 invalidate**。本地后端请求很快，不值得做精细失效。
+- 服务端数据只存在 Query 缓存里。失效按事件类型（P6，附录 #36）：每次提交后端推一条 SSE `changed`（这次变了哪些事实），`lib/events.ts` 的 `REFRESH` 把它映射成要失效的查询；
+  写操作成功后**不再自己全部 invalidate**，而是等响应头 `x-emaki-event` 那条事件的刷新做完（`settleRefresh`，只刷新一遍），SSE 断着时才按 `x-emaki-changes` 自己刷新。
+  后台任务的事件节流 400 ms，识别中排名列表最多一分钟拉一次；断线重连按 Last-Event-ID 补发，补不上收到 `resync` 全部刷新。
 - zustand 只放纯 UI 状态：本机偏好（持久化）、看图器、多选、撤销栈、浮层开关。
 - 页面筛选条件放 URL 查询参数，刷新 / 前进后退都保留；会影响查询结果的本机偏好（图库的类型、收拢组图）也写进 URL（见「读模型」）。
 
@@ -107,6 +161,8 @@ Node 后端 + 浏览器前端，`npm run dev` 就能用。以后要做成桌面�
 
 ### 5. 撤销
 所有修改接口返回 `MutationResult { message, undoToken }`。服务端 `UndoStack` 保存反向操作（最近 50 条，内存）。前端 toast 上有「撤销」按钮，顶栏撤销按钮 / Ctrl+Z 撤销最近一次。这让「排除」「归类」「移到回收站」这类批量操作可以放心大胆地做。
+同步命令的事务和撤销记录由命令层开（一个命令一个令牌，几个命令合成一次操作时一个令牌）；不可撤销的命令在注册表里标 `undoable: false`，
+响应头 `x-emaki-undo: barrier`，前端照它在撤销栈里放屏障（`entryOf`），不再自己判断。AI 助手做的、可撤销的修改推 `command` 事件，网页按 `bootId` 认领进撤销栈（标「助手：」）。
 撤销 = 还原事实 + 重放变化（见下一节）；后台的自动关联、Pixiv 补充、移动记在 `change_log` 里，重启后也能撤回，不占撤销栈。
 
 ### 5a. 变更传播：写操作只声明「改了什么」
@@ -114,10 +170,10 @@ Node 后端 + 浏览器前端，`npm run dev` 就能用。以后要做成桌面�
 套排除规则、重算合集、登记 Pixiv 补充、标记要查重、刷新缓存、推事件这些连带处理，由订阅这条变化的**反应**完成。
 谁写的、从哪个入口写的（网页、AI 助手、后台任务、启动修补）都一样，撤销也一样。
 
-**写一个新的写操作**：
+**写一个新的写操作**：在命令的 `tx` 里（命令层已经开好事务和撤销记录 `u`）调领域模块；领域模块里的写法是：
 
 ```ts
-// 可撤销：一个事务 + 撤销记录 + 变更传播
+// 可撤销：一个事务 + 撤销记录 + 变更传播（在命令的 tx 里调用时并进命令层开的那一个）
 return this.ctx.mutate((u) => {
   u.columns('images', ['shelved_at'], ids);                     // 只记事实的快照
   db.prepare('UPDATE images SET shelved_at = ? …').run(…);
@@ -128,7 +184,7 @@ return this.ctx.mutate((u) => {
 ```
 
 - 变化的类型在 `propagation/changes.ts`（第 5.1 节的表），都带涉及的图片 id；按图片的变化 id 为空时直接丢掉。
-- **不要**自己调合集重算、`reevaluateExclusions`、缓存失效、推 `library-changed`、通知设置监听者：`test/architecture/sideEffects.test.ts` 会失败。
+- **不要**自己调合集重算、`reevaluateExclusions`、缓存失效、推 `changed` 事件、通知设置监听者：`test/architecture/sideEffects.test.ts` 会失败。
 - 删掉会让派生数据跟着变的事实（例如删排除规则，外键会把 `excluded_by` 清空）时，**先声明变化再删**：反应在变化声明的那一刻记下「改之前」的样子（`snapshot`）。
 - 撤销不需要接线：`ctx.mutate` 的撤销 = 按撤销记录还原事实 + 在同一个事务里把这次声明的变化重放一遍，反应都是重算，派生数据自然对。
   快照表达不了的还原步骤用 `u.custom(fn)`（在撤销事务里逆序执行，只还原事实）。`onUndo` 已经删掉了。
@@ -227,13 +283,15 @@ export const reevaluateExclusionsReaction: Reaction = {
 - **排队（queue）**：提交后把工作交给后台任务；要做的事持久化在库里（识别、Pixiv 补充本来就在图片行和 `pixiv_character_checks` 里，查重在 `pending_work`）。
   只有用户和助手的操作在这里直接拉起任务，后台任务写库后由任务链接着排。
 - **提交后（after）**：缓存、事件、监听者。出错只记日志。
-- **actor**：HTTP 请求是 `user`；助手经 `app.inject` 调接口时带内部令牌，是 `assistant`；任务执行体在 `job:<种类>` 下；启动修补是 `system:startup`。
-  用户和助手的操作强刷新缓存、马上推 `library-changed`（reason `mutation`）；后台任务和启动修补弱刷新（旧结果最多再用 10 秒），事件按任务种类节流，任务结束时推一次。
+- **actor**：HTTP 请求是 `user`；助手的 MCP 工具经注册表执行，是 `assistant`；任务执行体在 `job:<种类>` 下；启动修补是 `system:startup`。每次写命令都记进审计记录（`command_log`，`GET /api/audit`）。
+  用户和助手的操作强刷新缓存、马上推 `changed`（reason `mutation`，带变化类型和命令名）；后台任务和启动修补弱刷新（旧结果最多再用 10 秒），事件按任务种类节流，任务结束时推一次。
   后台任务里昂贵的全量重算（合集）用 `defer` 延后到任务结束（不论完成、让出还是取消）一次做完。
 - 找慢的反应：`EMAKI_PROFILE_REACTIONS=1` 打印每个反应的耗时；写操作的测速脚本是 `apps/server/scripts/bench-mutations.ts`（合成数据）。
 
 ### 6. 后台任务 + SSE
-扫描、缩略图、识别、Pixiv 补充、Danbooru 同步、查重都是 `JobQueue` 里的任务，分两条通道：识别角色和画师主要吃显卡，走 gpu 道；其余吃 CPU / 硬盘，走 io 道。每条道同一时间只跑一个，道内按优先级出队，两条道可以同时跑。进度通过 `EventBus` → `GET /api/events`（SSE）推给前端，侧边栏显示进度环。
+扫描、缩略图、识别、Pixiv 补充、Danbooru 同步、查重都是 `JobQueue` 里的任务，分两条通道：识别角色和画师主要吃显卡，走 gpu 道；其余吃 CPU / 硬盘，走 io 道。每条道同一时间只跑一个，道内按优先级出队，两条道可以同时跑。
+每种任务的通道、优先级、名称、能否取消都登记在 `packages/shared/src/jobs.ts`（P6）。进度通过 `EventBus` → `GET /api/events`（SSE）推给前端，侧边栏显示进度环。
+SSE 里 `job`、`job-item` 是进度（不编号、不补发）；`changed`、`command`、`auto-change` 带 id（`<启动 id>.<序号>`），断线重连补发最近 500 条。
 
 ### 7. 图片展示
 - `Thumb`：主色占位（`dominantColor`）→ 缩略图淡入；敏感分级按偏好模糊。

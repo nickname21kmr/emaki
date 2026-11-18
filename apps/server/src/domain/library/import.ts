@@ -113,7 +113,7 @@ export async function importImages(ctx: SqliteContext, body: ImportImagesBody, o
       const namedRow = ctx.db.prepare(`SELECT id FROM images i WHERE root_id=? AND rel_path=? COLLATE NOCASE AND NOT ${DISCARDED('i')}`).get(root.id,namedRel) as {id:number}|undefined;
       if (!body.keepBoth && (namedRow || existsSync(path.join(folder,name)))) {
         items.push({path:file.path,status:'failed',code:'needs_confirm',existingImageId:namedRow ? String(namedRow.id) : undefined,
-          error:`已有同名文件「${name}」，请选择替换原图还是保留两个版本。明确要替换时使用 replace_image；保留两个版本时设置 keepBoth。`});
+          error:`已有同名文件「${name}」，请选择替换原图还是保留两个版本。明确要替换时使用 library_replace；保留两个版本时设置 keepBoth。`});
         continue;
       }
       const occupied = ctx.db.prepare(`SELECT 1 FROM images i WHERE root_id=? AND rel_path=? COLLATE NOCASE AND NOT ${DISCARDED('i')}`);

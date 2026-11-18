@@ -1,6 +1,6 @@
 # Emaki 核心架构设计（v2 草案）
 
-> 状态：D1、D2、D3、D4、D5、D7、D8 已批准（2026-11-17）；D6 和插件挪到下一阶段（第 13 节）。P0、P1、P2、P3、P4、P5 已完成（P3 完成于 2026-11-17，P4 完成于 2026-11-18：P4a 入库与分析收口，P4b 是 D5；P5 读模型与前端完成于 2026-11-18），见第 12 节。依据的代码快照：fork 的起点（`codex/flexible-collections` @ 13c677d 加上当时未提交的改动，2026-11-17）。
+> 状态：D1、D2、D3、D4、D5、D7、D8 已批准（2026-11-17）；D6 和插件挪到下一阶段（第 13 节）。**这一阶段 P0–P6 全部完成**（P3 完成于 2026-11-17，P4 完成于 2026-11-18：P4a 入库与分析收口，P4b 是 D5；P5 读模型与前端、P6 命令注册表与接口完成于 2026-11-18），见第 12 节。下一阶段（个性化页面与插件）可以直接用的接口见第 10.1 节。依据的代码快照：fork 的起点（`codex/flexible-collections` @ 13c677d 加上当时未提交的改动，2026-11-17）。
 > 现状盘点和已知的不一致见 [core-architecture-inventory.md](core-architecture-inventory.md)。本文里「附录 #n」指那里的第 n 条。
 
 ## 0. 要解决什么
@@ -136,7 +136,7 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
 
 - 领域模块之间只能调用对方的命令和查询，不碰对方的表。
 - 只有基础设施层接触真实的文件、网络和模型；这一层抽象成可以替换的「端口」，演示模式和测试换成假的实现（第 8 节）。
-- 现在的 `DataSource` 接口（63 个方法）在迁移过程中逐步退化成「命令 + 查询注册表」的一个外壳，最后删掉。
+- 现在的 `DataSource` 接口（63 个方法）在迁移过程中逐步退化成「命令 + 查询注册表」的一个外壳，最后删掉。**P6 已删**：入口只经命令 / 查询注册表（`apps/server/src/commands/`），`SqliteDataSource` 只是装配领域模块、读模型、变更传播和后台任务的「引擎」（第 4.1 节）。
 
 ### 3.1 目录和表的主人（P0 定下）
 
@@ -153,7 +153,7 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
 | 合集 | `domain/collections/` | `collections`、`collection_characters`、`collection_works` | `collection_id`、`page_no`、`collection_detached` |
 | 查重 | `domain/duplicates/` | `duplicate_groups`、`duplicate_members`、`duplicate_comparisons` | |
 | 设置 | `domain/settings/` | `settings` | |
-| 命令层 | `commands/` | `change_log`，以及撤销回放这类按表名拼 SQL 的通用写入 | |
+| 命令层 | `commands/` | `change_log`、`command_log`（审计记录和 operationId 幂等，P6 迁移 040），以及撤销回放这类按表名拼 SQL 的通用写入 | |
 | 变更传播（P2） | `propagation/` | `pending_work`（排队状态和用户的暂停，迁移 033）、`derived_versions`（派生数据的版本，P4a，迁移 037） | |
 
 - 永久例外只有 `demo/`：演示数据直接灌进空的一次性库，不经过命令。
@@ -187,6 +187,26 @@ defineCommand({
 - 命令层负责事务、撤销记录、`operationId` 幂等、记下 actor，再把变化交给变更传播。领域模块不再各自调用 `ctx.mutate`、`touch`、`collectionsHook`。
 - 一件事只有一个命令。比如角色关联，现在有 PATCH 整组替换、批量 `assign` / `unassign` / `assignTag`、采纳建议、合集批量加角色几条路（附录 #33），以后统一为 `curation.link` / `curation.unlink`，各个 HTTP 地址只是把参数转成这个命令。
 - 不可撤销的命令（改设置、启动任务）在注册表里明确标出，前端的「撤销屏障」由此生成，不再各处自己判断。
+
+**P6 的实现（2026-11-18）**：
+
+- **注册表**：`apps/server/src/commands/`。`defineCommand` / `defineQuery`（`registry.ts`）定义每个操作：名字（「模块.动作」，例如 `curation.link`）、一句说明、输入 schema（zod，`packages/shared/src/schemas.ts`，入口 `@emaki/shared/schemas`）、
+  权限范围 `scope`（`packages/shared/src/commands.ts` 的 `SCOPES`：read / curate / catalog / collections / import / organize-files / rules / duplicates / settings / jobs / history / ui）、
+  `undoable`、`idempotent`、HTTP 地址、执行函数。执行函数二选一：`tx(e, input, u)` 是同步命令，命令层开事务和撤销记录（`ctx.mutate`），`u` 是这次的撤销记录；
+  `run(e, input)` 是要动文件、跑任务、读文件夹的异步命令，自己管撤销（它们本来就「自带撤销逻辑」）。全部定义列在 `commands/index.ts`：归类 `curation.ts`、编目和合集 `catalog.ts`、
+  图库与文件 `library.ts`、设置 / 任务 / 撤销 / 规则 / 查重 `system.ts`、查询 `queries.ts`。执行函数只调用领域模块和读模型；引擎上留着几个命令共用的小工具（`requireVisibleImages`、`catalogNow` 这类）。
+- **命令层统一负责**（`Registry.execute` / `batch`）：校验输入；actor 和正在执行的命令放进 AsyncLocalStorage（`propagation/actor.ts` 的 `runCall`）；同步命令的事务和撤销记录——一个命令一个令牌，
+  几个命令可以合成一次操作（`batch`：一个事务、一个令牌，`PATCH /api/images/:id` 一次改好几项时用；嵌套的 `ctx.mutate` 并进外层）；`operationId` 幂等（以前只有 AI 助手有，
+  `operations.json`；现在所有入口都能用，网页每个写请求带 `Idempotency-Key`）；审计记录；撤销屏障；用户和助手的写命令推 `command` 事件。
+- **审计记录和幂等**：`command_log`（迁移 040，主人是命令层，`commands/audit.ts`）。每次执行写命令记一行：命令、actor（`user` / `assistant` / `job:<任务>`，后台任务每跑完一轮一行）、状态、
+  结果那句话、撤销令牌、变了哪些事实；`GET /api/audit` 可以按 actor、命令查。带 `operationId` 的按 `<命名空间>:<operationId>`（助手按会话、网页按 actor）去重：
+  同一个键再来返回存下的结果；参数不同 409；执行失败什么也没改，让出这个键可以重试；进程中途退出、结果不确定的（启动时标 `interrupted`）409「请查询实际状态后再决定」。只留最近 2 万行。
+- **一件事一个命令**（附录 #33）：图 ↔ 角色只有 `curation.link`（按 `characterId`、按 `tags` 找角色或按建议建档、`accept` 采纳这张图的建议并按证据记来历）、`curation.unlink`、`curation.replace`；
+  收藏、分级、类型、放下、原创、画师、排除 / 恢复单张图，单张和批量是同一个命令（一张图时提示用单张的说法）。合集批量加角色是合集的出场角色（主人是合集模块），
+  没有并进 `curation.link`，单独是 `collections.link`，但「按 id 或标签找角色、必要时建档」用同一个解析。旧的 HTTP 地址（`PATCH /api/images/:id`、`POST /api/images/bulk`、采纳建议、合集批量）
+  是 `http/compat.ts` 里把参数转成命令的兼容层，请求体的 schema 由命令的 schema 拼出来。
+- **撤销屏障**：命令的结果带 `undo`（`token` 可撤销 / `barrier` 不可撤销的命令 / `none` 这次什么也没改或界面小动作），HTTP 放在响应头 `x-emaki-undo`；
+  前端 `entryOf` 照它放进撤销栈，不再自己判断。可撤销的命令这次什么也没改（没有令牌）时不再占一格。
 
 ### 4.2 自动决定规则
 
@@ -270,7 +290,7 @@ decideAuto(image: ImageFacts, evidence: Evidence[], current: Decisions, settings
 | `refreshAllCollections` | `root.*`、`library.opened` | 提交后（全量） | 文件夹启停、漫画设置变化后的手工全量重算。P4a：启动（`library.opened`）只在合集判定的版本变了、或者有没做完的延后重算时全量重判（附录 #23） |
 | `recomputeCustomMatches` | `catalog.*` | 提交后 | 5 处手动调用 |
 | `notifySettings`、`notifyRoots` | `settings.changed`；`root.*` | 提交后 | 设置和文件夹监听的手工通知 |
-| `invalidateCaches` + 推送事件 | 任何写入 | 提交后 | 现在 `touch` 有 21 处调用，强刷新 / 弱刷新约定被后台路径破坏（附录 #20、#21） |
+| `invalidateCaches` + 推送事件 | 任何写入 | 提交后 | 现在 `touch` 有 21 处调用，强刷新 / 弱刷新约定被后台路径破坏（附录 #20、#21）。P6 起推的是带类型、带 id 的 `changed` 事件（第 9 节） |
 
 和最初设计的出入：`reevaluateAuto`（第 4.2 节）P3b 才加上（在 `dropStalePixivEvidence` 之后、`reevaluateExclusions` 之前）；`recomputeCustomMatches` 只订阅 `catalog.*`（它只看自建角色和标签，图上的角色变化不影响它）；
 P4a 把 `reclassifyByPath` 扩成分析唯一的事务内入口 `analyze`，前面加了 `staleFileEvidence`（文件内容变了时先把识别标成过期，`analyze` 才按「还没识别」重算主题、画质分）；
@@ -376,6 +396,11 @@ P4a 把 `reclassifyByPath` 扩成分析唯一的事务内入口 `analyze`，前�
   P4a 核对完：待识别在图片行（`tagged_at` 为空或 `retag`），Pixiv 待检查在 `pixiv_character_checks`，待查重、延后的合集全量重算、用户的暂停（识别、画师补跑、Pixiv 补充）在 `pending_work`
   （`dedupe`、`collections`、`pause:<任务>`；暂停以前只在进程里，重启就丢）。
 - 进度事件保持现状（`job`、`job-item`、节流）。任务结束时按任务种类发事件，不再一律标成 `scan`。
+- **P6 的实现（2026-11-18，附录 #34）**：任务种类的注册表是 `packages/shared/src/jobs.ts` 的 `JOB_KINDS`——名称、执行通道（io / gpu）、优先级、能否取消、能否手动启动、
+  取消后算不算用户的暂停、会不会联网、进度动词、侧栏环里的字，都登记在这一处；`JobKind` 由它推出来。任务队列（`core/jobs.ts`）的通道和优先级、可暂停的任务（`pause:<任务>`）、
+  HTTP 和 MCP 的启动参数（`StartJobInput` 的枚举）、网页的任务名和动词都从它取；以前散在约 8 处的表格只剩演示的假任务量（演示部件自己的）和网页的图标（组件不能放进 shared）。
+  `Pipeline.register` 支持多个注册者：钩子（`afterTag`、`afterScan`）累加、按注册顺序都调用；同一阶段注册两次直接报错，不再悄悄覆盖。加一种任务：在 `JOB_KINDS` 登记一行，
+  在 `services/pipeline.ts` 接上执行体。插件自己登记新任务种类（运行时注册）留到下一阶段和插件形态一起做。
 
 ## 8. 一个实现：演示也跑真实引擎（D4）
 
@@ -451,6 +476,28 @@ P4a 把 `reclassifyByPath` 扩成分析唯一的事务内入口 `analyze`，前�
 - **对外事件只提供领域变化的公开部分**，带类型、带事件 id，可以断线重连后补发。前端以后可以按事件类型精确刷新，不必每次全部重新获取；现在每个用户操作要重新获取两遍（附录 #36）。
 - **顺手统一接口风格**：设置改用 PATCH；只读的预览接口一律用 GET；401 / 403 不再返回 `bad_request`。
 
+**P6 的实现（2026-11-18）**：
+
+- **HTTP 从注册表生成**（`http/routes.ts`）：每个定义写了 `http` 地址的统一挂上，输入 = 路径参数 + 查询串（GET / DELETE）或请求体，校验用注册表里的 schema，路由文件里不再另写一份
+  （`routes/` 删掉了）。写命令的 actor 取请求的上下文，请求头 `Idempotency-Key` 就是 `operationId`；响应头带命令层的说明：`x-emaki-command`、`x-emaki-undo`、
+  `x-emaki-event`（这次推出去的最后一条 `changed` 事件的 id）、`x-emaki-changes`。通用入口：`POST /api/commands/:name`、`GET /api/queries/:name`；清单 `GET /api/commands`（名字、说明、scope、
+  是否可撤销、是否幂等、地址）。手写的只剩 SSE（`http/events.ts`）、健康检查、AI 助手的会话管理和兼容层（`http/compat.ts`）。
+- **MCP 从注册表生成**（`assistant/tools.ts`）：scope 在 `ASSISTANT_SCOPES`（read、curate、catalog、collections、import、jobs）里的每个命令一个工具，名字是命令名换成下划线（`curation.link` → `curation_link`），
+  参数是命令的 schema 加 `operationId`，按会话去重、actor 是 `assistant`。`read_library` 按地址读注册表里的查询（scope 允许的），`read_media` 读查询 `images.original`，任务列表是查询 `jobs.list`，
+  都不再绕过。权限边界和以前手写的工具一致：不能移动、回收用户的文件、处理重复、改设置和规则、撤销；同一范围里以前漏掉的（按标签归类、画师改回自动、合集的整理和出场角色、画师拆合）一起有了，
+  见 `docs/ai-assistant.md`。工具清单和 schema 存了一份快照（`test/architecture/__snapshots__/mcp-tools.json`），能力变了测试会失败。
+- **每次写入都记 actor**：网页是 `user`，助手是 `assistant`，后台任务是 `job:<任务>`，都在审计记录里（第 4.1 节）。**AI 助手做的、可撤销的修改**推一条 `command` 事件
+  （命令名、actor、那句话、撤销令牌、这次启动的 id、涉及的图），网页按 `bootId` 认领进顶栏的撤销栈（标「助手：」，撤销后指回那几张图），Ctrl+Z 用普通的撤销接口撤销。
+- **对外事件**（`packages/shared/src/events.ts`，附录 #36）：`changed`（这次提交变了哪些事实——公开的变化类型 `DOMAIN_CHANGES`，内部的请求不公开；reason、actor、命令名）、
+  `command`、`auto-change` 带递增的 id，SSE 的 id 行是 `<启动 id>.<序号>`；事件总线（`core/events.ts`）保留最近 500 条。断线重连时浏览器带 `Last-Event-ID`
+  （前端手动重建连接时放在 `?lastEventId=`）回来，服务端先补发漏掉的；后端重启过或漏得比保留的多时推 `resync`，前端整体刷新；最后推一条 `hello`（启动 id、最后一条的 id）。
+  进度事件 `job`、`job-item` 不编号、不补发；后台任务的 `changed` 按任务种类节流（3 秒，期间的类型合并），和以前一样。
+- **前端按事件类型精确刷新**：`lib/events.ts` 的 `REFRESH` 把每种变化映射到要失效的查询（图片上的决定刷新各处的图和计数，查重、排除规则、设置只在相关的变化时刷新）；
+  写操作不再自己全部重新获取：等响应头里那条事件的刷新做完（`settleRefresh`，事件一般比响应先到），SSE 断着、1.5 秒没等到时才按变化类型自己刷新。以前每个用户操作要拉两遍，现在一遍。
+- **接口风格**：设置 `PATCH /api/settings`（`PUT` 是兼容别名）；只读的预览有 GET：`GET /api/images/move/preview`、`GET /api/undo/status`、`GET /api/system/network-check`
+  （前两个参数太长时仍用 POST，网络检查的 POST 是兼容别名）；只许本机、只许自己的页面返回 403 `forbidden`，MCP 凭证不对返回 401 `unauthorized`。
+  列表的返回形状没有强行统一：图片、角色、未识别是分页的 `Page`，其余是数组，改动会波及网页和助手的所有读取，留着；新的审计记录是 `{ items }`。
+
 ## 10. 个性化页面与插件（下一阶段）
 
 这一阶段不做，只记下目标，并说明这一阶段要为它留好什么。
@@ -471,6 +518,20 @@ AI 助手已经能读写图库，还可以让它直接写新页面（比如各�
 - **查询和命令带权限范围**（第 4.1 节的 `scope`），以后给插件或 AI 生成的页面授权时直接用。
 
 **下一阶段再设计的内容**：插件的形态（页面插件、区块插件、数据来源插件）、运行与隔离方式、信任模型（D6）、AI 生成页面的存放与分享、版本兼容。以前想到的「证据来源插件」（新的识别模型、来源站）也一并放到那时考虑。
+
+### 10.1 这一阶段留好的接口（P6 完成时）
+
+| 要做的 | 用哪里 |
+| --- | --- |
+| 页面、插件、AI 生成的页面读数据 | 查询：`GET /api/queries/:name`（或各自的 GET 地址），清单 `GET /api/commands`；定义在 `apps/server/src/commands/queries.ts`，口径在 `readmodel/terms.ts`，界面上的数读 `library.summary` |
+| 改数据 | 命令：`POST /api/commands/:name`，输入 schema 在 `@emaki/shared/schemas`；可撤销的返回令牌，`Idempotency-Key` 去重 |
+| 授权 | 每个命令 / 查询的 `scope`（`packages/shared/src/commands.ts`）；AI 助手的范围是 `ASSISTANT_SCOPES`，给插件授权照这个办法 |
+| 跟着数据变 | SSE `GET /api/events`：`changed`（变化类型）、`command`、`auto-change`，带 id、断线补发；前端的映射在 `apps/web/src/lib/events.ts` 的 `REFRESH` |
+| 谁改的 | 审计记录 `GET /api/audit`（`command_log`）；actor 以后加 `plugin:<id>` |
+| 页面由区块组成 | `apps/web/src/blocks/registry.ts`（稳定 id、用到的公开查询）、`PageBlocks` |
+| 新的后台任务 | `packages/shared/src/jobs.ts` 的 `JOB_KINDS` + `services/pipeline.ts` 的 `register` |
+| 新的证据来源 | `domain/evidence/` 的 `replaceEvidence`，阈值按来源配在 `tagger.autoAcceptBySource`（`plugin:<id>`） |
+| 个人布局、本机偏好 | 图库设置（`settings.update`）和本机偏好（`usePrefs`）分开，见第 6.1 节 |
 
 ## 11. 必须保留的现有行为
 
@@ -504,7 +565,7 @@ D1：扫描发现和用户替换都走 `recordFileChanged` → `image.fileChange
 **P4b 已完成**（2026-11-18）：D5，类型拆成「类型」+「是否动图」（`images.animated`，迁移 038），实现说明见第 13 节 D5；
 `crossEntry.test.ts`（同一张动图从扫描入库和改类型两条路进来结果一致）、`db/animated.migration.test.ts`、`queries/listImages.test.ts`（动图筛选和查询计划） | M |
 | **P5 读模型与前端**（已完成 2026-11-18） | 命名口径唯一；状态拆成三个事实；汇总接口；共用的展示规则移进 `packages/shared`；前端删掉自带的业务规则；设置只有一份 | 附录 #24–#30、#32、#38 关闭。已完成（实现说明见第 6.1 节）：`readmodel/terms.ts` 唯一的口径和 `test/architecture/terms.test.ts`；图片的 `tagged` / `characterCount` / `queue`；`GET /api/summary`（`readmodel/summary.ts`，对账 `readmodel/summary.test.ts`）；`packages/shared/src/rules.ts`；设置的归属（迁移 039、`lib/urlPrefs.ts`）；页面区块注册表（`test/architecture/blocks.test.ts`）。关闭测试 `test/architecture/readmodel.closure.test.ts`、`src/readmodel/terms.test.ts`、`packages/shared/src/rules.test.ts` | M |
-| **P6 命令注册表与接口** | 命令 / 查询注册表；HTTP 和 MCP 从注册表生成；记录 actor；带类型的事件；合并重复的接口 | `DataSource` 接口删除；附录 #33–#36 关闭 | M |
+| **P6 命令注册表与接口**（已完成 2026-11-18） | 命令 / 查询注册表；HTTP 和 MCP 从注册表生成；记录 actor；带类型的事件；合并重复的接口 | `DataSource` 接口删除；附录 #33–#36 关闭。已完成（实现说明见第 4.1、7、9 节，下一阶段可以直接用的接口见第 10.1 节）：`commands/`（注册表、审计和幂等 `command_log` 迁移 040）、`http/`（从注册表生成的路由、兼容层、SSE 补发）、MCP 从注册表生成、任务种类的注册表 `packages/shared/src/jobs.ts`、前端按事件类型只刷新一遍；`DataSource` 接口和 `routes/` 删掉。关闭测试 `test/architecture/interfaces.closure.test.ts`、注册表完整性 `test/architecture/registry.test.ts`（含 MCP 工具快照）、`src/commands/registry.test.ts`、`apps/web/src/lib/events.p6.test.ts` | M |
 | 下一阶段 | 个性化页面与插件（第 10 节），另行设计 | | |
 
 **顺序的理由**：
