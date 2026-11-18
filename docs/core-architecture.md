@@ -1,6 +1,6 @@
 # Emaki 核心架构设计（v2 草案）
 
-> 状态：D1、D2、D3、D4、D5、D7、D8 已批准（2026-11-17）；D6 和插件挪到下一阶段（第 13 节）。P0、P1、P2、P3 已完成（P3 完成于 2026-11-17），见第 12 节。依据的代码快照：fork 的起点（`codex/flexible-collections` @ 13c677d 加上当时未提交的改动，2026-11-17）。
+> 状态：D1、D2、D3、D4、D5、D7、D8 已批准（2026-11-17）；D6 和插件挪到下一阶段（第 13 节）。P0、P1、P2、P3 已完成（P3 完成于 2026-11-17），P4 进行中（P4a 已完成 2026-11-18，P4b 是 D5），见第 12 节。依据的代码快照：fork 的起点（`codex/flexible-collections` @ 13c677d 加上当时未提交的改动，2026-11-17）。
 > 现状盘点和已知的不一致见 [core-architecture-inventory.md](core-architecture-inventory.md)。本文里「附录 #n」指那里的第 n 条。
 
 ## 0. 要解决什么
@@ -143,7 +143,7 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
 | 模块 | 目录 | 表 | `images` 的列 |
 | --- | --- | --- | --- |
 | 图库与文件 | `domain/library/` | `library_roots`、`comic_folders`、`scan_errors`、`pending_trash`、`pending_trash_items` | 新增、删除整行；`root_id`、`rel_path`、`file_name`、尺寸、`bytes`、`format`、`sha256`、`added_at`、`modified_at`、`missing`、`trashed_at` |
-| 分析 | `domain/analysis/` | `image_fingerprints` | `dhash`、`dominant_color`、`thumb_at`、`decode_error`、`content_kind*`（手动标记除外）、`camera`、`kind_signals`、`theme`、`art_score`、`frame_count` |
+| 分析 | `domain/analysis/` | （P4a 删掉了没人读写的 `image_fingerprints`，迁移 037） | `dhash`、`dominant_color`、`thumb_at`、`decode_error`、`content_kind*`（手动标记除外）、`camera`、`kind_signals`、`theme`、`art_score`、`frame_count` |
 | 证据 | `domain/evidence/` | `tags`、`image_tags`、`image_evidence`、`character_evidence`、`work_evidence`（P3b；建议是它们派生的视图 `v_character_suggestions`）、`pixiv_artwork_cache`、`pixiv_character_checks`、`pixiv_unavailable_posts`、`danbooru_tags`、`danbooru_artists` | `tagged_at`、`tagger_model`、`retag`、`artist_checked_at`、`source_site` / `source_post_id` / `source_artist` / `source_url` |
 | 编目 | `domain/catalog/` | `characters`、`works`、`character_works`、`aliases`、`danbooru_tag_redirects`、`custom_character_matches`、`character_verified_forms`、`character_verified_names`、`artist_links`、`tag_i18n`、`tag_name_keys`、`tag_renames` | |
 | 归类 | `domain/curation/`（P3a 建立） | `image_characters`、`image_copyrights`（手动指定的作品）、`image_artists`、`character_vetoes` | `rating`、`rating_manual`、`favorite`、`shelved_at`、`original_at` 和原创的来历列、`content_kind_manual`、`artist_manual`、`source_manual` |
@@ -152,7 +152,7 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
 | 查重 | `domain/duplicates/` | `duplicate_groups`、`duplicate_members`、`duplicate_comparisons` | |
 | 设置 | `domain/settings/` | `settings` | |
 | 命令层 | `commands/` | `change_log`，以及撤销回放这类按表名拼 SQL 的通用写入 | |
-| 变更传播（P2） | `propagation/` | `pending_work`（排队状态，迁移 033） | |
+| 变更传播（P2） | `propagation/` | `pending_work`（排队状态和用户的暂停，迁移 033）、`derived_versions`（派生数据的版本，P4a，迁移 037） | |
 
 - 永久例外只有 `demo/`：演示数据直接灌进空的一次性库，不经过命令。
 - P2 已搬进主人目录的：合集（原 `services/collections/` → `domain/collections/`）、可见性（原 `datasource/sqlite/exclusions.ts` → `domain/visibility/`）；
@@ -161,6 +161,8 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
   原创和自动分级（`curation/marks.ts`）、手动指定的作品（`curation/works.ts`）；识别器、Pixiv 的证据和待查记录（`evidence/tagger.ts`、`evidence/pixiv.ts`、`evidence/store.ts`）、
   识别进度（`evidence/retag.ts`）、Danbooru 元数据（`evidence/danbooru.ts`）；编目表全部在 `domain/catalog/`。允许清单里已经没有这三个模块的表；
   各模块的反应放在 `domain/<模块>/reactions.ts`，变更传播层本身在 `propagation/`（第 5 节）。
+  P4a 建立了图库与文件（`domain/library/`：扫描写库、显式导入、替换、移动、回收站、图库文件夹）和分析（`domain/analysis/`：唯一入口 `analyze`、缩略图回写、缓存回收），
+  允许清单里已经没有这两个模块的表和列（`library_roots`、`comic_folders`、`scan_errors`、`pending_trash*`、`images` 的观测列和派生列）。
 - 识别方式：扫描源码里所有字符串（含多行模板），找 `INSERT` / `REPLACE` / `UPDATE … SET` / `DELETE`；撤销记录器的 `u.columns` / `u.set` / `u.inserted` 也算写入。`images` 看 `SET` 的列名；看不出列（列名拼出来、整行快照）的记成 `images#?`，表名拼出来的记成 `<dynamic>`，这两种只能进允许清单或放进命令层。
 
 ## 4. 写入：命令和自动决定
@@ -228,7 +230,7 @@ decideAuto(image: ImageFacts, evidence: Evidence[], current: Decisions, settings
 | 变化 | 何时发出 | 关键细节 |
 | --- | --- | --- |
 | `image.added` / `image.gone` / `image.returned` | 入库、确认丢失、重新出现 | |
-| `image.fileChanged` | 同一 id 的文件内容变了 | `reason`：扫描发现 / 用户替换；新旧 sha |
+| `image.fileChanged` | 同一 id 的文件内容变了 | `reason`：扫描发现 / 用户替换（只记录在案，处理相同，D1）；`files`：新旧 sha；`probes`：读新文件头拿到的帧数、相机（`image.added` 同样带） |
 | `image.moved` | 路径变了 | `reason`：扫描发现 / 应用内移动 / 整理到子文件夹 / 撤回移动 |
 | `image.trashed` / `image.restored` | 回收与恢复 | |
 | `root.visibilityChanged` / `root.modeChanged` | 图库文件夹启用、停用、移除；漫画区变化 | |
@@ -251,8 +253,9 @@ decideAuto(image: ImageFacts, evidence: Evidence[], current: Decisions, settings
 | 反应 | 订阅 | 阶段 | 取代现在的 |
 | --- | --- | --- | --- |
 | `reparseSource` | `image.moved`（来源未手动锁定时） | 事务内 | 只有扫描时的移动会重新解析（附录 #13）。三条移动路径和撤回移动都发 `image.moved` |
+| `staleFileEvidence`（P4a） | `image.fileChanged` | 事务内 | 文件内容变了（D1）：这份文件版本的识别过期（识别时间、模型、画师识别时间清空，排队重认）；以前只有扫描会清识别、替换全保留、两条路都不重置画师（附录 #10） |
+| `analyze`（P4a，原 `reclassifyByPath`） | `image.added`、`image.fileChanged`、`image.moved`、`root.modeChanged` | 事务内 | 分析唯一的入口：入库判类型；内容变了清掉旧文件的像素派生、按新文件重判；路径相关的分类、漫画文件夹的类型和分级、去掉识别器的角色；声明 `image.kindChanged`、`curation.charactersChanged`（附录 #23） |
 | `reevaluateAuto`（P3b） | 证据、最终类型、放下 / 原创、否决、合集、漫画区、编目合并 / 绑定、补采纳命令（见第 4.2 节） | 事务内 | 识别写入、补采纳、改类型、Pixiv 补充四条路各自的判断（附录 #1–#3）；证据不再支持时撤回（D2），Pixiv 原创（D8） |
-| `reclassifyByPath`（`analyze` 里便宜的部分） | `image.moved`、`root.modeChanged` | 事务内 | 路径相关的分类、漫画文件夹的类型和分级、去掉识别器的角色；声明 `image.kindChanged`、`curation.charactersChanged` |
 | `dropStalePixivEvidence` | `image.sourceChanged` | 事务内 | 来源变了，按旧投稿号查的 Pixiv 证据和检查记录去掉（附录 #13）；以前只有改识别方式会做。P3b 起去掉证据声明 `evidence.changed`，依据它的自动关联由 `reevaluateAuto` 撤回 |
 | `reevaluateExclusions` | `visibility.rulesChanged`、`curation.charactersChanged`、`evidence.changed`（标签）、`image.added`、`image.moved`、`library.opened` | 事务内，同时负责排除和解除排除 | 现在 6 处会套用排除规则、4 处没套，而且从来不解除（附录 #14、#15） |
 | `queuePixivCheck` | `image.sourceChanged`、`image.kindChanged`、放下、原创、角色、`visibility.changed`、`evidence.changed`、`root.modeChanged`、`collections.changed` | 事务内登记（持久化的队列） | 现在只在识别批次结束时登记（附录 #19） |
@@ -261,13 +264,15 @@ decideAuto(image: ImageFacts, evidence: Evidence[], current: Decisions, settings
 | `renumberCollections` | `collections.changed`（手动增删成员） | 事务内 | `onUndoLast` 里的页序重排 |
 | `markDedupeDirty` | `image.added` / `fileChanged` / `gone` / `returned` / `trashed` / `restored`、`visibility.changed`、`root.visibilityChanged` | 排队，持久化在 `pending_work` | 现在只有图库文件夹变化会标记，而且重启就丢（附录 #18） |
 | `rescanRoots`、`queueTagging`、`queueAnalysis`、`queueArtists`、`schedulePixiv`、`rematchCachedPixiv` | 文件夹重新显示；放出排除、离开漫画文件夹、新图；新图和换了文件；改回自动画师；资格变了；来源变了 | 排队（只有用户和助手的操作直接拉起任务） | 恢复排除后不会重新识别（附录 #16）；撤销改识别方式、`artist-auto` 不会重跑（附录 #22） |
-| `refreshAllCollections` | `root.*`、`library.opened` | 提交后（全量） | 文件夹启停、漫画设置变化后的手工全量重算 |
+| `refreshAllCollections` | `root.*`、`library.opened` | 提交后（全量） | 文件夹启停、漫画设置变化后的手工全量重算。P4a：启动（`library.opened`）只在合集判定的版本变了、或者有没做完的延后重算时全量重判（附录 #23） |
 | `recomputeCustomMatches` | `catalog.*` | 提交后 | 5 处手动调用 |
 | `notifySettings`、`notifyRoots` | `settings.changed`；`root.*` | 提交后 | 设置和文件夹监听的手工通知 |
 | `invalidateCaches` + 推送事件 | 任何写入 | 提交后 | 现在 `touch` 有 21 处调用，强刷新 / 弱刷新约定被后台路径破坏（附录 #20、#21） |
 
 和最初设计的出入：`reevaluateAuto`（第 4.2 节）P3b 才加上（在 `dropStalePixivEvidence` 之后、`reevaluateExclusions` 之前）；`recomputeCustomMatches` 只订阅 `catalog.*`（它只看自建角色和标签，图上的角色变化不影响它）；
-`analyze` 只把路径相关的分类放在事务内，统一「文件内容变化」的语义和唯一入口留给 P4（D1）。
+P4a 把 `reclassifyByPath` 扩成分析唯一的事务内入口 `analyze`，前面加了 `staleFileEvidence`（文件内容变了时先把识别标成过期，`analyze` 才按「还没识别」重算主题、画质分）；
+缩略图、帧数、相机这些要读文件的部分仍由排队反应交给缩略图任务，任务算完交给分析模块写。
+`library.opened` 不再无条件全量重算合集：派生数据按版本（`derived_versions`）决定要不要整体重算，后台任务延后的全量重算记在 `pending_work` 里，进程中途退出时下次启动补做。
 
 三个阶段的含义：
 
@@ -297,6 +302,8 @@ decideAuto(image: ImageFacts, evidence: Evidence[], current: Decisions, settings
 - 任务只做两类事：产出证据（模型识别、Pixiv、Danbooru、查重比对），或者执行分析（缩略图、分类）。**任务不直接写决定**；决定由反应 `reevaluateAuto` 产生，自动决定和用户操作走同一套规则。
 - 任务种类做成注册表：名称、所在的执行通道（io / gpu）、优先级、显示名、能否取消。现在 `JobKind` 是封闭的联合类型，相关的表格散在大约 8 处（附录 #34），插件没法加新任务。
 - 「该做的事」持久化：待查重、待识别、Pixiv 待检查、暂停状态都存进数据库，重启不丢。
+  P4a 核对完：待识别在图片行（`tagged_at` 为空或 `retag`），Pixiv 待检查在 `pixiv_character_checks`，待查重、延后的合集全量重算、用户的暂停（识别、画师补跑、Pixiv 补充）在 `pending_work`
+  （`dedupe`、`collections`、`pause:<任务>`；暂停以前只在进程里，重启就丢）。
 - 进度事件保持现状（`job`、`job-item`、节流）。任务结束时按任务种类发事件，不再一律标成 `scan`。
 
 ## 8. 一个实现：演示也跑真实引擎（D4）
@@ -419,7 +426,10 @@ AI 助手已经能读写图库，还可以让它直接写新页面（比如各�
 Pixiv 只产出证据和原创信号，原创是带来历的决定（D8）；证据不再支持时撤回（D2，记 `change_log` 的 auto-retract）；编目唯一的 `resolve`、规范化、别名来历、解绑语义（#37，迁移 036）；
 归类、证据、编目的表都只由主人写，允许清单里没有它们了；附录 #1、#2、#3、#7、#8、#9、#37 关闭（`crossEntry.test.ts`、`evidence.closure.test.ts`、`catalog.closure.test.ts`、
 `domain/curation/auto.test.ts`、`db/evidence.migration.test.ts`、`db/catalogOrigins.migration.test.ts`） | L |
-| **P4 入库与分析收口** | 统一文件内容变化的语义（按 D1）；`analyze` 唯一入口；三条移动路径合一；合集判定版本号真正生效；派生数据都带版本 | 附录 #10、#11、#23 关闭 | M |
+| **P4 入库与分析收口**（进行中，P4a 已完成 2026-11-18） | 统一文件内容变化的语义（按 D1）；`analyze` 唯一入口；三条移动路径合一；合集判定版本号真正生效；派生数据都带版本。P4b：D5（类型拆成「类型」+「是否动图」两个维度） | 附录 #10、#11、#23 关闭。**P4a 已完成**：图库与文件（`domain/library/`）、分析（`domain/analysis/`）两个模块，允许清单里它们的表和列清零；
+D1：扫描发现和用户替换都走 `recordFileChanged` → `image.fileChanged`，识别过期（`staleFileEvidence`）、派生重算（`analyze`）、过期证据不新加自动关联（`decideAuto` 规则 5）；
+移动一条路径（`moveImages` / `revertMoveLog` / 扫描的 `recordMoved`），「不能动文件」只有 `assertFilesIdle` 一处；派生数据的版本统一记在 `derived_versions`（迁移 037），合集判定的版本真正生效；
+删掉 `image_fingerprints`；回收站行的匹配规则；缓存回收；暂停持久化。附录 #10、#11、#23 关闭（`crossEntry.test.ts`、`library.closure.test.ts`、`domain/analysis/cacheGc.test.ts`） | M |
 | **P5 读模型与前端** | 命名口径唯一；状态拆成三个事实；汇总接口；共用的展示规则移进 `packages/shared`；前端删掉自带的业务规则；设置只有一份 | 附录 #24–#30、#32、#38 关闭 | M |
 | **P6 命令注册表与接口** | 命令 / 查询注册表；HTTP 和 MCP 从注册表生成；记录 actor；带类型的事件；合并重复的接口 | `DataSource` 接口删除；附录 #33–#36 关闭 | M |
 | 下一阶段 | 个性化页面与插件（第 10 节），另行设计 | | |
@@ -434,7 +444,7 @@ Pixiv 只产出证据和原创信号，原创是带来历的决定（D8）；证
 
 | # | 问题 | 决定 |
 | --- | --- | --- |
-| D1 | 文件内容变化的语义。扫描发现外部改了文件，和用户主动替换高清版，现在一个会重置识别、一个全部保留 | **已批准**：统一成一种：发出 `image.fileChanged`；派生数据重算；这份文件版本的模型证据标记为过期并排队重新识别；手动决定保留；自动决定等新证据到了再按 D2 重算。`reason` 只记录在案，不改变处理方式 |
+| D1 | 文件内容变化的语义。扫描发现外部改了文件，和用户主动替换高清版，现在一个会重置识别、一个全部保留 | **已批准**：统一成一种：发出 `image.fileChanged`；派生数据重算；这份文件版本的模型证据标记为过期并排队重新识别；手动决定保留；自动决定等新证据到了再按 D2 重算。`reason` 只记录在案，不改变处理方式。**P4a 已实现**：「过期」= 识别时间清空、证据行留着（`decideAuto` 不拿过期的模型证据新加关联，也不因为它撤回）；画师识别时间一起清空；像素派生清掉、缩略图按新 sha 重新生成；见 `ARCHITECTURE.md`「文件内容变化」 |
 | D2 | 证据不再支持某个自动关联时（重新识别没再认出、来源插件被停用），要不要撤回 | **已批准**：只撤回「自动 + 依据的就是这个来源」的关联；手动的永远不动；撤回会记入审计，可以撤销。现在是只增不减，也就是旧模型的错误永远留着。**P3b 已实现**：只在这个来源的证据刚换过（重新识别、来源失效）时撤回，新证据里没有这个候选或分数低于这个来源的自动阈值；阈值调高、补采纳、改类型不撤回；来历不明的（rule `legacy`）和手动的不动；别的来源仍然支持时只改来历。撤回记 `change_log`（auto-retract），在「最近的自动改动」里撤回会把关联加回来并记成手动，这次撤回本身也能撤销；用户操作里连带的撤回随操作一起撤销 |
 | D3 | 用户手动加回一个被自己否决过的角色 | **已批准**：加回时清掉否决。现在不清，导致以后的自动规则仍然认为「用户不要」（附录 #39） |
 | D4 | 删掉 MockDataSource，演示改跑真实引擎 | **已批准**，P1 已完成（2026-11-17）。来龙去脉见第 8 节：只删第二套业务逻辑，演示能力和演示数据保留。`ARCHITECTURE.md` 的「设计决策 2」已改写 |

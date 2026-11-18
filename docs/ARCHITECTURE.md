@@ -48,7 +48,8 @@ emaki/
 │  │  ├─ DataSource.ts          接口（P6 换成命令 / 查询注册表后删掉）
 │  │  └─ sqlite/                唯一的实现（context.ts：写入的唯一入口 ctx.mutate / ctx.apply）
 │  ├─ domain/<模块>/   领域模块：表的主人（test/architecture/owners.ts）和它们的反应（P2 起逐步搬进来）；
-│  │                   domain/evidence/ 证据、domain/curation/ 归类（含唯一的自动决定规则 decideAuto）、domain/catalog/ 编目（P3）
+│  │                   domain/evidence/ 证据、domain/curation/ 归类（含唯一的自动决定规则 decideAuto）、domain/catalog/ 编目（P3）；
+│  │                   domain/library/ 图库与文件、domain/analysis/ 分析（P4a）
 │  ├─ propagation/     变更传播：变化（changes.ts）、反应注册表和三个阶段（registry.ts）、actor、引擎层的反应、排队状态
 │  ├─ infra/ports.ts   可替换部件：时钟、回收站、图片文件、图库文件夹、后台任务（扫描 / 模型 / 联网）
 │  ├─ demo/            演示数据（fixtures、种子、占位图）、灌数据、演示用的假部件
@@ -139,6 +140,47 @@ return this.ctx.mutate((u) => {
 规范化经 `CharacterCatalog.normalizeTag` / `normalizeWorkTag`（生产环境由 `createCatalog` 建）；建角色、建作品要可撤销时用 `insertDanbooruCharacter` / `insertWork`；
 「原创」作品只用 `ensureOriginalWork`；绑定、解绑 Danbooru 经 `bindings.ts`。
 
+**图库与文件模块**（P4a，[core-architecture.md](core-architecture.md) 第 2.4 节，附录 #11、#23）：图片行的新增和观测列（路径、文件名、尺寸、大小、格式、sha256、
+入库 / 修改时间、丢失、回收站）、图库文件夹、漫画子文件夹、读不了的文件（`scan_errors`）、回收批次只在 `domain/library/` 里写。
+- 扫描器（`services/scan/Scanner.ts`）只遍历、读文件、算 sha、读文件头；看到的经 `images.ts`（入库 `insertImage` + `declareAdded`、内容变化 `recordFileChanged`、
+  丢失 / 找回）、`move.ts`（`recordMoved`）、`scan.ts`（导入 / 扫描时间、`scan_errors`、跟着改名的漫画子文件夹）写进库并声明变化。显式导入（`import.ts`）、
+  替换文件（`replace.ts`）、移到回收站（`markTrashed` + `pendingTrash.ts`）、图库文件夹的增删改和合并接管（`roots.ts`）也在这里。
+- **移动只有一条路径**（`move.ts`）：应用内「移动…」、整理到子文件夹（reason `move` / `organize`）共用 `moveImages`——改文件、改路径、声明 `image.moved`、
+  记 `change_log`；撤回（toast 里的撤销、「最近的移动」里移回）共用 `revertMoveLog`。扫描发现的移动不动文件，经 `recordMoved` 写路径、声明同样的
+  `image.moved`（reason `scan`）。之后来源、路径相关的分类、漫画区、排除规则、合集都由反应按新位置重算，几条路完全一样。
+- **「扫描或识别进行中不能动文件」只有 `guard.ts` 的 `assertFilesIdle` 一处**：移动、整理、移回、替换、撤销替换、撤销导入都先过它
+  （扫描正在跑一律不行；识别正在跑、要动的图里有它还会去读的也不行）。
+- 回收站规则：用户移进回收站的行不当移动的来源；送进系统回收站后标成丢失（「丢弃的行」，`DISCARDED`），原位置再出现文件时旧行让出路径
+  （挪到 `.emaki-discarded/<id>/…`，扫描永远不进以 . 开头的目录），文件作为新图入库，不复活旧 id 和旧关联。还在撤销窗口里的不动；
+  系统回收站移不动（被占用）的没标丢失，文件还在原处，下次扫描照常回来。
+
+**分析模块**（P4a，第 2.4、3.1 节，附录 #23）：派生数据——缩略图回写的 dHash、主色、生成时间、解码错误，帧数、相机，自动类型、主题、画质分——只由
+`domain/analysis/` 写。唯一的入口是 `analyze(tx, ids, { probes, fileChanged })`：从现在的事实（路径、尺寸、格式、帧数、相机、识别标签、漫画区）重算类型、主题、
+画质分，最终类型变了声明 `image.kindChanged`。
+- 调用它的：反应 `analyze`（入库、文件内容变化、移动、漫画区变化）、识别写入（每批）、缩略图任务和识别任务读到的帧数 / 相机、手动改类型（`setManualKind`）、
+  撤销切换导入方式（`restoreKinds`）、启动时版本过期的行（`classifyStale`）。别处不要调分类器。
+- 读文件头才知道的帧数、相机由调用方交进来（变化里的 `probes`），分析模块先写上再判类型；入库的 INSERT 里不再顺手算类型。
+- 缩略图文件本身还在 `ThumbnailService`（按 sha 缓存），它算出的主色、dHash 交给 `recordPixels` / `recordDecodeError` 按 sha 写，不传播（看图时生成缩略图不该让前端整页重拉），
+  只有类型变了才传播。
+- 缓存回收（`cacheGc.ts` + `library/replace.ts` 的 `collectReplacementBackups`，启动 10 分钟后后台做一次）：只进数据目录下的 `thumbs/v1`、`animations/v1`、
+  `image-replacements`，只删名字符合格式、没有任何图片行引用的 sha 的普通文件，和撤销令牌已经过期的替换备份；缓存目录和任何图库文件夹重叠、
+  图库还没扫完过时整个不做。
+
+**文件内容变化（D1，附录 #10）**：同一个 id 的文件内容变了——扫描发现外部改了文件、用户替换成高清版——是**同一件事**，都只走 `recordFileChanged`：
+改观测列，声明 `image.fileChanged { reason: 'scan' | 'replace', files: [新旧 sha], probes }`。`reason` 只记录在案，处理完全相同：
+1. 证据（反应 `staleFileEvidence`，排在 `analyze` 前面）：这份文件版本还没有识别结果——识别时间、模型、画师识别时间清空，识别任务和画师任务会重新挑它；
+   标签、角色候选这些旧证据先留着（过期）。
+2. 分析（反应 `analyze`）：清掉旧文件的像素派生（缩略图任务按新 sha 重新生成），按新的尺寸、格式、帧数、相机重判类型；主题、画质分跟着「还没识别」清空。
+3. 决定：手动的（角色、收藏、分级、原创、来源、手动类型……）都挂在 id 上，原样保留；自动关联先留着，过期的模型证据不再拿来**新加**关联（`decideAuto` 规则 5），
+   新证据到了（重新识别写入）由 `reevaluateAuto` 按 D2 撤回不再被支持的。
+4. 排队：查重标记（`markDedupeDirty`）、识别（`queueTagging`）、缩略图（`queueAnalysis`）、合集按目录重算，都是订阅这条变化的反应。
+撤销替换也是一次文件内容变化，同样处理。缩略图、原图都按 sha 做 ETag，前端按 `modifiedAt` 带版本取，换了文件不会看到旧缩略图。
+
+**派生数据的版本**（附录 #23，`propagation/versions.ts`，迁移 037）：来源解析（`source`）、类型判定（`classification`）、合集判定（`collections`）
+上次整体重算用的版本统一记在 `derived_versions`。启动时对一遍：版本对不上就整体重算一次再记下（类型判定只重算 `content_kind_version` 过期的行）；
+合集只有判定版本变了、或者有没做完的延后重算（`pending_work` 的 `collections`，后台任务 `defer` 时记、做完清）时才全量重判。
+改了规则只要把对应的版本号加一。用户的暂停（识别、画师补跑、Pixiv 补充）也持久化在 `pending_work`（`pause:<任务>`），重启不丢。
+
 **写一个新的反应**：放在主人模块（`domain/<模块>/reactions.ts`）或 `propagation/engine.ts`，在 `SqliteDataSource.registerReactions` 里注册（同一阶段按注册顺序执行）：
 
 ```ts
@@ -166,7 +208,7 @@ export const reevaluateExclusionsReaction: Reaction = {
 
 ### 7. 图片展示
 - `Thumb`：主色占位（`dominantColor`）→ 缩略图淡入；敏感分级按偏好模糊。
-- 缩略图三档宽度 240/480/960（webp），按 sha256 缓存。图片 id 稳定（文件内容变了 id 不变），所以 HTTP 用按内容 sha 的 ETag + `private, no-cache`，不用 `immutable`。
+- 缩略图三档宽度 240/480/960（webp），按 sha256 缓存，没人引用的由缓存回收删掉（见「分析模块」）。图片 id 稳定（文件内容变了 id 不变），所以 HTTP 用按内容 sha 的 ETag + `private, no-cache`，不用 `immutable`。
 - `ImageGrid`：等高行布局（justify.ts）+ `@tanstack/react-virtual` 行虚拟化 + 无限滚动，10 万张也不卡。
 
 ### 8. 角色识别（真实实现）

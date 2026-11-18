@@ -21,7 +21,7 @@ import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import { readSettings } from '../../datasource/sqlite/settings.ts';
 import { parseId } from '../../datasource/sqlite/sql.ts';
 import { assertFilesIdle } from './guard.ts';
-import { declareAdded, insertImage, markRecycled, markTrashed } from './images.ts';
+import { declareAdded, DISCARDED, insertImage, markRecycled, markTrashed, releasePath } from './images.ts';
 import { normalizeSubdir } from './move.ts';
 
 const MAX_BYTES = 128 * 1024 * 1024;
@@ -108,13 +108,14 @@ export async function importImages(ctx: SqliteContext, body: ImportImagesBody, o
       }
       const ext = path.extname(name), stem = name.slice(0, name.length-ext.length);
       const namedRel = dir ? `${dir}/${name}` : name;
-      const namedRow = ctx.db.prepare('SELECT id FROM images WHERE root_id=? AND rel_path=? COLLATE NOCASE').get(root.id,namedRel) as {id:number}|undefined;
+      // 丢弃的行（已经送进系统回收站的）不占名字：入库时让出路径，新文件得到新 id（回收站规则，images.ts）
+      const namedRow = ctx.db.prepare(`SELECT id FROM images i WHERE root_id=? AND rel_path=? COLLATE NOCASE AND NOT ${DISCARDED('i')}`).get(root.id,namedRel) as {id:number}|undefined;
       if (!body.keepBoth && (namedRow || existsSync(path.join(folder,name)))) {
         items.push({path:file.path,status:'failed',code:'needs_confirm',existingImageId:namedRow ? String(namedRow.id) : undefined,
           error:`已有同名文件「${name}」，请选择替换原图还是保留两个版本。明确要替换时使用 replace_image；保留两个版本时设置 keepBoth。`});
         continue;
       }
-      const occupied = ctx.db.prepare('SELECT 1 FROM images WHERE root_id=? AND rel_path=? COLLATE NOCASE');
+      const occupied = ctx.db.prepare(`SELECT 1 FROM images i WHERE root_id=? AND rel_path=? COLLATE NOCASE AND NOT ${DISCARDED('i')}`);
       let n=0, target='', rel='';
       const tmp = path.join(folder, `.emaki-import-${randomUUID()}.tmp`);
       let published = false;
@@ -147,6 +148,8 @@ export async function importImages(ctx: SqliteContext, body: ImportImagesBody, o
         const comic = ComicAreas.load(ctx.db).of(root.id,rel);
         // 入库即声明 image.added：排除规则、合集、缩略图和识别排队、查重标记由反应处理
         const id = ctx.apply(() => {
+          for (const old of ctx.db.prepare(`SELECT id FROM images i WHERE root_id=? AND rel_path=? COLLATE NOCASE AND ${DISCARDED('i')}`).pluck().all(root.id,rel) as number[])
+            releasePath(ctx.db, old);
           const id = insertImage(ctx.db, { rootId:root.id,relPath:rel,fileName:path.basename(target),
             width:probe.width,height:probe.height,format:probe.format,bytes:bytes.length,sha256:sha,
             modifiedAt:statSync(target).mtime.toISOString(),addedAt:now,rating:comic?.rating ?? 'general',
