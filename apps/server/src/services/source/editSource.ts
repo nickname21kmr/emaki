@@ -1,17 +1,11 @@
 import type { ImageSource, Settings, UpdateImageBody } from '@emaki/shared';
+import { SourceEdit } from '@emaki/shared/schemas';
 import { z } from 'zod';
 import { parse } from '../../http/validate.ts';
 import { parseSource } from './parseSource.ts';
 
-export const sourceEditSchema = z.union([
-  z.object({
-    url: z.string().trim().min(1).max(4000).refine(value => {
-      try { const u = new URL(value); return ['http:', 'https:'].includes(u.protocol) && !u.username && !u.password; }
-      catch { return false; }
-    }, '请输入不含登录凭证的 HTTP 或 HTTPS 来源链接'),
-    artist: z.string().trim().max(200).optional(),
-  }), z.null(), z.literal('auto'),
-]);
+/** 来源的编辑：schema 在 packages/shared（HTTP、MCP 共用） */
+export const sourceEditSchema = SourceEdit;
 
 /** Metadata only: saving a URL never makes a network request. */
 export function editedSource(value: NonNullable<UpdateImageBody['source']> | null, relPath: string,

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../core/events.ts';
 import type { JobContext } from '../../core/jobs.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
-import { SqliteDataSource } from './SqliteDataSource.ts';
+import { SqliteDataSource } from '../../../test/helpers/client.ts';
 
 // 不联网：把 Pixiv 补充换成一直跑到被取消的假任务，待查数量由测试控制
 const fake = vi.hoisted(() => ({ pending: 0, runs: 0, clears: 0 }));

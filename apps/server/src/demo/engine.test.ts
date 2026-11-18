@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../core/events.ts';
 import { buildContractDb } from '../../test/fixtures/contract-db.ts';
 import { makeTmpDir } from '../../test/helpers/tmp.ts';
-import { openDemoEngine, type DemoEngine } from './engine.ts';
+import { openDemoEngine, type DemoEngine } from '../../test/helpers/client.ts';
 import { buildDemoDb, DEMO_ROOT_PREFIX } from './fixtures.ts';
 
 const NOW = Date.parse('2026-09-27T12:00:00.000Z');

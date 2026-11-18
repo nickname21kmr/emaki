@@ -5,9 +5,9 @@ import { EventBus } from '../../core/events.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
 import { sharp } from '../../services/image/sharpConfig.ts';
 import { animationHtml } from '../../../test/helpers/htmlAnimation.ts';
-import { SqliteDataSource } from '../../datasource/sqlite/SqliteDataSource.ts';
+import { SqliteDataSource } from '../../../test/helpers/client.ts';
 import Fastify from 'fastify';
-import { imageRoutes } from '../../routes/images.ts';
+import { registryRoutes } from '../../http/routes.ts';
 
 let dir:string, lib:string, downloads:string, rootId:string, ds:SqliteDataSource;
 let image:Buffer;
@@ -122,7 +122,7 @@ it('database write failure removes only its new copy and leaves no temporary fil
 });
 
 it('HTTP validates requests and returns immediately readable imported records',async()=>{
-  const app=Fastify();imageRoutes(app,ds);
+  const app=Fastify();registryRoutes(app,ds.registry);
   try {
     expect((await app.inject({method:'POST',url:'/api/images/import',payload:{rootId,files:[]}})).statusCode).toBe(400);
     const file=await source();
@@ -241,7 +241,7 @@ it('a queued thumbnail for the old version cannot cache new bytes under the old 
 });
 
 it('HTTP replacement returns the same ID and updated bytes, size and conditional cache validators',async()=>{
-  const original=item(await run([{path:await source()}])),app=Fastify();imageRoutes(app,ds);
+  const original=item(await run([{path:await source()}])),app=Fastify();registryRoutes(app,ds.registry);
   try {
     const oldFile=await app.inject({url:`/api/images/${original.imageId}/file`});
     const file=await source('hd.png',await sharp(image).resize(24,28).png().toBuffer());

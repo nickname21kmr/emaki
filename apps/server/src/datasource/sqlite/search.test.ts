@@ -4,7 +4,7 @@ import { EventBus } from '../../core/events.ts';
 import { openDatabase, type Db } from '../../db/connection.ts';
 import { migrate } from '../../db/migrate.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
-import { SqliteDataSource } from './SqliteDataSource.ts';
+import { SqliteDataSource } from '../../../test/helpers/client.ts';
 import { refreshTagCounts } from './search.ts';
 
 /** 原来的写法：从计入张数的图出发联 image_tags 分组。新写法要和它逐个一致 */

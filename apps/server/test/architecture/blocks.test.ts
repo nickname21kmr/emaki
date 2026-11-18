@@ -3,7 +3,7 @@
  *
  * 网页的区块注册表（apps/web/src/blocks/registry.ts）给每个页面区块登记了稳定 id 和它用到的查询。这里核对：
  * - id 唯一、格式是「页面.区块」，每页至少一个区块；
- * - 登记的每个查询都是服务端真实存在的 GET 接口（从 src/app.ts、src/routes/*.ts 扫出来），或者 SSE 事件；
+ * - 登记的每个查询都是服务端真实存在的 GET 接口（P6 起从命令 / 查询注册表的 http 地址来，加上 src/app.ts、src/http/events.ts 里手写的），或者 SSE 事件；
  * - 区块用的页面组件确实按注册表渲染（页面文件里有 <PageBlocks page="…">，并且给每个区块都写了渲染函数）。
  * 以后的个性化页面、插件按区块 id 引用，查询必须是公开接口，页面里不藏业务规则。
  */
@@ -11,15 +11,17 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ALL_BLOCKS, PAGES, blocksOf, type PageId } from '../../../web/src/blocks/registry.ts';
+import { DEFINITIONS } from '../../src/commands/index.ts';
 import { stripComments } from './sqlWrites.ts';
 
 const SRC = path.resolve(import.meta.dirname, '../../src');
 const WEB = path.resolve(import.meta.dirname, '../../../web/src');
 
-/** 服务端声明的 GET 路由（和 http.smoke.test.ts 的扫描同一个写法） */
+/** 服务端的 GET 路由：注册表里查询的地址（P6 起 HTTP 路由从注册表生成），加上手写的几条（健康检查、SSE） */
 function declaredGets(): Set<string> {
   const out = new Set<string>();
-  const files = [path.join(SRC, 'app.ts'), ...readdirSync(path.join(SRC, 'routes')).map((f) => path.join(SRC, 'routes', f))];
+  for (const d of DEFINITIONS) for (const h of d.http ?? []) if (h.method === 'GET') out.add(`GET ${h.path}`);
+  const files = [path.join(SRC, 'app.ts'), path.join(SRC, 'http/events.ts')];
   for (const f of files) {
     const text = stripComments(readFileSync(f, 'utf8'), f);
     for (const m of text.matchAll(/\bapp\.get\(\s*'([^']+)'/g)) out.add(`GET ${m[1]}`);

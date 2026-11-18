@@ -3,7 +3,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../../core/events.ts';
 import type { JobContext } from '../../core/jobs.ts';
-import { SqliteDataSource } from '../../datasource/sqlite/SqliteDataSource.ts';
+import { SqliteDataSource } from '../../../test/helpers/client.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
 import { SET_FOLDER_MAX } from '../../datasource/sqlite/duplicates.ts';
 import { sharp } from '../image/sharpConfig.ts';

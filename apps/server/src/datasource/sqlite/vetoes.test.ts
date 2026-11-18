@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { rmSync } from 'node:fs';
 import { EventBus } from '../../core/events.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
-import { SqliteDataSource } from './SqliteDataSource.ts';
+import { SqliteDataSource } from '../../../test/helpers/client.ts';
 import { unlinkByUser } from '../../domain/curation/links.ts';
 
 const T = '2026-01-01T00:00:00.000Z';

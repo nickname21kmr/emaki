@@ -6,7 +6,7 @@ import { TRASH_COMMITTED } from '../../core/undo.ts';
 import { closeDatabase } from '../../db/connection.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
 import { sharp } from '../../services/image/sharpConfig.ts';
-import { SqliteDataSource, type SqliteOpenOptions } from '../../datasource/sqlite/SqliteDataSource.ts';
+import { SqliteDataSource, type SqliteOpenOptions } from '../../../test/helpers/client.ts';
 
 describe('移到回收站延后执行（pending_trash）', () => {
   let dir: string;

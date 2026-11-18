@@ -5,7 +5,7 @@
  */
 import type { MutationResult } from '@emaki/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { SqliteDataSource } from '../src/datasource/sqlite/SqliteDataSource.ts';
+import type { SqliteDataSource } from './helpers/client.ts';
 import { sqliteFactory, type ContractEnv, type Kind } from './contract/harness.ts';
 import { dumpCore } from './helpers/dump.ts';
 

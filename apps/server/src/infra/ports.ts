@@ -9,8 +9,12 @@
  */
 import type { ImageFormat, JobKind, ThumbWidth } from '@emaki/shared';
 import type { JobRunner } from '../core/jobs.ts';
-import type { FileResponse } from '../datasource/DataSource.ts';
 import type { TrashImpl } from '../services/trash/recycleBin.ts';
+
+/** 图片文件响应：要么直接给内容（演示模式的 SVG 占位图），要么给磁盘路径让 fastify 流式发送 */
+export type FileResponse =
+  | { kind: 'buffer'; contentType: string; body: Buffer | string; etag?: string; cacheControl?: string }
+  | { kind: 'path'; contentType: string; filePath: string; etag?: string; cacheControl?: string };
 
 /** 读一张图的文件时用到的行（images 表里的列） */
 export interface ImageFileRow {

@@ -95,8 +95,9 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   duplicate_comparisons: 'duplicates',
   // 设置
   settings: 'settings',
-  // 命令层
+  // 命令层：最近的改动（可撤回）、审计记录和 operationId 幂等（P6，迁移 040）
   change_log: 'commands',
+  command_log: 'commands',
   [DYNAMIC_TABLE]: 'commands',
   // 变更传播：交给后台任务、还没做完的工作和用户的暂停（迁移 033）；派生数据的版本（迁移 037）
   pending_work: 'propagation',

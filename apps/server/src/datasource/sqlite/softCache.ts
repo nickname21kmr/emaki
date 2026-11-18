@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
  * - 硬失效（用户操作）：下一次读一定重算。
  * - 软失效（后台扫描 / 识别写库）：旧结果最多再用 softMs 毫秒，过了才重算。
  *
- * 识别期间每 3 秒一次 library-changed（后台任务的事件节流，propagation/engine.ts），前端会把已加载的 query 全部重拉；better-sqlite3 是同步的，
+ * 识别期间每 3 秒一次 changed 事件（后台任务的事件节流，propagation/engine.ts），前端会把已加载的 query 全部重拉；better-sqlite3 是同步的，
  * 没有这层的话统计、总数这些几十到几百毫秒的查询会一遍遍卡住整个服务（包括缩略图和 SSE）。
  * 软窗口用真实时间（performance.now），不用 ctx.clock：测试里的假时钟是定值。
  */

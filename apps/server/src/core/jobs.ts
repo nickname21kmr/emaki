@@ -54,8 +54,8 @@ export class JobQueue {
     private readonly bus: EventBus,
     private readonly resolveRunner: (kind: JobKind) => JobRunner,
     /**
-     * 任务结束时（完成、让出、取消、失败都算）：变更传播做掉延后的全量重算、推 library-changed（reason 是任务种类，附录 #20）。
-     * 不给时直接推一条 library-changed（单元测试）
+     * 任务结束时（完成、让出、取消、失败都算）：变更传播做掉延后的全量重算、推 changed 事件（reason 是任务种类，附录 #20）。
+     * 不给时直接推一条 changed 事件（单元测试）
      */
     private readonly onFinished?: (kind: JobKind) => void,
   ) {}
@@ -192,7 +192,7 @@ export class JobQueue {
       this.runners.delete(job.id);
       this.publish(job);
       if (this.onFinished) this.onFinished(job.kind);
-      else this.bus.emit({ type: 'library-changed', reason: job.kind });
+      else this.bus.publish({ type: 'changed', changes: [], reason: job.kind, actor: `job:${job.kind}` });
       this.running[lane] = false;
       void this.pump();
     }

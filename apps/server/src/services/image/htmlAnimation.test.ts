@@ -7,7 +7,7 @@ import { sharp } from './sharpConfig.ts';
 import { probeImage } from './probe.ts';
 import { preprocessWdV3 } from '../tagger/preprocess.ts';
 import { processPixels } from './pixels.ts';
-import { SqliteDataSource } from '../../datasource/sqlite/SqliteDataSource.ts';
+import { SqliteDataSource } from '../../../test/helpers/client.ts';
 import { EventBus } from '../../core/events.ts';
 import { writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';

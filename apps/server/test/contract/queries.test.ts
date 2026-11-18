@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { rmSync } from 'node:fs';
 import { EventBus } from '../../src/core/events.ts';
-import { openDemoEngine, type DemoEngine } from '../../src/demo/engine.ts';
+import { openDemoEngine, type DemoEngine } from '../helpers/client.ts';
 import { makeTmpDir } from '../helpers/tmp.ts';
 import { canon, sqliteFactory, type ContractEnv } from './harness.ts';
 

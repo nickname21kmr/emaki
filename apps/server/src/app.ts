@@ -1,24 +1,22 @@
 import type { HealthResponse } from '@emaki/shared';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
-import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { config } from './config.ts';
 import type { EventBus } from './core/events.ts';
-import type { DataSource } from './datasource/DataSource.ts';
+import type { SqliteDataSource } from './datasource/sqlite/SqliteDataSource.ts';
 import { toApiError } from './http/errors.ts';
+import { eventRoutes } from './http/events.ts';
+import { registryRoutes } from './http/routes.ts';
 import { keepAwakeStatus } from './services/system/keepAwake.ts';
-import { collectionRoutes } from './routes/collections.ts';
-import { imageRoutes } from './routes/images.ts';
-import { libraryRoutes } from './routes/library.ts';
-import { systemRoutes } from './routes/system.ts';
 import { assistantRoutes } from './assistant/routes.ts';
 import { actorFromHeaders, runAs } from './propagation/actor.ts';
 
-/** 这次启动的 id：撤销栈只在内存里，前端看到它变了就丢掉旧的撤销记录 */
-const bootId = randomUUID();
-
-export async function buildApp(ds: DataSource, bus: EventBus) {
+/**
+ * HTTP 入口。路由从命令 / 查询注册表生成（http/routes.ts，docs/core-architecture.md 第 9 节）；
+ * 另外只有 SSE（http/events.ts）、健康检查、AI 助手的会话管理（assistant/routes.ts）和生产模式托管前端。
+ */
+export async function buildApp(engine: SqliteDataSource, bus: EventBus) {
   const app = Fastify({
     logger: { level: process.env.EMAKI_LOG_LEVEL ?? 'info', transport: undefined },
     // 批量操作可能带几千个 id
@@ -40,13 +38,13 @@ export async function buildApp(ds: DataSource, bus: EventBus) {
   app.addHook('onRequest', async (req, reply) => {
     const hostHeader = (req.headers.host ?? '').toLowerCase();
     if (!allowedHosts.has(hostHeader.replace(/:\d+$/, ''))) {
-      return reply.code(403).send({ ok: false, error: '只允许本机访问', code: 'bad_request' });
+      return reply.code(403).send({ ok: false, error: '只允许本机访问', code: 'forbidden' });
     }
     const origin = req.headers.origin?.toLowerCase();
     const site = req.headers['sec-fetch-site'];
     const write = req.method !== 'GET' && req.method !== 'HEAD';
     if ((origin && origin !== `http://${hostHeader}`) || (write && site && site !== 'same-origin' && site !== 'none')) {
-      return reply.code(403).send({ ok: false, error: '只允许 Emaki 自己的页面调用', code: 'bad_request' });
+      return reply.code(403).send({ ok: false, error: '只允许 Emaki 自己的页面调用', code: 'forbidden' });
     }
     if (req.method === 'POST' && !(req.headers['content-type'] ?? '').startsWith('application/json')) {
       return reply.code(415).send({ ok: false, error: '请求必须是 JSON', code: 'bad_request' });
@@ -59,11 +57,9 @@ export async function buildApp(ds: DataSource, bus: EventBus) {
     void reply.status(statusCode).send(body);
   });
 
-  libraryRoutes(app, ds);
-  collectionRoutes(app, ds);
-  imageRoutes(app, ds);
-  systemRoutes(app, ds, bus);
-  assistantRoutes(app, ds);
+  registryRoutes(app, engine.registry);
+  eventRoutes(app, bus);
+  assistantRoutes(app, engine);
 
   app.get(
     '/api/health',
@@ -72,7 +68,7 @@ export async function buildApp(ds: DataSource, bus: EventBus) {
       dataSource: config.dataSource,
       version: config.appVersion,
       dataDir: config.libraryDir,
-      bootId,
+      bootId: bus.boot,
       ...(config.dataSource === 'sqlite' ? { keepAwake: keepAwakeStatus() } : {}),
     }),
   );

@@ -10,8 +10,8 @@ import type { LibraryStats, LibrarySummary, UnrecognizedSummary } from '@emaki/s
 import { rmSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { EventBus } from '../core/events.ts';
-import type { SqliteDataSource } from '../datasource/sqlite/SqliteDataSource.ts';
-import { openDemoEngine } from '../demo/engine.ts';
+import type { SqliteDataSource } from '../../test/helpers/client.ts';
+import { openDemoEngine } from '../../test/helpers/client.ts';
 import { makeTmpDir } from '../../test/helpers/tmp.ts';
 import { sqliteFactory, type ContractEnv } from '../../test/contract/harness.ts';
 import { ART_KINDS_SQL, ART_QUEUE_SCOPE, UNRECOGNIZED } from './terms.ts';

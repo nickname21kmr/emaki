@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { rmSync } from 'node:fs';
 import { EventBus } from '../core/events.ts';
-import { SqliteDataSource } from '../datasource/sqlite/SqliteDataSource.ts';
+import { SqliteDataSource } from '../../test/helpers/client.ts';
 import { buildContractDb } from '../../test/fixtures/contract-db.ts';
 import { makeTmpDir } from '../../test/helpers/tmp.ts';
 import type { DemoDb } from './fixtures.ts';

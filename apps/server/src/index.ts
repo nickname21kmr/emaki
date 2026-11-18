@@ -2,11 +2,12 @@ import { buildApp } from './app.ts';
 import { killAgentTreesSync } from './assistant/rpc.ts';
 import { config } from './config.ts';
 import { EventBus } from './core/events.ts';
-import type { DataSource } from './datasource/DataSource.ts';
+import type { Settings } from '@emaki/shared';
+import type { SqliteDataSource } from './datasource/sqlite/SqliteDataSource.ts';
 import { KeepAwake } from './services/system/keepAwake.ts';
 
 /** 演示模式也跑真实引擎（docs/core-architecture.md 第 8 节）：换成演示数据和假部件，数据库在 data/demo（每次启动重建） */
-async function createDataSource(bus: EventBus): Promise<DataSource> {
+async function openEngine(bus: EventBus): Promise<SqliteDataSource> {
   if (config.dataSource === 'demo') {
     const started = performance.now();
     const { openDemoEngine } = await import('./demo/engine.ts');
@@ -19,12 +20,12 @@ async function createDataSource(bus: EventBus): Promise<DataSource> {
 }
 
 const bus = new EventBus();
-const ds = await createDataSource(bus);
+const ds = await openEngine(bus);
 const app = await buildApp(ds, bus);
 // 后台任务运行时不让电脑休眠（设置 → 识别里可关）；演示数据不需要
 const awake =
   config.dataSource === 'sqlite'
-    ? new KeepAwake(bus, { enabled: async () => (await ds.getSettings()).tagger.keepAwake, log: (m) => app.log.info(m) })
+    ? new KeepAwake(bus, { enabled: async () => (await ds.registry.query<Settings>('settings.get', {}, { actor: 'system:keepAwake' })).tagger.keepAwake, log: (m) => app.log.info(m) })
     : null;
 
 try {
@@ -38,7 +39,7 @@ try {
       if (sig === 'SIGHUP') killAgentTreesSync();
       awake?.close();
       await app.close();
-      await ds.close?.();
+      await ds.close();
       process.exit(0);
     });
   }

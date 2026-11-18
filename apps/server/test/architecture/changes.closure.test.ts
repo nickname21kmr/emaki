@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../../src/app.ts';
 import { EventBus } from '../../src/core/events.ts';
 import type { JobContext } from '../../src/core/jobs.ts';
-import { SqliteDataSource, type SqliteOpenOptions } from '../../src/datasource/sqlite/SqliteDataSource.ts';
+import { SqliteDataSource, type SqliteOpenOptions } from '../helpers/client.ts';
 import { ACTOR_HEADER, ASSISTANT_HEADER_VALUE, runAs } from '../../src/propagation/actor.ts';
 import { hasWork } from '../../src/propagation/work.ts';
 import { sharp } from '../../src/services/image/sharpConfig.ts';
@@ -349,7 +349,7 @@ describe('附录 #20、#21：缓存和事件按 actor', () => {
     const events: string[] = [];
     const soft: boolean[] = [];
     env.bus.subscribe((e: ServerEvent) => {
-      if (e.type === 'library-changed') events.push(e.reason);
+      if (e.type === 'changed') events.push(e.reason);
     });
     env.ds.ctx.onInvalidate((_s, o) => void soft.push(!!o.soft));
     return { events, soft };

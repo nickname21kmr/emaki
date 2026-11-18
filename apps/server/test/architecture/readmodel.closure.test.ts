@@ -19,7 +19,7 @@ import { JobQueue } from '../../src/core/jobs.ts';
 import { openDatabase } from '../../src/db/connection.ts';
 import { migrate } from '../../src/db/migrate.ts';
 import { KIND_LABEL as SERVER_KIND_LABEL } from '../../src/datasource/sqlite/kinds.ts';
-import type { SqliteDataSource } from '../../src/datasource/sqlite/SqliteDataSource.ts';
+import type { SqliteDataSource } from '../helpers/client.ts';
 import { readSettings } from '../../src/datasource/sqlite/settings.ts';
 import { parseComicDir } from '../../src/domain/collections/parseName.ts';
 import { sqliteFactory, type ContractEnv } from '../contract/harness.ts';

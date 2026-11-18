@@ -98,7 +98,7 @@ export function recordChange(
     .prepare('DELETE FROM change_log WHERE kind = ? AND id NOT IN (SELECT id FROM change_log WHERE kind = ? ORDER BY id DESC LIMIT ?)')
     .run(kind, kind, KEEP);
   if (announce) {
-    ctx.bus.emit({
+    ctx.bus.publish({
       type: 'auto-change',
       change: { id: String(id), kind, createdAt: now, summary, revertedAt: null, note: null, count: announce.count, revertHint: announce.hint, revertable: true },
     });

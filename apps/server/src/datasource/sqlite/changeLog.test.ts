@@ -10,7 +10,7 @@ import type { JobContext } from '../../core/jobs.ts';
 import { cacheArtwork } from '../../services/pixiv/cache.ts';
 import type { PixivArtwork } from '../../services/pixiv/client.ts';
 import { queuePixivImages, resetPixivBackoff, syncPixivCharacters } from '../../services/pixiv/sync.ts';
-import type { SqliteDataSource } from './SqliteDataSource.ts';
+import type { SqliteDataSource } from '../../../test/helpers/client.ts';
 
 let env: ContractEnv;
 let ds: SqliteDataSource;
@@ -42,7 +42,7 @@ describe('自动关联 Danbooru 标签', () => {
     (ds as unknown as { characters: { associateAutomatic(): void } }).characters.associateAutomatic();
     expect(db().prepare('SELECT danbooru_tag, source FROM characters WHERE id = ?').get(cid)).toEqual({ danbooru_tag: 'hoshino_(blue_archive)', source: 'danbooru' });
     expect(env.events.filter((e) => e.type === 'auto-change')).toEqual([
-      { type: 'auto-change', change: expect.objectContaining({ kind: 'auto-associate', summary: '「小鸟游星野」自动绑上了 Danbooru 标签 hoshino_(blue_archive)' }) },
+      { type: 'auto-change', id: expect.any(Number), change: expect.objectContaining({ kind: 'auto-associate', summary: '「小鸟游星野」自动绑上了 Danbooru 标签 hoshino_(blue_archive)' }) },
     ]);
     // 绑定之后识别器按这个标签归进来一张
     db().prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_tag, evidence_score, added_at) VALUES (?, ?, 'auto', 'job:tag', 'auto-accept@1', 'tagger', ?, 0.9, ?)").run(img('i27'), cid, 'hoshino_(blue_archive)', NOW_ISO());

@@ -3,7 +3,7 @@
  * 确认路由、zod 校验、错误处理接线正确。
  * 引擎用演示模式的部件（demo/engine.ts：占位图、不碰文件、假任务）+ 契约夹具（固定 NOW）。用例里照旧写夹具 id
  * （i1 / c1 / w1 …），call() 负责把请求里的夹具 id 换成库里的 id、把响应里的 id 换回夹具 id。
- * 最后一条用例从 src/app.ts、src/routes/*.ts 里扫出全部路由，确保这里每个都测到了（新增路由忘了补冒烟会失败）。
+ * 最后一条用例列出全部路由（命令 / 查询注册表里的地址，加上 src/app.ts、src/http/*.ts 里手写的），确保这里每个都测到了（新增路由忘了补冒烟会失败）。
  */
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
@@ -11,8 +11,8 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { EventBus } from '../src/core/events.ts';
-import { SqliteDataSource } from '../src/datasource/sqlite/SqliteDataSource.ts';
-import { openDemoEngine } from '../src/demo/engine.ts';
+import { openDemoEngine, SqliteDataSource } from './helpers/client.ts';
+import { DEFINITIONS } from '../src/commands/index.ts';
 import type { IdMap } from '../src/demo/seed.ts';
 import { NOW } from './contract/harness.ts';
 import { buildContractDb } from './fixtures/contract-db.ts';
@@ -357,6 +357,16 @@ describe('图片、未识别、重复、排除（routes/images.ts）', () => {
     expect((await call('POST', '/api/images/move/preview', { rootId: 'root1', dir: '' })).status).toBe(400);
   });
 
+  // 只读的预览用 GET（第 9 节）：选中的图不多时 ids 放在查询串里
+  route('GET /api/images/move/preview', async () => {
+    const byCharacter = await call('GET', `/api/images/move/preview?characterId=c1&rootId=root1&dir=${encodeURIComponent('角色/未花')}`);
+    expect(byCharacter.status).toBe(200);
+    expect(byCharacter.json.ids.length).toBeGreaterThan(0);
+    const byIds = await call('GET', '/api/images/move/preview?ids=i1,i2&rootId=root1&dir=');
+    expect([byIds.status, byIds.json]).toEqual([200, { ids: expect.any(Array), alreadyThere: expect.any(Number), inCollection: expect.any(Number), otherCharacters: expect.any(Number) }]);
+    expect((await call('GET', '/api/images/move/preview?rootId=root1&dir=')).status).toBe(400);
+  });
+
   route('GET /api/images/:id', async () => {
     const { status, json } = await call('GET', '/api/images/i1');
     expect(status).toBe(200);
@@ -558,6 +568,12 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     expect([status, json]).toMatchObject([200, { proxy: { url: null }, targets: [], summary: expect.any(String) }]);
   });
 
+  // 只读的预览用 GET（第 9 节）；POST 留作兼容
+  route('GET /api/system/network-check', async () => {
+    const { status, json } = await call('GET', '/api/system/network-check');
+    expect([status, json]).toMatchObject([200, { proxy: { url: null }, targets: [], summary: expect.any(String) }]);
+  });
+
   route('GET /api/tagger/models', async () => {
     const { status, json } = await call('GET', '/api/tagger/models');
     expect(status).toBe(200);
@@ -607,6 +623,53 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     expect((await call('PUT', '/api/settings', { browse: { customThemes: [{ ...theme, tags: many, none: many.map((t) => `x${t}`) }] } })).status).toBe(400);
   });
 
+  // 设置用 PATCH（第 9 节）；PUT 留作兼容的别名，同一个命令 settings.update
+  route('PATCH /api/settings', async () => {
+    const res = await call('PATCH', '/api/settings', { ui: { theme: 'light' } });
+    expect([res.status, res.json]).toMatchObject([200, { ui: { theme: 'light' } }]);
+    // 改设置是不可撤销的命令：响应头说它是撤销屏障
+    expect([res.res.headers['x-emaki-command'], res.res.headers['x-emaki-undo']]).toEqual(['settings.update', 'barrier']);
+    expect((await call('PATCH', '/api/settings', { dedupe: { hammingThreshold: 100 } })).status).toBe(400);
+    await call('PATCH', '/api/settings', { ui: { theme: 'system' } });
+  });
+
+  route('GET /api/commands', async () => {
+    const { status, json } = await call('GET', '/api/commands');
+    expect(status).toBe(200);
+    expect(json).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'curation.link', kind: 'command', scope: 'curate', undoable: true, idempotent: true }),
+      expect.objectContaining({ name: 'settings.update', kind: 'command', scope: 'settings', undoable: false }),
+      expect.objectContaining({ name: 'images.list', kind: 'query', scope: 'read', http: [{ method: 'GET', path: '/api/images' }] }),
+    ]));
+  });
+
+  route('GET /api/audit', async () => {
+    await call('POST', '/api/images/bulk', { ids: ['i5'], action: { type: 'favorite', value: true } });
+    const { status, json } = await call('GET', '/api/audit?limit=5');
+    expect(status).toBe(200);
+    expect(json.items[0]).toMatchObject({ command: 'curation.setFavorite', actor: 'user', status: 'done', undoToken: expect.any(String), changes: ['curation.favoriteChanged'] });
+    expect((await call('GET', '/api/audit?actor=assistant')).json.items.every((r: { actor: string }) => r.actor === 'assistant')).toBe(true);
+  });
+
+  // 通用入口：新代码只用命令和查询（名字、输入就是注册表里的）
+  route('POST /api/commands/:name', async () => {
+    const res = await call('POST', '/api/commands/curation.setRating', { ids: ['i5'], value: 'sensitive' });
+    expect([res.status, res.json]).toEqual([200, withUndo]);
+    expect([res.res.headers['x-emaki-command'], res.res.headers['x-emaki-undo']]).toEqual(['curation.setRating', 'token']);
+    expect(Number(res.res.headers['x-emaki-event'])).toBeGreaterThan(0);
+    expect((await call('POST', '/api/commands/curation.setRating', { ids: ['i5'], value: 'nsfw' })).status).toBe(400);
+    expect((await call('POST', '/api/commands/no.such', {})).status).toBe(404);
+    // 查询不能当命令执行
+    expect((await call('POST', '/api/commands/images.list', {})).status).toBe(404);
+    await call('POST', `/api/undo/${res.json.undoToken}`);
+  });
+
+  route('GET /api/queries/:name', async () => {
+    const { status, json } = await call('GET', '/api/queries/images.list?limit=2&favorite=true');
+    expect([status, json]).toMatchObject([200, page]);
+    expect((await call('GET', '/api/queries/curation.link')).status).toBe(404);
+  });
+
   route('POST /api/library-roots', async () => {
     // 演示部件不碰用户的文件夹：参数校验通过后拒绝
     const { status, json } = await call('POST', '/api/library-roots', { path: 'F:/NewPics' });
@@ -649,9 +712,10 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     expect(status).toBe(200);
     expect(json).toMatchObject({ id: expect.any(String), kind: 'dedupe', status: expect.stringMatching(/^(queued|running)$/) });
     expect((await call('POST', '/api/jobs', { kind: 'format-c' })).status).toBe(400);
-    const start=vi.spyOn(ds,'startJob');
+    const start=vi.spyOn(ds.registry,'execute');
     expect((await call('POST','/api/jobs',{kind:'pixiv-tags',refreshPixiv:true})).status).toBe(200);
-    expect(start).toHaveBeenLastCalledWith('pixiv-tags',{refreshPixiv:true});
+    expect(start).toHaveBeenLastCalledWith('jobs.start',{kind:'pixiv-tags',refreshPixiv:true},expect.objectContaining({actor:'user'}));
+    start.mockRestore();
     expect((await call('POST','/api/jobs',{kind:'scan',refreshPixiv:true})).status).toBe(400);
     expect((await call('POST','/api/jobs',{kind:'pixiv-tags',refreshPixiv:'yes'})).status).toBe(400);
   });
@@ -662,7 +726,7 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     expect([status, json]).toEqual([200, { ok: true }]);
   });
 
-  route('POST /api/undo/:id', async () => {
+  route('POST /api/undo/:token', async () => {
     const token = (await call('POST', '/api/images/bulk', { ids: ['i3'], action: { type: 'favorite', value: true } })).json.undoToken as string;
     const { status, json } = await call('POST', `/api/undo/${token}`);
     expect([status, json]).toMatchObject([200, mutation]);
@@ -677,7 +741,15 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     expect([live.status, live.json]).toEqual([200, { status: { [token]: 'live', nope: 'expired' } }]);
     await call('POST', `/api/undo/${token}`);
     expect((await call('POST', '/api/undo/status', { tokens: [token] })).json).toEqual({ status: { [token]: 'undone' } });
-    expect((await call('POST', '/api/undo/status', { tokens: 'x' })).status).toBe(400);
+    // 和 GET 共用一个 schema：逗号分隔的字符串也认（GET 的查询串就是这样）；不是字符串、数组的照样 400
+    expect((await call('POST', '/api/undo/status', { tokens: 5 })).status).toBe(400);
+  });
+
+  route('GET /api/undo/status', async () => {
+    const token = (await call('POST', '/api/images/bulk', { ids: ['i4'], action: { type: 'favorite', value: false } })).json.undoToken as string;
+    const live = await call('GET', `/api/undo/status?tokens=${token},nope`);
+    expect([live.status, live.json]).toEqual([200, { status: { [token]: 'live', nope: 'expired' } }]);
+    await call('POST', `/api/undo/${token}`);
   });
 
   // SSE 会 hijack 响应、一直不结束，inject 等不到结果：真的监听一个随机端口（只在 127.0.0.1），读到第一个事件就断开
@@ -694,7 +766,7 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
       // 先读到 retry 行，确认订阅已建立，再发一个事件
       while (!text.includes('retry:')) text += decoder.decode((await reader.read()).value);
       await ds.updateImage(id('i4'), { favorite: true });
-      while (!text.includes('"type":"library-changed"')) text += decoder.decode((await reader.read()).value);
+      while (!text.includes('"type":"changed"')) text += decoder.decode((await reader.read()).value);
       expect(text).toMatch(/^retry: 3000\n\n/);
     } finally {
       ac.abort();
@@ -709,7 +781,7 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
 describe('本机安全（T23）', () => {
   it('非本机 Host → 403（防 DNS rebinding）', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/health', headers: { host: 'evil.example' } });
-    expect([res.statusCode, res.json()]).toEqual([403, apiError('bad_request')]);
+    expect([res.statusCode, res.json()]).toEqual([403, apiError('forbidden')]);
     for (const host of ['127.0.0.1:5174', 'localhost:5173', '[::1]:5174']) {
       expect((await app.inject({ method: 'GET', url: '/api/health', headers: { host } })).statusCode).toBe(200);
     }
@@ -752,7 +824,7 @@ describe('本机安全（T23）', () => {
       headers: { ...evil, 'sec-fetch-site': 'same-site', 'content-type': 'application/json' },
       payload: { ids: [id('i1')], action: { type: 'trash' } },
     });
-    expect([bulk.statusCode, bulk.json()]).toEqual([403, apiError('bad_request')]);
+    expect([bulk.statusCode, bulk.json()]).toEqual([403, apiError('forbidden')]);
     expect(bulk.headers['access-control-allow-origin']).toBeUndefined();
     const preflight = await app.inject({
       method: 'OPTIONS',
@@ -783,8 +855,9 @@ describe('本机安全（T23）', () => {
 
 describe('路由清单', () => {
   it('源码里的每个路由都有冒烟用例', () => {
-    const files = [path.join(SRC, 'app.ts'), ...readdirSync(path.join(SRC, 'routes')).map((f) => path.join(SRC, 'routes', f))];
-    const declared = new Set<string>();
+    // P6：HTTP 路由从命令 / 查询注册表生成，另外是 app.ts、http/*.ts 里手写的（SSE、健康检查、通用入口、旧地址的兼容层）
+    const declared = new Set<string>(DEFINITIONS.flatMap((d) => (d.http ?? []).map((h) => `${h.method} ${h.path}`)));
+    const files = [path.join(SRC, 'app.ts'), ...readdirSync(path.join(SRC, 'http')).filter((f) => f.endsWith('.ts')).map((f) => path.join(SRC, 'http', f))];
     for (const f of files) {
       for (const m of readFileSync(f, 'utf8').matchAll(/\bapp\.(get|post|put|patch|delete)\(\s*'([^']+)'/g)) {
         declared.add(`${m[1]!.toUpperCase()} ${m[2]}`);

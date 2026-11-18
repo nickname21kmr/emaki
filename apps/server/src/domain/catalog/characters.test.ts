@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { dumpCore } from '../../../test/helpers/dump.ts';
 import { sqliteFactory, type ContractEnv } from '../../../test/contract/harness.ts';
-import type { SqliteDataSource } from '../../datasource/sqlite/SqliteDataSource.ts';
+import type { SqliteDataSource } from '../../../test/helpers/client.ts';
 import { insertDanbooruCharacter } from './characterCatalog.ts';
 
 let env: ContractEnv;

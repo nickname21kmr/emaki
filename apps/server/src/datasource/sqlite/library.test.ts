@@ -2,7 +2,7 @@ import { rmSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../core/events.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
-import { SqliteDataSource } from './SqliteDataSource.ts';
+import { SqliteDataSource } from '../../../test/helpers/client.ts';
 
 describe('getStats 近 7 天分桶（本地时区）', () => {
   it('今天 0:00 / 23:59 落在下标 6，6 天前落在下标 0，7 天前不计', async () => {

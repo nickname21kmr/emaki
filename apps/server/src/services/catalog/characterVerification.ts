@@ -1,17 +1,9 @@
-import { z } from 'zod';
+import { CharacterVerificationInput, type CharacterVerification } from '@emaki/shared/schemas';
 import type { Db, Statement } from '../../db/connection.ts';
 
-const tag = z.string().trim().min(1).max(200).regex(/^[^\s:]+$/);
-const evidence = {
-  aliases: z.array(z.string().trim().min(1).max(100)).max(30).default([]),
-  sources: z.array(z.url({ protocol: /^https?$/ }).max(2000)).min(1).max(8),
-  evidence: z.string().trim().min(1).max(2000),
-};
-export const characterVerificationSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('identity'), tag, characterTag: tag, relation: z.enum(['form', 'same-character']), ...evidence }),
-  z.object({ type: z.literal('name'), tag, name: z.string().trim().min(1).max(100), ...evidence }),
-]);
-export type CharacterVerification = z.infer<typeof characterVerificationSchema>;
+/** 查证记录的 schema 在 packages/shared（HTTP、MCP 共用） */
+export const characterVerificationSchema = CharacterVerificationInput;
+export type { CharacterVerification };
 
 export class CharacterVerifications {
   private readonly names: Statement;

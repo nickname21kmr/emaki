@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../../core/events.ts';
 import { dumpCore } from '../../../test/helpers/dump.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
-import { SqliteDataSource } from '../../datasource/sqlite/SqliteDataSource.ts';
+import { SqliteDataSource } from '../../../test/helpers/client.ts';
 
 const T = '2026-01-01T00:00:00.000Z';
 

@@ -5,7 +5,7 @@ import { EventBus } from '../../core/events.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
 import { sharp } from '../../services/image/sharpConfig.ts';
 import { relUnder } from '../../domain/library/roots.ts';
-import { SqliteDataSource } from './SqliteDataSource.ts';
+import { SqliteDataSource } from '../../../test/helpers/client.ts';
 import { syncRootModes } from '../../domain/analysis/rootMode.ts';
 
 it('relUnder', () => {

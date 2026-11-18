@@ -42,8 +42,8 @@ const RULES: Rule[] = [
   { name: '撤销后的手工接线（onUndo / onUndoLast）', pattern: /\bonUndo(Last)?\(/, allowed: [], why: '撤销会重放原操作声明的变化，反应重算' },
   { name: '设置、文件夹监听（notifySettings / notifyRoots）', pattern: /\bnotify(Settings|Roots)\(/, allowed: [], why: '声明 settings.changed / root.* 变化' },
   {
-    name: 'library-changed 事件',
-    pattern: /type:\s*'library-changed'/,
+    name: 'changed 事件（以前叫 library-changed）',
+    pattern: /type:\s*'(library-)?changed'/,
     // core/jobs.ts：没接变更传播时（JobQueue 单元测试）的兜底
     allowed: ['propagation/', 'core/jobs.ts'],
     why: '事件由 invalidateCaches 按 actor 推送（后台任务节流，任务结束按任务种类推）',

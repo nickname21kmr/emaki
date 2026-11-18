@@ -6,9 +6,9 @@
  * 只有用户和助手的操作会在这里直接拉起后台任务；后台任务自己写库时，后续任务由任务链（services/pipeline.ts）接着排。
  */
 import type { EventBus } from '../core/events.ts';
-import type { LibraryChangedReason } from '@emaki/shared';
-import { changedReason, isInteractive } from './actor.ts';
-import { ALL_CHANGES } from './changes.ts';
+import type { DomainChange, LibraryChangedReason } from '@emaki/shared';
+import { changedReason, currentCall, isInteractive, type Actor } from './actor.ts';
+import { ALL_CHANGES, publicChanges } from './changes.ts';
 import type { Reaction } from './registry.ts';
 import { markWork } from './work.ts';
 
@@ -39,37 +39,46 @@ export interface EngineHooks {
   pendingPixiv(): boolean;
 }
 
-/** 后台任务写库时 library-changed 最多这么久推一次（扫描、识别以前各自节流，3 秒、5 秒） */
+/** 后台任务写库时 changed 事件最多这么久推一次（扫描、识别以前各自节流，3 秒、5 秒） */
 export const BACKGROUND_EMIT_MS = 3000;
 
 /**
- * library-changed 的推送：用户和助手的操作马上推；后台任务按 reason 节流（首次马上推，之后最多 3 秒一次，最后一次补推），
- * 任务结束时马上推一次。
+ * 对外的 changed 事件（附录 #36）：带这次提交变了哪些事实（公开的类型）、谁做的、哪个命令。
+ * 用户和助手的操作马上推；后台任务按 reason 节流（首次马上推，之后最多 3 秒一次，最后一次补推，期间的类型合并），
+ * 任务结束时马上推一次。推出去的事件 id 记进当前命令的上下文（命令层交给调用方）。
  */
 export class ChangeEvents {
   private readonly last = new Map<LibraryChangedReason, number>();
   private readonly timers = new Map<LibraryChangedReason, NodeJS.Timeout>();
+  /** 节流期间攒下的变化类型 */
+  private readonly pending = new Map<LibraryChangedReason, { changes: Set<DomainChange>; actor: Actor }>();
 
   constructor(private readonly bus: EventBus) {}
 
-  emit(reason: LibraryChangedReason, throttle: boolean): void {
-    if (!throttle) return this.send(reason);
+  emit(actor: Actor, changes: readonly DomainChange[], throttle: boolean): void {
+    const reason = changedReason(actor);
+    if (!throttle) return void this.send(reason, actor, changes);
+    const acc = this.pending.get(reason) ?? { changes: new Set<DomainChange>(), actor };
+    for (const c of changes) acc.changes.add(c);
+    this.pending.set(reason, acc);
     if (this.timers.has(reason)) return;
     const wait = (this.last.get(reason) ?? -Infinity) + BACKGROUND_EMIT_MS - performance.now();
-    if (wait <= 0) return this.send(reason);
+    if (wait <= 0) return this.flushPending(reason);
     const t = setTimeout(() => {
       this.timers.delete(reason);
-      this.send(reason);
+      this.flushPending(reason);
     }, wait);
     t.unref();
     this.timers.set(reason, t);
   }
 
   /** 马上推（任务结束时），取消等着的那次 */
-  flush(reason: LibraryChangedReason): void {
+  flush(reason: LibraryChangedReason, actor: Actor): void {
     clearTimeout(this.timers.get(reason));
     this.timers.delete(reason);
-    this.send(reason);
+    const acc = this.pending.get(reason);
+    this.pending.delete(reason);
+    this.send(reason, acc?.actor ?? actor, [...(acc?.changes ?? [])]);
   }
 
   close(): void {
@@ -77,9 +86,21 @@ export class ChangeEvents {
     this.timers.clear();
   }
 
-  private send(reason: LibraryChangedReason): void {
+  private flushPending(reason: LibraryChangedReason): void {
+    const acc = this.pending.get(reason);
+    this.pending.delete(reason);
+    if (acc) this.send(reason, acc.actor, [...acc.changes]);
+  }
+
+  private send(reason: LibraryChangedReason, actor: Actor, changes: readonly DomainChange[]): void {
     this.last.set(reason, performance.now());
-    this.bus.emit({ type: 'library-changed', reason });
+    const call = currentCall();
+    const command = call?.actor === actor ? call.command : undefined;
+    const id = this.bus.publish({ type: 'changed', changes: [...changes], reason, actor, ...(command ? { command } : {}) });
+    if (command) {
+      call?.events?.push(id);
+      for (const c of changes) call?.changes?.add(c);
+    }
   }
 }
 
@@ -195,10 +216,10 @@ export function engineReactions(hooks: EngineHooks, events: ChangeEvents): { que
       on: ALL_CHANGES,
       phase: 'after',
       always: true,
-      run({ ctx, actor }) {
+      run({ ctx, actor, all }) {
         const soft = !isInteractive(actor);
         ctx.invalidate('all', { soft });
-        events.emit(changedReason(actor), soft);
+        events.emit(actor, publicChanges(all.list), soft);
       },
     },
   ];

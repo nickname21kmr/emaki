@@ -2,7 +2,7 @@ import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../core/events.ts';
-import { SqliteDataSource } from '../datasource/sqlite/SqliteDataSource.ts';
+import { SqliteDataSource } from '../../test/helpers/client.ts';
 import { makeTmpDir } from '../../test/helpers/tmp.ts';
 import type { ChangeType } from './changes.ts';
 import { MAX_ROUNDS, type Reaction } from './registry.ts';

@@ -184,16 +184,6 @@ describe('assistant ownership and replay', () => {
     await expect(s.resume(session.id, { ...input, requestId: 'stale-button' })).rejects.toThrow('状态已更新');
     await s.close();
   });
-  it('deduplicates concurrent mutations and retains results after restart', async () => {
-    const s = setup(); s.store.settings.enabled = true; s.store.saveSettings();
-    const run = vi.fn(async () => ({ undoToken: 'once' }));
-    const results = await Promise.all([s.operation('scope', 'op', 'body', run), s.operation('scope', 'op', 'body', run)]);
-    expect(run).toHaveBeenCalledTimes(1); expect(results[0]).toEqual(results[1]);
-    const restored = new AssistantService(s.dir, '', () => '');
-    expect(await restored.operation('scope', 'op', 'body', run)).toEqual({ undoToken: 'once' });
-    expect(run).toHaveBeenCalledTimes(1);
-    await expect(s.operation('scope', 'op', 'changed-body', run)).rejects.toThrow('不同操作');
-  });
   it('retains app questions after completion and resumes once with the answer and original context', async () => {
     const s = setup(); s.store.settings.backend = 'codex'; s.store.settings.enabled = true;
     const session = s.store.create(), other = s.store.create();
@@ -232,12 +222,6 @@ describe('assistant ownership and replay', () => {
     await vi.waitFor(() => expect(prompt).toHaveBeenCalledOnce());
     expect(restored.store.get(session.id).messages.at(-1)?.text).toContain('暂不关联');
     await restored.close();
-  });
-  it('does not replay an uncertain mutation after an interruption', async () => {
-    const s = setup(); s.store.settings.enabled = true; s.store.saveSettings();
-    await expect(s.operation('scope', 'op', 'body', async () => { throw new Error('connection lost after write'); })).rejects.toThrow();
-    const restored = new AssistantService(s.dir, '', () => '');
-    const run = vi.fn(); await expect(restored.operation('scope', 'op', 'body', run)).rejects.toThrow('待核对'); expect(run).not.toHaveBeenCalled();
   });
 });
 
@@ -314,8 +298,6 @@ describe('deleting conversations', () => {
       sink = next;
       return { models: async () => [{ id: 'fixture', efforts: [], vision: true }], prompt, stop, close } as unknown as CodexBackend;
     });
-    await s.operation(session.id, 'op', 'body', async () => ({ undoToken: 't' }));
-    await s.operation(kept.id, 'op', 'body', async () => ({ undoToken: 'k' }));
     await s.send(session.id, input);
     await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
     const workspace = path.join(s.dir, 'workspaces', session.id);
@@ -328,9 +310,8 @@ describe('deleting conversations', () => {
     expect(heard).toContain(session.id);
     expect(() => s.store.get(session.id)).toThrow('找不到');
     expect(() => s.authorize(session.token)).toThrow('凭证无效');
-    // 操作记录只清这段对话的
-    const ledger = JSON.parse(readFileSync(path.join(s.dir, 'operations.json'), 'utf8'));
-    expect(Object.keys(ledger)).toEqual([`${kept.id}:op`]);
+    // 修改的 operationId 去重在命令层（command_log），删对话不再清一份 operations.json（commands/registry.test.ts）
+    expect(existsSync(path.join(s.dir, 'operations.json'))).toBe(false);
     sink.text('late', 'old reply'); sink.done('old process exit');
     expect(existsSync(path.join(s.dir, 'sessions', `${session.id}.json`))).toBe(false);
     await expect(s.send(session.id, { ...input, requestId: 'next' })).rejects.toThrow('找不到');

@@ -15,7 +15,7 @@ import { readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { EventBus } from '../../src/core/events.ts';
 import type { Db } from '../../src/db/connection.ts';
-import { SqliteDataSource } from '../../src/datasource/sqlite/SqliteDataSource.ts';
+import { SqliteDataSource } from '../helpers/client.ts';
 import { insertWork } from '../../src/domain/catalog/characterCatalog.ts';
 import { DanbooruCatalog } from '../../src/services/danbooru/catalog.ts';
 import { dumpCore } from '../helpers/dump.ts';

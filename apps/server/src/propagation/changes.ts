@@ -5,6 +5,7 @@
  * 每条变化都带 ids（涉及的图片 id，可以为空）；按图片的变化 ids 为空时直接丢掉（什么都没改）。
  * 细节字段只放反应真的要用的东西，不放整行快照。
  */
+import type { DomainChange } from '@emaki/shared';
 
 /** 移动的来由：扫描发现 / 应用内移动 / 整理到子文件夹 / 撤回移动 / 图库文件夹合并或接管 */
 export type MoveReason = 'scan' | 'move' | 'organize' | 'revertMove' | 'root';
@@ -134,6 +135,55 @@ export const ALL_CHANGES: readonly ChangeType[] = [
   'settings.changed',
   'library.opened',
 ];
+
+/**
+ * 对外事件里的变化类型（packages/shared 的 DOMAIN_CHANGES，附录 #36）：内部的变化 → 公开的名字，null 不公开。
+ * 写成完整的映射，加了新的变化类型这里不补就过不了类型检查
+ */
+export const PUBLIC_CHANGE: Record<ChangeType, DomainChange | null> = {
+  'image.added': 'image.added',
+  'image.gone': 'image.gone',
+  'image.returned': 'image.returned',
+  'image.fileChanged': 'image.fileChanged',
+  'image.moved': 'image.moved',
+  'image.trashed': 'image.trashed',
+  'image.restored': 'image.restored',
+  'root.visibilityChanged': 'root.visibilityChanged',
+  'root.modeChanged': 'root.modeChanged',
+  'image.kindChanged': 'image.kindChanged',
+  'image.animatedChanged': 'image.animatedChanged',
+  'image.sourceChanged': 'image.sourceChanged',
+  'evidence.changed': 'evidence.changed',
+  'curation.charactersChanged': 'curation.charactersChanged',
+  'curation.originalChanged': 'curation.originalChanged',
+  // 自动标原创对外就是原创变了；补采纳的「请求重新评估」是内部的，评估的结果会以角色变化出现
+  'curation.autoOriginalChanged': 'curation.originalChanged',
+  'curation.autoRequested': null,
+  'curation.shelvedChanged': 'curation.shelvedChanged',
+  'curation.ratingChanged': 'curation.ratingChanged',
+  'curation.favoriteChanged': 'curation.favoriteChanged',
+  'curation.artistsChanged': 'curation.artistsChanged',
+  'curation.vetoesChanged': 'curation.vetoesChanged',
+  'catalog.characterChanged': 'catalog.characterChanged',
+  'catalog.merged': 'catalog.merged',
+  'catalog.bindingChanged': 'catalog.bindingChanged',
+  'visibility.rulesChanged': 'visibility.rulesChanged',
+  'visibility.changed': 'visibility.changed',
+  'collections.changed': 'collections.changed',
+  'duplicates.changed': 'duplicates.changed',
+  'settings.changed': 'settings.changed',
+  'library.opened': 'library.opened',
+};
+
+/** 一组变化对外的类型（去重，按出现顺序） */
+export function publicChanges(list: readonly Change[]): DomainChange[] {
+  const out = new Set<DomainChange>();
+  for (const c of list) {
+    const p = PUBLIC_CHANGE[c.type];
+    if (p) out.add(p);
+  }
+  return [...out];
+}
 
 /** 一个事务里声明的变化（按声明顺序） */
 export class ChangeSet {

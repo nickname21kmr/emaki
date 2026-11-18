@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { dumpCore } from '../../../test/helpers/dump.ts';
 import { sqliteFactory, type ContractEnv } from '../../../test/contract/harness.ts';
 import { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
-import type { SqliteDataSource } from './SqliteDataSource.ts';
+import type { SqliteDataSource } from '../../../test/helpers/client.ts';
 import { pendingPixivCount, queuePixivImages } from '../../services/pixiv/sync.ts';
 
 let env: ContractEnv;

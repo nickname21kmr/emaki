@@ -18,9 +18,9 @@ export interface AllowedWrite {
 }
 
 export const ALLOWED_WRITES: readonly AllowedWrite[] = [
-  // datasource/sqlite/SqliteDataSource.ts
-  { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'images#collections' },
-  { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'settings' },
+  // commands/：P6 从 SqliteDataSource.ts 搬过来的两处（改来源前记同投稿组的撤销快照；切换识别方式的撤销把设置那一项改回去）
+  { file: 'commands/curation.ts', table: 'images#collections', note: '改来源前记同投稿组成员的撤销快照（u.columns）' },
+  { file: 'commands/system.ts', table: 'settings', note: '切换识别方式的撤销：只把 pixivFilenameMode 改回去（u.sql）' },
   // datasource/sqlite/changeLog.ts
   { file: 'datasource/sqlite/changeLog.ts', table: 'change_log' },
   // datasource/sqlite/collections.ts

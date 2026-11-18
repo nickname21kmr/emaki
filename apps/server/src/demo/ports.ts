@@ -7,7 +7,7 @@
  */
 import type { JobKind, ThumbWidth } from '@emaki/shared';
 import type { JobRunner } from '../core/jobs.ts';
-import type { FileResponse } from '../datasource/DataSource.ts';
+import type { FileResponse } from '../infra/ports.ts';
 import type { EnginePorts, ImageFileRow, ImageFilesPort } from '../infra/ports.ts';
 import type { DemoDb } from './fixtures.ts';
 import { placeholderSvg } from './placeholder.ts';

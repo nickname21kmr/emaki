@@ -17,7 +17,7 @@ import path from 'node:path';
 import { searchKey } from '@emaki/shared';
 import { EventBus } from '../../src/core/events.ts';
 import { declareTagged } from '../../src/domain/evidence/reactions.ts';
-import { SqliteDataSource } from '../../src/datasource/sqlite/SqliteDataSource.ts';
+import { SqliteDataSource } from '../helpers/client.ts';
 import { patchSettingsInternal, readSettings } from '../../src/datasource/sqlite/settings.ts';
 import { CharacterCatalog } from '../../src/domain/catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../../src/services/catalog/copyrights.ts';

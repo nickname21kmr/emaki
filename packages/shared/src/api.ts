@@ -5,6 +5,7 @@
  * 前端只通过 `apps/web/src/lib/api.ts` 调用；后端路由在 `apps/server/src/routes/`。
  * 改接口时三处一起改：这里 → 后端路由 → 前端 api.ts。
  */
+import type { ChangedEvent, CommandEvent, HelloEvent, ResyncEvent } from './events.ts';
 import type {
   Character,
   CharacterSource,
@@ -92,7 +93,8 @@ export interface ApiError {
   error: string;
   /** 机器可读的错误码 */
   /** needs_confirm：要用户确认，error 是要问的问题（例如添加父文件夹时合并已有文件夹） */
-  code: 'not_found' | 'bad_request' | 'conflict' | 'needs_confirm' | 'not_implemented' | 'internal';
+  /** unauthorized：没带或带错了凭证（401，MCP 的访问凭证）；forbidden：不许这样调用（403，只许本机、只许 Emaki 自己的页面） */
+  code: 'not_found' | 'bad_request' | 'unauthorized' | 'forbidden' | 'conflict' | 'needs_confirm' | 'not_implemented' | 'internal';
 }
 
 // ---------------------------------------------------------------- 统计
@@ -416,6 +418,8 @@ export type ChangeGroup = 'auto' | 'move';
 /** SSE：后台刚做了一次自动改动（前端弹提示、刷新「最近的自动改动」） */
 export interface AutoChangeEvent {
   type: 'auto-change';
+  /** 可补发的事件 id（core/events.ts） */
+  id: number;
   change: ChangeEntry;
 }
 
@@ -803,15 +807,11 @@ export interface StartJobBody {
 export type LibraryChangedReason = 'mutation' | 'system' | JobKind;
 
 /**
- * GET /api/events —— Server-Sent Events
- * 事件类型见 ServerEvent；前端收到后让对应的 query 失效。
+ * GET /api/events —— Server-Sent Events（events.ts）
+ * job、job-item 是进度，不补发；changed、command、auto-change 带 id，断线重连按 Last-Event-ID 补发，补不上推 resync。
+ * 前端按 changed 的变化类型只刷新相关的查询（lib/events.ts）。
  */
-export type ServerEvent =
-  | { type: 'job'; job: Job }
-  | JobItemEvent
-  | { type: 'library-changed'; reason: LibraryChangedReason }
-  | { type: 'stats'; stats: LibraryStats }
-  | AutoChangeEvent;
+export type ServerEvent = { type: 'job'; job: Job } | JobItemEvent | ChangedEvent | CommandEvent | AutoChangeEvent | ResyncEvent | HelloEvent;
 
 /**
  * 识别胶卷（SEL-19）：tag 任务刚识别完的一张图。每批最多推一条、每秒最多 4 条；

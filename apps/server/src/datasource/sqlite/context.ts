@@ -35,7 +35,9 @@ export interface SqliteContext {
   changed(change: Change): void;
   /**
    * 所有可撤销修改的唯一入口：一个事务 + 自动收集撤销数据 + 变更传播。fn 必须是同步函数。
-   * 撤销 = 按撤销记录还原 + 在同一个事务里把这次声明的变化重放一遍（反应重算派生数据）
+   * 撤销 = 按撤销记录还原 + 在同一个事务里把这次声明的变化重放一遍（反应重算派生数据）。
+   * 命令层（commands/registry.ts）给同步的命令开的就是它；已经在一个 mutate 里时（命令的 tx 里又调了带 mutate 的领域方法、
+   * 几个命令合成一次操作）并进外层：同一个事务、同一份撤销记录，令牌由外层发
    */
   mutate<T extends { message: string }>(fn: (u: UndoRecorder) => T): MutationResult & Omit<T, 'message'>;
   /** 不可撤销、但要连带处理的写入（后台任务、启动修补、自带撤销逻辑的文件操作）。fn 必须是同步函数 */
@@ -54,6 +56,8 @@ export function createContext(init: {
 }): SqliteContext & { onInvalidate(listener: InvalidateListener): void } {
   const statements = new Map<string, Statement>();
   const listeners: InvalidateListener[] = [];
+  /** 正在进行的 mutate 的撤销记录（嵌套的 mutate 并进它） */
+  let active: UndoRecorder | null = null;
   const ctx: SqliteContext & { onInvalidate(listener: InvalidateListener): void } = {
     ...init,
     propagation: new Propagation(() => ctx),
@@ -72,8 +76,20 @@ export function createContext(init: {
       ctx.propagation.changed(change);
     },
     mutate<T extends { message: string }>(fn: (u: UndoRecorder) => T): MutationResult & Omit<T, 'message'> {
+      if (active) {
+        const outer = active;
+        const { message, ...rest } = ctx.propagation.run(() => fn(outer)).value;
+        return { ...rest, ...done(message) };
+      }
       const u = new UndoRecorder(init.db);
-      const { value: out, declared } = ctx.propagation.run(() => fn(u), { undo: u });
+      active = u;
+      let ran: ReturnType<typeof ctx.propagation.run<T>>;
+      try {
+        ran = ctx.propagation.run(() => fn(u), { undo: u });
+      } finally {
+        active = null;
+      }
+      const { value: out, declared } = ran;
       const { message, ...rest } = out;
       if (u.isEmpty) return { ...rest, ...done(message) };
       const restore = u.build();

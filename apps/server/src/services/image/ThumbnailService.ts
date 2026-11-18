@@ -55,7 +55,7 @@ export class ThumbnailService {
       now?: () => number;
       /**
        * 变更传播（P2）：帧数、相机让类型或是否动图变了时声明 image.kindChanged / image.animatedChanged（合集、Pixiv 资格、查重由反应处理，附录 #3、#17），
-       * 缓存和 library-changed 由变更传播按 job:thumbnail 弱刷新、节流推送（RV-T-9）。不给时（单元测试）只开事务
+       * 缓存和 changed 事件由变更传播按 job:thumbnail 弱刷新、节流推送（RV-T-9）。不给时（单元测试）只开事务
        */
       changes?: { apply<T>(fn: (emit: (c: Change) => void) => T): T };
     },

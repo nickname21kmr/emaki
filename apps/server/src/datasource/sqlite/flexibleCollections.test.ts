@@ -3,7 +3,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { EventBus } from '../../core/events.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
-import { SqliteDataSource } from './SqliteDataSource.ts';
+import { SqliteDataSource } from '../../../test/helpers/client.ts';
 import { AUTO_COLLAPSE_MIN, type ListImagesQuery } from '@emaki/shared';
 
 let ds: SqliteDataSource, dir: string;

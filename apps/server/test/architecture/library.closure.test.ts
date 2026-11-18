@@ -10,7 +10,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../src/core/events.ts';
 import type { JobContext } from '../../src/core/jobs.ts';
-import { SqliteDataSource, type SqliteOpenOptions } from '../../src/datasource/sqlite/SqliteDataSource.ts';
+import { SqliteDataSource, type SqliteOpenOptions } from '../helpers/client.ts';
 import { analyze } from '../../src/domain/analysis/analyze.ts';
 import { DETECTOR_VERSION } from '../../src/domain/collections/detect.ts';
 import { runAs } from '../../src/propagation/actor.ts';

@@ -1,5 +1,5 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, existsSync, writeFileSync, renameSync } from 'node:fs';
+import { mkdirSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { lstat, rm, rmdir, unlink } from 'node:fs/promises';
 import type { AssistantCard, AssistantContext, AssistantDetection, AssistantModel } from '@emaki/shared';
@@ -11,7 +11,6 @@ import { prepareSkills } from './skills.ts';
 import { boundedText, interruptActivities } from './activity.ts';
 import { DshBackend } from './dsh.ts';
 
-type Operation = { signature: string; result?: unknown; complete: boolean };
 export class AssistantService implements ToolHost {
   readonly store: AssistantStore;
   private agents = new Map<string, AgentBackend>();
@@ -20,8 +19,6 @@ export class AssistantService implements ToolHost {
   private connections = new Map<string, symbol>();
   private listeners = new Set<(id: string) => void>();
   private timers = new Map<string, NodeJS.Timeout>();
-  private operations: Record<string, Operation>;
-  private inflight = new Map<string, Promise<unknown>>();
   private generation = 0;
   // 空闲的 agent 进程过一段时间就关掉，下次发送再按原会话打开
   private idleTimers = new Map<string, NodeJS.Timeout>();
@@ -32,13 +29,10 @@ export class AssistantService implements ToolHost {
   // 读模型、检测用的临时工作目录，清空全部对话时不能删
   private temporary = new Set<string>();
   constructor(readonly dir: string, readonly repoRoot: string, readonly endpoint: () => string) {
+    // 修改的 operationId 去重在命令层（commands/registry.ts，审计记录 command_log）：这里不再另存一份 operations.json
     this.store = new AssistantStore(dir);
-    const ledger = path.join(dir, 'operations.json');
-    // 记录文件坏了不能让后端起不来：警告后从空记录开始
-    try { this.operations = existsSync(ledger) ? JSON.parse(readFileSync(ledger, 'utf8')) ?? {} : {}; }
-    catch (e) { console.warn(`[assistant] 跳过无法读取的 operations.json：${(e as Error).message}`); this.operations = {}; }
   }
-  assertEnabled() { if (!this.store.settings.enabled) throw new HttpError(403, 'bad_request', 'AI 助手尚未开启'); }
+  assertEnabled() { if (!this.store.settings.enabled) throw new HttpError(403, 'forbidden', 'AI 助手尚未开启'); }
   subscribe(fn: (id: string) => void) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   flush(s: StoredSession) {
     clearTimeout(this.timers.get(s.id)); this.timers.delete(s.id); this.store.save(s);
@@ -293,8 +287,6 @@ export class AssistantService implements ToolHost {
     await this.stopping.get(id)?.catch(() => {});
     await this.stopSession(id, s).catch(() => {});
     this.connections.delete(id); this.agents.delete(id);
-    const keys = Object.keys(this.operations).filter(key => key.startsWith(`${id}:`) && !this.inflight.has(key));
-    if (keys.length) { for (const key of keys) delete this.operations[key]; this.saveOperations(); }
     await this.removeWorkspace(id);
     for (const listener of this.listeners) listener(id);
   }
@@ -340,19 +332,6 @@ export class AssistantService implements ToolHost {
     const equal = (s: string) => { const expected = Buffer.from(s); return expected.length === supplied.length && timingSafeEqual(expected, supplied); };
     if (equal(this.store.settings.externalToken)) return { scope: 'external' };
     for (const s of this.store.sessions.values()) if (equal(s.token)) return { scope: s.id, sessionId: s.id };
-    throw new HttpError(401, 'bad_request', 'MCP 访问凭证无效');
+    throw new HttpError(401, 'unauthorized', 'MCP 访问凭证无效');
   }
-  async operation(scope: string, key: string, signature: string, run: () => Promise<unknown>) {
-    this.assertEnabled(); const id = `${scope}:${key}`, existing = this.operations[id];
-    if (existing) {
-      if (existing.signature !== signature) throw new ConflictError('operationId 已用于不同操作');
-      if (existing.complete) return existing.result;
-      const running = this.inflight.get(id); if (running) return running;
-      throw new ConflictError('此前操作中断，结果待核对；请查询实际状态后再决定下一步');
-    }
-    this.operations[id] = { signature, complete: false }; this.saveOperations();
-    const promise = run().then(result => { this.operations[id] = { signature, complete: true, result }; this.saveOperations(); return result; }).finally(() => this.inflight.delete(id));
-    this.inflight.set(id, promise); return promise;
-  }
-  private saveOperations() { const file = path.join(this.dir, 'operations.json'); writeFileSync(`${file}.tmp`, JSON.stringify(this.operations), { mode: 0o600 }); renameSync(`${file}.tmp`, file); }
 }

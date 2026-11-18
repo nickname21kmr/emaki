@@ -1302,7 +1302,7 @@ export function undoContract(make: ContractFactory) {
       e.events.length = 0;
       await e.ds.undo(res.undoToken!);
       expect(await e.ds.getImage(id)).toEqual(before);
-      expect(e.events.some((ev) => ev.type === 'library-changed')).toBe(true);
+      expect(e.events.some((ev) => ev.type === 'changed')).toBe(true);
     });
 
     it('同一个 token 撤销两次 → not_found', async () => {
@@ -1347,7 +1347,7 @@ export function kindsContract(make: ContractFactory) {
       const e = env();
       const id = e.id('image', 'i24');
       const r = await e.ds.bulkImages({ ids: [id], action: { type: 'kind', value: 'screenshot' } });
-      expect(r.message).toBe('已把 1 张图标为「截图」');
+      expect(r.message).toBe('已标为「截图」'); // P6：单张和批量是同一个命令，一张图时用单张的说法
       const stats = await e.ds.getStats();
       expect(stats.unrecognizedCount).toBe(6);
       expect(stats.kindCounts).toMatchObject({ illustration: 31, screenshot: 1 });
