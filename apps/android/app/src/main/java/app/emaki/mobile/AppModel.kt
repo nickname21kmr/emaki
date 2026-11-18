@@ -52,8 +52,11 @@ sealed interface Screen {
     /** 等电脑批准：显示校验码 */
     data class Waiting(val conn: Connected, val attempt: PairAttempt) : Screen
 
-    /** 主界面：电脑提供的网页。generation 变了就重建 WebView（重新写 Cookie、重新加载） */
-    data class Main(val server: SavedServer, val address: HostPort, val generation: Int = 0) : Screen
+    /**
+     * 主界面：电脑提供的网页。generation 变了就重建 WebView（重新写 Cookie、重新加载）。
+     * path 是打开时加载的页面：断线重连回来时回到断线前看的那一页
+     */
+    data class Main(val server: SavedServer, val address: HostPort, val generation: Int = 0, val path: String = "/") : Screen
 
     /** 哪个地址都没连上。在前台时一直自动重连（ConnectionWatch），trying 是正在试 */
     data class Offline(val server: SavedServer, val certMismatch: HostPort?, val note: String? = null, val trying: Boolean = false) : Screen
@@ -152,11 +155,18 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     private fun toScreen(saved: SavedServer, result: ReconnectResult): Screen = when (result) {
         is ReconnectResult.Online -> {
             val s = store.connected(result.address, result.hello) ?: saved
-            Screen.Main(s, result.address)
+            Screen.Main(s, result.address, path = lastPath?.takeIf { it.first == s.serverId }?.second ?: "/")
         }
         is ReconnectResult.Removed -> Screen.Removed(store.connected(result.address, result.hello) ?: saved, result.address, result.revoked)
         is ReconnectResult.Upgrade -> Screen.Upgrade(result.minAppVersion)
         is ReconnectResult.Offline -> Screen.Offline(saved, result.certMismatch)
+    }
+
+    /** 网页上次在哪一页（电脑标识、路径）：断线重连回来时回到这一页。只在这次打开 App 期间记着 */
+    private var lastPath: Pair<String, String>? = null
+
+    fun onWebPath(main: Screen.Main, path: String) {
+        lastPath = main.server.serverId to path
     }
 
     /** 「电脑不在线」页面上的「重试」：自动重连不等了，马上试 */

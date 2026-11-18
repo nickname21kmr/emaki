@@ -71,8 +71,10 @@ fun WebScreen(
     server: SavedServer,
     address: HostPort,
     generation: Int,
+    path: String,
     fileChooser: FileChooser,
     onPaper: (Color) -> Unit,
+    onPath: (String) -> Unit,
     onUnpaired: (String) -> Unit,
     onConnectionLost: () -> Unit,
     onCertWrong: () -> Unit,
@@ -89,6 +91,7 @@ fun WebScreen(
     val latestCertWrong by rememberUpdatedState(onCertWrong)
     val latestOffline by rememberUpdatedState(onOffline)
     val latestPaper by rememberUpdatedState(onPaper)
+    val latestPath by rememberUpdatedState(onPath)
 
     val webView = remember(server.serverId, address, generation) {
         createWebView(
@@ -97,8 +100,9 @@ fun WebScreen(
             server.fingerprintBytes,
             fileChooser,
             object : WebEvents {
-                override fun history(view: WebView) {
+                override fun history(view: WebView, path: String?) {
                     canGoBack = view.canGoBack()
+                    path?.let(latestPath)
                 }
 
                 override fun progress(value: Int) {
@@ -125,6 +129,7 @@ fun WebScreen(
         DeviceCookie.open(
             address,
             server.token,
+            path,
             set = { url, value, done ->
                 cookies.setCookie(url, value) {
                     cookies.flush()
@@ -156,7 +161,8 @@ fun WebScreen(
 }
 
 private interface WebEvents {
-    fun history(view: WebView)
+    /** path：电脑的网页上现在的路径（含查询参数），不是电脑的网页时是 null */
+    fun history(view: WebView, path: String?)
     fun progress(value: Int)
     fun paper(color: Color)
     fun unpaired(code: String)
@@ -196,6 +202,12 @@ fun parseCssColor(text: String): Color? {
     val m = Regex("""rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)""").find(s) ?: return null
     val (r, g, b) = m.destructured
     return Color(r.toInt().coerceIn(0, 255), g.toInt().coerceIn(0, 255), b.toInt().coerceIn(0, 255))
+}
+
+/** 「/gallery?kind=art」：路径加查询参数（没有路径时是 /） */
+private fun pathOf(uri: Uri): String {
+    val p = uri.encodedPath?.takeIf { it.startsWith("/") } ?: "/"
+    return uri.encodedQuery?.let { "$p?$it" } ?: p
 }
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -292,7 +304,8 @@ private fun createWebView(
         }
 
         override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
-            events.history(view)
+            val uri = Uri.parse(url ?: "")
+            events.history(view, if (isComputer(uri)) pathOf(uri) else null)
         }
 
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {

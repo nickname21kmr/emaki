@@ -83,7 +83,32 @@ class ConnectionWatchTest {
         val (w, screen) = watch(main, alive = false)
         w.verify(main, "网页报连不上")
         runCurrent()
+        // 隔 1 秒再试一次，还不通才换
+        assertEquals(main, screen.value)
+        advanceTimeBy(1_001)
         assertEquals(Screen.Offline(server, null), screen.value)
+    }
+
+    @Test
+    fun `核实第一次不通、隔 1 秒再试通了（换网络的那一下）：不换页面`() = runTest {
+        val main = Screen.Main(server, home)
+        val answers = ArrayDeque(listOf(false, true))
+        val at = mutableListOf<Long>()
+        val screen = MutableStateFlow<Screen>(main)
+        val w = ConnectionWatch(
+            scope = backgroundScope,
+            screen = screen,
+            alive = { _, _ ->
+                at += currentTime
+                answers.removeFirst()
+            },
+            reconnect = { offline },
+            toScreen = { s, _ -> Screen.Offline(s, null) },
+        )
+        w.verify(main, "换了网络")
+        advanceTimeBy(5_000)
+        assertEquals(main, screen.value)
+        assertEquals(listOf(0L, 1_000L), at)
     }
 
     @Test
@@ -203,12 +228,12 @@ class ConnectionWatchTest {
         val main = Screen.Main(server, home)
         val (w, screen) = watch(main, alive = false)
         w.foreground(true)
-        runCurrent()
+        advanceTimeBy(1_001)
         assertEquals(Screen.Offline(server, null), screen.value)
 
         val (w2, screen2) = watch(main, alive = false)
         w2.networkChanged()
-        runCurrent()
+        advanceTimeBy(1_001)
         assertEquals(Screen.Offline(server, null), screen2.value)
     }
 }

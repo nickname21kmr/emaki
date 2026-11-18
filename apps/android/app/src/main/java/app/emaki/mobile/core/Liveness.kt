@@ -52,9 +52,14 @@ object DeviceCookie {
 
     fun value(token: String): String = "$NAME=$token; Secure; HttpOnly; SameSite=Strict; Path=/"
 
-    /** set(url, value, done)：写 Cookie，写好了调 done；然后 load(url) */
-    fun open(address: HostPort, token: String, set: (url: String, value: String, done: () -> Unit) -> Unit, load: (String) -> Unit) {
-        val url = address.url("/")
-        set(url, value(token)) { load(url) }
+    /** set(url, value, done)：给这个地址的 / 写 Cookie，写好了调 done；然后 load 这个地址上的 path（断线前看的那一页，默认首页） */
+    fun open(
+        address: HostPort,
+        token: String,
+        path: String = "/",
+        set: (url: String, value: String, done: () -> Unit) -> Unit,
+        load: (String) -> Unit,
+    ) {
+        set(address.url("/"), value(token)) { load(address.url(if (path.startsWith("/")) path else "/")) }
     }
 }

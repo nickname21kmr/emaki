@@ -93,4 +93,14 @@ class LivenessTest {
             calls,
         )
     }
+
+    @Test
+    fun `断线重连回来：Cookie 还是写给根路径，加载断线前看的那一页`() {
+        val calls = mutableListOf<String>()
+        DeviceCookie.open(HostPort("192.168.1.23", 5175), "tok-a", "/gallery?kind=art", set = { url, _, done ->
+            calls += "set $url"
+            done()
+        }, load = { calls += "load $it" })
+        assertEquals(listOf("set https://192.168.1.23:5175/", "load https://192.168.1.23:5175/gallery?kind=art"), calls)
+    }
 }
