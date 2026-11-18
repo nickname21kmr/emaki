@@ -11,6 +11,8 @@ import type {
   ApiError,
   BulkCollectionsBody,
   BulkImagesBody,
+  CollectionCountsQuery,
+  CollectionCountsResponse,
   CollectionSummary,
   CreateCollectionBody,
   GetCollectionResponse,
@@ -221,6 +223,7 @@ export const api = {
   revealImage: (id: ID) => post<{ ok: true }>(`/images/${encodeURIComponent(id)}/reveal`),
 
   collections: (q: ListCollectionsQuery = {}) => get<ListCollectionsResponse>('/collections', q),
+  collectionCounts: (q: CollectionCountsQuery = {}) => get<CollectionCountsResponse>('/collections/counts', q),
   artists: () => get<ListArtistsResponse>('/artists'),
   collection: (id: ID) => get<GetCollectionResponse>(`/collections/${encodeURIComponent(id)}`),
   createCollection: (body: CreateCollectionBody) => post<MutationResult & { collection: CollectionSummary }>('/collections', body),

@@ -147,6 +147,3 @@ export function CollectionShelf({
     </>
   );
 }
-
-/** 按单元计数（系列算一个） */
-export const unitCount = (list: CollectionSummary[]) => toShelfUnits(list).length;

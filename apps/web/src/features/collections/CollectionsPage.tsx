@@ -1,4 +1,4 @@
-import { matchesQuery, type CollectionKind, type CollectionSummary } from '@emaki/shared';
+import { matchesQuery, type CollectionKind, type CollectionMembership } from '@emaki/shared';
 import { Check, UserRoundPlus } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
@@ -6,21 +6,23 @@ import { PageBody, PageHeader } from '@/components/layout/PageHeader';
 import { Button, EmptyState, ErrorState, SearchInput, SectionTitle, Segmented, Skeleton } from '@/components/ui';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
-import { COLLECTION_META, unitWord } from '@/lib/collections';
+import { COLLECTION_META, compareGroups, shelfPlan, unitWord, type ShelfView as View } from '@/lib/collections';
 import { formatCount } from '@/lib/format';
-import { useArtists, useCollections, useMutate } from '@/lib/queries';
+import { useArtists, useCollectionCounts, useCollections, useMutate } from '@/lib/queries';
 import { CharacterPicker } from '@/features/gallery/CharacterPicker';
 import { useDebounced } from '@/features/gallery/useDebounced';
 import { ArtistShelf } from './components/ArtistShelf';
-import { CollectionShelf, unitCount } from './components/Shelf';
+import { CollectionShelf } from './components/Shelf';
 
-/** 「全部」里同一投稿的组图不超过这么多就直接摆出来，多了收成一行（和图库「自动收拢」一个思路：多就收，少就摊开） */
-const POSTS_INLINE = 12;
+const BOOKS: CollectionKind[] = ['doujin', 'artbook'];
+/** 组图里手动收集的（同一投稿以外的：手选的，和按文件夹成册后改成组图的） */
+const MANUAL: CollectionMembership[] = ['folder', 'selection'];
 
 /**
  * 合集书架（T38d）：01 本子 · 02 画集 · 03 组图 · 04 画师；?kind 只看一类，?q 搜书名 / 社团 / 作者 / 画师，?series 看一个系列。
  * 本子、画集按文件夹自动成册；组图是收在一起的散图。都不移动文件。
  * 同一投稿自动收拢的组图可能有几千组：「全部」里超过 POSTS_INLINE 组时先只摆手动收集的，同投稿的收成一行，点开或切到「组图」再看。
+ * 那时也不拉它们：列表按类型分开请求（shelfPlan），副标题、每类的小字、「另有 N 组」的数都读 /api/collections/counts。
  */
 export function CollectionsPage() {
   const [params, setParams] = useSearchParams();
@@ -30,18 +32,34 @@ export function CollectionsPage() {
 
 function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: ReturnType<typeof useSearchParams>[1] }) {
   const kindParam = params.get('kind');
-  const kind: CollectionKind | 'artist' | null = kindParam === 'group' || kindParam === 'doujin' || kindParam === 'artbook' || kindParam === 'artist' ? kindParam : null;
+  const kind: View = kindParam === 'group' || kindParam === 'doujin' || kindParam === 'artbook' || kindParam === 'artist' ? kindParam : null;
   const [q, setQ] = useState(params.get('q') ?? '');
   const debounced = useDebounced(q.trim(), 200);
-  const list = useCollections({ q: debounced || undefined });
-  const all = list.data ?? [];
+  const search = debounced || undefined;
+  const [showPosts, setShowPosts] = useState(false);
+  const counts = useCollectionCounts({ q: search });
+  const c = counts.data;
+  const plan = shelfPlan(kind, c?.group.membership.post.count, showPosts, !counts.isPlaceholderData);
+  const booksQ = useCollections({ kind: BOOKS, q: search }, plan.books);
+  const manualQ = useCollections({ kind: 'group', membership: MANUAL, q: search }, plan.groups);
+  const postsQ = useCollections({ kind: 'group', membership: 'post', q: search }, plan.fetchPosts);
+  // 没在用的列表不看（关掉的查询还会顶着上一次的结果）
+  const books = plan.books ? (booksQ.data ?? []) : [];
+  const groups = [...(plan.groups ? (manualQ.data ?? []) : []), ...(plan.posts ? (postsQ.data ?? []) : [])].sort(compareGroups);
+  // 点了「显示」、同投稿的还在路上：那一行写「载入中」，书架上别的照常
+  const postsLoading = kind === null && showPosts && postsQ.isPending;
   // 画师：识别出来的才有（设置 → 识别 里打开「识别画师」）；搜索框也筛画师名
   const artistsQ = useArtists();
   // 搜索归一化用共用的 matchesQuery（附录 #38）
   const artists = (artistsQ.data ?? []).filter((a) => matchesQuery(debounced, [a.name, a.tag, a.twitter, ...a.tags, ...a.aliases]));
-  const by = (k: CollectionKind) => all.filter((c) => c.kind === k);
-  const [showPosts, setShowPosts] = useState(false);
-  const pages = (xs: CollectionSummary[]) => xs.reduce((n, c) => n + c.pageCount, 0);
+  const used = [counts, ...(plan.books ? [booksQ] : []), ...(plan.groups ? [manualQ] : []), ...(plan.fetchPosts ? [postsQ] : [])];
+  const failed = used.find((r) => r.isError);
+  const pending =
+    counts.isPending ||
+    (plan.books && booksQ.isPending) ||
+    (plan.groups && manualQ.isPending) ||
+    (plan.posts && !postsLoading && postsQ.isPending) ||
+    (kind === 'artist' && artistsQ.isPending);
   const set = (key: string, v: string | null) =>
     setParams(
       (prev) => {
@@ -54,8 +72,8 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
     );
 
   let body;
-  if (list.isError) body = <ErrorState error={list.error} onRetry={() => void list.refetch()} />;
-  else if (list.isPending) body = <ShelfSkeleton />;
+  if (failed) body = <ErrorState error={failed.error} onRetry={() => void failed.refetch()} />;
+  else if (pending || !c) body = <ShelfSkeleton />;
   else if (kind === 'artist')
     body = artists.length ? (
       <section>
@@ -69,7 +87,7 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
         description="在「设置 → 识别」里打开「识别画师」，识别完的图会按画师归到这里。只认得 Danbooru 上图多的画师，认不出的不会出现。"
       />
     );
-  else if (!all.length && !artists.length)
+  else if (!c.doujin.count && !c.artbook.count && !c.group.count && !artists.length)
     body = debounced ? (
       <EmptyState glyph="无" title={`没有找到「${debounced}」`} description="可以搜书名、社团、作者、原作或汉化组。" />
     ) : (
@@ -80,7 +98,7 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
       />
     );
   // 只看一类时这一类是空的（搜索只命中了别的类，或这一类本来就没有）：不能留一片空白
-  else if (kind && !by(kind).length)
+  else if (kind && !c[kind].count)
     body = (
       <EmptyState
         glyph={COLLECTION_META[kind].glyph}
@@ -99,31 +117,28 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
         {(['doujin', 'artbook', 'group'] as const)
           .filter((k) => !kind || kind === k)
           .map((k) => {
-            const xs = by(k);
-            if (!xs.length) return null;
+            const t = c[k];
+            if (!t.count) return null;
             const m = COLLECTION_META[k];
             const word = k === 'group' ? '张' : '页';
-            // 组图：手动收集的先摆；同一投稿的在「全部」里收成一行
-            const posts = k === 'group' ? xs.filter((c) => c.membership === 'post') : [];
-            const folded = !kind && !showPosts && posts.length > POSTS_INLINE;
-            const shown = (folded ? xs.filter((c) => c.membership !== 'post') : xs).sort(
-              (a, b) =>
-                k !== 'group' ? 0 : Number(b.membership !== 'post') - Number(a.membership !== 'post') || (b.lastAddedAt ?? '').localeCompare(a.lastAddedAt ?? ''),
-            );
+            // 组图：手动收集的先摆，同一投稿的在「全部」里多了收成一行（这时没拉它们）
+            const shown = k === 'group' ? groups : books.filter((x) => x.kind === k);
             return (
               <section key={k}>
-                <SectionTitle hint={`${formatCount(unitCount(xs))} ${m.unit} · ${formatCount(pages(xs))} ${word} · ${m.hint}`}>{m.label}</SectionTitle>
+                <SectionTitle hint={`${formatCount(t.units)} ${m.unit} · ${formatCount(t.pages)} ${word} · ${m.hint}`}>{m.label}</SectionTitle>
                 {shown.length > 0 && <CollectionShelf list={shown} keepOrder={k === 'group'} />}
-                {folded && (
+                {k === 'group' && (plan.folded || postsLoading) && (
                   <button
                     type="button"
+                    disabled={postsLoading}
                     onClick={() => setShowPosts(true)}
                     className={cn(
                       'flex w-full items-center justify-center gap-2 rounded-lg py-3 text-[13px] text-fg-muted transition-colors hover:bg-hover hover:text-fg',
+                      'disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-fg-muted',
                       shown.length > 0 && 'mt-8',
                     )}
                   >
-                    另有 {formatCount(posts.length)} 组是同一投稿自动收拢的 · 显示
+                    另有 {formatCount(t.membership.post.count)} 组是同一投稿自动收拢的 · {postsLoading ? '载入中…' : '显示'}
                   </button>
                 )}
               </section>
@@ -144,9 +159,9 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
         sticky
         title="合集"
         subtitle={
-          list.data ? (
+          c ? (
             <span>
-              {formatCount(unitCount(by('doujin')))} 本本子 · {formatCount(unitCount(by('artbook')))} 册画集 · {formatCount(by('group').length)} 组组图
+              {formatCount(c.doujin.units)} 本本子 · {formatCount(c.artbook.units)} 册画集 · {formatCount(c.group.count)} 组组图
             </span>
           ) : (
             <Skeleton className="h-3 w-56 rounded-full" />

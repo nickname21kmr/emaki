@@ -1,16 +1,18 @@
-import type { ID } from '@emaki/shared';
+import type { CollectionKind, ID } from '@emaki/shared';
 import { SectionTitle } from '@/components/ui';
 import { formatCount } from '@/lib/format';
 import { useCollections } from '@/lib/queries';
 import { BookCard } from '@/features/collections/components/Shelf';
 
+/** 「收录于」只列本子、画集 */
+const BOOKS: CollectionKind[] = ['doujin', 'artbook'];
+
 /**
  * 角色 / 作品详情的「收录于」（T38f）：这个角色（作品）出现在哪些合集里，一行小书卡，点开是扉页。
- * 没有时整章不渲染，后面的章节编号自动前移。
+ * 只列本子和画集（服务端按类型筛，组图的出场角色不用算）。没有时整章不渲染，后面的章节编号自动前移。
  */
 export function CollectionsStrip({ characterId, workId }: { characterId?: ID; workId?: ID }) {
-  const { data: all } = useCollections(characterId ? { characterId } : { workId });
-  const data = all?.filter(c => c.kind !== 'group');
+  const { data } = useCollections({ ...(characterId ? { characterId } : { workId }), kind: BOOKS });
   if (!data || data.length === 0) return null;
   return (
     <section aria-label="收录于">

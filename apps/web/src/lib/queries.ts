@@ -16,6 +16,7 @@ import type {
   JobKind,
   StartJobBody,
   ListCharactersQuery,
+  CollectionCountsQuery,
   ListCollectionsQuery,
   UnrecognizedAnnexKind,
   UnrecognizedArea,
@@ -49,6 +50,8 @@ export const qk = {
   summary: ['summary'] as const,
   contentKinds: ['content-kinds'] as const,
   collections: (q: ListCollectionsQuery = {}) => ['collections', q] as const,
+  /** 在 'collections' 下面：合集变了和列表一起刷新 */
+  collectionCounts: (q: CollectionCountsQuery = {}) => ['collections', 'counts', q] as const,
   artists: ['artists'] as const,
   collection: (id: ID) => ['collection', id] as const,
   works: (q: ListWorksQuery = {}) => ['works', q] as const,
@@ -86,6 +89,9 @@ export const useArtists = (enabled = true) => useQuery({ queryKey: qk.artists, q
 
 export const useCollections = (q: ListCollectionsQuery = {}, enabled = true) =>
   useQuery({ queryKey: qk.collections(q), queryFn: () => api.collections(q), placeholderData: keepPreviousData, enabled });
+/** 合集的数目（每一类、每种成员来源）：合集页的副标题、每类的小字、「另有 N 组同一投稿」，不用为了数目拉全部列表 */
+export const useCollectionCounts = (q: CollectionCountsQuery = {}) =>
+  useQuery({ queryKey: qk.collectionCounts(q), queryFn: () => api.collectionCounts(q), placeholderData: keepPreviousData });
 export const useCollection = (id: ID | undefined) =>
   useQuery({ queryKey: qk.collection(id ?? ''), queryFn: () => api.collection(id!), enabled: !!id });
 

@@ -10,6 +10,7 @@ import {
   type CollectionKind,
   type CollectionSummary,
   type CoverRef,
+  type ID,
 } from '@emaki/shared';
 import { BookImage, BookOpen, Layers, type LucideIcon } from 'lucide-react';
 import { blurReason, type BlurPrefs } from './blur';
@@ -110,3 +111,43 @@ export const showUnderPage = (c: Pick<CollectionSummary, 'coverTagged'>, under: 
 
 /** 组图的来历，写在书卡、详情页的小字里 */
 export const groupOrigin = (c: Pick<CollectionSummary, 'membership'>) => (c.membership === 'post' ? '同一投稿' : '手动收集');
+
+/** 组图的顺序：手动收集的在前，再按最近加图（书架上的组图、「收进组图」弹窗） */
+export const compareGroups = (a: CollectionSummary, b: CollectionSummary) =>
+  Number(b.membership !== 'post') - Number(a.membership !== 'post') || (b.lastAddedAt ?? '').localeCompare(a.lastAddedAt ?? '');
+
+/** 「全部」里同一投稿的组图不超过这么多就直接摆出来，多了收成一行（和图库「自动收拢」一个思路：多就收，少就摊开） */
+export const POSTS_INLINE = 12;
+
+/** 合集页看的是哪一类：null = 全部 */
+export type ShelfView = CollectionKind | 'artist' | null;
+
+/**
+ * 合集页要拉哪几份列表。同一投稿的组图在大库上有几千组，不再一次全拉回来：
+ * - books = 本子、画集；groups = 手动收集的组图；posts = 同一投稿的组图。数目（副标题、每类的小字、「另有 N 组」）都读 counts；
+ * - 「全部」里同一投稿的超过 POSTS_INLINE 组时收成一行（folded），点「显示」（showPosts）才拉；不超过时照样摆出来；
+ * - fetchPosts：真要发请求。数目还是上一次搜索的（fresh = false，比如刚清空搜索框）时先不发，免得照旧的数目把几千组拉回来，
+ *   等这次的数目回来再定；这期间 posts 照常显示上一次的结果。
+ */
+export function shelfPlan(view: ShelfView, postGroups: number | undefined, showPosts: boolean, fresh = true) {
+  const none = { books: false, groups: false, posts: false, fetchPosts: false, folded: false };
+  if (view === 'artist') return none;
+  if (view === 'doujin' || view === 'artbook') return { ...none, books: true };
+  if (view === 'group') return { ...none, groups: true, posts: true, fetchPosts: true };
+  const many = postGroups !== undefined && postGroups > POSTS_INLINE;
+  const posts = showPosts || (postGroups !== undefined && postGroups > 0 && !many);
+  return { books: true, groups: true, posts, fetchPosts: posts && (showPosts || fresh), folded: many && !showPosts };
+}
+
+/** 「收进组图」弹窗列多少组 */
+export const PICKER_LIMIT = 50;
+
+/**
+ * 「收进组图」弹窗的候选：手动收集的、同一投稿的各请求最近加图的 PICKER_LIMIT + 1 组（服务端按 q 搜过，多一组是给 excludeId 留的），
+ * 合起来手动收集的在前、取前 PICKER_LIMIT 组，不列当前所在的组图
+ */
+export const pickerGroups = (manual: CollectionSummary[], posts: CollectionSummary[], excludeId?: ID) =>
+  [...manual, ...posts]
+    .filter((c) => c.id !== excludeId)
+    .sort(compareGroups)
+    .slice(0, PICKER_LIMIT);
