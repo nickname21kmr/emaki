@@ -127,7 +127,7 @@ describe('按配置启停', () => {
 });
 
 describe('真的起 https（随机端口）', () => {
-  it('证书指纹就是状态里的那个；撤销时这台设备开着的事件连接立即断开，局域网入口不推 access 事件', async () => {
+  it('证书指纹就是状态里的那个；撤销时这台设备开着的事件连接立即断开，局域网入口不推 access、command 事件', async () => {
     const app = await buildLanApp(f.ds, f.bus, f.ds.access, f.tls, { webDist: f.webDist });
     try {
       await app.listen({ host: '127.0.0.1', port: 0 });
@@ -161,11 +161,17 @@ describe('真的起 https（随机端口）', () => {
       // 本机页面的事件不推给手机；领域变化照推
       f.ds.access.notify('changed');
       f.bus.publish({ type: 'changed', changes: ['curation.favoriteChanged'], reason: 'mutation', actor: 'user' });
+      // 电脑上的操作（带撤销令牌的 command 事件）也不推给手机
+      const boot = f.bus.boot;
+      const command = { name: 'curation.setFavorite', actor: 'user', message: '已收藏', boot } as const;
+      f.bus.publish({ type: 'command', ...command, undoToken: 'secret-token', undo: 'token' });
       await new Promise((r) => setTimeout(r, 50));
       await f.ds.registry.execute('devices.revoke', { id: device.id });
       await mine.ended;
       expect(mine.text()).toContain('"type":"changed"');
       expect(mine.text()).not.toContain('"type":"access"');
+      expect(mine.text()).not.toContain('"type":"command"');
+      expect(mine.text()).not.toContain('secret-token');
       // 别的设备的连接不受影响
       f.bus.publish({ type: 'changed', changes: ['curation.ratingChanged'], reason: 'mutation', actor: 'user' });
       await expect.poll(() => theirs.text()).toContain('curation.ratingChanged');

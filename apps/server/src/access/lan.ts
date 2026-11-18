@@ -106,8 +106,8 @@ export async function buildLanApp(engine: Engine, bus: EventBus, access: Access,
   });
 
   mountShared(app, engine, bus, {
-    // 配对请求、校验码只给本机页面
-    skip: (e) => e.type === 'access',
+    // 配对请求、校验码只给本机页面；command 事件（电脑上的操作和它们的撤销令牌）手机上的页面用不到，也不给
+    skip: (e) => e.type === 'access' || e.type === 'command',
     watch: (close) => {
       const id = deviceIdOf(currentActor());
       return access.devices.onRevoked((revoked) => {

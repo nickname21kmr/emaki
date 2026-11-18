@@ -93,6 +93,33 @@ describe('默认权限的设备', () => {
     expect(f.ds.ctx.db.prepare('SELECT favorite FROM images WHERE id = ?').pluck().get(Number(i4))).toBe(0);
   });
 
+  it('只能撤销这台设备自己的操作：电脑上、别的手机上的撤销令牌 403（审计记录里看得到所有令牌）', async () => {
+    const a = makeDevice(f.ds, undefined, '手机 A');
+    const b = makeDevice(f.ds, undefined, '手机 B');
+    const i3 = f.id('i3');
+    const favorite = () => f.ds.ctx.db.prepare('SELECT favorite FROM images WHERE id = ?').pluck().get(Number(i3));
+    // 电脑上（本机入口，user）的操作
+    const local: any = await f.ds.registry.execute('curation.setFavorite', { ids: [i3], value: true });
+    const asA = await f.app.inject({ method: 'POST', url: `/api/undo/${local.undoToken}`, headers: a.auth, payload: {} });
+    expect([asA.statusCode, asA.json().code]).toEqual([403, 'forbidden']);
+    expect(favorite()).toBe(1);
+    // 手机 A 的操作：手机 B 撤销不了，手机 A 自己可以
+    const fav = await f.app.inject({
+      method: 'POST',
+      url: '/api/commands/curation.setFavorite',
+      headers: a.auth,
+      payload: { ids: [i3], value: false },
+    });
+    const token = (fav.json() as { undoToken: string }).undoToken;
+    expect((await f.app.inject({ method: 'POST', url: `/api/undo/${token}`, headers: b.auth, payload: {} })).statusCode).toBe(403);
+    expect(favorite()).toBe(0);
+    expect((await f.app.inject({ method: 'POST', url: `/api/undo/${token}`, headers: a.auth, payload: {} })).statusCode).toBe(200);
+    expect(favorite()).toBe(1);
+    // 本机入口照旧能撤销任何操作
+    await f.ds.registry.execute('history.undo', { token: local.undoToken });
+    expect(favorite()).toBe(0);
+  });
+
   it('设置、移动文件、回收站（单独的地址、通用入口、兼容层）都 403', async () => {
     const { auth } = makeDevice(f.ds);
     const i1 = f.id('i1');

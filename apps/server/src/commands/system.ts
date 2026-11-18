@@ -34,7 +34,8 @@ import { countLinks, evaluateAuto, promotionScope } from '../domain/curation/ree
 import { snapshotSources } from '../domain/evidence/source.ts';
 import { applySettingsPatch, readSettings } from '../datasource/sqlite/settings.ts';
 import { iso, parseId } from '../datasource/sqlite/sql.ts';
-import { BadRequestError } from '../http/errors.ts';
+import { BadRequestError, HttpError } from '../http/errors.ts';
+import { currentActor, deviceIdOf } from '../propagation/actor.ts';
 import { snapshotVersion } from '../propagation/versions.ts';
 import { readSettingsView } from '../readmodel/settings.ts';
 import { HAS_CHARACTER } from '../readmodel/terms.ts';
@@ -331,7 +332,13 @@ export const systemCommands = [
     barrier: false,
     idempotent: false,
     http: [{ method: 'POST', path: '/api/undo/:token' }],
-    run: (e, input) => e.ctx.undo.run(input.token),
+    run: (e, input) => {
+      // 手机（device:<id>）只能撤销这台设备自己的操作：审计记录里能看到所有令牌，不拦的话手机能撤销电脑上的操作（docs/mobile.md 2.5）
+      const actor = currentActor();
+      if (deviceIdOf(actor) && e.registry.audit.actorOfUndoToken(input.token) !== actor)
+        throw new HttpError(403, 'forbidden', '手机上只能撤销这台设备自己做的操作');
+      return e.ctx.undo.run(input.token);
+    },
   }),
   defineCommand({
     name: 'history.revertChange',
