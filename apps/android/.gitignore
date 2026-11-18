@@ -1,0 +1,14 @@
+# Gradle、Android Studio 的产物
+.gradle/
+.kotlin/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+.cxx/
+# 签名密钥和密码永远不进仓库（放在 x99e 的 /root/android/keys/，见 README）
+*.jks
+*.keystore
+*.p12
+signing.properties

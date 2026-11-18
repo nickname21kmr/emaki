@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 米纸（apps/web/src/styles/index.css）：画卷外的桌面、纸、朱 -->
+    <color name="canvas">#ECE8E0</color>
+    <color name="sheet">#FAF8F4</color>
+    <color name="brand">#C73A27</color>
+    <!-- App 图标：纸色底、朱色徽记（不随深浅变） -->
+    <color name="icon_background">#FAF8F4</color>
+    <color name="brand_icon">#C73A27</color>
+</resources>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 浅色：WebView 的 prefers-color-scheme 跟着 isLightTheme（targetSdk 33 以上），网页「跟随系统」时也就对得上 -->
+    <style name="Theme.Emaki" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/canvas</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>
