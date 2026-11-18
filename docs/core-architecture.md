@@ -271,7 +271,8 @@ decideAuto(image: ImageFacts, evidence: Evidence[], current: Decisions, settings
 
 和最初设计的出入：`reevaluateAuto`（第 4.2 节）P3b 才加上（在 `dropStalePixivEvidence` 之后、`reevaluateExclusions` 之前）；`recomputeCustomMatches` 只订阅 `catalog.*`（它只看自建角色和标签，图上的角色变化不影响它）；
 P4a 把 `reclassifyByPath` 扩成分析唯一的事务内入口 `analyze`，前面加了 `staleFileEvidence`（文件内容变了时先把识别标成过期，`analyze` 才按「还没识别」重算主题、画质分）；
-缩略图、帧数、相机这些要读文件的部分仍由排队反应交给缩略图任务，任务算完交给分析模块写。
+缩略图、帧数、相机这些要读文件的部分仍由排队反应交给缩略图任务，任务算完交给分析模块写；第 2.4 节表里分析模块的 `image.analyzed` 没有加：
+主色、dHash 这些像素派生回写时不传播（看图时生成缩略图不该让前端整页重拉，P2 的约定），只有类型变了才声明 `image.kindChanged`。
 `library.opened` 不再无条件全量重算合集：派生数据按版本（`derived_versions`）决定要不要整体重算，后台任务延后的全量重算记在 `pending_work` 里，进程中途退出时下次启动补做。
 
 三个阶段的含义：
