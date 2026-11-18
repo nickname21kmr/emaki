@@ -22,6 +22,7 @@ import { readCameraFromExif, readJpegExifHead } from './exif.ts';
 import { computeDominantColor, fitBox, openSharp, processPixels, thumbPath, WEBP } from './pixels.ts';
 import { sharp } from './sharpConfig.ts';
 import { probeImage } from './probe.ts';
+import { FILE_LIVE, ROOT_ACTIVE } from '../../readmodel/terms.ts';
 
 export interface ThumbRow {
   id: number;
@@ -36,10 +37,11 @@ export interface ThumbRow {
 const MAX_BUFFERED = 256 * 1024 * 1024;
 const BATCH = 200;
 
-const PENDING_WHERE = `(i.thumb_at IS NULL OR (i.frame_count IS NULL AND i.format IN ('webp','png','avif','gif','html'))) AND i.decode_error IS NULL AND i.missing = 0 AND i.trashed_at IS NULL`;
+const PENDING_WHERE = `(i.thumb_at IS NULL OR (i.frame_count IS NULL AND i.format IN ('webp','png','avif','gif','html'))) AND i.decode_error IS NULL
+  AND ${FILE_LIVE('i')}`;
 /** 还没读过 EXIF 相机的 JPEG（T27）：非 JPEG 直接写 ''，不读文件 */
-const CAMERA_WHERE = `i.format = 'jpeg' AND i.camera IS NULL AND i.missing = 0 AND i.trashed_at IS NULL`;
-const ROOT_JOIN = `JOIN library_roots r ON r.id = i.root_id AND r.enabled = 1 AND r.removed_at IS NULL`;
+const CAMERA_WHERE = `i.format = 'jpeg' AND i.camera IS NULL AND ${FILE_LIVE('i')}`;
+const ROOT_JOIN = `JOIN library_roots r ON r.id = i.root_id AND ${ROOT_ACTIVE('r')}`;
 
 export class ThumbnailService {
   /** sharp 跑在 libuv 线程池，和 fs 读写共用；并发保持在 2~4，别让 HTTP 读原图排队 */

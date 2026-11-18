@@ -23,6 +23,7 @@ import { parseId } from '../../datasource/sqlite/sql.ts';
 import { assertFilesIdle } from './guard.ts';
 import { declareAdded, DISCARDED, insertImage, markRecycled, markTrashed, releasePath } from './images.ts';
 import { normalizeSubdir } from './move.ts';
+import { ROOT_ACTIVE, VISIBLE } from '../../readmodel/terms.ts';
 
 const MAX_BYTES = 128 * 1024 * 1024;
 const inside = (child: string, parent: string) => {
@@ -47,7 +48,7 @@ export function destination(ctx: SqliteContext, rootId: string, dir: string) {
   }
   abs = toAbs(root.path, dir);
   if (inside(abs, path.resolve(ctx.dataDir))) throw new BadRequestError('图片不能导入 Emaki 数据目录');
-  for (const nested of ctx.db.prepare('SELECT id,path FROM library_roots WHERE removed_at IS NULL AND enabled=1 AND id<>?').all(root.id) as Root[]) {
+  for (const nested of ctx.db.prepare(`SELECT id,path FROM library_roots WHERE ${ROOT_ACTIVE('')} AND id<>?`).all(root.id) as Root[]) {
     if (inside(abs, path.resolve(nested.path))) throw new BadRequestError('目标属于另一个图库文件夹，请使用该文件夹的 rootId');
   }
   mkdirSync(abs, { recursive: true });
@@ -97,7 +98,7 @@ export async function importImages(ctx: SqliteContext, body: ImportImagesBody, o
       // Recheck state after all asynchronous preparation. No writes to existing images.
       const { root, abs: folder } = destination(ctx, body.rootId, dir);
       const duplicates = ctx.db.prepare(`SELECT i.id,i.rel_path,r.path FROM images i JOIN library_roots r ON r.id=i.root_id
-        WHERE i.sha256=? AND i.missing=0 AND i.trashed_at IS NULL AND r.enabled=1 AND r.removed_at IS NULL ORDER BY i.id`).all(sha) as { id: number; rel_path: string; path: string }[];
+        WHERE i.sha256=? AND ${VISIBLE} ORDER BY i.id`).all(sha) as { id: number; rel_path: string; path: string }[];
       const existing = duplicates.find(r => {
         try { const f=toAbs(r.path,r.rel_path); return statSync(f).size === bytes.length && sha256Buffer(readFileSync(f)) === sha; }
         catch { return false; }

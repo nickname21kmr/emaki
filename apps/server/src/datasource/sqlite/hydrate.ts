@@ -1,9 +1,12 @@
 /**
- * images 行 → ImageItem。一次查询拿整页的角色和作品，不要 N+1。
+ * images 行 → ImageItem。一次查询拿整页的角色、作品和所在队列，不要 N+1。
+ * 「状态」拆成三个事实（P5，附录 #27）：识别过没有（tagged）、角色数（characterCount）、在哪个待处理队列（queue，服务端按口径算，
+ * readmodel/terms.ts 的 QUEUE_OF）；另有 excluded。以前的 status 同时表示这几样，已经去掉。
  */
-import type { ContentKind, ContentKindSource, ImageFormat, ImageItem, ImageSource, Rating } from '@emaki/shared';
+import type { ContentKind, ContentKindSource, ImageFormat, ImageItem, ImageSource, Rating, TriageQueue } from '@emaki/shared';
 import type { Db } from '../../db/connection.ts';
 import { DEFAULT_DOMINANT, toId } from './sql.ts';
+import { QUEUE_OF } from '../../readmodel/terms.ts';
 
 export interface ImageRow {
   id: number;
@@ -64,6 +67,13 @@ export function hydrateImages(db: Db, rows: ImageRow[]): ImageItem[] {
   const chars = groupPairs(charRows);
   const names = new Map<number, string[]>();
   for (const r of charRows) names.set(r.image_id, [...(names.get(r.image_id) ?? []), r.name]);
+  // 所在队列单独一条查询：放进 IMAGE_COLS 的话，要排序的列表会对每个命中的行都算一遍子查询
+  const queues = new Map(
+    (db.prepare(`SELECT i.id, ${QUEUE_OF} AS queue FROM images i WHERE i.id IN (SELECT value FROM json_each(?))`).all(ids) as {
+      id: number;
+      queue: TriageQueue | null;
+    }[]).map((r) => [r.id, r.queue]),
+  );
   const works = groupPairs(
     db
       .prepare(
@@ -86,13 +96,10 @@ export function hydrateImages(db: Db, rows: ImageRow[]): ImageItem[] {
       addedAt: r.added_at,
       modifiedAt: r.modified_at,
       rating: r.rating,
-      // 有角色，或不是插画 / 漫画（别册不用找角色）→ recognized；放下的仍是 unrecognized（T27 补充）
-      status:
-        r.excluded_by != null
-          ? 'excluded'
-          : c.length || r.original_at || (r.content_kind !== 'illustration' && r.content_kind !== 'comic')
-            ? 'recognized'
-            : 'unrecognized',
+      excluded: r.excluded_by != null,
+      tagged: r.tagged_at !== null,
+      characterCount: c.length,
+      queue: queues.get(r.id) ?? null,
       kind: r.content_kind,
       animated: r.animated === 1,
       characterIds: c.map(toId),

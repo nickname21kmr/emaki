@@ -27,7 +27,8 @@ import { manual } from '../../domain/curation/provenance.ts';
 import { markRetag } from '../../domain/evidence/retag.ts';
 import type { SqliteContext } from './context.ts';
 import { loadImageItems } from './hydrate.ts';
-import { ANNEX_KINDS_SQL, QUEUE_KINDS_SQL, IN_COMIC_I, NOT_IN_BOOK, decodeCursor, encodeCursor, iso, parseId, QUEUE, THEME_EXPR, UNRECOGNIZED } from './sql.ts';
+import { ANNEX_KINDS_SQL, ANNEX_QUEUE, ART_KINDS_SQL, ART_QUEUE_SCOPE, ILLUSTRATION, QUEUE, THEME_EXPR, UNRECOGNIZED } from '../../readmodel/terms.ts';
+import { decodeCursor, encodeCursor, iso, parseId } from './sql.ts';
 import { loadSuggestions } from './suggestions.ts';
 
 /**
@@ -37,12 +38,12 @@ import { loadSuggestions } from './suggestions.ts';
 const COLS = `i.id, i.added_at AS a, i.tagged_at AS tg, i.shelved_at AS sh, (i.content_kind = 'comic') AS c,
     COALESCE((SELECT MAX(s.score) FROM v_character_suggestions s WHERE s.image_id = i.id), -1) AS t,
     COALESCE(i.art_score, -999) AS s, ${THEME_EXPR} AS th`;
-/** 插画和漫画（漫画页看设置）：没有角色、不在合集里（合集整本处理）、不在按漫画导入的文件夹里，放下的也在这里（由分段区分） */
-const ROW_ART = `SELECT ${COLS} FROM v_counted_images i WHERE ${QUEUE_KINDS_SQL} AND ${UNRECOGNIZED} AND ${NOT_IN_BOOK} AND NOT ${IN_COMIC_I}`;
-/** 照片、文字等：没有角色的别册图 */
-const ROW_ANNEX = `SELECT ${COLS} FROM v_counted_images i WHERE ${ANNEX_KINDS_SQL} AND ${UNRECOGNIZED}`;
+/** 「插画 · 漫画」队列的范围里没认出的（漫画页看设置；合集里的页整本处理、漫画区不找角色，都不在这里），放下的也在这里（由分段区分） */
+const ROW_ART = `SELECT ${COLS} FROM v_counted_images i WHERE ${ART_QUEUE_SCOPE} AND ${UNRECOGNIZED}`;
+/** 「照片 · 文字等」队列 */
+const ROW_ANNEX = `SELECT ${COLS} FROM v_counted_images i WHERE ${ANNEX_QUEUE}`;
 /** 「用主模型重新识别」的范围：队列里识别过、没认出角色的插画（漫画按本处理，放下的是用户自己的决定，都不动） */
-const RETAGGABLE = `FROM v_counted_images i WHERE ${QUEUE} AND i.tagged_at IS NOT NULL AND i.content_kind = 'illustration'`;
+const RETAGGABLE = `FROM v_counted_images i WHERE ${QUEUE} AND i.tagged_at IS NOT NULL AND ${ILLUSTRATION}`;
 
 /** 分段条件（作用在 ROW 结果上）。漫画不等识别，直接算「没认出」（RV-T-1 ②） */
 const BUCKET_WHERE = {
@@ -130,14 +131,14 @@ export class UnrecognizedQueries {
     const rows = this.ctx
       .stmt(
         `SELECT i.content_kind AS ck, CASE
-            WHEN i.content_kind NOT IN ('illustration','comic') THEN i.content_kind
+            WHEN NOT ${ART_KINDS_SQL} THEN i.content_kind
             WHEN i.shelved_at IS NOT NULL THEN 'shelved'
             WHEN EXISTS (SELECT 1 FROM v_character_suggestions s WHERE s.image_id = i.id) THEN 'suggested'
             WHEN i.content_kind = 'comic' THEN 'comic'
             WHEN i.tagged_at IS NULL THEN 'untagged'
             ELSE ${THEME_EXPR} END AS k, COUNT(*) AS n
          FROM v_counted_images i
-         WHERE ${UNRECOGNIZED} AND (${ANNEX_KINDS_SQL} OR (${QUEUE_KINDS_SQL} AND ${NOT_IN_BOOK} AND NOT ${IN_COMIC_I}))
+         WHERE ${UNRECOGNIZED} AND (${ANNEX_KINDS_SQL} OR (${ART_QUEUE_SCOPE}))
          GROUP BY 1, 2`,
       )
       .all() as { ck: string; k: string; n: number }[];

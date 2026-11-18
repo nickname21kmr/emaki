@@ -1,5 +1,7 @@
-/** SQLite 数据源共用的小工具。其他任务只 import，不要再写一份。 */
-import { IN_COMIC } from '../../services/classify/comicAreas.ts';
+/**
+ * SQLite 数据源共用的小工具。其他任务只 import，不要再写一份。
+ * 口径（可见、计入统计、队列……）不在这里，在 readmodel/terms.ts（P5）。
+ */
 import type { ImageFormat, Page } from '@emaki/shared';
 import { BadRequestError } from '../../http/errors.ts';
 
@@ -43,20 +45,6 @@ export function paginateOffset<T>(all: T[], cursor: string | undefined, limit: n
 export const DAY = 86_400_000;
 export const RECENT_DAYS = 30;
 
-/**
- * 用法：FROM images i JOIN library_roots r ON r.id = i.root_id WHERE ${VISIBLE}
- * 条件必须字面上包含 i.missing = 0 AND i.trashed_at IS NULL（T22 的部分索引靠它命中）
- */
-export const VISIBLE = 'i.missing = 0 AND i.trashed_at IS NULL AND r.enabled = 1 AND r.removed_at IS NULL';
-/**
- * 同 VISIBLE，但不用 JOIN library_roots r（T22）：图片列表只查 images 一张表，查询计划才会沿排序索引走、找够一页就停。
- * `+i.root_id` 的加号是故意的：不让 SQLite 拿 root_id 上的索引去驱动查询（那样要先把整个文件夹的图排一遍序）。
- * 部分索引要求字面包含 `trashed_at IS NULL AND missing = 0`，不要改写这两个条件。
- */
-export const LIVE_IMAGES =
-  'i.missing = 0 AND i.trashed_at IS NULL AND +i.root_id IN (SELECT id FROM library_roots WHERE enabled = 1 AND removed_at IS NULL)';
-/** 图片 i 属于作品 @workId —— 与 T13 的作品张数用同一个视图，数字才对得上 */
-export const IMAGE_IN_WORK = 'EXISTS (SELECT 1 FROM v_image_works vw WHERE vw.image_id = i.id AND vw.work_id = @workId)';
 export const MIME: Record<ImageFormat, string> = {
   html: 'image/webp',
   jpeg: 'image/jpeg',
@@ -68,36 +56,3 @@ export const MIME: Record<ImageFormat, string> = {
 };
 /** 像素处理还没跑时的占位色 */
 export const DEFAULT_DOMINANT = '#d9d4cc';
-
-/** 未识别（没有任何角色关联）。i 是 v_counted_images 的别名 */
-export const UNRECOGNIZED = '(NOT EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id) AND i.original_at IS NULL)';
-/** 插画和漫画：要找角色的图（T27 补充） */
-export const ART_KINDS_SQL = `i.content_kind IN ('illustration','comic')`;
-/** 别册：既不是插画也不是漫画 */
-export const ANNEX_KINDS_SQL = `i.content_kind IN ('screenshot','text','photo','meme')`;
-/**
- * 是动图（D5：和类型是两个维度，分析模块按帧数、格式写）。字面写 = 1：按入库时间翻页走部分索引 idx_images_animated_live
- * （迁移 038，条件 animated = 1 AND trashed_at IS NULL AND missing = 0），不要改成参数
- */
-export const ANIMATED_SQL = 'i.animated = 1';
-/** 按漫画导入的范围（整个图库文件夹或里面的子文件夹）：不识别、不找角色 */
-export const IN_COMIC_I = IN_COMIC('i');
-/**
- * 逐张「未识别」队列：插画和漫画、没有放下、没有角色。getStats、分段、侧栏共用这一份（MG-9）。
- * 合集里的页不逐张进队列（T38c），在「成册待整理」里整本处理；按漫画导入的文件夹不找角色，不进队列。
- */
-/**
- * 设置「未识别里也列出漫画页」（tagger.comicInUnrecognized，缺省 = 开）。直接在 SQL 里读设置表：
- * 不相关子查询每条语句只算一次，用到队列的地方不用各自传参数
- */
-export const COMIC_IN_QUEUE = `COALESCE((SELECT json_extract(s.value, '$.comicInUnrecognized') FROM settings s WHERE s.key = 'tagger'), 1)`;
-/** 未识别「插画 · 漫画」要找角色的类型：插画，加上设置开着时的漫画页 */
-export const QUEUE_KINDS_SQL = `(i.content_kind = 'illustration' OR (i.content_kind = 'comic' AND ${COMIC_IN_QUEUE}))`;
-export const NOT_IN_BOOK = `NOT EXISTS (SELECT 1 FROM collections bc WHERE bc.id = i.collection_id AND bc.kind <> 'group' AND bc.state = 'active')`;
-export const QUEUE = `${QUEUE_KINDS_SQL} AND i.shelved_at IS NULL AND ${UNRECOGNIZED} AND ${NOT_IN_BOOK} AND NOT ${IN_COMIC_I}`;
-/** 「待识别」：队列里还没跑过识别的；漫画不算（它按本处理，RV-T-1 ③） */
-export const UNTAGGED_UNRECOGNIZED = `i.tagged_at IS NULL AND i.content_kind <> 'comic' AND ${QUEUE}`;
-/** 图片所在目录（带末尾的 /） */
-export const DIR_EXPR = 'substr(i.rel_path, 1, length(i.rel_path) - length(i.file_name))';
-/** 「没认出」的画面主题：存的 theme 加上查询时判定的漫画、不像插画、敏感（与 services/classify/theme.ts 的 resolveTheme 一致） */
-export const THEME_EXPR = `CASE WHEN i.content_kind = 'comic' THEN 'comic' WHEN i.theme = 'odd' THEN 'odd' WHEN i.rating IN ('questionable','explicit') THEN 'nsfw' ELSE COALESCE(i.theme, 'other') END`;

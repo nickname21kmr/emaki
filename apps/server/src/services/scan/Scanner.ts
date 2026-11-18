@@ -30,6 +30,7 @@ import type { Change, ProbeFacts } from '../../propagation/changes.ts';
 import { declareAdded, insertImage, markGone, markReturned, recordFileChanged, recordMeta, releasePath, type NewImageRow, type ObservedContent } from '../../domain/library/images.ts';
 import { recordMoved, type PathUpdate } from '../../domain/library/move.ts';
 import { clearScanError, followComicFolders, markRootsImported, markRootsScanned, recordScanError, type ScanErrorRow } from '../../domain/library/scan.ts';
+import { ROOT_ACTIVE } from '../../readmodel/terms.ts';
 
 export interface ScanSummary {
   added: number;
@@ -201,7 +202,7 @@ export class Scanner {
     // ---- 阶段 0：请求
     const req = this.d.requests.take();
     const roots = db
-      .prepare('SELECT id, path, last_scan_at FROM library_roots WHERE enabled = 1 AND removed_at IS NULL ORDER BY id')
+      .prepare(`SELECT id, path, last_scan_at FROM library_roots WHERE ${ROOT_ACTIVE('')} ORDER BY id`)
       .all() as RootRow[];
     const rootById = new Map(roots.map((r) => [r.id, r]));
     // 按漫画导入的范围（整个图库文件夹或里面的子文件夹）：入库就归漫画、用选的分级

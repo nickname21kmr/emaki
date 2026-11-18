@@ -17,7 +17,8 @@ import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import { insertDanbooruCharacter } from '../catalog/characterCatalog.ts';
 import { recordChange, type RetractPayload } from '../../datasource/sqlite/changeLog.ts';
 import { DEFAULT_SETTINGS, readSettings } from '../../datasource/sqlite/settings.ts';
-import { iso, NOT_IN_BOOK, UNRECOGNIZED } from '../../datasource/sqlite/sql.ts';
+import { iso } from '../../datasource/sqlite/sql.ts';
+import { ACTIVE_ROOT_IDS, FILE_LIVE, NOT_EXCLUDED, NOT_IN_BOOK, UNRECOGNIZED } from '../../readmodel/terms.ts';
 import type { UndoRecorder } from '../../datasource/sqlite/undo.ts';
 import { isInteractive, type Actor } from '../../propagation/actor.ts';
 import type { ChangeSet, ChangeType } from '../../propagation/changes.ts';
@@ -81,8 +82,7 @@ interface FactRow {
 const FACTS = `SELECT i.id, i.content_kind AS kind, i.shelved_at IS NOT NULL AS shelved, i.original_at IS NOT NULL AS marked, i.tagged_at IS NULL AS untagged,
     i.original_decision, i.original_rule, i.original_evidence_provider,
     (NOT ${NOT_IN_BOOK}) AS in_book, ${IN_COMIC('i')} AS in_comic,
-    (i.excluded_by IS NOT NULL OR i.trashed_at IS NOT NULL OR i.missing = 1
-      OR i.root_id NOT IN (SELECT id FROM library_roots WHERE enabled = 1 AND removed_at IS NULL)) AS excluded
+    NOT (${NOT_EXCLUDED('i')} AND ${FILE_LIVE('i')} AND i.root_id IN (${ACTIVE_ROOT_IDS})) AS excluded
   FROM images i WHERE i.id IN (SELECT value FROM json_each(?))`;
 
 /**

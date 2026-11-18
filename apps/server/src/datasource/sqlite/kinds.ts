@@ -5,7 +5,7 @@
  * - 最终类型变了就声明 image.kindChanged：自动关联由反应 reevaluateAuto 按新类型重新评估（和自动改类型同一条路，附录 #3）。
  * 全部可撤销。
  */
-import { CONTENT_KINDS, type ContentKind } from '@emaki/shared';
+import { CONTENT_KINDS, KIND_LABEL, type ContentKind } from '@emaki/shared';
 import { BadRequestError } from '../../http/errors.ts';
 import { setManualKind } from '../../domain/analysis/analyze.ts';
 import type { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
@@ -13,14 +13,8 @@ import { setKindManual } from '../../domain/curation/kinds.ts';
 import type { SqliteContext } from './context.ts';
 import type { UndoRecorder } from './undo.ts';
 
-export const KIND_LABEL: Record<ContentKind, string> = {
-  illustration: '插画',
-  comic: '漫画',
-  screenshot: '截图',
-  text: '文字',
-  photo: '照片',
-  meme: '表情',
-};
+/** 类型名在 packages/shared（KIND_LABEL），和网页同一份 */
+export { KIND_LABEL };
 
 export function assertKindValue(v: unknown): asserts v is ContentKind | 'auto' {
   if (v === 'animated') throw new BadRequestError('「动图」不是类型了：是不是动图按帧数自动判断，不能手动改');

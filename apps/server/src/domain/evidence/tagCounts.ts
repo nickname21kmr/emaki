@@ -1,5 +1,6 @@
 /** 搜索联想用的标签张数缓存（tags.image_count，证据模块的表）：图库有变化只标记过期，下次搜索时再刷新 */
 import type { Db } from '../../db/connection.ts';
+import { NOT_COUNTED } from '../../readmodel/terms.ts';
 
 /**
  * tags.image_count = 每个标签在计入张数的图（v_counted_images）里出现几次。
@@ -16,13 +17,12 @@ export function refreshTagCounts(db: Db): void {
     ][]) {
       n.set(id, c);
     }
-    // 条件是 v_images + excluded_by IS NULL 的反面；LEFT JOIN 是为了文件夹行不在的图也算不计数（视图里是内连接）
+    // 条件是「计入统计」的反面（NOT_COUNTED）；LEFT JOIN 是为了文件夹行不在的图也算不计数（视图里是内连接）
     for (const [id, c] of db
       .prepare(
         `SELECT it.tag_id, COUNT(*) FROM images i LEFT JOIN library_roots r ON r.id = i.root_id
          CROSS JOIN image_tags it ON it.image_id = i.id
-         WHERE NOT (r.id IS NOT NULL AND r.enabled = 1 AND r.removed_at IS NULL
-                    AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL)
+         WHERE ${NOT_COUNTED()}
          GROUP BY it.tag_id`,
       )
       .raw()

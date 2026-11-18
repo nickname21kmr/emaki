@@ -32,6 +32,7 @@ import type {
   JobKind,
   StartJobBody,
   LibraryStats,
+  LibrarySummary,
   ListCharactersQuery,
   ListCharactersResponse,
   ListDuplicatesQuery,
@@ -89,6 +90,8 @@ export interface DataSource {
   replaceImage(id: ID, body: ReplaceImageBody): Promise<ReplaceImageResult>;
   // 统计
   getStats(): Promise<LibraryStats>;
+  /** 汇总接口（P5）：侧栏、首页、命令面板、统计条要显示的计数，按命名口径算好 */
+  getSummary(): Promise<LibrarySummary>;
   /** 别册首页：每一类的张数、最近张数和预览（T27） */
   listContentKinds(): Promise<ContentKindSummary[]>;
 

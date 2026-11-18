@@ -9,6 +9,7 @@ import { FOCUS_TAGS, inferCoverFocus } from '../../services/covers/focus.ts';
 import { COVER_TAG_WEIGHTS, coverQuality, isUnfitCover } from '../../services/covers/quality.ts';
 import type { SqliteContext } from './context.ts';
 import { DAY, iso, RECENT_DAYS } from './sql.ts';
+import { ART_KINDS_SQL, ILLUSTRATION } from '../../readmodel/terms.ts';
 
 export interface CharacterRec {
   id: number;
@@ -164,7 +165,7 @@ export class Derived {
         db
           .prepare(
             `SELECT ic.character_id AS id, COUNT(*) AS n FROM image_characters ic
-             JOIN v_counted_images i ON i.id = ic.image_id WHERE i.content_kind <> 'illustration' GROUP BY ic.character_id`,
+             JOIN v_counted_images i ON i.id = ic.image_id WHERE NOT ${ILLUSTRATION} GROUP BY ic.character_id`,
           )
           .all() as { id: number; n: number }[]
       ).map((r) => [r.id, r.n]),
@@ -174,7 +175,7 @@ export class Derived {
         db
           .prepare(
             `SELECT w.work_id AS id, COUNT(*) AS n FROM v_image_works w
-             JOIN v_counted_images i ON i.id = w.image_id WHERE i.content_kind <> 'illustration' GROUP BY w.work_id`,
+             JOIN v_counted_images i ON i.id = w.image_id WHERE NOT ${ILLUSTRATION} GROUP BY w.work_id`,
           )
           .all() as { id: number; n: number }[]
       ).map((r) => [r.id, r.n]),
@@ -194,7 +195,7 @@ export class Derived {
       .prepare(
         `SELECT ${COVER_CANDIDATE_COLS.replace('COALESCE(cr.n, 1) - 1', '0')}
          FROM image_characters ic JOIN v_counted_images i ON i.id = ic.image_id
-         WHERE i.content_kind IN ('illustration','comic')`,
+         WHERE ${ART_KINDS_SQL}`,
       )
       .all() as CoverCandidate[]) {
       r.others = (crowd.get(r.iid) ?? 1) - 1;

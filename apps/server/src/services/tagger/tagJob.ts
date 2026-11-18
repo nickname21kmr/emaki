@@ -18,11 +18,12 @@ import { ARTIST_THRESHOLD } from './artists.ts';
 import { ensureModelFiles, isModelReady } from './download.ts';
 import { clampBatch, findModel, TAGGER_MODELS, type TaggerModelSpec } from './models.ts';
 import type { HostItemResult, HostThresholds } from './protocol.ts';
-import { IN_COMIC } from '../classify/comicAreas.ts';
 import { NOT_SKIPPED, noteReadFailures, skipIds } from './readBackoff.ts';
 import { ResilientTagger } from './resilient.ts';
 import { TagResultWriter } from '../../domain/evidence/tagger.ts';
 import type { Change } from '../../propagation/changes.ts';
+import { COUNTED, NO_CHARACTER, TAGGABLE } from '../../readmodel/terms.ts';
+import { formatEta } from '@emaki/shared';
 
 export interface TagJobDeps {
   db: Db;
@@ -68,16 +69,16 @@ function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T | null> 
  * - 旧模型轮：没识别过、文件时间早于 @before
  * - 主模型轮：没识别过、文件时间不早于 @before；以及别的模型识别过、没认出角色、文件时间不早于 @before 的（@retryOld = 1 时不看时间）；
  *   以及用户在「未识别」里要求重新识别的（retag = 1，不管之前是哪个模型认的）
- * 两轮都跳过相机照片（@skipCamera = 1）和按漫画导入的文件夹。@before 为 NULL 时主模型轮覆盖全部。
+ * 两轮都只看计入统计的图（COUNTED），跳过相机照片（@skipCamera = 1）和按漫画导入的文件夹（TAGGABLE，和首页「还没识别」同一份口径）。
+ * @before 为 NULL 时主模型轮覆盖全部。
  */
-const BASE = `r.enabled = 1 AND r.removed_at IS NULL AND NOT ${IN_COMIC('i')} AND i.missing = 0 AND i.trashed_at IS NULL AND i.excluded_by IS NULL
-  AND NOT (@skipCamera = 1 AND i.content_kind = 'photo' AND COALESCE(i.camera, '') <> '')`;
+const BASE = `${COUNTED()} AND ${TAGGABLE}`;
 const NEWER = '(@before IS NULL OR i.modified_at >= @before)';
 const WHERE_PRIMARY = `${BASE} AND (
   (i.tagged_at IS NULL AND ${NEWER})
   OR i.retag = 1
   OR (i.tagged_at IS NOT NULL AND i.tagger_model IS NOT @model AND (${NEWER} OR @retryOld = 1)
-      AND NOT EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id)))`;
+      AND ${NO_CHARACTER('i')}))`;
 const WHERE_LEGACY = `${BASE} AND i.tagged_at IS NULL AND i.modified_at < @before`;
 const count = (where: string) => `SELECT COUNT(*) AS n FROM images i JOIN library_roots r ON r.id = i.root_id WHERE ${where} AND ${NOT_SKIPPED}`;
 const batch = (where: string) => `SELECT i.id AS id, r.path AS rootPath, i.rel_path AS relPath, i.format AS format, i.camera AS camera
@@ -121,12 +122,6 @@ const ITEM_MS = 250;
 
 const mb = (n: number) => (n / 1048576).toFixed(0);
 
-function formatEta(sec: number): string {
-  if (!Number.isFinite(sec)) return '—';
-  if (sec < 60) return `${Math.ceil(sec)} 秒`;
-  if (sec < 3600) return `${Math.ceil(sec / 60)} 分钟`;
-  return `${(sec / 3600).toFixed(1)} 小时`;
-}
 
 export function createTagJobRunner(deps: TagJobDeps): TagRunner {
   const { db } = deps;
@@ -353,9 +348,11 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
         const rate = done / ((performance.now() - t0) / 1000);
         // 剩余时间只按这一轮的速度估（旧模型快、新模型慢）；后面还有轮次时注明
         const later = counts.slice(passes.indexOf(pass) + 1).reduce((a, b) => a + b, 0);
+        const left = (total - done) / rate;
+        ctx.setEta?.(left);
         advance(
           rows.length,
-          `${tag}${done} / ${total} · ${deviceLabel} · ${rate.toFixed(1)} 张/秒 · 这一轮剩余约 ${formatEta((total - done) / rate)}${later ? ` · 之后还有 ${later} 张用新模型` : ''}`,
+          `${tag}${done} / ${total} · ${deviceLabel} · ${rate.toFixed(1)} 张/秒 · 这一轮剩余约 ${formatEta(left) ?? '—'}${later ? ` · 之后还有 ${later} 张用新模型` : ''}`,
         );
       }
       if (yielded && !ctx.signal.aborted) return { message: null, yielded: true };

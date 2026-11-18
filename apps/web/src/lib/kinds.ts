@@ -1,38 +1,13 @@
 /**
- * 内容类型的文案与图标（T27 / T32a）。插画是主角，其余五类统称「别册」。
+ * 内容类型的图标（T27 / T32a）。插画是主角，其余五类统称「别册」。
  * 键位顺序 = CONTENT_KINDS 顺序：1 插画 2 漫画 3 截图 4 文字 5 照片 6 表情。
+ * 类型的名称、印章字、说明只有一份，在 packages/shared（KIND_LABEL / KIND_GLYPH / KIND_HINT，附录 #38），这里转出来。
  * 「动图」不是类型（D5）：是另一个维度（ImageItem.animated），按帧数自动判断，文案在下面的 ANIMATED_*。
  */
 import type { ContentKind, ContentKindSource } from '@emaki/shared';
 import { BookOpen, Camera, FileText, Image, Smartphone, Sticker, type LucideIcon } from 'lucide-react';
 
-export const KIND_LABEL: Record<ContentKind, string> = {
-  illustration: '插画',
-  comic: '漫画',
-  screenshot: '截图',
-  text: '文字',
-  photo: '照片',
-  meme: '表情',
-};
-
-/** 朱文小印上的字（T32b） */
-export const KIND_GLYPH: Record<ContentKind, string> = {
-  illustration: '插',
-  comic: '漫',
-  screenshot: '截',
-  text: '文',
-  photo: '照',
-  meme: '表',
-};
-
-export const KIND_HINT: Record<ContentKind, string> = {
-  illustration: '单幅插画、CG、立绘、封面',
-  comic: '漫画和本子的内页、分镜、四格',
-  screenshot: '手机电脑截屏、聊天记录、视频截图',
-  text: '文档、笔记、满屏文字、二维码',
-  photo: '相机拍的照片、真人、实物',
-  meme: '表情包、梗图、反应图',
-};
+export { KIND_GLYPH, KIND_HINT, KIND_LABEL } from '@emaki/shared';
 
 export const KIND_ICON: Record<ContentKind, LucideIcon> = {
   illustration: Image,
@@ -60,6 +35,3 @@ export const ANIMATED_LABEL = '动图';
 export const kindTotal = (counts: Record<ContentKind, number>, total: number, kind: ContentKind[] | 'all') =>
   kind === 'all' ? total : kind.reduce((n, k) => n + (counts[k] ?? 0), 0);
 
-/** 别册总数 = 非插画之和 */
-export const annexTotal = (counts: Record<ContentKind, number> | undefined) =>
-  counts ? Object.entries(counts).reduce((n, [k, v]) => (k === 'illustration' ? n : n + v), 0) : 0;

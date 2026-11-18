@@ -610,7 +610,7 @@ export function unrecognizedContract(make: ContractFactory) {
       expect((await e.ds.getStats()).unrecognizedCount).toBe(6);
       expect((await e.ds.unrecognizedSummary()).art.total).toBe(6);
       expect((await e.ds.listImages({ status: 'unrecognized' })).total).toBe(6);
-      expect((await e.ds.getImage(i25))?.status).toBe('recognized');
+      expect((await e.ds.getImage(i25))?.queue).toBeNull();
       const original = (await e.ds.listWorks({})).find((w) => w.name === '原创');
       expect(original).toBeDefined();
       expect((await e.ds.listImages({ workId: original!.id })).items.map((x) => e.back('image', x.id))).toContain('i25');
@@ -998,7 +998,7 @@ export function imagesContract(make: ContractFactory) {
     it('getImage：标签与建议；不可见返回 null', async () => {
       const e = env();
       const img = await e.ds.getImage(e.id('image', 'i24'));
-      expect(img?.status).toBe('unrecognized');
+      expect([img?.characterCount, img?.queue]).toEqual([0, 'art']);
       expect(img?.workIds.map((w) => e.back('work', w))).toEqual(['w1']);
       expect(img?.tags.map((t) => t.tag)).toContain('1girl');
       expect(img?.characterSuggestions.map((s) => [s.danbooruTag, s.name, s.workName, s.characterId && e.back('character', s.characterId)])).toEqual([
@@ -1122,7 +1122,7 @@ export function bulkContract(make: ContractFactory) {
         for (const id of ids) expect((await e.ds.getImage(id))!.characterIds.map((c) => e.back('character', c))).not.toContain('c1');
       }],
       ['exclude', () => ({ type: 'exclude' }), '已排除 2 张图', async (e, ids) => {
-        for (const id of ids) expect((await e.ds.getImage(id))!.status).toBe('excluded');
+        for (const id of ids) expect((await e.ds.getImage(id))!.excluded).toBe(true);
       }],
       ['favorite', () => ({ type: 'favorite', value: true }), '已收藏 2 张图', async (e, ids) => {
         for (const id of ids) expect((await e.ds.getImage(id))!.favorite).toBe(true);
@@ -1234,7 +1234,7 @@ export function bulkContract(make: ContractFactory) {
       const before = await snapshot(e, ids);
       const r = await e.ds.bulkImages({ ids, action: { type: 'restore' } });
       expect(r.message).toBe('已恢复 2 张图');
-      for (const id of ids) expect((await e.ds.getImage(id))!.status).not.toBe('excluded');
+      for (const id of ids) expect((await e.ds.getImage(id))!.excluded).toBe(false);
       await e.ds.undo(r.undoToken!);
       expect(await snapshot(e, ids)).toEqual(before);
     });
@@ -1352,7 +1352,7 @@ export function kindsContract(make: ContractFactory) {
       expect(stats.kindCounts).toMatchObject({ illustration: 31, screenshot: 1 });
       expect(Object.values(stats.kindCounts).reduce((a, b) => a + b, 0)).toBe(stats.imageCount);
       const img = await e.ds.getImage(id);
-      expect([img?.kind, img?.status, img?.kindSource, img?.kindReason]).toEqual(['screenshot', 'recognized', 'manual', null]);
+      expect([img?.kind, img?.queue, img?.kindSource, img?.kindReason]).toEqual(['screenshot', 'annex', 'manual', null]);
       expect(ids(e, (await e.ds.listImages({ kind: ['screenshot'] })).items)).toEqual(['i24']);
       expect((await e.ds.listImages({ kind: 'all' })).total).toBe(32);
       expect((await e.ds.listImages({ status: 'unrecognized' })).total).toBe(6);
@@ -1365,7 +1365,7 @@ export function kindsContract(make: ContractFactory) {
 
       await e.ds.undo(r.undoToken!);
       const back = await e.ds.getImage(id);
-      expect([back?.kind, back?.status]).toEqual(['illustration', 'unrecognized']);
+      expect([back?.kind, back?.queue]).toEqual(['illustration', 'art']);
       expect(back?.kindSource).not.toBe('manual');
       expect((await e.ds.getStats()).unrecognizedCount).toBe(7);
     });

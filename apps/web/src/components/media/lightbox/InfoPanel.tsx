@@ -1,4 +1,4 @@
-import type { ImageDetail, ImageItem, Rating } from '@emaki/shared';
+import { collectionTitle, volumeUnit, type ImageDetail, type ImageItem, type Rating } from '@emaki/shared';
 import { Ban, FolderOpen, Heart, Sparkles, Trash2 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { toast } from 'sonner';
@@ -12,7 +12,6 @@ import {
 } from '@/lib/format';
 import { CONTENT_KINDS } from '@emaki/shared';
 import { cn } from '@/lib/cn';
-import { unitOfFolder } from '@/lib/collections';
 import { ANIMATED_LABEL, KIND_GLYPH, KIND_HINT, KIND_LABEL } from '@/lib/kinds';
 import { AnimatedGlyph } from '../KindBadge';
 import { PanelArtists } from './PanelArtists';
@@ -215,13 +214,14 @@ function Header({
       </div>
     );
   }
-  // 头部先说「这是谁」，文件名降成一行小字（BR-8）
+  // 头部先说「这是谁」，文件名降成一行小字（BR-8）。状态只读服务端给的事实（角色数、所在队列），不自己从类型推（附录 #27）
   const names = base.characterNames;
-  const art = base.kind === 'illustration' || base.kind === 'comic';
   // 认出（或手动改）的画师优先，没有再用文件名、元数据里的
   const artist = artists?.length ? artists.map((a) => a.name).join('、') : base.source?.artist;
-  // 成册的漫画页（比如按漫画导入的）不找角色：头部写书名和第几页，不显示「未识别」
-  const book = names.length === 0 && base.kind === 'comic' && collection ? collection : null;
+  // 整本处理的合集里的页（queue = book）：头部写书名和第几页，不显示「未识别」
+  const book = base.characterCount === 0 && base.queue === 'book' && collection ? collection : null;
+  // 在未识别「插画 · 漫画」里（含放下的）
+  const unrecognized = base.queue === 'art' || base.queue === 'shelved';
   return (
     <div className="px-5 pt-5 pb-4">
       {names.length > 0 ? (
@@ -241,8 +241,8 @@ function Header({
       ) : book ? (
         <div>
           <h2 className="line-clamp-2 text-[16px] leading-snug font-semibold tracking-tight">
-            {book.title ?? '无题'}
-            {book.volumeNo !== null && ` 第 ${book.volumeNo} ${unitOfFolder(book.folderName)}`}
+            {collectionTitle(book)}
+            {book.volumeNo !== null && ` 第 ${book.volumeNo} ${volumeUnit(book.folderName)}`}
           </h2>
           <div className="mt-0.5 text-xs text-fg-subtle tabular">
             第 {book.pageNo} / {book.pageCount} 页{artist ? ` · 画师 ${artist}` : ''}
@@ -251,16 +251,18 @@ function Header({
       ) : (
         <div>
           <h2 className="text-[16px] leading-snug font-semibold tracking-tight">
-            {base.original ? '原创' : art ? '未识别' : KIND_LABEL[base.kind]}
+            {base.original ? '原创' : unrecognized ? '未识别' : KIND_LABEL[base.kind]}
           </h2>
           <div className="mt-0.5 text-xs text-fg-subtle">
             {base.original
               ? '画师自己的原创角色，不在未识别里'
-              : art
+              : unrecognized
                 ? '可以在下方添加角色或采纳识别建议'
                 : artist
                   ? `画师 ${artist}`
-                  : '别册里的图，不参与角色识别'}
+                  : base.queue === 'annex'
+                    ? '别册里的图，不参与角色识别'
+                    : '不在未识别里，可以在下方添加角色'}
           </div>
         </div>
       )}
@@ -274,9 +276,9 @@ function Header({
         <Dot />
         <span className="uppercase">{base.format}</span>
       </div>
-      {base.status === 'excluded' || (base.status === 'unrecognized' && !book) ? (
-        <Badge tone={base.status === 'excluded' ? 'danger' : 'warn'} dot className="mt-3">
-          {base.status === 'excluded' ? '已排除' : '未识别'}
+      {base.excluded || unrecognized ? (
+        <Badge tone={base.excluded ? 'danger' : 'warn'} dot className="mt-3">
+          {base.excluded ? '已排除' : '未识别'}
         </Badge>
       ) : (
         base.kind !== 'illustration' && (

@@ -4,8 +4,10 @@
  * 约定：
  * - 所有 ID 都是字符串（后端用 SQLite INTEGER 主键时转成字符串再返回）。
  * - 所有时间都是 ISO 8601 字符串（UTC）。
- * - 「张数」一律指未被排除（status !== 'excluded'）的图片数量。
+ * - 「张数」一律指计入统计（可见、没被排除）的图片数量；口径的唯一定义在服务端 readmodel/terms.ts。
  */
+
+import type { TriageQueue } from './rules.ts';
 
 export type ID = string;
 export type ISODate = string;
@@ -16,14 +18,14 @@ export type Rating = 'general' | 'sensitive' | 'questionable' | 'explicit';
 /** 标签类别，与 Danbooru 的 category 对应。 */
 export type TagCategory = 'general' | 'character' | 'copyright' | 'artist' | 'meta';
 
-/** 图片在库中的状态。 */
-export type ImageStatus =
-  /** 有角色，或不是插画 / 漫画（别册里的图不用找角色） */
-  | 'recognized'
-  /** 还没有关联任何角色（可能 tagger 还没跑，或者识别置信度不够） */
-  | 'unrecognized'
-  /** 被用户排除，不参与统计和浏览 */
-  | 'excluded';
+/**
+ * 图片列表的旧筛选（ListImagesQuery.status）。图片本身不再带 status（P5，附录 #27），改看三个事实：
+ * tagged（识别过没有）、characterCount（角色数）、queue（在哪个待处理队列），以及 excluded。
+ * - recognized：有角色、归为原创，或不是插画 / 漫画
+ * - unrecognized：插画 / 漫画里没有角色、没归原创的（含放下的、成册的页）
+ * - excluded：被排除的
+ */
+export type ImageStatus = 'recognized' | 'unrecognized' | 'excluded';
 
 export type ImageFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'avif' | 'bmp' | 'html';
 
@@ -153,7 +155,17 @@ export interface ImageItem {
   /** 文件修改时间 */
   modifiedAt: ISODate;
   rating: Rating;
-  status: ImageStatus;
+  /** 被排除了（「已排除」页才列出来） */
+  excluded: boolean;
+  /** 识别过没有：当前这份文件有没有识别结果（换了文件、外部改了文件之后是 false，等重新识别，P4a） */
+  tagged: boolean;
+  /** 关联的角色数（= characterIds.length） */
+  characterCount: number;
+  /**
+   * 在哪个待处理队列，服务端按命名口径算好（triageQueue 的说明）：art 未识别「插画 · 漫画」、shelved 放下的、
+   * annex「照片 · 文字等」、book 在整本处理的合集里；null = 不在。前端不要自己从类型、角色推
+   */
+  queue: TriageQueue | null;
   /** 内容类型（T27） */
   kind: ContentKind;
   /** 是动图（D5）：分析模块按帧数、格式判断（多帧的 GIF / WebP / PNG、HTML 逐帧动画），和类型无关，不能手动改 */
@@ -527,6 +539,8 @@ export interface Job {
   /** 总量（未知时为 null） */
   total: number | null;
   message: string;
+  /** 预计还要多少秒（识别、画师补跑按当前速度估）；不知道时 null。界面用它，不要从 message 里抠（附录 #38） */
+  etaSeconds: number | null;
   startedAt: ISODate | null;
   finishedAt: ISODate | null;
 }

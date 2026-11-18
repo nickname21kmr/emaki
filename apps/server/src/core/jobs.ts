@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Job, JobKind } from '@emaki/shared';
+import { JOB_LABEL as JOB_LABELS, type Job, type JobKind } from '@emaki/shared';
 import type { EventBus } from './events.ts';
 import { jobActor, runAs } from '../propagation/actor.ts';
 
@@ -18,6 +18,8 @@ export interface JobContext {
   /** 进度 +n，并可更新提示文字 */
   advance(n?: number, message?: string): void;
   setMessage(message: string): void;
+  /** 预计还要多少秒（结构化，界面直接用；不知道传 null）。任务名和剩余时间的文案在 packages/shared（JOB_LABEL、formatEta） */
+  setEta?(seconds: number | null): void;
   /** 有更高优先级的任务在排队：长任务应尽快 requeue() 然后 return */
   shouldYield(): boolean;
   /** 当前任务结束后再排一个同类任务 */
@@ -25,16 +27,6 @@ export interface JobContext {
   /** 本次调用过 requeue()（Pipeline 据此判断要不要链式触发） */
   readonly yielded: boolean;
 }
-
-const JOB_LABELS: Record<JobKind, string> = {
-  scan: '扫描图库',
-  thumbnail: '生成缩略图',
-  tag: '识别角色',
-  'danbooru-sync': '同步 Danbooru',
-  dedupe: '查找重复',
-  artists: '识别画师',
-  'pixiv-tags': '补充 Pixiv 角色',
-};
 
 /** 数字越小越先跑：新放进来的图要先扫描、出缩略图，别被一个多小时的打标签堵住 */
 const PRIORITY: Record<JobKind, number> = { scan: 0, thumbnail: 1, dedupe: 2, tag: 3, 'danbooru-sync': 4, artists: 5, 'pixiv-tags': 6 };
@@ -87,6 +79,7 @@ export class JobQueue {
       progress: 0,
       total: null,
       message: `${JOB_LABELS[kind]}：等待中`,
+      etaSeconds: null,
       startedAt: null,
       finishedAt: null,
     };
@@ -162,6 +155,9 @@ export class JobQueue {
         job.message = message;
         this.publishThrottled(job);
       },
+      setEta: (seconds) => {
+        job.etaSeconds = seconds !== null && Number.isFinite(seconds) && seconds >= 0 ? Math.round(seconds) : null;
+      },
       // 只让给同一条道里更急的任务（另一条道本来就在并行跑）
       shouldYield: () => this.jobs.some((j) => j.status === 'queued' && LANE[j.kind] === lane && PRIORITY[j.kind] < PRIORITY[job.kind]),
       requeue: () => {
@@ -191,6 +187,7 @@ export class JobQueue {
           : `${JOB_LABELS[job.kind]}失败：${err instanceof Error ? err.message : String(err)}`;
     } finally {
       job.finishedAt = new Date().toISOString();
+      job.etaSeconds = null;
       this.controllers.delete(job.id);
       this.runners.delete(job.id);
       this.publish(job);

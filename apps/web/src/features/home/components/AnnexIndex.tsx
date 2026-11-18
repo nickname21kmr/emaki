@@ -8,8 +8,8 @@ import { RollingNumber, Seal, SectionTitle } from '@/components/ui';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
-import { ANIMATED_LABEL, annexTotal, KIND_GLYPH, KIND_HINT, KIND_LABEL } from '@/lib/kinds';
-import { qk, useStats } from '@/lib/queries';
+import { ANIMATED_LABEL, KIND_GLYPH, KIND_HINT, KIND_LABEL } from '@/lib/kinds';
+import { qk, useSummary } from '@/lib/queries';
 
 /** 一格：别册的一类，或者最后的「动图」（D5：不是类型，跨类型的筛选） */
 type Cell = { key: ContentKind | 'animated'; query: ListImagesQuery };
@@ -25,19 +25,19 @@ const CELLS: Cell[] = [
  * 张数为 0 的格子变淡、不可点。
  */
 export function AnnexIndex() {
-  const stats = useStats().data;
-  const counts = stats?.kindCounts;
+  const images = useSummary().data?.images;
+  const counts = images?.byKind;
   const previews = useQueries({
     queries: CELLS.map(({ query }) => ({ queryKey: qk.images(query), queryFn: () => api.images(query), staleTime: 5 * 60_000 })),
   });
-  const total = annexTotal(counts);
-  if (!stats || !counts || total + stats.animatedCount === 0) return null;
+  const total = images?.annex ?? 0;
+  if (!images || !counts || total + images.animated === 0) return null;
   return (
     <section>
       <SectionTitle hint={`不是插画的图，自动分开放 · ${formatCount(total)} 张`}>别册</SectionTitle>
       <div className="grid grid-cols-6 border-t border-rule max-[1100px]:grid-cols-3 max-[700px]:grid-cols-2">
         {CELLS.map(({ key }, i) => {
-          const n = key === 'animated' ? stats.animatedCount : counts[key];
+          const n = key === 'animated' ? images.animated : counts[key];
           const items = previews[i]?.data?.items ?? [];
           const { mark, label, hint }: { mark: ReactNode; label: string; hint: string } =
             key === 'animated'

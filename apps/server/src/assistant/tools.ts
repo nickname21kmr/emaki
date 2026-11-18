@@ -21,7 +21,7 @@ export interface ToolHost {
 }
 const ids = z.array(z.string().min(1).max(100)).min(1).max(5000);
 const json = (data: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data) }] });
-const readablePath = /^\/api\/(images(?:\/[^/]+)?|characters(?:\/[^/]+)?|works(?:\/[^/]+)?|collections(?:\/[^/]+)?|library-roots|stats|jobs|search|unrecognized(?:\/summary)?)$/;
+const readablePath = /^\/api\/(images(?:\/[^/]+)?|characters(?:\/[^/]+)?|works(?:\/[^/]+)?|collections(?:\/[^/]+)?|library-roots|stats|summary|jobs|search|unrecognized(?:\/summary)?)$/;
 
 /** app.inject 按 WHATWG URL 解析：\ 当作 /，.. 和 %2e 会被消掉。所以按解析后的结果判断，且解析不能改写路径 */
 function libraryReadPath(path: string) {
@@ -60,7 +60,9 @@ export function createLibraryMcp(app: FastifyInstance, ds: DataSource, file: str
       host.assertEnabled(); return json(await queryLibrary(db, sql, params, limit));
     });
   }
-  server.registerTool('read_library', { description: '按应用现有口径读取图库信息。path 为 /api/images、/api/images/:id、/api/characters、/api/characters/:id、/api/works、/api/works/:id、/api/collections、/api/collections/:id、/api/library-roots（可用的入库目标）、/api/stats、/api/jobs、/api/search 或 /api/unrecognized（含 /summary），可附查询参数。角色归入搜索可用 /api/search?forAssignment=true&q=角色名，同时查找现有角色和未建档建议。',
+  server.registerTool('read_library', { description: '按应用现有口径读取图库信息。path 为 /api/images、/api/images/:id、/api/characters、/api/characters/:id、/api/works、/api/works/:id、/api/collections、/api/collections/:id、/api/library-roots（可用的入库目标）、/api/stats、/api/summary、/api/jobs、/api/search 或 /api/unrecognized（含 /summary），可附查询参数。角色归入搜索可用 /api/search?forAssignment=true&q=角色名，同时查找现有角色和未建档建议。' +
+      '界面上显示的数（待处理数、已认出比例、别册张数等）读 /api/summary，和用户看到的一致。图片不再有 status 字段，改看三个事实：tagged（这份文件识别过没有）、' +
+      'characterCount（角色数）、queue（在哪个待处理队列：art 未识别「插画 · 漫画」、shelved 放下的、annex「照片 · 文字等」、book 在整本处理的合集里、null 不在），另有 excluded。',
     inputSchema: { path: z.string().max(4000) }, annotations: read }, async ({ path }) => json(await invoke('GET', libraryReadPath(path))));
   server.registerTool('read_media', { description: '实际查看图库图片。按需使用，可指定原图的像素裁剪区域检查局部。输出缩放到最多 1600px。',
     inputSchema: { imageId: z.string().min(1), crop: z.object({ left: z.number().int().nonnegative(), top: z.number().int().nonnegative(), width: z.number().int().positive(), height: z.number().int().positive() }).optional() }, annotations: read }, async ({ imageId, crop }) => {

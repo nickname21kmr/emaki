@@ -7,13 +7,14 @@
  * 规则变了、角色或标签变了、图移动或新入库了，声明对应的变化，反应 reevaluateExclusions 按 id 集合重算，
  * 再声明 visibility.changed（新排除的、放出来的），合集、识别排队、查重标记都订阅它。
  */
-import type { Exclusion, ExclusionKind } from '@emaki/shared';
+import { normalizeExclusionTag, type Exclusion, type ExclusionKind } from '@emaki/shared';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import { normalizeRootPath } from '../../datasource/sqlite/settings.ts';
 import { parseId, toId } from '../../datasource/sqlite/sql.ts';
 import type { UndoRecorder } from '../../datasource/sqlite/undo.ts';
 import type { Reaction } from '../../propagation/registry.ts';
+import { VISIBLE } from '../../readmodel/terms.ts';
 
 /** 完整路径表达式（盘符根目录 `D:/` 已带结尾斜杠） */
 export const FULL_PATH_SQL = `CASE WHEN substr(r.path, -1) = '/' THEN r.path || i.rel_path ELSE r.path || '/' || i.rel_path END`;
@@ -171,8 +172,9 @@ export function createExclusionInTx(
   let label: string;
   switch (kind) {
     case 'tag':
-      target = t;
-      label = `标签 · ${t}`;
+      // 归一化在服务端做（附录 #38）：网页、HTTP、助手传进来的同样处理；网页表单只是按同一个函数预览
+      target = normalizeExclusionTag(t);
+      label = `标签 · ${target}`;
       break;
     case 'folder':
       target = normalizeRootPath(t);
@@ -193,8 +195,7 @@ export function createExclusionInTx(
           ? undefined
           : (ctx
               .stmt(
-                `SELECT i.id, i.file_name FROM images i JOIN library_roots r ON r.id = i.root_id
-                 WHERE i.id = ? AND i.missing = 0 AND i.trashed_at IS NULL AND r.enabled = 1 AND r.removed_at IS NULL`,
+                `SELECT i.id, i.file_name FROM images i JOIN library_roots r ON r.id = i.root_id WHERE i.id = ? AND ${VISIBLE}`,
               )
               .get(id) as { id: number; file_name: string } | undefined);
       if (!row) throw new NotFoundError('图片');
@@ -274,7 +275,7 @@ export class ExclusionQueries {
     const preview = this.ctx
       .stmt(
         `SELECT i.id FROM images i INDEXED BY idx_images_excluded JOIN library_roots r ON r.id = i.root_id
-         WHERE i.excluded_by = ? AND r.enabled = 1 AND r.removed_at IS NULL AND i.trashed_at IS NULL AND i.missing = 0
+         WHERE i.excluded_by = ? AND ${VISIBLE}
          ORDER BY i.added_at DESC, i.id DESC LIMIT 4`,
       )
       .pluck();

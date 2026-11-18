@@ -27,6 +27,7 @@ import type {
   GetImageResponse,
   GetSettingsResponse,
   GetStatsResponse,
+  LibrarySummary,
   ID,
   ImportImagesBody,
   ImportImagesResult,
@@ -142,6 +143,7 @@ export const api = {
   importImages: (body: ImportImagesBody) => post<ImportImagesResult>('/images/import',body),
   replaceImage: (id: ID, body: ReplaceImageBody) => post<ReplaceImageResult>(`/images/${encodeURIComponent(id)}/replace`,body),
   stats: () => get<GetStatsResponse>('/stats'),
+  summary: () => get<LibrarySummary>('/summary'),
   contentKinds: () => get<ListContentKindsResponse>('/content-kinds'),
 
   works: (q: ListWorksQuery = {}) => get<ListWorksResponse>('/works', q),

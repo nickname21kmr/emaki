@@ -1,17 +1,16 @@
 import { selectionIds } from '@/components/media/CollectionControls';
-import { UNRECOGNIZED_ANNEX_KINDS, type BulkImageAction, type ContentKind, type ID, type ImageItem, type Rating } from '@emaki/shared';
+import { queueAfterKindChange, type BulkImageAction, type ContentKind, type ID, type ImageItem, type Rating, type TriageQueue } from '@emaki/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { KIND_LABEL } from '@/lib/kinds';
-import { collapseParam, useMutate, useUnrecognizedInfinite, type UnrecognizedParams } from '@/lib/queries';
+import { collapseParam, useMutate, useSettings, useUnrecognizedInfinite, type UnrecognizedParams } from '@/lib/queries';
 import { usePrefs, useSelection } from '@/lib/stores';
 import { useReconcileSelection } from '@/lib/useReconcileSelection';
 import type { AssignTarget, StampEvent } from './types';
 
 const SCOPE = 'unrecognized';
 const EMPTY: ReadonlySet<ID> = new Set();
-const ANNEX: readonly string[] = UNRECOGNIZED_ANNEX_KINDS;
 const MAX_SELECT = 2000;
 
 /**
@@ -21,6 +20,7 @@ const MAX_SELECT = 2000;
 export function useSheet(params: UnrecognizedParams, enabled: boolean) {
   const mode = usePrefs((s) => s.collapseMode);
   const query = useUnrecognizedInfinite({ ...params, collapseCollections: collapseParam(mode) }, 120);
+  const comicInQueue = useSettings().data?.tagger.comicInUnrecognized ?? true;
   const { data, dataUpdatedAt } = query;
 
   const all = useMemo(() => {
@@ -116,16 +116,18 @@ export function useSheet(params: UnrecognizedParams, enabled: boolean) {
     const n = selectedCount;
     run({ type: 'original', value }, { hide: true, stamp: value ? ['原', `${n} 张 · 原创`] : ['回', `移出原创 ${n} 张`] });
   };
+  /**
+   * 改类型：离不离开当前这一列分两层。队列按共用的规则算（queueAfterKindChange，和服务端同一条：改成截图等离开「插画 · 漫画」，
+   * 改成漫画看「未识别里也列出漫画页」）；再加上这一页的分组（没认出里漫画单独一组）和「只看插画 / 只看漫画」
+   */
   const setKind = (k: ContentKind | 'auto') => {
     const art = params.area === 'art';
-    const comicGroup = params.theme === 'comic';
+    const from: TriageQueue = !art ? 'annex' : params.bucket === 'shelved' ? 'shelved' : 'art';
     const leaves =
-      (art && ANNEX.includes(k)) ||
-      (!art && (k === 'illustration' || k === 'comic')) ||
-      (comicGroup && k === 'illustration') ||
-      (art && !comicGroup && k === 'comic' && params.artKind !== 'comic') ||
-      // 只看插画 / 只看漫画时，改成另一类也离开
-      (art && !!params.artKind && (k === 'illustration' || k === 'comic') && k !== params.artKind);
+      k !== 'auto' &&
+      (queueAfterKindChange(from, k, comicInQueue) !== from ||
+        (art && (params.theme === 'comic' ? k !== 'comic' : k === 'comic' && params.artKind !== 'comic')) ||
+        (art && !!params.artKind && k !== params.artKind));
     run({ type: 'kind', value: k }, { hide: leaves, stamp: ['类', k === 'auto' ? '自动' : KIND_LABEL[k], 'muted'] });
   };
   const setRating = (r: Rating) => run({ type: 'rating', value: r }, { hide: false, stamp: ['级', '已改分级', 'muted'] });

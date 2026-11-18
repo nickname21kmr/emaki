@@ -10,12 +10,11 @@
  * 不在整本处理的合集里、不在漫画区、来源是 Pixiv 投稿、还没有角色、投稿不是明确不存在的。模型分数落在哪一档都不影响。
  */
 import type { Db } from '../../db/connection.ts';
-import { NOT_IN_BOOK } from '../../datasource/sqlite/sql.ts';
-import { IN_COMIC } from '../../services/classify/comicAreas.ts';
 import { PixivArtworkSchema, type PixivArtwork } from '../../services/pixiv/client.ts';
 import { CharacterCatalog } from '../catalog/characterCatalog.ts';
 import { stmt } from '../tx.ts';
 import type { CharacterCandidate } from './store.ts';
+import { ART_SCOPE, NO_CHARACTER } from '../../readmodel/terms.ts';
 
 /** Pixiv 证据的置信度 */
 export const PIXIV_CONFIDENCE = {
@@ -25,10 +24,12 @@ export const PIXIV_CONFIDENCE = {
   candidate: 0,
 } as const;
 
-/** 能去查 Pixiv 的图（i 是 v_counted_images 的别名），不看原创 */
-export const PIXIV_ELIGIBLE_BASE = `i.content_kind IN ('illustration','comic') AND i.shelved_at IS NULL
-  AND ${NOT_IN_BOOK} AND NOT ${IN_COMIC('i')} AND i.source_site='pixiv' AND i.source_post_id IS NOT NULL
-  AND NOT EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id=i.id)
+/**
+ * 能去查 Pixiv 的图（i 是 v_counted_images 的别名），不看原创：逐张找角色的图（ART_SCOPE：插画、漫画，不在整本处理的合集里、不在漫画区）、
+ * 没放下、没有角色，来源是 Pixiv 投稿、投稿不是明确不存在的
+ */
+export const PIXIV_ELIGIBLE_BASE = `i.source_site='pixiv' AND i.source_post_id IS NOT NULL AND i.shelved_at IS NULL
+  AND ${ART_SCOPE} AND ${NO_CHARACTER('i')}
   AND NOT EXISTS (SELECT 1 FROM pixiv_unavailable_posts p WHERE p.post_id=i.source_post_id)`;
 export const PIXIV_ELIGIBLE = `${PIXIV_ELIGIBLE_BASE} AND i.original_at IS NULL`;
 /** 登记了、还没查的 */

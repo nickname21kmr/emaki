@@ -8,6 +8,7 @@ import { characterVerificationSchema } from '../services/catalog/characterVerifi
 /** 统计、作品、角色、搜索 */
 export function libraryRoutes(app: FastifyInstance, ds: DataSource): void {
   app.get('/api/stats', () => ds.getStats());
+  app.get('/api/summary', () => ds.getSummary());
   app.get('/api/content-kinds', () => ds.listContentKinds());
 
   // ---------------------------------------------------------- 作品

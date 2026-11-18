@@ -5,6 +5,8 @@ import { randomUUID } from 'node:crypto';
  * 写操作全部走 ctx.mutate，任何写都把合集转成 origin='manual'（自动判定不会再删它）。
  */
 import {
+  COLLECTION_KIND_META,
+  collectionTitle,
   searchKey,
   type BulkCollectionsBody,
   type CreateCollectionBody,
@@ -28,12 +30,14 @@ import { summarize } from '../../domain/collections/summary.ts';
 import type { SqliteContext } from './context.ts';
 import type { Derived } from './derived.ts';
 import { toCharacter, toWork } from './library.ts';
-import { DEFAULT_DOMINANT, iso, parseId, toId, VISIBLE } from './sql.ts';
+import { DEFAULT_DOMINANT, iso, parseId, toId } from './sql.ts';
+import { COUNTED, HAS_CHARACTER, imageWorkRows, ROOT_ACTIVE, VISIBLE } from '../../readmodel/terms.ts';
 import type { UndoRecorder } from './undo.ts';
 import type { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import { resolveSuggestedCharacter } from './suggestions.ts';
 
-const KIND_LABEL: Record<CollectionKind, string> = { doujin: '本子', artbook: '画集', group: '组图' };
+/** 合集类型名：和网页同一份（packages/shared 的 COLLECTION_KIND_META） */
+const KIND_LABEL = Object.fromEntries(Object.entries(COLLECTION_KIND_META).map(([k, v]) => [k, v.label])) as Record<CollectionKind, string>;
 const isKind = (v: unknown): v is CollectionKind => v === 'doujin' || v === 'artbook' || v === 'group';
 /** 可变列（撤销时整行记下这些） */
 const MUTABLE = [
@@ -74,11 +78,15 @@ export const compareSummaries = (a: CollectionSummary, b: CollectionSummary) =>
   (a.volumeNo ?? 0) - (b.volumeNo ?? 0) ||
   Number(a.id) - Number(b.id);
 
+/** 合集显示出来：按文件夹成册的看所在图库文件夹可见；手动、同投稿的组图在文件夹停用后，只要还有计入统计的页也显示 */
+const COLLECTION_VISIBLE = `((c.membership = 'folder' AND ${ROOT_ACTIVE('r')})
+    OR (c.membership <> 'folder' AND ((${ROOT_ACTIVE('r')}) OR EXISTS (SELECT 1 FROM v_counted_images i WHERE i.collection_id = c.id))))`;
+
 /** RV-C-15：一个目录下的直接成员（不含子目录），不用 LIKE */
 const DIR_MEMBERS = `SELECT i.id, i.file_name, i.width, i.height, i.modified_at, i.content_kind, i.content_kind_source, i.content_kind_manual, i.animated,
     i.tagged_at
   FROM images i JOIN library_roots r ON r.id = i.root_id
-  WHERE ${VISIBLE} AND i.excluded_by IS NULL AND i.root_id = @root
+  WHERE ${COUNTED()} AND i.root_id = @root
     AND (CASE WHEN @dir = '' THEN instr(i.rel_path, '/') = 0
       ELSE substr(i.rel_path, 1, length(@dir) + 1) = @dir || '/' AND instr(substr(i.rel_path, length(@dir) + 2), '/') = 0 END)`;
 
@@ -96,7 +104,7 @@ export class CollectionQueries {
     const rows = db
       .prepare(
         `SELECT c.*, r.path AS root_path FROM collections c JOIN library_roots r ON r.id = c.root_id
-         WHERE c.state = 'active' AND ((c.membership = 'folder' AND r.enabled = 1 AND r.removed_at IS NULL) OR (c.membership <> 'folder' AND ((r.enabled = 1 AND r.removed_at IS NULL) OR EXISTS (SELECT 1 FROM v_counted_images i WHERE i.collection_id = c.id))))`,
+         WHERE c.state = 'active' AND ${COLLECTION_VISIBLE}`,
       )
       .all() as (CollectionRow & { root_path: string; comic: boolean })[];
     const comics = ComicAreas.load(db);
@@ -105,7 +113,7 @@ export class CollectionQueries {
     for (const p of db
       .prepare(
         `SELECT i.id, i.collection_id, i.page_no, i.width, i.height, i.rating, i.content_kind, i.dominant_color, i.tagged_at, i.added_at, i.modified_at,
-                EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id) AS has_char
+                ${HAS_CHARACTER('i')} AS has_char
          FROM v_counted_images i WHERE i.collection_id IS NOT NULL ORDER BY i.collection_id, i.page_no`,
       )
       .all() as PageRow[]) {
@@ -126,20 +134,9 @@ export class CollectionQueries {
       `SELECT i.collection_id AS c, ic.character_id AS x, COUNT(*) AS n FROM v_counted_images i
        JOIN image_characters ic ON ic.image_id = i.id WHERE i.collection_id IS NOT NULL GROUP BY 1, 2`,
     );
-    // 与 v_image_works 同口径（经角色的作品 ∪ 手动指定的作品 ∪ 原创图的「原创」作品），但直接连底表：
-    // 连视图时 SQLite 会把整个 UNION 视图对每一行重扫一遍，副本上要 11 秒
+    // 图的作品（imageWorkRows：和 v_image_works 同口径，直接连底表——连视图时 SQLite 会把整个 UNION 视图对每一行重扫一遍，副本上要 11 秒）
     const workHits = hits(
-      `SELECT c, x, COUNT(*) AS n FROM (
-         SELECT i.collection_id AS c, i.id AS iid, cw.work_id AS x FROM v_counted_images i
-           JOIN image_characters ic ON ic.image_id = i.id JOIN character_works cw ON cw.character_id = ic.character_id
-           WHERE i.collection_id IS NOT NULL
-         UNION
-         SELECT i.collection_id, i.id, ico.work_id FROM v_counted_images i
-           JOIN image_copyrights ico ON ico.image_id = i.id
-           WHERE i.collection_id IS NOT NULL AND i.original_at IS NULL
-         UNION
-         SELECT i.collection_id, i.id, ow.id FROM v_counted_images i JOIN works ow ON ow.danbooru_tag = 'original'
-           WHERE i.collection_id IS NOT NULL AND i.original_at IS NOT NULL)
+      `SELECT c, work_id AS x, COUNT(*) AS n FROM (${imageWorkRows('v_counted_images i', 'i.collection_id IS NOT NULL', 'i.collection_id AS c')})
        GROUP BY c, x`,
     );
     const manual = (table: string, col: string) => {
@@ -551,7 +548,8 @@ export class CollectionQueries {
       this.write(c.id, { state: 'dismissed', origin: 'manual', updated_at: now });
       this.membersChanged(members);
       db.prepare('UPDATE images SET collection_id = NULL, page_no = NULL, collection_detached = 1 WHERE collection_id = ?').run(c.id);
-      return { message: c.membership === 'folder' ? `已取消成册：${c.title ?? '无题'}` : `已解散${KIND_LABEL[c.kind as CollectionKind] ?? '组图'}：${c.title ?? '无题'}（图片都还在）` };
+      const title = collectionTitle({ title: c.title, folderName: leafOf(c.rel_dir) });
+      return { message: c.membership === 'folder' ? `已取消成册：${title}` : `已解散${KIND_LABEL[c.kind as CollectionKind] ?? '组图'}：${title}（图片都还在）` };
     });
   }
 
@@ -639,7 +637,7 @@ export class CollectionQueries {
         : (this.ctx.db
             .prepare(
               `SELECT c.* FROM collections c JOIN library_roots r ON r.id = c.root_id
-               WHERE c.id = ? AND c.state = 'active' AND ((c.membership = 'folder' AND r.enabled = 1 AND r.removed_at IS NULL) OR (c.membership <> 'folder' AND ((r.enabled = 1 AND r.removed_at IS NULL) OR EXISTS (SELECT 1 FROM v_counted_images i WHERE i.collection_id = c.id))))`,
+               WHERE c.id = ? AND c.state = 'active' AND ${COLLECTION_VISIBLE}`,
             )
             .get(id) as CollectionRow | undefined);
     if (!row) throw new NotFoundError('合集');

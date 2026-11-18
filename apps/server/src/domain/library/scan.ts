@@ -5,6 +5,7 @@
  */
 import type { Db } from '../../db/connection.ts';
 import { stmt } from '../tx.ts';
+import { FILE_LIVE } from '../../readmodel/terms.ts';
 
 /** 第一次扫描的文件夹记下首次导入时间（开始时就写，首页能在扫描过程中进入「刚导入」状态） */
 export function markRootsImported(db: Db, rootIds: readonly number[], at: string): void {
@@ -59,7 +60,7 @@ export function followComicFolders(db: Db, moves: readonly FolderMove[], onDisk:
   if (!folders.length) return 0;
   const live = db
     .prepare(
-      `SELECT COUNT(*) FROM images WHERE root_id = ? AND missing = 0 AND trashed_at IS NULL
+      `SELECT COUNT(*) FROM images WHERE root_id = ? AND ${FILE_LIVE('')}
          AND substr(rel_path, 1, length(?) + 1) = ? || '/'`,
     )
     .pluck();

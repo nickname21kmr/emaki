@@ -3,6 +3,7 @@
  * 正则逐字来自 docs/design/m5/collections-detect.reference.cjs；解析步骤的顺序不能换（04-round2 T38a 第 1 节）。
  * 所有字段都是 NFC、已 trim，空串存 null。十六进制 / uuid 名的 title 为 null（界面显示「无题 #前 6 位」）。
  */
+import { CHAPTER_MARKS as SHARED_CHAPTER_MARKS } from '@emaki/shared';
 
 export interface ParsedFolderName {
   title: string | null;
@@ -173,8 +174,11 @@ const RANGE = new RegExp(
   String.raw`[\[(（【]?\s*(?:v(?:ol(?:ume)?)?[._\s]*\d+\s*[-~～]\s*(?:v(?:ol(?:ume)?)?[._\s]*)?\d+|第?\s*\d+\s*[-~～]\s*\d+\s*[卷巻册冊集话話回章]?|全\s*\d+\s*[卷巻册冊集话話回章]|未完|完结|完結|连载中|連載中)\s*[\])）】]?`,
   'gi',
 );
-/** 话数：第3话 / 3話 / 第3回 / 第3章 / Chapter 3 / Ch.3 / Ep.3（同一段里有卷又有话时取话） */
-const CHAPTER_MARKS = [new RegExp(String.raw`(?:第\s*)?${N}\s*[话話回章]`), new RegExp(String.raw`(?<![a-z])(?:ch(?:apter)?|ep(?:isode)?)[._\s]*${N}`, 'i')];
+/**
+ * 话数：第3话 / 3話 / 第3回 / 第3章 / Chapter 3 / Ch.3 / Ep.3（同一段里有卷又有话时取话）。
+ * 和网页决定写「话」还是「册」的是同一份（packages/shared 的 CHAPTER_MARKS / volumeUnit，附录 #38）
+ */
+const CHAPTER_MARKS = SHARED_CHAPTER_MARKS;
 /** 卷号：Vol.3 / Volume 3 / v03 / VOL_03 / 第3卷 / 3卷 / 卷3（巻、册、冊、集也算） */
 const VOLUME_MARKS = [
   new RegExp(String.raw`(?<![a-z])v(?:ol(?:ume)?)?[._\s]*${N}(?![\d])`, 'i'),
@@ -207,7 +211,7 @@ const arabic = (s: string) =>
       return v === null ? all : `${w}${v}`;
     });
 
-const firstMatch = (res: RegExp[], s: string): RegExpExecArray | null => {
+const firstMatch = (res: readonly RegExp[], s: string): RegExpExecArray | null => {
   for (const re of res) {
     const m = re.exec(s);
     if (m) return m;

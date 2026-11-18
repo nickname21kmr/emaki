@@ -30,6 +30,7 @@ import type {
   JobKind,
   StartJobBody,
   LibraryStats,
+  LibrarySummary,
   ListCharactersQuery,
   ListCharactersResponse,
   ListDuplicatesQuery,
@@ -150,7 +151,7 @@ import { UnrecognizedQueries } from './unrecognized.ts';
 import { createContext } from './context.ts';
 import { Derived } from './derived.ts';
 import { dropOrphanImageRules, ExclusionQueries, reevaluateExclusionsReaction } from '../../domain/visibility/exclusions.ts';
-import { LibraryQueries } from './library.ts';
+import { LibraryQueries, type LibraryCounts } from './library.ts';
 import { declareMoved, moveImages, normalizeSubdir, type MoveRow } from '../../domain/library/move.ts';
 import { importImages } from '../../domain/library/import.ts';
 import { collectReplacementBackups, replaceImage } from '../../domain/library/replace.ts';
@@ -171,7 +172,9 @@ import {
   type ChildRoot,
 } from '../../domain/library/roots.ts';
 import { applySettingsPatch, getDanbooruApiKey, isInside, normalizeRootPath, patchSettingsInternal, readSettings, rootPathKey, samePath } from './settings.ts';
-import { iso, MIME, parseId, toId, VISIBLE } from './sql.ts';
+import { iso, MIME, parseId, toId } from './sql.ts';
+import { ACTIVE_ROOT_IDS, FILE_LIVE, HAS_CHARACTER, NOT_EXCLUDED, ROOT_ACTIVE, VISIBLE } from '../../readmodel/terms.ts';
+import { summarize } from '../../readmodel/summary.ts';
 
 /** 启动修补的 actor */
 const STARTUP: Actor = 'system:startup';
@@ -386,7 +389,7 @@ export class SqliteDataSource implements DataSource {
     // Register old animations locally as well; network scheduling still follows
     // the user's Pixiv setting and the normal pipeline.
     queueUnseenPixivAnimations(ds.ctx);
-    const roots = db.prepare('SELECT COUNT(*) FROM library_roots WHERE enabled = 1 AND removed_at IS NULL').pluck().get() as number;
+    const roots = db.prepare(`SELECT COUNT(*) FROM (${ACTIVE_ROOT_IDS})`).pluck().get() as number;
     if (ds.ports.autoJobs && !process.env.EMAKI_NO_AUTOSCAN && roots > 0) {
       ds.requests.requestFull();
       ds.ctx.jobs.enqueue('scan');
@@ -571,7 +574,7 @@ export class SqliteDataSource implements DataSource {
   private registerReactions(): void {
     const db = this.ctx.db;
     const p = this.ctx.propagation;
-    const visible = (rootId: number) => !!db.prepare('SELECT 1 FROM library_roots WHERE id = ? AND enabled = 1 AND removed_at IS NULL').get(rootId);
+    const visible = (rootId: number) => !!db.prepare(`SELECT 1 FROM library_roots WHERE id = ? AND ${ROOT_ACTIVE('')}`).get(rootId);
     const hooks: EngineHooks = {
       requestTag: () => this.requestTag(),
       // 新图、换了文件：接着做像素处理和识别，标记要查重（任务链的 afterImport，不重复扫描）
@@ -598,7 +601,7 @@ export class SqliteDataSource implements DataSource {
         !!db
           .prepare(
             `SELECT 1 FROM images i WHERE i.id IN (SELECT value FROM json_each(?)) AND (i.tagged_at IS NULL OR i.retag = 1)
-             AND i.excluded_by IS NULL AND i.trashed_at IS NULL AND i.missing = 0 AND NOT ${IN_COMIC('i')} LIMIT 1`,
+             AND ${NOT_EXCLUDED('i')} AND ${FILE_LIVE('i')} AND NOT ${IN_COMIC('i')} LIMIT 1`,
           )
           .get(JSON.stringify(ids)),
       pendingArtists: (ids) =>
@@ -633,7 +636,7 @@ export class SqliteDataSource implements DataSource {
   }
 
   private watchedRoots(): WatchedRoot[] {
-    return (this.ctx.db.prepare('SELECT id, path FROM library_roots WHERE enabled = 1 AND removed_at IS NULL').all() as { id: number; path: string }[]).map(
+    return (this.ctx.db.prepare(`SELECT id, path FROM library_roots WHERE ${ROOT_ACTIVE('')}`).all() as { id: number; path: string }[]).map(
       (r) => ({ ...r, enabled: true }),
     );
   }
@@ -710,7 +713,16 @@ export class SqliteDataSource implements DataSource {
 
   // T13 统计 / 作品 / 角色查询
   async getStats(): Promise<LibraryStats> {
-    return this.results.get('stats', () => this.library.getStats()) as LibraryStats;
+    return this.counts().stats;
+  }
+
+  async getSummary(): Promise<LibrarySummary> {
+    return this.results.get('summary', () => summarize(this.counts())) as LibrarySummary;
+  }
+
+  /** 统计和汇总共用一遍扫描（两级缓存，T22） */
+  private counts(): LibraryCounts {
+    return this.results.get('counts', () => this.library.readCounts()) as LibraryCounts;
   }
   async listContentKinds(): Promise<ContentKindSummary[]> {
     return this.results.get('kinds', () => this.library.listContentKinds()) as ContentKindSummary[];
@@ -1142,7 +1154,7 @@ export class SqliteDataSource implements DataSource {
       .stmt(
         `SELECT r.id, r.path, r.enabled, r.last_scan_at, r.imported_at, r.content_mode, r.comic_rating,
            (SELECT COUNT(*) FROM images i
-             WHERE i.root_id = r.id AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL) AS image_count
+             WHERE i.root_id = r.id AND ${FILE_LIVE('i')} AND ${NOT_EXCLUDED('i')}) AS image_count
          FROM library_roots r
          WHERE r.removed_at IS NULL
          ORDER BY r.id`,
@@ -1232,7 +1244,7 @@ export class SqliteDataSource implements DataSource {
       .prepare(
         `SELECT COUNT(DISTINCT i.id) FROM images i WHERE i.id IN (SELECT value FROM json_each(?)) AND (
            EXISTS (SELECT 1 FROM v_character_suggestions cs WHERE cs.image_id = i.id AND cs.source = 'pixiv')
-           OR EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id))`,
+           OR ${HAS_CHARACTER('i')})`,
       )
       .pluck()
       .get(JSON.stringify(cachedIds)) as number;
@@ -1292,7 +1304,7 @@ export class SqliteDataSource implements DataSource {
          JOIN pixiv_character_checks p ON p.image_id = i.id AND p.checked_at IS NOT NULL AND p.post_id = i.source_post_id
          WHERE i.id IN (SELECT value FROM json_each(?)) AND (
            EXISTS (SELECT 1 FROM v_character_suggestions cs WHERE cs.image_id = i.id AND cs.source = 'pixiv')
-           OR EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id))`,
+           OR ${HAS_CHARACTER('i')})`,
       )
       .pluck()
       .get(JSON.stringify(ids)) as number;

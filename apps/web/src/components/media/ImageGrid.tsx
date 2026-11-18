@@ -388,7 +388,8 @@ function Tile({
               ? image.characterNames.slice(0, 2).join('、') + (image.characterNames.length > 2 ? ` 等 ${image.characterNames.length} 位` : '')
               : image.original
                 ? '原创'
-                : image.kind === 'illustration' || image.kind === 'comic'
+                : // 要找角色还没找到的才写「未识别」：读服务端给的所在队列，不自己按类型推（附录 #27）
+                  image.queue === 'art' || image.queue === 'shelved' || image.queue === 'book'
                   ? '未识别'
                   : ''}
           </span>

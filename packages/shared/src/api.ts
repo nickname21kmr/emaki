@@ -97,8 +97,84 @@ export interface ApiError {
 
 // ---------------------------------------------------------------- 统计
 
-/** GET /api/stats */
+/** GET /api/stats：按命名口径数出来的原始计数（MCP、各页面的标题用）。界面上要显示的数优先读 GET /api/summary */
 export type GetStatsResponse = LibraryStats;
+
+/**
+ * GET /api/summary：侧栏、首页、命令面板、统计条要显示的所有计数（P5，附录 #28、#29）。
+ * 全部由服务端按命名口径（readmodel/terms.ts）算好，前端只展示、不再自己加减。每个数的定义见 docs/core-architecture.md 第 6 节；
+ * 和旧的 LibraryStats、/api/unrecognized/summary 的对账见 apps/server/src/readmodel/summary.test.ts
+ */
+export interface LibrarySummary {
+  /** 计入统计的张数（可见、没被排除） */
+  images: {
+    /** 全部类型（= LibraryStats.imageCount） */
+    total: number;
+    /** 插画（= kindCounts.illustration） */
+    illustrations: number;
+    /** 别册：插画以外的类型（= total − illustrations） */
+    annex: number;
+    /** 按类型（各项之和 = total） */
+    byKind: Record<ContentKind, number>;
+    /** 动图（跨类型，D5） */
+    animated: number;
+    /** 归为原创的 */
+    original: number;
+    /** 总体积（字节） */
+    bytes: number;
+    /** 平均每张的体积；没有图时 null */
+    averageBytes: number | null;
+  };
+  /** 新收：只数插画（BI-11） */
+  added: {
+    /** 最近 7 天每天的张数，从旧到新，[6] 是今天（本地时区） */
+    last7Days: number[];
+    /** 这 7 天合计（「本周新收」） */
+    week: number;
+    /** 今天 */
+    today: number;
+    /** 插画里最晚的入库时间 */
+    lastAt: string | null;
+  };
+  /** 有插画的角色数 */
+  characters: number;
+  /** 有插画的作品数（和作品列表同口径，附录 #26） */
+  works: number;
+  /**
+   * 待处理（唯一定义）：待处理数 total = images + books，侧栏角标、首页「待处理」、命令面板都是它。
+   * 不含待识别（识别跑完会自动处理）、放下的（用户说了不找了）、照片 · 文字等（别册不催）
+   */
+  triage: {
+    /** 等你确认的张数：未识别「插画 · 漫画」队列里模型看过、还没认出的（有建议 + 没认出；漫画页不等识别） */
+    images: number;
+    /** 成册待整理的条目数（同一系列算一条） */
+    books: number;
+    /** 待处理数 = images + books */
+    total: number;
+    /** 待识别：「插画 · 漫画」队列里还没跑过识别的插画 */
+    waiting: number;
+    /** 放下的 */
+    shelved: number;
+  };
+  /**
+   * 已认出比例（唯一定义，附录 #29）：分母 scope = 要找角色的图（插画，加上设置开着时的漫画页；不在整本处理的合集里、不在漫画区，
+   * 也就是未识别「插画 · 漫画」这一类的范围，含放下的），分子 recognized = 其中有角色或归为原创的。放下的不算认出
+   */
+  recognition: { scope: number; recognized: number; ratio: number | null };
+  /** 识别进度：pending = 计入统计里还没识别、识别任务会看的；seenRatio = 1 − pending / images.total */
+  tagging: { pending: number; seenRatio: number | null };
+  /** 没处理的重复组 */
+  duplicates: number;
+  /** 能对上 Danbooru 的自建角色 */
+  customMatchable: number;
+  /** 合集本数（页数 > 0 的） */
+  collections: Record<CollectionKind, number>;
+  /** 「原创」作品的 id，还没有时为 null（侧栏「原创」入口） */
+  originalWorkId: ID | null;
+  lastScanAt: string | null;
+  /** 7 天内有文件夹首次导入（同 LibraryStats.recentImport） */
+  recentImport: LibraryStats['recentImport'];
+}
 
 // ---------------------------------------------------------------- 作品
 

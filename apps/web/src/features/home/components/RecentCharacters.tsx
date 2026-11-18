@@ -1,4 +1,4 @@
-import type { LibraryStats } from '@emaki/shared';
+import type { LibrarySummary } from '@emaki/shared';
 import { useMemo } from 'react';
 import { AvatarTile } from '@/components/media/AvatarTile';
 import { CharacterCover } from '@/components/media/CharacterCover';
@@ -11,7 +11,7 @@ import { QuietNote, SeeAllLink } from './Bits';
  * 最近在收（HO-7）：最近 30 天有新图的角色，一行圆头像，按 30 天新增张数从多到少，+N 就是这个数。
  * 为空时（例如首次导入，文件时间都很早）换成「收得最多」一排竖卡（HO-6），不留虚线空洞。
  */
-export function RecentCharacters({ stats }: { stats: LibraryStats }) {
+export function RecentCharacters({ summary }: { summary: LibrarySummary }) {
   const recent = useTopCharacters({ workId: 'recent', limit: 14 });
   const top = useTopCharacters({ limit: 6 });
   const total = useCharactersInfinite({ workId: 'recent', limit: 1 }).data?.pages[0]?.total;
@@ -25,7 +25,7 @@ export function RecentCharacters({ stats }: { stats: LibraryStats }) {
     return (
       <section>
         <SectionTitle
-          hint={stats.recentImport ? '这次导入里认出最多的角色' : '最近 30 天没有新收，先看看收得最多的'}
+          hint={summary.recentImport ? '这次导入里认出最多的角色' : '最近 30 天没有新收，先看看收得最多的'}
           actions={<SeeAllLink to="/characters">全部</SeeAllLink>}
         >
           收得最多

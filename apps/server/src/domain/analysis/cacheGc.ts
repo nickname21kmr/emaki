@@ -14,6 +14,7 @@
 import { lstatSync, readdirSync, realpathSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import type { Db } from '../../db/connection.ts';
+import { ROOT_ACTIVE } from '../../readmodel/terms.ts';
 
 /** 缓存目录（相对数据目录）和其中文件名的格式 */
 export const CACHE_DIRS = [
@@ -63,7 +64,7 @@ export interface CacheGcOptions {
 export async function collectCaches(db: Db, dataDir: string, opts: CacheGcOptions): Promise<{ thumbs: number; animations: number } | null> {
   const startedAt = opts.startedAt ?? Date.now();
   if (!(db.prepare('SELECT 1 FROM images LIMIT 1').get())) return null;
-  const unscanned = db.prepare('SELECT 1 FROM library_roots WHERE enabled = 1 AND removed_at IS NULL AND last_scan_at IS NULL LIMIT 1').get();
+  const unscanned = db.prepare(`SELECT 1 FROM library_roots WHERE ${ROOT_ACTIVE('')} AND last_scan_at IS NULL LIMIT 1`).get();
   if (unscanned) return null;
   const used = new Set(db.prepare('SELECT DISTINCT sha256 FROM images').pluck().all() as string[]);
   for (const sha of opts.keep ?? []) used.add(sha);

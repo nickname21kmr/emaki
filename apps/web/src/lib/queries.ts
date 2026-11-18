@@ -44,6 +44,7 @@ import { confirmText, madeHere, needsConfirm } from './undoPlace';
 
 export const qk = {
   stats: ['stats'] as const,
+  summary: ['summary'] as const,
   contentKinds: ['content-kinds'] as const,
   collections: (q: ListCollectionsQuery = {}) => ['collections', q] as const,
   artists: ['artists'] as const,
@@ -74,6 +75,8 @@ export const useCustomCharacterMatches = (enabled: boolean) => useQuery({
 });
 
 export const useStats = () => useQuery({ queryKey: qk.stats, queryFn: api.stats });
+/** 汇总接口（P5）：侧栏、首页、命令面板、统计条显示的数都读它，不要自己拿 stats 加减（附录 #28） */
+export const useSummary = () => useQuery({ queryKey: qk.summary, queryFn: api.summary });
 
 /** 合集（T38）：书架列表和一本的详情。写操作走 useMutate，成功后全部失效 */
 /** 识别出来的画师（合集页的「画师」） */

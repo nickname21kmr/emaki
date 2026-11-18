@@ -5,8 +5,7 @@ import { NavLink } from 'react-router';
 import { cn } from '@/lib/cn';
 import { useLiveJobs, useRunningJobs } from '@/lib/events';
 import { formatCompact, formatCount } from '@/lib/format';
-import { annexTotal } from '@/lib/kinds';
-import { useHealth, useStats } from '@/lib/queries';
+import { useHealth, useSummary } from '@/lib/queries';
 import { Badge, RollingNumber, Tooltip } from '@/components/ui';
 import { Emblem } from '@/components/ui/Emblem';
 
@@ -27,7 +26,8 @@ interface NavItem {
  * 当前项：图标底座变成纸色卡片 + 左侧一道朱色竖线（像书签）。
  */
 export function Sidebar() {
-  const { data: stats } = useStats();
+  // 计数都读汇总接口：服务端按命名口径算好，这里不加减（附录 #28）
+  const { data: s } = useSummary();
   const jobs = useRunningJobs();
   const demo = useHealth().data?.dataSource === 'demo';
 
@@ -36,45 +36,45 @@ export function Sidebar() {
       to: '/',
       label: '首页',
       icon: House,
-      dot: !!stats?.addedLast7Days[6],
-      hint: stats?.addedLast7Days[6] ? `今天新收 ${formatCount(stats.addedLast7Days[6])} 张` : undefined,
+      dot: !!s?.added.today,
+      hint: s?.added.today ? `今天新收 ${formatCount(s.added.today)} 张` : undefined,
     },
     { to: '/gallery', label: '图库', icon: Images },
     { to: '/characters', label: '角色', icon: UsersRound },
     // 原创（用户 2026-09-29）：直达「原创」作品页；还没有原创作品时不显示
-    ...(stats?.originalWorkId
+    ...(s?.originalWorkId
       ? [
           {
-            to: `/works/${stats.originalWorkId}`,
+            to: `/works/${s.originalWorkId}`,
             label: '原创',
             icon: Sparkles,
-            hint: stats.originalCount ? `你归为原创的 ${formatCount(stats.originalCount)} 张，和原创角色的图` : '原创角色的图',
+            hint: s.images.original ? `你归为原创的 ${formatCount(s.images.original)} 张，和原创角色的图` : '原创角色的图',
           },
         ]
       : []),
     // 合集（T38d）：本子与画集，不显示数量
     { to: '/collections', label: '合集', icon: LibraryBig },
     // 别册：截图、漫画等不打扰插画的图（T32b），只显示总数
-    { to: '/annex', label: '别册', icon: BookCopy, count: annexTotal(stats?.kindCounts) },
+    { to: '/annex', label: '别册', icon: BookCopy, count: s?.images.annex ?? 0 },
   ];
   const triage: NavItem[] = [
     {
       to: '/unrecognized',
       label: '未识别',
       icon: CircleHelp,
-      // 待识别的不算（识别跑完会自动处理）；成册待整理的按本算
-      count: stats ? stats.unrecognizedCount - stats.untaggedCount + stats.pendingCollectionCount : undefined,
-      hint: stats
+      // 待处理数（唯一定义见汇总接口 triage）：等你确认的张数 + 成册待整理的本数；待识别的不算（识别跑完会自动处理）
+      count: s?.triage.total,
+      hint: s
         ? [
-            `${formatCount(stats.unrecognizedCount - stats.untaggedCount)} 张等你确认`,
-            stats.pendingCollectionCount ? `${formatCount(stats.pendingCollectionCount)} 本待整理` : '',
-            stats.untaggedCount ? `另有 ${formatCount(stats.untaggedCount)} 张等待识别` : '',
+            `${formatCount(s.triage.images)} 张等你确认`,
+            s.triage.books ? `${formatCount(s.triage.books)} 本待整理` : '',
+            s.triage.waiting ? `另有 ${formatCount(s.triage.waiting)} 张等待识别` : '',
           ]
             .filter(Boolean)
             .join(' · ')
         : undefined,
     },
-    { to: '/duplicates', label: '重复', icon: Copy, count: stats?.duplicateGroupCount, hint: stats?.duplicateGroupCount ? `${formatCount(stats.duplicateGroupCount)} 组重复等你处理` : undefined },
+    { to: '/duplicates', label: '重复', icon: Copy, count: s?.duplicates, hint: s?.duplicates ? `${formatCount(s.duplicates)} 组重复等你处理` : undefined },
     { to: '/excluded', label: '已排除', icon: Ban },
   ];
 

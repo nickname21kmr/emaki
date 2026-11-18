@@ -30,6 +30,7 @@ import {
 } from './detect.ts';
 import { parseBookDir, parseComicDir, type parseFolderName } from './parseName.ts';
 import { ComicAreas, type ComicArea } from '../../services/classify/comicAreas.ts';
+import { COUNTED, FILE_LIVE } from '../../readmodel/terms.ts';
 
 interface Row {
   id: number;
@@ -100,11 +101,11 @@ export interface RefreshResult {
   ms: number;
 }
 
-/** 条件字面包含 trashed_at IS NULL AND missing = 0（T22 的部分索引） */
+/** 计入统计的图（COUNTED，字面包含 trashed_at IS NULL AND missing = 0，T22 的部分索引） */
 const ROW_SQL = `SELECT i.id, i.root_id, i.rel_path, i.file_name, i.width, i.height, i.modified_at, i.content_kind, i.content_kind_source,
     i.content_kind_manual, i.animated, i.tagged_at, i.collection_id, i.page_no, i.collection_detached, COALESCE(c.membership, 'folder') AS membership, i.source_site, i.source_post_id, c.origin AS collection_origin
   FROM images i JOIN library_roots r ON r.id = i.root_id LEFT JOIN collections c ON c.id = i.collection_id
-  WHERE r.enabled = 1 AND r.removed_at IS NULL AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL`;
+  WHERE ${COUNTED()}`;
 
 /**
  * 某个目录里直接放的页（@rootId、@prefix = 目录 + '/'，根目录是 ''）。rel_path 的范围条件让查询走 (root_id, rel_path) 唯一索引：
@@ -317,7 +318,7 @@ export class CollectionService {
     for (const [key, c] of [...existing]) {
       if (c.origin !== 'manual' || c.state !== 'active' || groups.has(key)) continue;
       const rows = this.db
-        .prepare('SELECT rel_path, file_name, root_id FROM images WHERE collection_id = ? AND trashed_at IS NULL AND missing = 0')
+        .prepare(`SELECT rel_path, file_name, root_id FROM images WHERE collection_id = ? AND ${FILE_LIVE('')}`)
         .all(c.id) as { rel_path: string; file_name: string; root_id: number }[];
       if (!rows.length) continue;
       const count = new Map<string, number>();

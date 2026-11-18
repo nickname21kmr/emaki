@@ -16,6 +16,8 @@ import { ResilientTagger } from './resilient.ts';
 import { ensureModelFiles } from './download.ts';
 import { clampBatch, findModel } from './models.ts';
 import type { HostItemResult } from './protocol.ts';
+import { COUNTED, ILLUSTRATION } from '../../readmodel/terms.ts';
+import { formatEta } from '@emaki/shared';
 
 export const ARTIST_THRESHOLD = 0.35;
 /** 能认画师的模型 */
@@ -39,8 +41,7 @@ export function writeArtists(db: Db, imageId: number, artists: [string, number][
  * 读不了、正在退避的（readBackoff）先不算，免得自动续补为它们反复加载模型
  */
 const PENDING = `FROM images i JOIN library_roots r ON r.id = i.root_id
-  WHERE i.artist_checked_at IS NULL AND i.tagged_at IS NOT NULL AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL
-    AND r.enabled = 1 AND r.removed_at IS NULL AND i.content_kind = 'illustration' AND ${NOT_SKIPPED}`;
+  WHERE i.artist_checked_at IS NULL AND i.tagged_at IS NOT NULL AND ${COUNTED()} AND ${ILLUSTRATION} AND ${NOT_SKIPPED}`;
 
 export function artistPendingCount(db: Db): number {
   return (db.prepare(`SELECT COUNT(*) AS n ${PENDING}`).get({ skip: skipIds() }) as { n: number }).n;
@@ -145,8 +146,8 @@ export function createArtistJobRunner(deps: ArtistJobDeps): JobRunner {
         done += head.rows.length;
         const rate = done / ((performance.now() - t0) / 1000);
         const left = (total - done) / rate;
-        const eta = left < 60 ? `${Math.ceil(left)} 秒` : left < 3600 ? `${Math.ceil(left / 60)} 分钟` : `${(left / 3600).toFixed(1)} 小时`;
-        ctx.advance(head.rows.length, `识别画师：${done} / ${total} · 认出 ${found} 张 · ${rate.toFixed(1)} 张/秒 · 剩余约 ${eta}`);
+        ctx.setEta?.(left);
+        ctx.advance(head.rows.length, `识别画师：${done} / ${total} · 认出 ${found} 张 · ${rate.toFixed(1)} 张/秒 · 剩余约 ${formatEta(left) ?? '—'}`);
       }
     } finally {
       client.close();

@@ -11,7 +11,8 @@ import { tagsOfArtist } from '../artists.ts';
 import type { Db } from '../../../db/connection.ts';
 import { hydrateImages, IMAGE_COLS, type ImageRow } from '../hydrate.ts';
 import { THEME_FILTERS } from '../../../services/classify/theme.ts';
-import { ANIMATED_SQL, ART_KINDS_SQL, UNRECOGNIZED, decodeCursor, encodeCursor, IMAGE_IN_WORK, LIVE_IMAGES, parseId } from '../sql.ts';
+import { ANIMATED_SQL, ART_KINDS_SQL, HAS_CHARACTER, IMAGE_IN_WORK, LIVE_IMAGES, UNRECOGNIZED } from '../../../readmodel/terms.ts';
+import { decodeCursor, encodeCursor, parseId } from '../sql.ts';
 
 const EMPTY_PAGE: Page<ImageItem> = { items: [], nextCursor: null, total: 0 };
 
@@ -94,7 +95,7 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
     case 'recognized':
       both(
         '+i.excluded_by IS NULL',
-        `(EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id) OR i.original_at IS NOT NULL OR NOT (${ART_KINDS_SQL}))`,
+        `(${HAS_CHARACTER('i')} OR i.original_at IS NOT NULL OR NOT (${ART_KINDS_SQL}))`,
       );
       break;
     case 'unrecognized':

@@ -1,15 +1,6 @@
 import type { Job, JobKind, JobStatus } from '@emaki/shared';
+export { JOB_LABEL } from '@emaki/shared';
 import { CloudDownload, Copy, FolderSearch, Image as ImageIcon, Palette, ScanFace, type LucideIcon } from 'lucide-react';
-
-export const JOB_LABEL: Record<JobKind, string> = {
-  scan: '扫描图库',
-  thumbnail: '生成缩略图',
-  tag: '识别角色',
-  'danbooru-sync': '同步 Danbooru',
-  dedupe: '查找重复',
-  artists: '识别画师',
-  'pixiv-tags': '补充 Pixiv 角色',
-};
 
 /** 进度条旁边的动词，比「进行中」更具体 */
 export const JOB_VERB: Record<JobKind, string> = {
@@ -60,9 +51,14 @@ export function formatDuration(ms: number): string {
   return m % 60 ? `${h} 小时 ${m % 60} 分` : `${h} 小时`;
 }
 
-/** 按目前的平均速度估算剩余时间；刚开始样本太少时不估，免得数字乱跳 */
+/**
+ * 剩余时间（毫秒）：任务自己报了（job.etaSeconds，识别、画师补跑按这一轮的速度估）就用它；
+ * 没报的按目前的平均速度估，刚开始样本太少时不估，免得数字乱跳
+ */
 export function estimateRemaining(job: Job, now: number): number | null {
-  if (job.status !== 'running' || !job.total || !job.startedAt || job.progress <= 0) return null;
+  if (job.status !== 'running') return null;
+  if (job.etaSeconds != null) return job.etaSeconds * 1000;
+  if (!job.total || !job.startedAt || job.progress <= 0) return null;
   const elapsed = now - Date.parse(job.startedAt);
   if (elapsed < 1500) return null;
   return ((job.total - job.progress) * elapsed) / job.progress;
