@@ -4,6 +4,7 @@ import { Check, Copy } from 'lucide-react';
 import { IconButton } from '@/components/ui';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
+import { copyText } from '@/lib/clipboard';
 import { DURATION, EASE_OUT } from '@/lib/motion';
 import { qk } from '@/lib/queries';
 import { useLightbox } from '@/lib/stores';
@@ -71,7 +72,7 @@ export function CopyButton({ text, className }: { text: () => string; className?
     return () => clearTimeout(timer);
   }, [copied]);
   const copy = () => {
-    void navigator.clipboard?.writeText(text()).then(() => setCopied(true), () => { /* 没有剪贴板权限就算了 */ });
+    void copyText(text()).then(() => setCopied(true), () => { /* 没有剪贴板权限就算了 */ });
   };
   return (
     <IconButton

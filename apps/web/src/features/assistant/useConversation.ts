@@ -6,6 +6,7 @@ import type { AssistantBackend, AssistantCard, AssistantContext, AssistantModel,
 import { ApiRequestError } from '@/lib/api';
 import { useLightbox, useSelection, useUndoStore } from '@/lib/stores';
 import { undo as undoMutation } from '@/lib/queries';
+import { uuid } from '@/lib/random';
 import { assistantApi } from './client';
 import { openSessionEvents } from './sessionEvents';
 import { composerContext, erratumOf, reconcileModelSelection, toggleResultImage, type ResultSelection } from './presentation';
@@ -285,7 +286,7 @@ export function useConversation(backend: AssistantBackend | null): ConversationV
     void perform(async () => {
       // Preserve the id after a lost response, including a manual retry of the same submission.
       const signature = JSON.stringify({ sessionId: sid, text: value, model, effort, context });
-      if (submission.current?.signature !== signature) submission.current = { signature, requestId: crypto.randomUUID() };
+      if (submission.current?.signature !== signature) submission.current = { signature, requestId: uuid() };
       await assistantApi.send(sid, { requestId: submission.current.requestId, text: value, model, effort, context });
       submission.current = null;
       // 等待期间接着写的留下，已经发出去的那段去掉；清的是发出去的那个会话的草稿
@@ -306,7 +307,7 @@ export function useConversation(backend: AssistantBackend | null): ConversationV
     void perform(async () => {
       const messageId = session.interruption!.messageId;
       const signature = JSON.stringify({ sessionId: sid, messageId, model, effort });
-      if (resumption.current?.signature !== signature) resumption.current = { signature, requestId: crypto.randomUUID() };
+      if (resumption.current?.signature !== signature) resumption.current = { signature, requestId: uuid() };
       const ids = interruptedRequest?.context?.imageIds ?? [];
       if (ids.length) setResultSelection({ cardId: `resume:${messageId}`, title: '上次任务', ids });
       const updated = await assistantApi.resume(sid, { requestId: resumption.current.requestId, messageId, model, effort });

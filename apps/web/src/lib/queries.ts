@@ -41,6 +41,7 @@ import { toast } from 'sonner';
 import { api, ApiRequestError, metaOf, withMeta } from './api';
 import { settleRefresh, useLiveJobs } from './events';
 import { modKeyLabel } from './hotkeys';
+import { uuid } from './random';
 import { usePrefs, useUndoReveal, useUndoStore, type CollapseMode, type UndoEntry, type UndoFocus } from './stores';
 import { confirmText, madeHere, needsConfirm } from './undoPlace';
 import { useCollapseMode } from './urlPrefs';
@@ -266,7 +267,7 @@ export function invalidateAll(client: QueryClient) {
 
 const PLAIN_NOTE = '这一步不能撤销，需要的话请手动改回去（任务可以在设置里取消）。再按一次撤销会撤更早的操作。';
 const TRASH_NOTE = '文件已经放进系统回收站，要找回请去系统回收站还原。再按一次撤销会撤更早的操作。';
-const barrierId = () => `barrier:${crypto.randomUUID()}`;
+const barrierId = () => `barrier:${uuid()}`;
 
 /**
  * 一次写操作在撤销栈里记什么：有 token 记 token；回收站那种撤销不了的占位；不可撤销的命令（改设置、启动任务……）也占一格（撤销屏障），
@@ -289,7 +290,7 @@ const undoQueued = new Set<string>();
 
 /** 写操作一开始就在撤销栈顶占个位置，免得请求还没回来时 Ctrl+Z 撤到上一步 */
 export function beginPending(label: string, focus?: UndoFocus): string {
-  const id = `pending:${crypto.randomUUID()}`;
+  const id = `pending:${uuid()}`;
   let resolve!: (t: string | null | false) => void;
   const promise = new Promise<string | null | false>((r) => (resolve = r));
   pendingWaiters.set(id, { promise, resolve });

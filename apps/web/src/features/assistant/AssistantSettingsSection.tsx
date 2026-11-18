@@ -5,6 +5,7 @@ import type { AssistantBackend, AssistantDetection, AssistantSettings } from '@e
 import { toast } from 'sonner';
 import { Badge, Button, Dialog, DialogFooter, Field, IconButton, Input, SearchInput, Segmented, Spinner, Switch, type SegmentedOption } from '@/components/ui';
 import { cn } from '@/lib/cn';
+import { copyText } from '@/lib/clipboard';
 import { modKeyLabel } from '@/lib/hotkeys';
 import { SettingsSection, SettingsCard, BlockRow } from '@/features/settings/components/SettingsSection';
 import { assistantApi, useAssistantSave, useAssistantSettings } from './client';
@@ -541,7 +542,7 @@ function McpRow({ busy, perform }: { busy: boolean; perform: Perform }) {
   };
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(json);
+      await copyText(json);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch (e) {
