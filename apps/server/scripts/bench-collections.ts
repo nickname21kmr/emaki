@@ -251,7 +251,11 @@ const PAGE_REQUESTS: [string, string[]][] = lazy
       ['合集页切到「组图」（都没拉过）', [`/api/collections?${nonPost}`, '/api/collections?kind=group&membership=post']],
       [
         `合集页搜索 ${SEARCH}`,
-        [`/api/collections?kind=doujin,artbook&q=${SEARCH}`, `/api/collections?${nonPost}&q=${SEARCH}`, `/api/collections/counts?q=${SEARCH}`],
+        [
+          `/api/collections?kind=doujin,artbook&q=${SEARCH}`,
+          `/api/collections?${nonPost}&q=${SEARCH}`,
+          `/api/collections/counts?q=${SEARCH}`,
+        ],
       ],
       ['「收进组图」弹窗打开', picker('')],
       [`「收进组图」搜索 ${SEARCH}`, picker(SEARCH)],
@@ -295,7 +299,7 @@ for (const [name, run] of scenarios) {
     await run();
     ms.push(performance.now() - t);
   }
-  const size = typeof bytes === 'number' ? `${(bytes / 1024).toFixed(0)} KB` : '';
+  const size = typeof bytes === 'number' ? `${(bytes / 1024).toFixed(bytes < 10_240 ? 1 : 0)} KB` : '';
   console.log(`| ${name} | ${fmt(pct(ms, 0.5))} | ${fmt(pct(ms, 0.95))} | ${size} |`);
 }
 

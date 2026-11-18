@@ -13,6 +13,7 @@
 ## 组图
 
 - **收进组图**：图库、角色 / 作品页、未识别里选图，按 G（或点「组图…」），搜已有的组图，或输入名字新建。看图器信息栏里也有「收进组图…」。只列组图：本子和画集跟着文件夹走，不收别处的图。
+  列最近加图的 50 组，手动收集的在前；搜索在服务端（和合集页同一个规则），不拉全部合集。
 - **同一投稿自动收拢**：同一个站点 + 投稿号的两张以上自动成一组（`membership = 'post'`）。动过成员后就算手动收集；手动移出、解散的图不会被自动收回去。
 - **组图页**：扇形封面 + 细线表、出场角色、图片网格。可以添加图片（搜图库，或参考第一张找构图相近的候选，复用查重的 dHash 范围，只给候选）、移出、选图另建组图、设封面、改名、放映、解散（图片都还在）。
 - **类型**：组图可以改成本子或画集按页读；改成本子后整本处理，页不再逐张进「未识别」。
@@ -33,6 +34,8 @@
 - 只收拢组图。本子、画集的页在图库里照常逐张平铺（TASKS「第二轮的默认决定」）。
 - 首页「最新入库」按插画挑格子，格子代表整组（`includeWholeCollections`）。
 - 合集书架的「全部」里，同一投稿自动收拢的组图不超过 12 组就直接摆出来；多了先收成一行，点开或切到「组图」再看，免得几千组挤满书架。
+  收成一行时也不拉它们（真实库有 3500 组，一次 2.2 MB）：书架按「本子 · 画集」「手动收集的组图」「同一投稿的组图」分开请求，
+  副标题、每类的小字、「另有 N 组」的数读 `/api/collections/counts`；点「显示」或切到「组图」才拉同一投稿的。
 
 ## 整理到子文件夹（默认不做）
 
@@ -43,7 +46,11 @@
 - `collections.membership`：`folder` = 按文件夹成册；`selection` = 手动挑的；`post` = 同一投稿。前端从 `CollectionSummary.membership` 读。
 - 组图的 `rel_dir` 是占位值（`@selection/…`、`@post/站点:投稿号`），不占真实目录；文件夹书移出页只记 `images.collection_detached`，`membership` 保持 `folder`，以后进来的新页照常接着编号。
 - `images.collection_detached` 记手动调整，扫描和同投稿聚合不再动这些图。`source_key` 是站点 + 投稿号，唯一。
+- `GET /api/collections`：`kind`、`membership` 可多选（逗号分隔，如 `kind=group&membership=folder,selection` 是手动收集的组图），
+  另有 `characterId`、`workId`、`seriesKey`、`pending`、`q`（书名、文件夹名、社团、作者、原作、汉化组）；`sort=recent&limit=50` 是最近加图的 50 本。
+- `GET /api/collections/counts`（查询 `collections.counts`）：每一类的本数、书架格数（同一系列算一格）、页数，以及按 `membership` 分开的
+  （同一投稿的组图是 `group.membership.post`）；`q` 同列表。口径和列表一样，只数页数 > 0 的。
 - `POST /api/collections`：`imageIds` + `title` + `kind` 新建组图；`fromImageId` 仍是「把这个文件夹成册」。
 - `PATCH /api/collections/:id`：`addImageIds` / `removeImageIds` 增删成员，`organizeFiles` 整理到子文件夹。文件夹书只能 `removeImageIds`。
 - `GET /api/images?collapseCollections=true|false|auto`：在原筛选里收拢组图（`auto` 见上）；收拢时返回 `collapsed: true`，`total` 是图片张数，`displayTotal` 是格数，`collectionGroup.memberIds` 是命中的成员。`/api/unrecognized` 同样支持。
-- AI 助手：`read_library` 可读 `/api/collections`；`edit_collection` 新建、修改、解散，走同一套业务接口、撤销和 operationId。
+- AI 助手：`read_library` 可读 `/api/collections`、`/api/collections/counts`；`edit_collection` 新建、修改、解散，走同一套业务接口、撤销和 operationId。

@@ -32,7 +32,8 @@ export function CollectionsPage() {
 
 function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: ReturnType<typeof useSearchParams>[1] }) {
   const kindParam = params.get('kind');
-  const kind: View = kindParam === 'group' || kindParam === 'doujin' || kindParam === 'artbook' || kindParam === 'artist' ? kindParam : null;
+  const kind: View =
+    kindParam === 'group' || kindParam === 'doujin' || kindParam === 'artbook' || kindParam === 'artist' ? kindParam : null;
   const [q, setQ] = useState(params.get('q') ?? '');
   const debounced = useDebounced(q.trim(), 200);
   const search = debounced || undefined;
@@ -125,7 +126,9 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
             const shown = k === 'group' ? groups : books.filter((x) => x.kind === k);
             return (
               <section key={k}>
-                <SectionTitle hint={`${formatCount(t.units)} ${m.unit} · ${formatCount(t.pages)} ${word} · ${m.hint}`}>{m.label}</SectionTitle>
+                <SectionTitle hint={`${formatCount(t.units)} ${m.unit} · ${formatCount(t.pages)} ${word} · ${m.hint}`}>
+                  {m.label}
+                </SectionTitle>
                 {shown.length > 0 && <CollectionShelf list={shown} keepOrder={k === 'group'} />}
                 {k === 'group' && (plan.folded || postsLoading) && (
                   <button

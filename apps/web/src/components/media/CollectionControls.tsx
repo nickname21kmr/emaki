@@ -1,4 +1,11 @@
-import { AUTO_COLLAPSE_MIN, collectionTitle, type CollectionMembership, type CollectionSummary, type ID, type ImageItem } from '@emaki/shared';
+import {
+  AUTO_COLLAPSE_MIN,
+  collectionTitle,
+  type CollectionMembership,
+  type CollectionSummary,
+  type ID,
+  type ImageItem,
+} from '@emaki/shared';
 import { Command } from 'cmdk';
 import { CornerDownLeft, Layers, Plus, Search } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';

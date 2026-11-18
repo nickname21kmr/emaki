@@ -254,7 +254,12 @@ describe('合集按需读：和全读一遍的结果一样', () => {
   it('sort=recent、limit：最近加图的前几本，同时加的不会因为先挑后排而挑错（「收进组图」弹窗）', async () => {
     const all = expected({ sort: 'recent' });
     expect(all.map((c) => c.lastAddedAt)).toEqual([...all.map((c) => c.lastAddedAt)].sort().reverse());
-    const filters: ListCollectionsQuery[] = [{}, { kind: 'group' }, { kind: 'group', membership: 'post' }, { membership: ['folder', 'selection'] }];
+    const filters: ListCollectionsQuery[] = [
+      {},
+      { kind: 'group' },
+      { kind: 'group', membership: 'post' },
+      { membership: ['folder', 'selection'] },
+    ];
     for (let limit = 1; limit <= all.length + 1; limit++) {
       for (const q of filters) {
         const query: ListCollectionsQuery = { ...q, sort: 'recent', limit };
