@@ -255,7 +255,10 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 4. **查重**：候选搜索范围 `Slider`（0–16，范围越大，参与原图核对的候选越多）、「重新查找」。
 5. **外观**：主题（跟随系统 / 浅色 / 深色，三张小预览卡片可选；图库设置，存在服务端）、默认模糊敏感图片、网格密度（这两项和底色、封面裁剪一样是本机偏好，只存在这台设备上，P5）。
 6. **后台任务**：最近任务列表（`useJobs` + `useLiveJobs`）：类型、状态 Badge、进度条、开始时间、取消按钮。
-7. **关于**：版本、数据目录、快捷键入口。
+7. **手机访问**（`features/access/PhoneAccessSection`，[mobile.md](mobile.md) 第 2 节）：开关「让手机连接这台电脑」（默认关）；打开后是状态（监听的端口、局域网地址，`error` 红底醒目写出，Windows 防火墙要允许「专用网络」的提醒）、
+   电脑名称、端口、「用二维码添加」（`uqr` 编码后画成 SVG，包一层 `data-theme="light"`，深色主题下也是浅底深码）；下面「等你批准的请求」（大号 3 + 3 校验码、剩余时间、批准 / 拒绝，权限默认折叠）和「已连接的设备」（编辑名称和权限、移除先确认）。
+   数据是查询 `access.status`（`useAccessStatus`，局域网入口上 403 时为 null），SSE 的 `access` 事件让它重新取。这些命令不可撤销、不占撤销栈（`useMutate(…, { undo: false })`）。
+8. **关于**：版本、数据目录、快捷键入口。
 
 设置修改即时保存（`api.updateSettings`，toast「已保存」），滑块松手时才保存。
 
@@ -267,6 +270,19 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - `useSearch(q)`，输入为空时显示「最近访问的角色」（localStorage 记录最近 8 个）和常用命令。
 - 选中角色 → 导航 `/characters/:id`；作品 → `/works/:id`；标签 → `/gallery?q=tag`。
 - 底部一行快捷键提示：↑↓ 选择 · ↵ 打开 · Esc 关闭。
+
+### 批准提示（`features/access/AccessPrompts.tsx`）
+
+手机发来连接请求（SSE `access` 的 `requested`）时，本机入口的任何页面（AppShell 和首次使用引导）右上角、页头全局操作下面弹出一叠卡片，一条请求一张，不会自动消失：
+「Pixel 7 请求连接这台电脑」、校验码、剩余时间，「批准」（默认权限）「拒绝」「设置…」（跳到设置 →「手机访问」并展开这条的权限）。
+不用 sonner：toast 是操作结果（几秒烧完、底部正中、最多叠 3 条），这里是要做决定的请求。数据只认 `GET /api/access` 的 `requests`：过期、在设置页或别的标签页处理掉后自动收起；
+设置页里「等你批准的请求」那一段在屏幕上时不弹（那里已经列着，浮着的还会盖住开关）。
+
+### 连接到电脑（`features/access/PairingPage.tsx`，局域网入口）
+
+手机浏览器打开局域网入口、还没有凭证时：任何请求收到 401 `unauthorized` / `device_revoked`（`lib/api.ts` 的 `request()` 记进 `lib/deviceAuth.ts`；SSE 被关掉时探一次 `/api/health`），
+`main.tsx` 整页换成它（懒加载）。设备名称从 UA 猜，照 `apps/server/src/access/pairing.ts` 的协议走（`features/access/pairing.ts`），校验码大号显示，批准后服务端 Set-Cookie，页面重新加载。
+sha256 有 `crypto.subtle` 就用，没有时用 `lib/sha256.ts` 的纯 JS 实现（非安全上下文也能配对）。本机入口没有这两种 401，不会出现这个页面。
 
 ### 帮助面板（`HelpDialog.tsx`）
 

@@ -307,6 +307,9 @@ SSE 里 `job`、`job-item` 是进度（不编号、不补发）；`changed`、`c
 - 本机页面用的查询和命令（scope `devices`）：`GET /api/access`、`PATCH /api/access`、`POST /api/access/requests/:id/approve | reject`、
   `PATCH | DELETE /api/devices/:id`、`POST /api/access/tickets`（扫码的一次性口令）。SSE 的 `access` 事件只推给本机入口。
 - 假手机：`npx tsx apps/server/scripts/lan-client.ts discover | pair <主机:端口> | call <方法> <路径> [json] | events`。
+- 网页（`apps/web/src/features/access/`）：设置 →「手机访问」、任何页面都会弹出的批准提示（本机入口）；手机浏览器打开局域网入口、
+  收到 401 `unauthorized` / `device_revoked` 时整页换成「连接到电脑」配对页（`lib/deviceAuth.ts`）。浏览器拿不到 TLS 证书，
+  校验码用 `hello` 里的 `fingerprint`（证书 DER 的 sha256）算：这条路防不了中间人，只防同一 Wi-Fi 下有人冒充手机，防中间人靠 App。
 
 ### 7. 图片展示
 - `Thumb`：主色占位（`dominantColor`）→ 缩略图淡入；敏感分级按偏好模糊。
