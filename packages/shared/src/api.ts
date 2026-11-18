@@ -11,6 +11,7 @@ import type {
   Character,
   CharacterSource,
   CollectionKind,
+  CollectionMembership,
   CollectionPage,
   CollectionSummary,
   DuplicateGroup,
@@ -486,6 +487,7 @@ export interface UpdateArtistLinksBody {
 
 /**
  * GET    /api/collections            列表（按 title 排，无题排最后；页数为 0 的不列）
+ * GET    /api/collections/counts     数目：每一类、每种成员来源的本数、书架格数、页数（不用为了数目拉全部摘要）
  * GET    /api/collections/:id        一本：目次、出场角色、作品、同系列
  * POST   /api/collections            把一个文件夹做成合集 → MutationResult & { collection }
  * PATCH  /api/collections/:id        改名、改类型、换封面、页序、系列、已整理、手动关联
@@ -493,14 +495,44 @@ export interface UpdateArtistLinksBody {
  * POST   /api/collections/bulk       批量：标为已整理、关联角色 / 作品、改类型
  */
 export interface ListCollectionsQuery {
-  kind?: CollectionKind;
+  /** 类型，可多选（查询串里逗号分隔：kind=doujin,artbook）；空的等于不筛 */
+  kind?: CollectionKind | CollectionKind[];
+  /**
+   * 成员怎么来的，可多选：folder = 按文件夹成册，selection = 手动挑的，post = 同一投稿自动收拢。
+   * 大库上同一投稿的组图可能有几千组，书架先只拉别的（membership=folder,selection）
+   */
+  membership?: CollectionMembership | CollectionMembership[];
   characterId?: ID;
   workId?: ID;
   seriesKey?: string;
   pending?: boolean;
+  /** 搜书名、文件夹名、社团、作者、原作、汉化组（searchKey 归一化后包含） */
   q?: string;
+  /** title（缺省）：无题排最后，再按标题、卷号；recent：最近加图的在前 */
+  sort?: 'title' | 'recent';
+  /** 只要排在前面的这么多本 */
+  limit?: number;
 }
 export type ListCollectionsResponse = CollectionSummary[];
+
+/** 一组合集的数目：只数页数 > 0 的（和列表同一口径） */
+export interface CollectionTally {
+  /** 本数（组图是组数） */
+  count: number;
+  /** 书架上的格数：同一系列两本以上合成一格（和书架的 toShelfUnits 一样） */
+  units: number;
+  /** 页数合计（组图是张数） */
+  pages: number;
+}
+export interface CollectionCountsQuery {
+  /** 和列表的 q 同一个搜索规则 */
+  q?: string;
+}
+/** 每一类的数目，以及按成员来源分开的（同一投稿的组图是 group.membership.post） */
+export type CollectionCountsResponse = Record<
+  CollectionKind,
+  CollectionTally & { membership: Record<CollectionMembership, CollectionTally> }
+>;
 
 export interface GetCollectionResponse {
   collection: CollectionSummary;

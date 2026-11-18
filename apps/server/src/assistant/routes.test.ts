@@ -143,6 +143,11 @@ describe('assistant HTTP and MCP', () => {
       expect(JSON.parse(again.content[0].text)).toEqual(result);
       const read: any = await client.callTool({ name: 'read_library', arguments: { path: '/api/collections/' + result.collection.id } });
       expect(JSON.parse(read.content[0].text).pages).toHaveLength(2);
+      // 数目、按成员来源筛选：/api/collections/counts 不会被当成 /api/collections/:id
+      const counts: any = await client.callTool({ name: 'read_library', arguments: { path: '/api/collections/counts' } });
+      expect(JSON.parse(counts.content[0].text).group.membership.selection).toEqual({ count: 1, units: 1, pages: 2 });
+      const manual: any = await client.callTool({ name: 'read_library', arguments: { path: '/api/collections?kind=group&membership=folder,selection' } });
+      expect(JSON.parse(manual.content[0].text).map((c: { id: string }) => c.id)).toEqual([result.collection.id]);
       const removed: any = await client.callTool({ name: 'collections_update', arguments: { id: result.collection.id, removeImageIds: [sample[0]], operationId: 'collection-remove' } });
       expect(removed.isError).not.toBe(true);
       expect((await ds.getCollection(result.collection.id))!.pages).toHaveLength(1);

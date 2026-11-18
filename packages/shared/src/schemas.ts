@@ -51,6 +51,8 @@ export const KindValue = z.enum([...CONTENT_KINDS, 'auto'] as unknown as [Conten
 /** 查询串里的类型：kind=all 或 kind=comic,screenshot；有未知值返回 400 */
 export const qKinds = z.union([z.literal('all'), qList(KindSchema)]);
 export const CollectionKindSchema = z.enum(['doujin', 'artbook', 'group']);
+/** 合集的成员怎么来的：folder = 按文件夹成册，selection = 手动挑的，post = 同一投稿自动收拢 */
+export const CollectionMembershipSchema = z.enum(['folder', 'selection', 'post']);
 export const RootModeSchema = z.enum(['auto', 'comic']);
 
 /** 一批图片（批量操作可能带几千个 id） */
@@ -402,14 +404,20 @@ export const SearchInput = z.object({
   forAssignment: qBool.optional(),
 });
 export const TagSuggestionsInput = z.object({ q: z.string().max(100).default(''), limit: qNumber.min(1).max(50).optional() });
+/** 合集列表：kind、membership 可多选（逗号分隔）；sort=recent&limit=50 是最近加图的 50 本 */
 export const ListCollectionsInput = z.object({
-  kind: CollectionKindSchema.optional(),
+  kind: qList(CollectionKindSchema).optional(),
+  membership: qList(CollectionMembershipSchema).optional(),
   characterId: z.string().optional(),
   workId: z.string().optional(),
   seriesKey: z.string().optional(),
   pending: qBool.optional(),
   q: z.string().optional(),
+  sort: z.enum(['title', 'recent']).optional(),
+  limit: qNumber.min(1).max(1000).optional(),
 });
+/** 合集的数目（每一类、每种成员来源）：q 和列表的搜索同一个规则 */
+export const CollectionCountsInput = z.object({ q: z.string().optional() });
 export const ListUnrecognizedInput = z.object({
   cursor: z.string().optional(),
   limit: qNumber.min(1).max(200).optional(),

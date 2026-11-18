@@ -9,12 +9,12 @@
 import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { CollectionKind, CollectionSummary, ListCollectionsQuery } from '@emaki/shared';
+import type { CollectionKind, CollectionMembership, CollectionSummary, CollectionTally, ListCollectionsQuery } from '@emaki/shared';
 import { searchKey } from '@emaki/shared';
 import { EventBus } from '../../core/events.ts';
 import { openDemoEngine, type DemoEngine } from '../../../test/helpers/client.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
-import { compareSummaries } from './collections.ts';
+import { compareRecent, compareSummaries } from './collections.ts';
 
 type Ranked = { id: number; pageCount: number; manual: boolean }[];
 interface Full {
@@ -29,17 +29,26 @@ let base: string;
 let demo: DemoEngine;
 /** 参照：全部合集连同出场角色、作品全读一遍 */
 let full: Map<number, Full>;
+/** 演示数据里两本本子的系列 */
+let series: string;
+
+const KINDS: CollectionKind[] = ['doujin', 'artbook', 'group'];
+const MEMBERSHIPS: CollectionMembership[] = ['folder', 'selection', 'post'];
+const listOf = <T>(v: T | T[] | undefined) => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
 
 /** 参照的列表：和 CollectionQueries.list 同一套筛选，只是在全读的结果上做 */
 function expected(q: ListCollectionsQuery): CollectionSummary[] {
   const cid = q.characterId !== undefined ? Number(q.characterId) : null;
   const wid = q.workId !== undefined ? Number(q.workId) : null;
   const k = q.q ? searchKey(q.q) : '';
+  const kinds = listOf(q.kind);
+  const memberships = listOf(q.membership);
   const out: CollectionSummary[] = [];
   for (const l of full.values()) {
     const s = l.summary;
     if (s.pageCount === 0) continue;
-    if (q.kind && s.kind !== q.kind) continue;
+    if (kinds.length && !kinds.includes(s.kind)) continue;
+    if (memberships.length && !memberships.includes(s.membership)) continue;
     if (q.seriesKey !== undefined && s.seriesKey !== q.seriesKey) continue;
     if (q.pending !== undefined && s.pending !== q.pending) continue;
     const text = [s.title ?? '', s.folderName, s.circle, s.artist, s.parody, s.translator];
@@ -57,7 +66,8 @@ function expected(q: ListCollectionsQuery): CollectionSummary[] {
     }
     out.push(match === undefined ? s : { ...s, matchPageCount: match });
   }
-  return out.sort(compareSummaries);
+  out.sort(q.sort === 'recent' ? compareRecent : compareSummaries);
+  return q.limit !== undefined ? out.slice(0, q.limit) : out;
 }
 
 beforeAll(async () => {
@@ -103,6 +113,16 @@ beforeAll(async () => {
   if (!db.prepare("SELECT 1 FROM works WHERE danbooru_tag = 'original'").get()) {
     insert("INSERT INTO works (name, danbooru_tag, created_at) VALUES ('原创', 'original', '2026-01-01')");
   }
+  // 两组同投稿最晚的入库时间相同：sort=recent&limit 正好切在它们中间时，两组都要先留下、再按摘要排
+  db.prepare('UPDATE images SET added_at = (SELECT MAX(added_at) FROM images WHERE collection_id = ?) WHERE collection_id = ?').run(
+    Number(posts[6]!.id),
+    Number(posts[7]!.id),
+  );
+  // 一组同投稿归进系列（书架格数：同一系列两本以上算一格），一本同投稿的改成画集（同投稿不全是组图）
+  series = books.find((c) => c.seriesKey)!.seriesKey!;
+  await ds.updateCollection(posts[8]!.id, { seriesKey: series });
+  await ds.updateCollection(posts[9]!.id, { seriesKey: '只有它' });
+  await ds.bulkCollections({ ids: [posts[10]!.id], action: { type: 'kind', value: 'artbook' } });
   const [originalPage, manualWorkPage] = pagesOf(posts[5]!.id, 2);
   db.prepare(
     "UPDATE images SET original_at = '2026-11-01', original_decision = 'manual', original_actor = 'user' WHERE id = ?",
@@ -131,6 +151,10 @@ describe('合集按需读：和全读一遍的结果一样', () => {
     expect(doujin.some((l) => l.cast.every((c) => !c.manual) && l.works.every((w) => !w.manual))).toBe(true);
     expect([...full.values()].some((l) => l.row.series_key !== null)).toBe(true);
     expect([...full.values()].filter((l) => l.summary.membership === 'selection')).toHaveLength(1);
+    expect([...full.values()].some((l) => l.summary.membership === 'post' && l.summary.kind === 'artbook')).toBe(true);
+    expect([...full.values()].some((l) => l.summary.membership === 'post' && l.summary.seriesKey === series)).toBe(true);
+    const lastAdded = [...full.values()].map((l) => l.summary.lastAddedAt);
+    expect(new Set(lastAdded).size).toBeLessThan(lastAdded.length);
   });
 
   it('列表（不筛选）、统计', async () => {
@@ -196,5 +220,85 @@ describe('合集按需读：和全读一遍的结果一样', () => {
       { characterId: String(someCast.cast[0]!.id), workId: String(someWork.works[0]!.id) },
     );
     for (const q of queries) expect(await demo.ds.listCollections(q), JSON.stringify(q)).toEqual(expected(q));
+  });
+
+  it('按成员来源筛选、类型多选（合集页的「全部」先不拉同投稿的组图），和别的条件一起', async () => {
+    const queries: ListCollectionsQuery[] = [];
+    for (const m of MEMBERSHIPS) queries.push({ membership: m }, { membership: [m] });
+    queries.push(
+      { membership: ['folder', 'selection'] },
+      { membership: ['folder', 'selection', 'post'] },
+      { membership: [] },
+      { kind: ['doujin', 'artbook'] },
+      { kind: [] },
+      { kind: 'group', membership: ['folder', 'selection'] },
+      { kind: 'group', membership: 'post' },
+      { kind: ['doujin', 'artbook'], membership: 'post' },
+      { kind: 'group', membership: 'post', q: 'pixiv' },
+      { membership: 'post', pending: false },
+      { membership: 'selection', q: '手选' },
+      { membership: 'post', seriesKey: series },
+    );
+    const someCast = [...full.values()].find((l) => l.summary.membership === 'post' && l.cast.length)!;
+    const characterId = String(someCast.cast[0]!.id);
+    queries.push({ characterId, membership: 'post' }, { characterId, membership: 'folder' });
+    for (const q of queries) expect(await demo.ds.listCollections(q), JSON.stringify(q)).toEqual(expected(q));
+    // 「全部」= 别的 + 同投稿的组图，一个不多一个不少
+    const rest = await demo.ds.listCollections({ kind: ['doujin', 'artbook'] });
+    const manual = await demo.ds.listCollections({ kind: 'group', membership: ['folder', 'selection'] });
+    const posts = await demo.ds.listCollections({ kind: 'group', membership: 'post' });
+    expect(posts.length).toBeGreaterThan(12);
+    expect([...rest, ...manual, ...posts].sort(compareSummaries)).toEqual(await demo.ds.listCollections({}));
+  });
+
+  it('sort=recent、limit：最近加图的前几本，同时加的不会因为先挑后排而挑错（「收进组图」弹窗）', async () => {
+    const all = expected({ sort: 'recent' });
+    expect(all.map((c) => c.lastAddedAt)).toEqual([...all.map((c) => c.lastAddedAt)].sort().reverse());
+    const filters: ListCollectionsQuery[] = [{}, { kind: 'group' }, { kind: 'group', membership: 'post' }, { membership: ['folder', 'selection'] }];
+    for (let limit = 1; limit <= all.length + 1; limit++) {
+      for (const q of filters) {
+        const query: ListCollectionsQuery = { ...q, sort: 'recent', limit };
+        expect(await demo.ds.listCollections(query), JSON.stringify(query)).toEqual(expected(query));
+      }
+    }
+    // 搜索、看摘要的筛选（待整理、角色）一起时也一样；按标题排时 limit 截的是标题顺序的前几本
+    const someCast = [...full.values()].find((l) => l.cast.length)!;
+    for (const q of [
+      { q: 'pixiv', sort: 'recent', limit: 3 },
+      { pending: false, sort: 'recent', limit: 4 },
+      { characterId: String(someCast.cast[0]!.id), sort: 'recent', limit: 1 },
+      { limit: 5 },
+      { kind: 'group', q: '没有这个', sort: 'recent', limit: 5 },
+    ] as ListCollectionsQuery[]) {
+      expect(await demo.ds.listCollections(q), JSON.stringify(q)).toEqual(expected(q));
+    }
+  });
+
+  it('数目（counts）：每一类、每种成员来源的本数、书架格数、页数，和列表算出来的一样；统计里的合集数也是它', async () => {
+    const tally = (list: CollectionSummary[]): CollectionTally => ({
+      count: list.length,
+      units: new Set(list.map((c) => c.seriesKey ?? `c${c.id}`)).size,
+      pages: list.reduce((n, c) => n + c.pageCount, 0),
+    });
+    for (const q of [undefined, '', '示例', 'pixiv', '手选', '没有这个']) {
+      const list = expected({ q });
+      const want = Object.fromEntries(
+        KINDS.map((k) => {
+          const of = list.filter((c) => c.kind === k);
+          const membership = Object.fromEntries(MEMBERSHIPS.map((m) => [m, tally(of.filter((c) => c.membership === m))]));
+          return [k, { ...tally(of), membership }];
+        }),
+      );
+      expect(await demo.ds.ask('collections.counts', q === undefined ? {} : { q }), String(q)).toEqual(want);
+    }
+    const counts = demo.ds.collectionQueries.counts();
+    // 书架格数：同一系列的两本本子算一格；归进这个系列的那组同投稿在组图里单独算（书架按类型分开合系列）
+    expect(counts.doujin.units).toBe(counts.doujin.count - 1);
+    expect(counts.group.membership.post.count).toBeGreaterThan(12);
+    expect(demo.ds.collectionQueries.stats().collectionCounts).toEqual({
+      doujin: counts.doujin.count,
+      artbook: counts.artbook.count,
+      group: counts.group.count,
+    });
   });
 });

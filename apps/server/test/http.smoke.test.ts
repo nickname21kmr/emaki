@@ -276,6 +276,26 @@ describe('合集（注册表：collections.*）', () => {
     const { status, json } = await call('GET', '/api/collections?pending=true');
     expect([status, json]).toEqual([200, []]);
     expect((await call('GET', '/api/collections?kind=manga')).status).toBe(400);
+    // 类型、成员来源可多选（逗号分隔，和前端 api.ts 拼数组的写法一样）；sort、limit
+    const id = await create();
+    const many = await call('GET', '/api/collections?kind=doujin,artbook&membership=folder,selection&sort=recent&limit=5');
+    expect([many.status, many.json.map((c: { id: string }) => c.id)]).toEqual([200, [id]]);
+    expect((await call('GET', '/api/collections?membership=post')).json).toEqual([]);
+    expect((await call('GET', '/api/collections?membership=book')).status).toBe(400);
+    expect((await call('GET', '/api/collections?sort=size')).status).toBe(400);
+    expect((await call('GET', '/api/collections?limit=0')).status).toBe(400);
+  });
+
+  route('GET /api/collections/counts', async () => {
+    await create();
+    // 不会被当成 /api/collections/:id
+    const { status, json } = await call('GET', '/api/collections/counts');
+    expect(status).toBe(200);
+    const none = { count: 0, units: 0, pages: 0 };
+    const one = { count: 1, units: 1, pages: 25 };
+    expect(json.artbook).toEqual({ ...one, membership: { folder: one, selection: none, post: none } });
+    expect(json.group).toEqual({ ...none, membership: { folder: none, selection: none, post: none } });
+    expect((await call('GET', '/api/collections/counts?q=没有这本')).json.artbook.count).toBe(0);
   });
 
   route('POST /api/collections', async () => {

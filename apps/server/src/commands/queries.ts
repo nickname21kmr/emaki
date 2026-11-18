@@ -6,6 +6,7 @@
 import { THUMB_WIDTHS, type CustomCharacterMatch, type ID, type ImageDetail, type LibrarySummary, type ThumbWidth } from '@emaki/shared';
 import {
   AuditInput,
+  CollectionCountsInput,
   CoverCandidatesInput,
   EmptyInput,
   IdInput,
@@ -320,11 +321,20 @@ export const queries = [
   // ---------------------------------------------------------------- 合集
   defineQuery({
     name: 'collections.list',
-    summary: '合集列表',
+    summary: '合集列表；kind、membership（folder / selection / post）可多选，sort=recent&limit=50 是最近加图的 50 本',
     input: ListCollectionsInput,
     scope: 'read',
     http: [{ method: 'GET', path: '/api/collections' }],
     run: (e, q) => e.collectionQueries.list(q),
+  }),
+  // 写在 collections.get 前面：read_library 按注册的顺序匹配地址，counts 不能被当成 :id
+  defineQuery({
+    name: 'collections.counts',
+    summary: '合集的数目：每一类、每种成员来源的本数、书架格数、页数（q 同列表的搜索）；同一投稿的组图可能几千组，数目不用拉全部列表',
+    input: CollectionCountsInput,
+    scope: 'read',
+    http: [{ method: 'GET', path: '/api/collections/counts' }],
+    run: (e, q) => e.collectionQueries.counts(q),
   }),
   defineQuery({
     name: 'collections.get',

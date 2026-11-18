@@ -10,9 +10,13 @@ import {
   searchKey,
   type BulkCollectionsBody,
   type CreateCollectionBody,
+  type CollectionCountsQuery,
+  type CollectionCountsResponse,
   type CollectionKind,
+  type CollectionMembership,
   type CollectionPage,
   type CollectionSummary,
+  type CollectionTally,
   type ContentKind,
   type GetCollectionResponse,
   type ID,
@@ -95,6 +99,20 @@ export const compareSummaries = (a: CollectionSummary, b: CollectionSummary) =>
   collator.compare(a.title ?? '', b.title ?? '') ||
   (a.volumeNo ?? 0) - (b.volumeNo ?? 0) ||
   Number(a.id) - Number(b.id);
+/** sort=recent：最近加图的在前（ISO 时间直接比字符串），同时加的再按 compareSummaries */
+export const compareRecent = (a: CollectionSummary, b: CollectionSummary) => {
+  const x = a.lastAddedAt ?? '';
+  const y = b.lastAddedAt ?? '';
+  return x < y ? 1 : x > y ? -1 : compareSummaries(a, b);
+};
+
+/** 可多选的筛选（kind、membership）：单个值也认；空的等于不筛 */
+const many = <T>(v: T | T[] | undefined): T[] | undefined => {
+  const list = v === undefined ? [] : Array.isArray(v) ? v : [v];
+  return list.length ? list : undefined;
+};
+const KINDS: CollectionKind[] = ['doujin', 'artbook', 'group'];
+const MEMBERSHIPS: CollectionMembership[] = ['folder', 'selection', 'post'];
 
 /** 合集显示出来：按文件夹成册的看所在图库文件夹可见；手动、同投稿的组图在文件夹停用后，只要还有计入统计的页也显示 */
 const COLLECTION_VISIBLE = `((c.membership = 'folder' AND ${ROOT_ACTIVE('r')})
@@ -260,17 +278,18 @@ export class CollectionQueries {
     const cid = q.characterId !== undefined ? parseId(q.characterId) : null;
     const wid = q.workId !== undefined ? parseId(q.workId) : null;
     if ((q.characterId !== undefined && cid === null) || (q.workId !== undefined && wid === null)) return [];
-    const k = q.q ? searchKey(q.q) : '';
-    const ids = this.candidates(q, cid, wid);
+    // 类型、成员来源、系列、搜索在 candidates 里已经筛准了（都是合集行上的字段）；下面只筛要看摘要的：待整理、角色、作品
+    let ids = this.candidates(q, cid, wid);
     if (ids && !ids.length) return [];
+    // 最近加图的前 limit 本（「收进组图」弹窗）：不看摘要的筛选时，先按页的入库时间挑出来，不用算几千组同投稿的摘要
+    if (q.sort === 'recent' && q.limit !== undefined && q.pending === undefined && cid === null && wid === null) {
+      ids = this.recentIds(ids, q.limit);
+    }
     const out: CollectionSummary[] = [];
     for (const l of this.loadAll({ ids, cast: cid !== null, works: wid !== null }).values()) {
       const s = l.summary;
       if (s.pageCount === 0) continue;
-      if (q.kind && s.kind !== q.kind) continue;
-      if (q.seriesKey !== undefined && s.seriesKey !== q.seriesKey) continue;
       if (q.pending !== undefined && s.pending !== q.pending) continue;
-      if (k && ![s.title ?? '', s.folderName, s.circle, s.artist, s.parody, s.translator].some((x) => x && searchKey(x).includes(k))) continue;
       let match: number | undefined;
       if (cid !== null) {
         const hit = l.cast!.find((c) => c.id === cid);
@@ -284,22 +303,37 @@ export class CollectionQueries {
       }
       out.push(match === undefined ? s : { ...s, matchPageCount: match });
     }
-    return out.sort(compareSummaries);
+    out.sort(q.sort === 'recent' ? compareRecent : compareSummaries);
+    return q.limit !== undefined ? out.slice(0, q.limit) : out;
   }
 
   /**
-   * 列表的筛选能先按索引缩小到哪些合集（类型、系列、角色、作品；几个一起给时取交集），没有这些筛选时 undefined = 全部。
-   * 只缩小范围、不做判断：留下的合集照常按摘要、出场角色、作品筛选，结果和全读一遍一样。
+   * 列表的筛选先缩小到哪些合集（几个一起给时取交集），没有这些筛选时 undefined = 全部：
+   * - 类型、成员来源、系列、搜索是合集行上的字段，在这里就筛准了（合集表只有几千行，读一遍不到 1 毫秒；页才是几万行，按 id 走合集的索引读）；
+   * - 角色、作品、待整理只缩小范围，留下的合集照常按摘要、出场角色、作品判断，结果和全读一遍一样。
    * 角色和作品从它们的索引出发找页（+i.collection_id：不让查询改走合集的索引把几万页扫一遍）
    */
   private candidates(q: ListCollectionsQuery, cid: number | null, wid: number | null): number[] | undefined {
     const db = this.ctx.db;
     const sets: number[][] = [];
-    const ids = (sql: string, params: Record<string, unknown>) => db.prepare(sql).pluck().all(params) as number[];
-    if (q.kind) sets.push(ids("SELECT id FROM collections WHERE kind = @kind AND state = 'active'", { kind: q.kind }));
+    const ids = (sql: string, params: Record<string, unknown> = {}) => db.prepare(sql).pluck().all(params) as number[];
+    const kinds = many(q.kind);
+    if (kinds) {
+      const sql = "SELECT id FROM collections WHERE kind IN (SELECT value FROM json_each(@v)) AND state = 'active'";
+      sets.push(ids(sql, { v: JSON.stringify(kinds) }));
+    }
+    const memberships = many(q.membership);
+    if (memberships) {
+      const sql = "SELECT id FROM collections WHERE membership IN (SELECT value FROM json_each(@v)) AND state = 'active'";
+      sets.push(ids(sql, { v: JSON.stringify(memberships) }));
+    }
+    // 待整理只会是本子、画集（domain/collections/summary.ts：组图没有「没认出的页」，pending 恒为 false）
+    if (q.pending === true) sets.push(ids("SELECT id FROM collections WHERE kind IN ('doujin', 'artbook') AND state = 'active'"));
     if (q.seriesKey !== undefined) {
       sets.push(ids("SELECT id FROM collections WHERE series_key = @key AND state = 'active'", { key: q.seriesKey }));
     }
+    const text = this.searched(q.q);
+    if (text) sets.push(text);
     // 角色：这本里有它的页（出场的门槛由摘要判断），或者手动关联了它
     if (cid !== null) {
       sets.push(
@@ -329,6 +363,86 @@ export class CollectionQueries {
       const keep = new Set(b);
       return a.filter((x) => keep.has(x));
     });
+  }
+
+  /**
+   * 搜索命中的合集：书名、文件夹名、社团、作者、原作、汉化组，searchKey 归一化后包含（都是合集行上的字段，不用读页）。
+   * 没有搜索（或者归一化后是空的）时 undefined = 不筛
+   */
+  private searched(text: string | undefined): number[] | undefined {
+    const k = text ? searchKey(text) : '';
+    if (!k) return undefined;
+    const rows = this.ctx.db
+      .prepare("SELECT id, title, rel_dir, circle, artist, parody, translator FROM collections WHERE state = 'active'")
+      .all() as Pick<CollectionRow, 'id' | 'title' | 'rel_dir' | 'circle' | 'artist' | 'parody' | 'translator'>[];
+    const hit = (r: (typeof rows)[number]) =>
+      [r.title ?? '', leafOf(r.rel_dir), r.circle, r.artist, r.parody, r.translator].some((x) => x && searchKey(x).includes(k));
+    return rows.filter(hit).map((r) => r.id);
+  }
+
+  /**
+   * 最近加图的前 limit 本：按每本可见页里最晚的入库时间（= 摘要的 lastAddedAt）挑，和第 limit 本同时的也留下（最后在摘要上按 compareRecent 排）。
+   * 只读页的入库时间（走合集的索引），不算摘要；显示的范围和 loadAll 一样（state、COLLECTION_VISIBLE），页数为 0 的本来就不在里面
+   */
+  private recentIds(ids: number[] | undefined, limit: number): number[] {
+    const rows = this.ctx.db
+      .prepare(
+        `SELECT p.c, p.at FROM (
+           SELECT i.collection_id AS c, MAX(i.added_at) AS at FROM v_counted_images i
+           WHERE i.collection_id ${ids ? 'IN (SELECT value FROM json_each(@ids))' : 'IS NOT NULL'} GROUP BY i.collection_id
+         ) p JOIN collections c ON c.id = p.c JOIN library_roots r ON r.id = c.root_id
+         WHERE c.state = 'active' AND ${COLLECTION_VISIBLE}
+         ORDER BY p.at DESC`,
+      )
+      .all(ids ? { ids: JSON.stringify(ids) } : {}) as { c: number; at: string }[];
+    const cut = rows[limit - 1]?.at;
+    return (cut === undefined ? rows : rows.filter((x) => x.at >= cut)).map((x) => x.c);
+  }
+
+  /**
+   * 合集的数目（GET /api/collections/counts）：每一类、每种成员来源的本数、书架格数（同系列两本以上算一格）、页数。
+   * 只读合集的行和每本的页数，不算摘要：合集页的副标题、每一类的小字、「另有 N 组同一投稿」不用把几千组的摘要都拉回来。
+   * 口径和 list 一样（只数页数 > 0 的；显示范围同 loadAll；q 同 list 的搜索），collections.test.ts 和列表逐项比对
+   */
+  counts(q: CollectionCountsQuery = {}): CollectionCountsResponse {
+    const tally = (): CollectionTally => ({ count: 0, units: 0, pages: 0 });
+    const out = Object.fromEntries(
+      KINDS.map((k) => [k, { ...tally(), membership: Object.fromEntries(MEMBERSHIPS.map((m) => [m, tally()])) }]),
+    ) as CollectionCountsResponse;
+    const ids = this.searched(q.q);
+    if (ids && !ids.length) return out;
+    const rows = this.ctx.db
+      .prepare(
+        `SELECT c.id, c.kind, c.membership, c.series_key, p.n FROM (
+           SELECT i.collection_id AS c, COUNT(*) AS n FROM v_counted_images i
+           WHERE i.collection_id ${ids ? 'IN (SELECT value FROM json_each(@ids))' : 'IS NOT NULL'} GROUP BY i.collection_id
+         ) p JOIN collections c ON c.id = p.c JOIN library_roots r ON r.id = c.root_id
+         WHERE c.state = 'active' AND ${COLLECTION_VISIBLE}`,
+      )
+      .all(ids ? { ids: JSON.stringify(ids) } : {}) as {
+      id: number;
+      kind: CollectionKind;
+      membership: CollectionMembership | null;
+      series_key: string | null;
+      n: number;
+    }[];
+    // 书架格数：同一系列算一格，不在系列里的一本一格（toShelfUnits 的规则）
+    const units = new Map<CollectionTally, Set<string>>();
+    const add = (t: CollectionTally, unit: string, pages: number) => {
+      const seen = units.get(t) ?? new Set<string>();
+      units.set(t, seen.add(unit));
+      t.count++;
+      t.pages += pages;
+      t.units = seen.size;
+    };
+    for (const r of rows) {
+      const k = out[r.kind];
+      if (!k) continue;
+      const unit = r.series_key ?? `c${r.id}`;
+      add(k, unit, r.n);
+      add(k.membership[r.membership ?? 'folder'], unit, r.n);
+    }
+    return out;
   }
 
   /** 一本的摘要（新建之后返回给前端） */
@@ -385,16 +499,18 @@ export class CollectionQueries {
     };
   }
 
-  /** getStats 用：页数 > 0 的本数，和待整理条目数（同一系列算一条） */
+  /**
+   * getStats 用：页数 > 0 的本数（counts，不算摘要），和待整理条目数（同一系列算一条）。
+   * 待整理只会是本子、画集（见 candidates），只算它们的摘要，几千组同投稿的不用算
+   */
   stats(): { collectionCounts: Record<CollectionKind, number>; pendingCollectionCount: number } {
-    const counts: Record<CollectionKind, number> = { doujin: 0, artbook: 0, group: 0 };
+    const c = this.counts();
     const pending = new Set<string>();
-    for (const { summary: s } of this.loadAll({ cast: false, works: false }).values()) {
-      if (s.pageCount === 0) continue;
-      counts[s.kind]++;
-      if (s.pending) pending.add(s.seriesKey ?? `c${s.id}`);
-    }
-    return { collectionCounts: counts, pendingCollectionCount: pending.size };
+    for (const s of this.list({ pending: true })) pending.add(s.seriesKey ?? `c${s.id}`);
+    return {
+      collectionCounts: { doujin: c.doujin.count, artbook: c.artbook.count, group: c.group.count },
+      pendingCollectionCount: pending.size,
+    };
   }
 
   // ---------------------------------------------------------------- 修改
