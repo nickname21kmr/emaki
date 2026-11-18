@@ -119,11 +119,12 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 
 ## 可用积木（先用这些，不够再加）
 
-- `components/ui`：`Button` `IconButton`（必须有 label，自带 tooltip）`Chip` `ChipAvatar` `Badge` `CountBubble` `Segmented` `Input` `SearchInput` `Kbd` `Tooltip` `Dialog` `DialogFooter` `Menu*` `Switch` `Slider` `Progress` `Field` `Skeleton` `EmptyState` `ErrorState` `SectionTitle` `Seal` `RollingNumber`；另有 `Emblem.tsx`、`Toast.tsx`（不从 index 导出）
-- `components/layout`：`PageHeader`（右侧自带全局操作：跳到角色 ⌘K / 模糊开关 / 撤销 / 帮助）`PageBody` `useScrollContainer` `ThemeSync` `chapters.ts`
-- `components/media`：`Thumb`（所有插画都用它：主色占位、淡入、按分级 / 类型模糊，`blurBadge` 按尺寸自动选、`revealOnHover` 默认关）`ImageGrid`（虚拟化等高行网格 + 无限滚动 + 多选 + 点开看图器）`CharacterCover`（`variant="overlay"` Top 卡 / `"plate"` 书架图版）`CoverFan`（全站唯一的扇形叠放，1 / 2 / 3 / 5 张）`AvatarTile` + `RecentStrip`（圆头像「卡纸框」+ 图注）`BookPlate`（本子、画集的书）`CollectionsStrip`（「收录于」，只列本子和画集）`CollectionControls`（组图：`GroupBadge` 收拢格的张数角标、`CollapseGroupsMenu` 收拢菜单（自动 / 总是收拢 / 总是逐张）、`AddToGroupDialog` 收进组图；书架上的组图用 `CoverFan`，见 [collections.md](collections.md)）`KindBadge.tsx`（`KindBadge` 类型小印、`AnimatedMark` / `AnimatedGlyph` 动图标记、`TileMarks` 格子左下角那一行）`KindMenu` `CardGrid`
+- `components/ui`：`Button` `IconButton`（必须有 label，自带 tooltip）`Chip` `ChipAvatar` `Badge` `CountBubble` `Segmented` `Input` `SearchInput` `Kbd` `Tooltip` `Dialog`（compact 下是底部面板）`DialogFooter` `Sheet`（底部面板） `Menu*` `Switch` `Slider` `Progress` `Field` `Skeleton` `EmptyState` `ErrorState` `SectionTitle` `Seal` `RollingNumber`；另有 `Emblem.tsx`、`Toast.tsx`（不从 index 导出）
+- `components/layout`：`PageHeader`（右侧自带全局操作：跳到角色 ⌘K / 模糊开关 / 撤销 / 帮助；手机竖屏收成放大镜 +「…」）`PageBody` `useScrollContainer` `ThemeSync` `chapters.ts` `TabBar`（手机竖屏的底部标签栏）
+- `components/media`：`Thumb`（所有插画都用它：主色占位、淡入、按分级 / 类型模糊，`blurBadge` 按尺寸自动选、`revealOnHover` 默认关）`ImageGrid`（虚拟化等高行网格 + 无限滚动 + 多选 + 点开看图器；行高按窗口缩放，触屏长按多选；页头放 `SelectButton`）`CharacterCover`（`variant="overlay"` Top 卡 / `"plate"` 书架图版）`CoverFan`（全站唯一的扇形叠放，1 / 2 / 3 / 5 张）`AvatarTile` + `RecentStrip`（圆头像「卡纸框」+ 图注）`BookPlate`（本子、画集的书）`CollectionsStrip`（「收录于」，只列本子和画集）`CollectionControls`（组图：`GroupBadge` 收拢格的张数角标、`CollapseGroupsMenu` 收拢菜单（自动 / 总是收拢 / 总是逐张）、`AddToGroupDialog` 收进组图；书架上的组图用 `CoverFan`，见 [collections.md](collections.md)）`KindBadge.tsx`（`KindBadge` 类型小印、`AnimatedMark` / `AnimatedGlyph` 动图标记、`TileMarks` 格子左下角那一行）`KindMenu` `CardGrid`
 - `lib/queries.ts`：全部数据 hook；修改一律用 `useMutate(fn)`，自动结果 toast + 撤销 + 刷新。界面上显示的计数读 `useSummary()`（汇总接口，见下面「数字从哪来」）
 - `lib/stores.ts`：`usePrefs`（本机偏好：模糊开关与范围、照片 / 文字模糊、悬停显示、底色、网格密度、书架 / 列表、行高、图库类型、收拢组图、阅读器单双页与翻页方向）`useLightbox`（`show(ids, index)` 打开看图器）`useSelection`（多选）`useOverlays` `useUndoStore`
+- `lib/viewport.ts`（`useViewport` 和排法规则）、`lib/gestures.ts`（触屏手势的判定）、`lib/useLongPress.ts`、`lib/useSwipePager.ts`（见下面「窗口分级和触控」）
 - `lib/motion.ts`、`lib/viewTransition.ts`、`lib/kinds.ts`（类型的图标、`ANIMATED_LABEL`；类型名、印章字、说明转自 `packages/shared`）、`lib/blur.ts`（转出 `packages/shared` 的 `blurReason`）、`lib/format.ts`（`formatCount` `formatCompact` `formatBytes` `formatRelative` `formatDate`；`RATING_LABEL` 转自 shared）、`lib/hotkeys.ts`（`useHotkey('mod+k', fn)`）、`lib/events.ts`（SSE：`changed` 按变化类型只让相关的 query 失效（`REFRESH`），写操作等自己那条事件的刷新（`settleRefresh`），助手的可撤销修改进撤销栈；识别进行中排名类列表最多一分钟重拉一次，未识别列表只标记过期）、`lib/urlPrefs.ts`（收拢组图的模式进 URL）
 - `blocks/`：页面区块注册表 `registry.ts` 和按注册表渲染的 `PageBlocks`（见下面「页面区块」）
 
@@ -137,6 +138,35 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - 会发出请求的（助手设置、手机访问状态这类设备上必然 403 的）用 `known(need)`：确定是电脑上才发。
 
 页面的筛选状态放在 URL 查询参数（`useSearchParams`），刷新后保留。会影响列表里有哪些图的本机偏好也写进 URL：图库的类型 `?kind=`、收拢组图 `?collapse=`（没写时把偏好补进去，写了以 URL 为准），AI 助手拿到的页面地址和用户看到的一致。
+
+### 窗口分级和触控（A1，docs/mobile.md 4.2）
+
+手机、平板、电脑是同一套页面，按**窗口尺寸和输入方式**排；判断依据只有这两样，不判断「是不是手机」「是不是 App」。**电脑上（宽屏 + 鼠标）一个像素都不变**：改排法时先拍 1440×900 的截图，改完逐像素对比。
+
+| 分级 | 条件 | Tailwind 变体 | 典型设备 |
+| --- | --- | --- | --- |
+| 宽度 compact | < 600 | `compact:` | 手机竖屏 |
+| 宽度 medium | 600–839 | `medium:` | 平板竖屏 |
+| 宽度 compact + medium | < 840 | `narrow:` | 「窄屏」：看图器的底部信息面板、未识别的网格 |
+| 宽度 expanded | ≥ 840 | （不写，默认样式） | 平板横屏、电脑、手机横屏 |
+| 高度 compact | 高 < 480 | `short:` | 手机横屏 |
+| 触屏 | `pointer: coarse` | `touch:`（= 内置的 `pointer-coarse:`） | 手机、平板（横屏也是） |
+
+- **桌面优先**：组件里照旧写电脑上的样式，再用上面的变体覆盖；变体都是媒体查询，宽屏 + 鼠标时一条都不生效。`compact:` 定义在 `narrow:` 后面，同一属性上盖过它。
+  只在某一级出现的元素外面包 `hidden compact:contents`（或 `touch:contents`），电脑上整个不占位。
+- **要在 JS 里算的**（网格行高、虚拟列表、看图器留白、阅读器单双页、页头吸顶、渲染哪个组件）用 `useViewport()`（`lib/viewport.ts`：`width` / `height` / `orientation` / `touch` / `hover`），
+  规则写成 `viewport.ts` 里的函数：`gridRowHeight`（compact 160、medium 220、手机横屏最多 160，expanded 照用户的设置）、`gridGap`、`balancedRows`（窄屏的两端对齐行用 `justify(…, { balance })`）、
+  `cardMinWidth`、`stagePadding`、`readerSpreadFits`（横屏而且 expanded 才双页）、`stickyHeaderFits`（手机横屏不吸顶）、`isNarrow`。
+  组件里不读 `innerWidth`、不写宽高或指针的 `matchMedia`（`viewport.test.ts` 扫源码检查，助手附页的 `dock.ts` 例外）。
+- **外框**：compact 时纸铺满屏幕、侧栏换成底部标签栏（`TabBar`，项来自 `tabBarItems`，和侧栏同一套计数、能力过滤）；页头标题变小、副标题换到下面整行，
+  全局操作只剩放大镜和「…」。`index.html` 有 `viewport-fit=cover`：贴底的东西（标签栏、底部面板、多选栏、看图器的信息面板）加 `pb-[env(safe-area-inset-bottom)]`，手机横屏的侧栏让出左边刘海。
+- **弹层**：`Dialog` 在 compact 下自动排成底部面板；只在手机上出现的面板用 `Sheet`（`components/ui/Sheet.tsx`，把手往下拖收起）。菜单、弹出框最宽是窗口减边距。
+- **触控目标**：触屏上可点的至少 44×44。`IconButton`、看图器按钮已经带 `touch-hit`（透明的 `::after` 把点击区域扩到 44，视觉尺寸不变）；自己写的小按钮也加它。
+  只在悬停时出现的按钮，触屏上要常显（`touch:opacity-100`）或者有别的入口（长按、底部面板、看图器里）。键盘提示（`Kbd`、「Ctrl / ⌘ 点击多选」）在触屏上 `touch:hidden`。
+- **手势**只认 `pointerType === 'touch'`，鼠标、键盘的行为不经过它们；判定是 `lib/gestures.ts` 里的纯函数（方向锁定、滑动的距离 / 速度阈值、下滑关闭、捏合缩放的中心、点按 / 双击），阈值都在 `GESTURE`：
+  看图器 `lightbox/useTouchGestures.ts`、左右翻页 `lib/useSwipePager.ts`（阅读器、未识别）、长按 `lib/useLongPress.ts`（网格、未识别队列：进入多选并选中）。
+  跟手的位移直接写 style，不走 React 状态。没有引入手势库。
+- **多选**：电脑上照旧悬停勾选圈、Ctrl / Shift 点击；触屏上长按一张进入多选，页头有「选择」（`SelectButton`，`useSelection.start(scope)` 进入还没选图的多选模式，`isSelecting` 判断）。
 
 ### 数字从哪来（P5）
 
@@ -190,6 +220,7 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - 全屏深色 scrim，图片居中 `object-contain`；先显示 960 宽缩略图（`imageUrl.thumb(id, 960)`）再换原图，避免白屏。
 - 右侧可折叠信息面板（320px，按 `I` 切换）：文件名、尺寸、体积、格式、入库时间、来源（pixiv 链接等）、分级（可改）、类型（六枚类型印，动图另起一行写依据，见「动图」）、角色（chip 列表，可移除，可添加——带搜索的弹出框，调用 `api.updateImage`）、tagger 建议（`characterSuggestions`，一键采纳）、标签（按 category 分组，score 用细进度条表示）、操作：收藏（F）、在资源管理器中显示、排除（E）、移到回收站。
 - 顶部：`index / total`、关闭。左右方向键切换，滚轮 / 双击放大（简单的 transform scale + 拖动即可）。
+- 触屏（A1）：左右滑切换、下滑关闭、捏合 / 双击缩放、放大后拖动平移、单击切换界面（`lightbox/useTouchGestures.ts`）；窄屏（< 840）信息面板是贴底的 `InfoSheet`（平时只露出操作那一排，上拉展开），不显示胶片条。
 - 敏感图片默认模糊，中间一个「显示」按钮（只对当前这张生效）。
 - 切换图片时预加载下一张。
 

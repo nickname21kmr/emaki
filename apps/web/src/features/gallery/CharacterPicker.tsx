@@ -73,7 +73,7 @@ export function CharacterPicker({
             collisionPadding={16}
             onCloseAutoFocus={(e) => { if (createName !== null) e.preventDefault(); }}
             className={cn(
-              'z-[70] w-[340px] overflow-hidden rounded-xl bg-raised text-fg shadow-pop ring-1 ring-line',
+              'z-[70] w-[340px] max-w-[calc(100vw-32px)] overflow-hidden rounded-xl bg-raised text-fg shadow-pop ring-1 ring-line',
               'origin-[var(--radix-popover-content-transform-origin)] data-[state=open]:animate-rise',
             )}
           >
