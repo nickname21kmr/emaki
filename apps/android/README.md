@@ -16,9 +16,10 @@
 | `.../platform/` | 安卓的部分：NsdManager 找电脑（`Discovery.kt`）、Keystore 加密凭证（`Storage.kt`）、设备名称和型号 |
 | `.../ui/` | 原生页面（Compose）和 WebView 主界面（`WebScreen.kt`） |
 | `.../AppModel.kt` | 页面之间怎么走（找电脑 → 请求 → 等批准 → 主界面；电脑不在线、已被电脑移除、需要更新、证书不对） |
+| `.../ConnectionWatch.kt` | 断线处理（docs/mobile.md 3.6）：主界面上核实连接（`core/Liveness.kt` 的 `LinkCheck`），「电脑不在线」页面上自动重连 |
 
-网页那边只有一处配合：`apps/web/src/lib/deviceAuth.ts` 在有 `window.EmakiApp` 时，遇到 401 调 `EmakiApp.unpaired(code)`，
-不显示网页自己的「连接到电脑」页。
+网页那边两处配合：`apps/web/src/lib/deviceAuth.ts` 在有 `window.EmakiApp` 时，遇到 401 调 `EmakiApp.unpaired(code)`，
+不显示网页自己的「连接到电脑」页；`apps/web/src/lib/connection.ts` 连不上电脑时调 `EmakiApp.connectionLost()`，不显示网页自己的提示条。
 
 ## 在哪构建
 
@@ -69,4 +70,6 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 模拟器在 NAT 后面，收不到局域网的 mDNS：「自动发现」只能在真机上测，模拟器里用「手动输入地址」。
 扫码的流程可以用 `adb shell am start -a android.intent.action.VIEW -d '<电脑上生成的 emaki://pair?… 链接>'` 代替相机。
+断线处理（docs/mobile.md 3.6）可以这样测：在电脑上用 `PATCH /api/access {"enabled":false}` 关掉局域网入口、再 `{"enabled":true}` 打开（证书、设备都不变），
+或者在模拟器里 `adb shell svc wifi disable` / `svc data disable` 断网；`adb logcat -s Emaki` 能看到「网页报连不上」「换了网络」「自动重连：连上了」。
 debug 版可以用 Chrome 的 devtools 看 WebView：`adb forward tcp:9333 localabstract:webview_devtools_remote_<App 的 pid>`。

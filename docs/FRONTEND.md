@@ -295,6 +295,13 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 `main.tsx` 整页换成它（懒加载）。设备名称从 UA 猜，照 `apps/server/src/access/pairing.ts` 的协议走（`features/access/pairing.ts`），校验码大号显示，批准后服务端 Set-Cookie，页面重新加载。
 sha256 有 `crypto.subtle` 就用，没有时用 `lib/sha256.ts` 的纯 JS 实现（非安全上下文也能配对）。本机入口没有这两种 401，不会出现这个页面。
 
+### 连不上电脑（`features/access/ConnectionBanner.tsx`，局域网入口）
+
+连接状态在 `lib/connection.ts`（docs/mobile.md 3.6）：SSE 出错、请求网络错误或 10 秒没回应、图片加载失败时探一次 `/api/health`，探不通就是 offline。
+offline 时顶部正中一枚墨色胶囊「连不上电脑，可能电脑关机了或者不在同一个网络」+「重试」，不会自己消失，连上了自己收起（`main.tsx` 挂在 `Root` 旁边）。
+只在局域网入口的浏览器里显示：安卓 App 里交给 `window.EmakiApp.connectionLost()`（App 换到原生页面），本机入口不显示。
+重新连上后所有查询重新取；图片要用 `Thumb`（或 `useImageRetry`）才会在重新连上后重新加载失败过的那几张。
+
 ### 帮助面板（`HelpDialog.tsx`）
 
 两列快捷键表（全局 / 看图器 / 未识别 / 重复），用 `Kbd`；下方一句「Emaki 是本地应用，图片不会上传到任何地方」。

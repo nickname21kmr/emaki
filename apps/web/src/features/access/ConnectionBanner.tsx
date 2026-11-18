@@ -32,7 +32,7 @@ export function ConnectionNotice({ probing, onRetry }: { probing: boolean; onRet
       )}
     >
       <WifiOff className="size-4 shrink-0 opacity-80" aria-hidden />
-      <span className="min-w-0 leading-snug">{OFFLINE_TEXT}</span>
+      <span className="min-w-0 leading-snug text-balance">{OFFLINE_TEXT}</span>
       <button
         type="button"
         onClick={onRetry}
