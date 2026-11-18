@@ -39,14 +39,17 @@ emaki/
 │  ├─ domain.ts        领域模型：Work / Character / ImageItem / DuplicateGroup / Exclusion / Settings / Job …
 │  ├─ api.ts           HTTP 契约：请求体、查询参数、响应类型
 │  ├─ schemas.ts       命令 / 查询的输入 schema（zod，入口 @emaki/shared/schemas）：HTTP、MCP、前端共用（P6）
-│  ├─ commands.ts      权限范围 SCOPES、AI 助手能用的范围 ASSISTANT_SCOPES、命令清单的类型（P6）
+│  ├─ commands.ts      权限范围 SCOPES、AI 助手能用的范围 ASSISTANT_SCOPES、设备的 DEVICE_*_SCOPES、命令清单的类型（P6）
+│  ├─ access.ts        手机访问：hello、配对、设备、「手机访问」状态的类型，access 事件（docs/mobile.md 第 2 节）
 │  ├─ jobs.ts          任务种类的注册表 JOB_KINDS：名称、通道、优先级、能否取消……（P6）
 │  ├─ events.ts        对外事件：changed / command / resync / hello，公开的变化类型 DOMAIN_CHANGES（P6）
 │  ├─ search.ts        searchKey() / matchesQuery() / searchRank()：「未花 / ミカ / mika / Mika_(Blue_Archive)」归一化，前后端一致
 │  └─ rules.ts         共用的展示规则（P5）：名称和说明、能否不打码显示、在哪个待处理队列、话 / 册、无题、排除标签归一化、剩余时间
 ├─ apps/server/src/
-│  ├─ index.ts         启动：打开引擎（真实图库或演示数据）→ buildApp → listen
-│  ├─ app.ts           Fastify 实例、本机安全、错误处理、健康检查、生产模式托管前端
+│  ├─ index.ts         启动：打开引擎（真实图库或演示数据）→ buildApp → listen → 局域网入口（LanEntry，默认关）
+│  ├─ app.ts           Fastify 实例、本机入口（本机安全）、两个入口共用的部分（错误处理、注册表路由、SSE、健康检查、托管前端）
+│  ├─ access/          设备与访问（手机访问）：局域网入口 lan.ts（https、设备凭证、启停）、配对 pairing.ts（协议写在文件头）、
+│  │                   设备凭证 devices.ts、证书 cert.ts、mDNS 广播 discovery.ts；表 lan_access、devices 的主人
 │  ├─ config.ts        环境变量
 │  ├─ commands/        命令 / 查询注册表（P6）：registry.ts（defineCommand / defineQuery、命令层）、audit.ts（command_log）、
 │  │                   curation / catalog / library / system / queries.ts（定义）、index.ts（全部列在这里）
@@ -58,7 +61,7 @@ emaki/
 │  ├─ propagation/     变更传播：变化（changes.ts）、反应注册表和三个阶段（registry.ts）、actor 和调用上下文、引擎层的反应、排队状态
 │  ├─ readmodel/       读模型：唯一的命名口径（terms.ts）、汇总接口（summary.ts）、设置的读模型（settings.ts）
 │  ├─ assistant/       AI 助手：会话、Agent 后端、MCP 工具（tools.ts，从注册表生成）
-│  ├─ infra/ports.ts   可替换部件：时钟、回收站、图片文件、图库文件夹、后台任务（扫描 / 模型 / 联网）
+│  ├─ infra/ports.ts   可替换部件：时钟、回收站、图片文件、图库文件夹、后台任务（扫描 / 模型 / 联网）、局域网入口的监听和广播
 │  ├─ demo/            演示数据（fixtures、种子、占位图）、灌数据、演示用的假部件
 │  └─ db/              迁移（schema.sql 是 v1，migrations/ 是之后的版本）
 └─ apps/web/src/
@@ -283,8 +286,9 @@ export const reevaluateExclusionsReaction: Reaction = {
 - **排队（queue）**：提交后把工作交给后台任务；要做的事持久化在库里（识别、Pixiv 补充本来就在图片行和 `pixiv_character_checks` 里，查重在 `pending_work`）。
   只有用户和助手的操作在这里直接拉起任务，后台任务写库后由任务链接着排。
 - **提交后（after）**：缓存、事件、监听者。出错只记日志。
-- **actor**：HTTP 请求是 `user`；助手的 MCP 工具经注册表执行，是 `assistant`；任务执行体在 `job:<种类>` 下；启动修补是 `system:startup`。每次写命令都记进审计记录（`command_log`，`GET /api/audit`）。
-  用户和助手的操作强刷新缓存、马上推 `changed`（reason `mutation`，带变化类型和命令名）；后台任务和启动修补弱刷新（旧结果最多再用 10 秒），事件按任务种类节流，任务结束时推一次。
+- **actor**：HTTP 请求是 `user`；助手的 MCP 工具经注册表执行，是 `assistant`；局域网入口上批准过的设备是 `device:<设备 id>`（带着它的权限范围）；
+  任务执行体在 `job:<种类>` 下；启动修补是 `system:startup`。每次写命令都记进审计记录（`command_log`，`GET /api/audit`）。
+  用户、助手和设备的操作强刷新缓存、马上推 `changed`（reason `mutation`，带变化类型和命令名）；后台任务和启动修补弱刷新（旧结果最多再用 10 秒），事件按任务种类节流，任务结束时推一次。
   后台任务里昂贵的全量重算（合集）用 `defer` 延后到任务结束（不论完成、让出还是取消）一次做完。
 - 找慢的反应：`EMAKI_PROFILE_REACTIONS=1` 打印每个反应的耗时；写操作的测速脚本是 `apps/server/scripts/bench-mutations.ts`（合成数据）。
 
@@ -292,6 +296,17 @@ export const reevaluateExclusionsReaction: Reaction = {
 扫描、缩略图、识别、Pixiv 补充、Danbooru 同步、查重都是 `JobQueue` 里的任务，分两条通道：识别角色和画师主要吃显卡，走 gpu 道；其余吃 CPU / 硬盘，走 io 道。每条道同一时间只跑一个，道内按优先级出队，两条道可以同时跑。
 每种任务的通道、优先级、名称、能否取消都登记在 `packages/shared/src/jobs.ts`（P6）。进度通过 `EventBus` → `GET /api/events`（SSE）推给前端，侧边栏显示进度环。
 SSE 里 `job`、`job-item` 是进度（不编号、不补发）；`changed`、`command`、`auto-change` 带 id（`<启动 id>.<序号>`），断线重连补发最近 500 条。
+
+### 6a. 手机访问（局域网入口，docs/mobile.md 第 2 节）
+设置 →「手机访问」里打开（默认关），另开一个 https 端口（默认 5175，监听所有网卡），本机入口 `127.0.0.1:5174` 不变。
+- 页面和接口在同一个入口上：静态文件不要身份；`/api/` 全部要设备凭证（`Authorization: Bearer`，或网页用的 Cookie `emaki_device`），
+  只有 `GET /api/v1/hello`、配对 `POST /api/v1/pair`、`POST /api/v1/pair/:id/reveal`、`GET /api/v1/pair/:id?wait=` 例外；`GET /api/v1/me` 确认凭证还有效。
+  不挂 AI 助手的路由。配对协议（commit / reveal、6 位校验码、长轮询）写在 `access/pairing.ts` 的文件头。
+- 权限：设备凭证带一组 scope（默认 `DEVICE_DEFAULT_SCOPES`，最多 `DEVICE_GRANTABLE_SCOPES`），由注册表统一拦截（403）；`devices`（管理设备）、
+  `desktop`（在电脑屏幕上弹窗）永远拿不到。
+- 本机页面用的查询和命令（scope `devices`）：`GET /api/access`、`PATCH /api/access`、`POST /api/access/requests/:id/approve | reject`、
+  `PATCH | DELETE /api/devices/:id`、`POST /api/access/tickets`（扫码的一次性口令）。SSE 的 `access` 事件只推给本机入口。
+- 假手机：`npx tsx apps/server/scripts/lan-client.ts discover | pair <主机:端口> | call <方法> <路径> [json] | events`。
 
 ### 7. 图片展示
 - `Thumb`：主色占位（`dominantColor`）→ 缩略图淡入；敏感分级按偏好模糊。
@@ -315,7 +330,7 @@ WD14 tagger（ONNX，`onnxruntime-node`，Windows 上用 DirectML 走显卡）�
 | `EMAKI_DATA_SOURCE` | `sqlite` | `sqlite` 真实图库 / `demo` 演示数据（旧写法 `mock` 也认；也可以 `npm run dev:mock`，即命令行 `--mock`，优先级最高）。演示数据放在 `<数据目录>/demo`，每次启动重建 |
 | `EMAKI_DATA_DIR` | `./data` | 数据库、缩略图缓存、模型文件 |
 | `EMAKI_PORT` | `5174` | 后端端口（前端 dev server 固定 5173，代理 `/api`） |
-| `EMAKI_HOST` | `127.0.0.1` | 只监听本机 |
+| `EMAKI_HOST` | `127.0.0.1` | 只监听本机。手机访问请用设置里的「手机访问」（局域网入口，https + 设备凭证）；把它和 `EMAKI_ALLOWED_HOSTS` 改成局域网地址没有任何身份验证，不推荐 |
 | `EMAKI_LOG_LEVEL` | `info` | Fastify 日志级别 |
 | `EMAKI_MODELS_DIR` | `<dataDir>/models` | 识别模型目录，多个库可共用一份 |
 | `EMAKI_MODEL_SOURCES` | `huggingface,hf-mirror,modelscope` | 模型下载源，并行测速选最快的 |
@@ -337,7 +352,7 @@ WD14 tagger（ONNX，`onnxruntime-node`，Windows 上用 DirectML 走显卡）�
 
 ## 隐私
 
-- 后端只监听 127.0.0.1。
+- 后端只监听 127.0.0.1。打开「手机访问」后另开一个 https 端口监听局域网，所有接口都要你在电脑上批准过的设备凭证（docs/mobile.md 第 2 节）；mDNS 广播电脑名称和标识。
 - 联网行为：下载 tagger 模型、（可选）同步 Danbooru 标签元数据、（可选）按 Pixiv 作品号读公开标签补角色、（可选，默认关）AI 助手。前三项都不上传图片。
 - AI 助手开启后，对话、查询结果和助手查看的图片会发给用户选的模型服务；查出处时，经用户同意可能把去掉元数据的查询图上传到 Yandex、SauceNAO 等搜图网站。见 [ai-assistant.md](ai-assistant.md)。
 - Pixiv 补充会把未识别图片文件名里的作品号发给 pixiv.net。识别后的自动补充由 `tagger.pixiv` 控制，默认关；「未识别」页的「补充 Pixiv 角色」按钮是用户手动点的，开关关着也会跑。
