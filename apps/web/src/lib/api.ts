@@ -84,6 +84,7 @@ import type {
   UpdateArtistLinksBody,
   Work,
 } from '@emaki/shared';
+import { SLOW_REQUEST_MS, suspect } from './connection';
 import { noteResponse } from './deviceAuth';
 import { uuid } from './random';
 
@@ -163,6 +164,8 @@ export async function request<T>(method: string, path: string, body?: unknown): 
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   // 写请求带 operationId（Idempotency-Key）：同一个键重试，服务端返回第一次的结果，不会做两遍
   if (method !== 'GET') headers['Idempotency-Key'] = uuid();
+  // 连不上、或者很久没回应：让连接状态探一下是不是电脑不在了（lib/connection.ts）
+  const slow = setTimeout(suspect, SLOW_REQUEST_MS);
   try {
     res = await fetch(`/api${path}`, {
       method,
@@ -170,10 +173,14 @@ export async function request<T>(method: string, path: string, body?: unknown): 
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
+    suspect();
     throw new ApiRequestError(0, 'network', '连不上后端：可能正在重启，过几秒再试；一直这样的话，看看后端窗口是不是关了');
+  } finally {
+    clearTimeout(slow);
   }
   // 开发模式下 vite 代理连不上后端时回 502 / 503 / 504（后端重启要十几秒）：按「连不上」处理，查询会自动重试
   if (res.status === 502 || res.status === 503 || res.status === 504) {
+    suspect();
     throw new ApiRequestError(res.status, 'network', '后端暂时连不上（可能正在重启），过几秒再试一次');
   }
   const text = await res.text();

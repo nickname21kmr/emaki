@@ -1,7 +1,7 @@
 /**
  * 局域网入口上没有（或没了）设备凭证（docs/mobile.md 2.4、2.6）：手机浏览器打开 https://<电脑地址>:5175/ 时，
  * 所有 /api/ 都是 401 —— `unauthorized`（没批准过）或 `device_revoked`（被电脑移除了）。
- * 任何请求收到这两种 401（lib/api.ts 的 request()；SSE 连不上时 lib/events.ts 再探一次），整页换成「连接到电脑」
+ * 任何请求收到这两种 401（lib/api.ts 的 request()；SSE 断开时 lib/connection.ts 探一次 /api/health），整页换成「连接到电脑」
  * （main.tsx → features/access/PairingPage）。本机入口没有这两种 401，不会出现这个页面。
  *
  * 403 forbidden 另外通知订阅者（onForbidden）：权限可能刚在电脑上被改了，lib/capabilities.ts 据此重新取 GET /api/me。
@@ -29,9 +29,11 @@ export function onForbidden(fn: (path: string) => void): () => void {
 /** 安卓 App 注入的接口（apps/android 的 WebScreen.kt） */
 interface EmakiAppBridge {
   unpaired(code: DeviceAuthLost): void;
+  /** 连不上电脑了（lib/connection.ts）：App 核实后切到原生的「电脑不在线」。老版本的 App 没有 */
+  connectionLost?(): void;
 }
 
-const appBridge = (): EmakiAppBridge | undefined => (globalThis as { EmakiApp?: EmakiAppBridge }).EmakiApp;
+export const appBridge = (): EmakiAppBridge | undefined => (globalThis as { EmakiApp?: EmakiAppBridge }).EmakiApp;
 
 /**
  * 收到一个失败的响应时调用：是那两种 401 就切到配对页（被移除的说法优先，不会被后来的 unauthorized 盖掉），在 App 里交给 App；

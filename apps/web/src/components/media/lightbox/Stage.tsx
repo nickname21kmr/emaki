@@ -5,6 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 're
 import { Spinner, Tooltip } from '@/components/ui';
 import { imageUrl } from '@/lib/api';
 import { cn } from '@/lib/cn';
+import { useImageRetry } from '@/lib/connection';
 import { isTypingTarget } from '@/lib/hotkeys';
 import { clampPan, zoomAround, type ZoomApi, type ZoomBounds } from './useZoomPan';
 import { EASE_OUT } from '@/lib/motion';
@@ -339,7 +340,11 @@ function StageImage({
 }) {
   const [thumbLoaded, setThumbLoaded] = useState(false);
   const [fullLoaded, setFullLoaded] = useState(false);
-  const [fullFailed, setFullFailed] = useState(false);
+  // 电脑断开那一会儿加载失败的，重新连上后换个地址重新加载（lib/connection.ts）
+  const thumb = useImageRetry(imageUrl.thumb(id, 960, meta.modifiedAt));
+  const full = useImageRetry(imageUrl.file(id, meta.modifiedAt));
+  const [failedFull, setFailedFull] = useState<string | null>(null);
+  const fullFailed = failedFull === full.src;
   const fullShown = fullLoaded && !holdFull;
 
   const imgClass = cn(
@@ -357,12 +362,13 @@ function StageImage({
     >
       {placeholder && !fullShown && <img src={imageUrl.thumb(id, placeholder, meta.modifiedAt)} alt="" draggable={false} className={imgClass} />}
       <img
-        src={imageUrl.thumb(id, 960, meta.modifiedAt)}
+        src={thumb.src}
         alt=""
         draggable={false}
         // 看图器里正在看的这张优先：网格里几十张缩略图同时在下载时，它不用排队
         fetchPriority="high"
         onLoad={(e) => showDecoded(e.currentTarget, () => setThumbLoaded(true))}
+        onError={thumb.onError}
         className={cn(
           imgClass,
           // 原图淡入完成后再隐藏缩略图，避免透明 PNG 叠出重影
@@ -373,13 +379,16 @@ function StageImage({
       />
       {!fullFailed && (
         <img
-          src={imageUrl.file(id, meta.modifiedAt)}
+          src={full.src}
           alt={meta.fileName}
           draggable={false}
           decoding="async"
           fetchPriority="high"
           onLoad={(e) => showDecoded(e.currentTarget, () => setFullLoaded(true))}
-          onError={() => setFullFailed(true)}
+          onError={() => {
+            setFailedFull(full.src);
+            full.onError();
+          }}
           className={cn(imgClass, fullShown ? 'opacity-100' : 'opacity-0')}
         />
       )}

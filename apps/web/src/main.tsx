@@ -6,8 +6,10 @@ import { createBrowserRouter, RouterProvider } from 'react-router';
 import { Toaster } from 'sonner';
 import { ThemeSync } from '@/components/layout/ThemeSync';
 import { TooltipProvider } from '@/components/ui';
+import { ConnectionBanner } from '@/features/access/ConnectionBanner';
 import { api, ApiRequestError } from './lib/api';
 import { watchForbidden } from './lib/capabilities';
+import { watchConnection } from './lib/connection';
 import { useDeviceAuth } from './lib/deviceAuth';
 import { meRetry, qk } from './lib/queries';
 import { routes } from './router';
@@ -29,6 +31,8 @@ const queryClient = new QueryClient({
 // 谁在调用（lib/capabilities.ts）：一开始就去问，页面等它的时间最短；请求回 403 forbidden 时重新问（权限可能刚在电脑上改了）
 void queryClient.prefetchQuery({ queryKey: qk.me, queryFn: api.me, retry: meRetry, retryDelay: 500 });
 watchForbidden(queryClient);
+// 连不上电脑：浏览器里顶部提示、App 里交给 App；重新连上时全部重新取（lib/connection.ts）
+watchConnection(queryClient);
 
 const router = createBrowserRouter(routes);
 
@@ -55,6 +59,7 @@ createRoot(document.getElementById('root')!).render(
         <TooltipProvider>
           <ThemeSync />
           <Root />
+          <ConnectionBanner />
           <Toaster
             position="bottom-center"
             offset={24}

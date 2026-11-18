@@ -15,6 +15,7 @@ import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { api, type CommandMeta } from './api';
 import { refreshMe } from './capabilities';
+import { streamBroken, streamOpened } from './connection';
 import { qk } from './queries';
 import { useUndoStore } from './stores';
 
@@ -436,13 +437,20 @@ export function useServerEvents() {
         .catch(() => {});
     };
     const onMessage = (data: string) => handleServerEvent(client, invalidate, JSON.parse(data) as ServerEvent);
-    // 断开期间记下的撤销不知道是哪次启动的，等重新连上再认领
     const close = openEventStream({
-      open: onOpen,
+      // 连上了：断过的话算重新连上（lib/connection.ts：提示收起、全部重新取、失败过的图片重新加载）
+      open: () => {
+        streamOpened();
+        onOpen();
+      },
       message: onMessage,
-      error: () => useUndoStore.getState().setBoot(null),
-      // 连不上：是不是局域网入口上凭证没了（没批准过 / 被电脑移除了）？探一下，401 时 request() 会切到配对页（lib/deviceAuth.ts）
-      closed: () => void api.health().catch(() => {}),
+      // 断开期间记下的撤销不知道是哪次启动的，等重新连上再认领。
+      // 断开、连不上：探一下 /api/health —— 探不通是电脑不在了；401 是局域网入口上凭证没了（没批准过 / 被电脑移除了），
+      // 切到配对页（lib/deviceAuth.ts）
+      error: () => {
+        useUndoStore.getState().setBoot(null);
+        streamBroken();
+      },
     });
     return () => {
       dispose();
