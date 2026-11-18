@@ -1,6 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="canvas">#0D0C0B</color>
-    <color name="sheet">#161412</color>
-    <color name="brand">#EE6242</color>
 </resources>

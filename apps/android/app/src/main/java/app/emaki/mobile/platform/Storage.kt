@@ -17,6 +17,7 @@ import javax.crypto.spec.GCMParameterSpec
 class PrefsStore(private val prefs: SharedPreferences) : KeyValueStore {
     override fun get(key: String): String? = prefs.getString(key, null)
 
+    @Suppress("ApplySharedPref")
     override fun put(values: Map<String, String?>) {
         val e = prefs.edit()
         for ((k, v) in values) if (v == null) e.remove(k) else e.putString(k, v)

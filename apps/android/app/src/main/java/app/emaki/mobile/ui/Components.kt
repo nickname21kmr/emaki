@@ -179,7 +179,7 @@ fun GhostButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier
 
 /** 提示条：warn 是黄底（被移除了），danger 是红底（证书不对） */
 @Composable
-fun Notice(text: String, danger: Boolean = false, modifier: Modifier = Modifier) {
+fun Notice(text: String, modifier: Modifier = Modifier, danger: Boolean = false) {
     val p = LocalPaper.current
     Text(
         text,

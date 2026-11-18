@@ -11,6 +11,7 @@
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
         android:icon="@mipmap/ic_launcher"
         android:label="Emaki"
         android:roundIcon="@mipmap/ic_launcher"
@@ -38,10 +39,9 @@
             </intent-filter>
         </activity>
 
-        <!-- 扫码页：库默认只能横屏，改成跟着手机转 -->
+        <!-- 扫码页：库默认只能横屏，去掉这个限制，跟着手机转 -->
         <activity
             android:name="com.journeyapps.barcodescanner.CaptureActivity"
-            android:screenOrientation="fullSensor"
-            tools:replace="screenOrientation" />
+            tools:remove="android:screenOrientation" />
     </application>
 </manifest>

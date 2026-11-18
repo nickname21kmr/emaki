@@ -14,7 +14,8 @@ import javax.net.ssl.X509TrustManager
 class FingerprintMismatchException(val expected: ByteArray, val actual: ByteArray?) :
     CertificateException("证书不对：期望 ${Hex.encode(expected)}，收到 ${actual?.let(Hex::encode) ?: "（没有证书）"}")
 
-/** 只认一个指纹的 TrustManager：原生请求（OkHttp）都用它 */
+/** 只认一个指纹的 TrustManager：原生请求（OkHttp）都用它。不走系统的证书校验是有意的（自签证书，靠指纹） */
+@Suppress("CustomX509TrustManager")
 class PinnedTrustManager(private val expected: ByteArray) : X509TrustManager {
     init {
         require(expected.size == 32) { "指纹应该是 32 字节" }
@@ -34,6 +35,7 @@ class PinnedTrustManager(private val expected: ByteArray) : X509TrustManager {
 }
 
 /** 第一次连上时用：什么证书都接受，只记下它的指纹（之后同一条流程里的请求都用 PinnedTrustManager 认准它） */
+@Suppress("CustomX509TrustManager")
 class CapturingTrustManager : X509TrustManager {
     @Volatile
     var fingerprint: ByteArray? = null

@@ -250,6 +250,8 @@ private fun createWebView(
             return true
         }
 
+        // 自签证书一定会走到这里：证书 DER 的 sha256 和配对时记下的一样才放行，其余一律 cancel
+        @Suppress("WebViewClientOnReceivedSslError")
         override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
             val cert = error.certificate?.x509Certificate
             val ours = isComputer(Uri.parse(error.url))
