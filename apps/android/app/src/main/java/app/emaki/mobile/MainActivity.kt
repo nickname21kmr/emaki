@@ -2,6 +2,8 @@ package app.emaki.mobile
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
 import android.os.Bundle
 import android.webkit.ValueCallback
@@ -91,6 +93,47 @@ class MainActivity : ComponentActivity() {
                 App(model, fileChooser, ::setBarIcons)
             }
         }
+    }
+
+    // 在前台时才探（docs/mobile.md 3.6）：回到前台核实一次连接，「电脑不在线」页面上自动重连；到后台就停，省电
+    override fun onResume() {
+        super.onResume()
+        model.foreground(true)
+        watchNetwork(true)
+    }
+
+    override fun onPause() {
+        watchNetwork(false)
+        model.foreground(false)
+        super.onPause()
+    }
+
+    /** 手机换了网络（离开 Wi-Fi、换到移动数据）：不等网页报，马上核实 */
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    private fun watchNetwork(on: Boolean) {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        networkCallback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
+        networkCallback = null
+        if (!on) return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            // 注册时系统先报一次现在的网络，那次不算「换了」
+            private var initial = cm.activeNetwork != null
+
+            override fun onAvailable(network: Network) {
+                if (initial) {
+                    initial = false
+                    return
+                }
+                runOnUiThread { model.networkChanged() }
+            }
+
+            override fun onLost(network: Network) {
+                initial = false
+                runOnUiThread { model.networkChanged() }
+            }
+        }
+        runCatching { cm.registerDefaultNetworkCallback(callback) }.onSuccess { networkCallback = callback }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -187,6 +230,7 @@ private fun App(model: AppModel, fileChooser: FileChooser, setBarIcons: (Boolean
                 fileChooser = fileChooser,
                 onPaper = { webPaper = it },
                 onUnpaired = { code -> model.onWebUnpaired(s, code) },
+                onConnectionLost = { model.onWebConnectionLost(s) },
                 onCertWrong = { model.onWebCertWrong(s) },
                 onOffline = { model.onWebOffline(s) },
             )
@@ -194,7 +238,8 @@ private fun App(model: AppModel, fileChooser: FileChooser, setBarIcons: (Boolean
                 s.server,
                 s.certMismatch,
                 s.note,
-                onRetry = model::reconnect,
+                trying = s.trying,
+                onRetry = model::retryNow,
                 onChangeAddress = { dialog = Dialog.ChangeAddress },
                 onForget = { dialog = Dialog.Forget },
             )

@@ -204,11 +204,23 @@ fun OfflineScreen(
     server: SavedServer,
     certMismatch: HostPort?,
     note: String?,
+    trying: Boolean,
     onRetry: () -> Unit,
     onChangeAddress: () -> Unit,
     onForget: () -> Unit,
 ) {
     PaperPage(title = "电脑不在线", subtitle = "「${server.name}」", tag = "page:offline") {
+        // 在前台时一直在自动重连（ConnectionWatch）：电脑回来了（换了地址也行）自己回到主界面
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 14.dp).testTag("offline:auto")) {
+            Spinner(14.dp)
+            Spacer(Modifier.size(10.dp))
+            Text(
+                if (trying) "正在自动重连：正在找「${server.name}」…" else "正在自动重连：每隔几秒试一次，电脑回来了会自己接上",
+                color = LocalPaper.current.fgMuted,
+                fontSize = 13.sp,
+                lineHeight = 19.sp,
+            )
+        }
         Row(verticalAlignment = Alignment.Top) {
             Icon(Glyphs.WifiOff, null, Modifier.size(20.dp).padding(top = 2.dp), tint = LocalPaper.current.fgMuted)
             Spacer(Modifier.size(10.dp))
@@ -225,7 +237,7 @@ fun OfflineScreen(
             Notice("$certMismatch 上有一台设备的证书和这台电脑的对不上，没有连它。", danger = true, modifier = Modifier.padding(top = 12.dp))
         }
         Spacer(Modifier.height(22.dp))
-        PrimaryButton("重试", onRetry, icon = Glyphs.Rotate)
+        PrimaryButton("重试", onRetry, loading = trying, icon = Glyphs.Rotate)
         Spacer(Modifier.height(10.dp))
         SecondaryButton("换地址", onChangeAddress, Modifier.fillMaxWidth(), icon = Glyphs.Keyboard)
         Spacer(Modifier.height(6.dp))

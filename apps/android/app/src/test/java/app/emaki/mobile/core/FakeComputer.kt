@@ -37,6 +37,9 @@ class FakeComputer(
     val requests = ConcurrentHashMap<String, Req>()
     val tickets = ConcurrentHashMap.newKeySet<String>()
 
+    /** hello 晚这么久才回（核实连接的 2 秒超时） */
+    @Volatile var helloDelayMs = 0L
+
     /** 长轮询：前几次回 pending，然后按 decide 决定 */
     @Volatile var pendingPolls = 1
     @Volatile var decide: (Req) -> String = { "approved" }
@@ -76,7 +79,7 @@ class FakeComputer(
                 JSONObject().put("app", "emaki").put("protocol", 1).put("serverId", serverId).put("name", name)
                     .put("version", "0.1.16").put("minAppVersion", minAppVersion).put("port", port)
                     .put("addresses", JSONArray(addresses)).put("pairing", true).put("fingerprint", Hex.encode(fingerprint)),
-            )
+            ).setHeadersDelay(helloDelayMs, java.util.concurrent.TimeUnit.MILLISECONDS)
             r.method == "POST" && p == "/api/v1/pair" -> {
                 if (r.getHeader("content-type")?.startsWith("application/json") != true) return error(415, "bad_request", "请求必须是 JSON")
                 val body = JSONObject(r.body.clone().readUtf8())

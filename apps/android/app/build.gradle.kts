@@ -93,4 +93,5 @@ dependencies {
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.okhttp.tls)
     testImplementation(libs.org.json)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

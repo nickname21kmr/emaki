@@ -32,6 +32,8 @@ junit = { module = "junit:junit", version.ref = "junit" }
 okhttp-mockwebserver = { module = "com.squareup.okhttp3:mockwebserver", version.ref = "okhttp" }
 okhttp-tls = { module = "com.squareup.okhttp3:okhttp-tls", version.ref = "okhttp" }
 org-json = { module = "org.json:json", version.ref = "orgJson" }
+# 自动重连的退避（30 秒一次）用虚拟时间测，不真的等
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

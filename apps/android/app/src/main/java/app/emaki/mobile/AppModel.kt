@@ -11,6 +11,7 @@ import app.emaki.mobile.core.EmakiApi
 import app.emaki.mobile.core.Hello
 import app.emaki.mobile.core.Hex
 import app.emaki.mobile.core.HostPort
+import app.emaki.mobile.core.LinkCheck
 import app.emaki.mobile.core.NotEmakiException
 import app.emaki.mobile.core.PairAttempt
 import app.emaki.mobile.core.PairStatus
@@ -54,8 +55,8 @@ sealed interface Screen {
     /** 主界面：电脑提供的网页。generation 变了就重建 WebView（重新写 Cookie、重新加载） */
     data class Main(val server: SavedServer, val address: HostPort, val generation: Int = 0) : Screen
 
-    /** 哪个地址都没连上 */
-    data class Offline(val server: SavedServer, val certMismatch: HostPort?, val note: String? = null) : Screen
+    /** 哪个地址都没连上。在前台时一直自动重连（ConnectionWatch），trying 是正在试 */
+    data class Offline(val server: SavedServer, val certMismatch: HostPort?, val note: String? = null, val trying: Boolean = false) : Screen
 
     /** 电脑不认这台手机了：revoked 是在电脑上被移除了，否则是电脑不认识这个凭证 */
     data class Removed(val server: SavedServer, val address: HostPort, val revoked: Boolean) : Screen
@@ -85,6 +86,16 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     private val _deviceName = MutableStateFlow(store.deviceName() ?: DeviceInfo.defaultName(app))
     val deviceName: StateFlow<String> = _deviceName.asStateFlow()
+
+    /** 断线处理：主界面上核实连接，「电脑不在线」页面上自动重连（docs/mobile.md 3.6） */
+    private val watch = ConnectionWatch(
+        scope = viewModelScope,
+        screen = _screen,
+        alive = LinkCheck()::alive,
+        reconnect = { saved -> reconnector.run(saved) { discovery.find(saved.serverId) } },
+        toScreen = ::toScreen,
+        log = { Log.i(TAG, it) },
+    )
 
     /** 现在在跑的流程（换页时取消：比如等批准时点「取消」） */
     private var job: Job? = null
@@ -134,16 +145,28 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun applyReconnect(saved: SavedServer, result: ReconnectResult) {
-        _screen.value = when (result) {
-            is ReconnectResult.Online -> {
-                val s = store.connected(result.address, result.hello) ?: saved
-                Screen.Main(s, result.address)
-            }
-            is ReconnectResult.Removed -> Screen.Removed(store.connected(result.address, result.hello) ?: saved, result.address, result.revoked)
-            is ReconnectResult.Upgrade -> Screen.Upgrade(result.minAppVersion)
-            is ReconnectResult.Offline -> Screen.Offline(saved, result.certMismatch)
-        }
+        _screen.value = toScreen(saved, result)
     }
+
+    /** 重连的结果换到哪一页；连上了的话记下这次的地址（可能是新地址）和 hello 给的地址 */
+    private fun toScreen(saved: SavedServer, result: ReconnectResult): Screen = when (result) {
+        is ReconnectResult.Online -> {
+            val s = store.connected(result.address, result.hello) ?: saved
+            Screen.Main(s, result.address)
+        }
+        is ReconnectResult.Removed -> Screen.Removed(store.connected(result.address, result.hello) ?: saved, result.address, result.revoked)
+        is ReconnectResult.Upgrade -> Screen.Upgrade(result.minAppVersion)
+        is ReconnectResult.Offline -> Screen.Offline(saved, result.certMismatch)
+    }
+
+    /** 「电脑不在线」页面上的「重试」：自动重连不等了，马上试 */
+    fun retryNow() = watch.kick()
+
+    /** Activity 的 onResume / onPause：在后台不探 */
+    fun foreground(on: Boolean) = watch.foreground(on)
+
+    /** 手机换了网络（ConnectivityManager 的默认网络变了） */
+    fun networkChanged() = watch.networkChanged()
 
     /** 「换地址」：用保存的凭证试一个手动输入的地址（还是只认这台电脑的证书和标识） */
     fun tryAddress(address: HostPort) {
@@ -317,6 +340,12 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    /**
+     * 网页连不上电脑了（window.EmakiApp.connectionLost，apps/web/src/lib/connection.ts）：原生对现在的地址发 hello 核实，
+     * 通的话什么都不做（误报、短暂掉线），不通换到「电脑不在线」并自动重连
+     */
+    fun onWebConnectionLost(main: Screen.Main) = watch.verify(main, "网页报连不上")
 
     /** 网页的主页面加载失败（电脑关了、换了地址）：重新找 */
     fun onWebOffline(main: Screen.Main) {

@@ -45,6 +45,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import app.emaki.mobile.BuildConfig
+import app.emaki.mobile.core.DeviceCookie
 import app.emaki.mobile.core.HostPort
 import app.emaki.mobile.core.SavedServer
 import app.emaki.mobile.core.fingerprintOf
@@ -55,16 +56,14 @@ fun interface FileChooser {
     fun choose(callback: ValueCallback<Array<Uri>>, params: WebChromeClient.FileChooserParams): Boolean
 }
 
-/** 设备凭证的 Cookie（apps/server/src/access/lan.ts 的 DEVICE_COOKIE） */
-const val DEVICE_COOKIE = "emaki_device"
-
 /**
  * 主界面：全屏 WebView 加载电脑上的网页 `https://<地址>:<端口>/`（docs/mobile.md 3.1）。
  *
- * - 加载前给这个地址写 Cookie `emaki_device=<凭证>`（网页的请求靠它认证）；
+ * - 加载前给这个地址写 Cookie `emaki_device=<凭证>`（网页的请求靠它认证，DeviceCookie）：地址变了 WebView 就重建，Cookie 写到新地址上；
  * - 证书：onReceivedSslError 里比对证书 DER 的 sha256，等于保存的指纹才 proceed，否则 cancel，换到「证书不对」；
  * - 外部链接（不是电脑的地址）用系统浏览器打开；返回键先在网页里后退；支持选文件；
  * - 注入 `window.EmakiApp`：网页遇到 401（设备被移除）时调 `unpaired(code)`，App 回到原生页面，不显示网页自己的配对页；
+ *   网页连不上电脑时调 `connectionLost()`（apps/web/src/lib/connection.ts），App 核实后换到「电脑不在线」；
  *   `paper(color)` 是 App 自己注入的脚本用的，把网页的纸色报上来，状态栏、导航栏跟着换颜色。
  */
 @Composable
@@ -75,6 +74,7 @@ fun WebScreen(
     fileChooser: FileChooser,
     onPaper: (Color) -> Unit,
     onUnpaired: (String) -> Unit,
+    onConnectionLost: () -> Unit,
     onCertWrong: () -> Unit,
     onOffline: () -> Unit,
 ) {
@@ -85,6 +85,7 @@ fun WebScreen(
     var progress by remember { mutableFloatStateOf(0f) }
     // WebView 只建一次，回调要拿到最新的
     val latestUnpaired by rememberUpdatedState(onUnpaired)
+    val latestConnectionLost by rememberUpdatedState(onConnectionLost)
     val latestCertWrong by rememberUpdatedState(onCertWrong)
     val latestOffline by rememberUpdatedState(onOffline)
     val latestPaper by rememberUpdatedState(onPaper)
@@ -110,6 +111,7 @@ fun WebScreen(
                 }
 
                 override fun unpaired(code: String) = latestUnpaired(code)
+                override fun connectionLost() = latestConnectionLost()
                 override fun certWrong() = latestCertWrong()
                 override fun offline() = latestOffline()
             },
@@ -120,10 +122,17 @@ fun WebScreen(
         // 先写 Cookie 再加载
         val cookies = CookieManager.getInstance()
         cookies.setAcceptCookie(true)
-        cookies.setCookie(address.url("/"), "$DEVICE_COOKIE=${server.token}; Secure; HttpOnly; SameSite=Strict; Path=/") {
-            cookies.flush()
-            webView.loadUrl(address.url("/"))
-        }
+        DeviceCookie.open(
+            address,
+            server.token,
+            set = { url, value, done ->
+                cookies.setCookie(url, value) {
+                    cookies.flush()
+                    done()
+                }
+            },
+            load = webView::loadUrl,
+        )
         onDispose {
             webView.stopLoading()
             (webView.parent as? ViewGroup)?.removeView(webView)
@@ -151,6 +160,7 @@ private interface WebEvents {
     fun progress(value: Int)
     fun paper(color: Color)
     fun unpaired(code: String)
+    fun connectionLost()
     fun certWrong()
     fun offline()
 }
@@ -224,6 +234,11 @@ private fun createWebView(
             @JavascriptInterface
             fun unpaired(code: String?) {
                 main.post { events.unpaired(code ?: "unauthorized") }
+            }
+
+            @JavascriptInterface
+            fun connectionLost() {
+                main.post { events.connectionLost() }
             }
 
             @JavascriptInterface
