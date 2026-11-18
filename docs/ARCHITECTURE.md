@@ -26,7 +26,7 @@
 │              ├── core/  JobQueue（io / gpu 两条通道） UndoStack（撤销） EventBus（→ SSE）         │
 │              └── services/  scanner · thumbnails · tagger(ONNX) · pixiv · danbooru · dedupe     │
 └──────────────────────────────────────────────────────────────────────────────────────────────┘
-                     packages/shared  —— 领域类型 + API 契约 + 搜索归一化（前后端共用）
+                     packages/shared  —— 领域类型 + API 契约 + 搜索归一化 + 共用的展示规则（前后端共用）
 ```
 
 ## 目录
@@ -36,7 +36,8 @@ emaki/
 ├─ packages/shared/src/
 │  ├─ domain.ts        领域模型：Work / Character / ImageItem / DuplicateGroup / Exclusion / Settings / Job …
 │  ├─ api.ts           HTTP 契约：每个接口的路径、查询参数、请求体、响应类型
-│  └─ search.ts        searchKey()：「未花 / ミカ / mika / Mika_(Blue_Archive)」归一化，前后端一致
+│  ├─ search.ts        searchKey() / matchesQuery() / searchRank()：「未花 / ミカ / mika / Mika_(Blue_Archive)」归一化，前后端一致
+│  └─ rules.ts         共用的展示规则（P5）：名称和说明、能否不打码显示、在哪个待处理队列、话 / 册、无题、排除标签归一化、剩余时间
 ├─ apps/server/src/
 │  ├─ index.ts         启动：打开引擎（真实图库或演示数据）→ buildApp → listen
 │  ├─ app.ts           Fastify 实例、错误处理、生产模式托管前端
@@ -51,13 +52,15 @@ emaki/
 │  │                   domain/evidence/ 证据、domain/curation/ 归类（含唯一的自动决定规则 decideAuto）、domain/catalog/ 编目（P3）；
 │  │                   domain/library/ 图库与文件、domain/analysis/ 分析（P4a）
 │  ├─ propagation/     变更传播：变化（changes.ts）、反应注册表和三个阶段（registry.ts）、actor、引擎层的反应、排队状态
+│  ├─ readmodel/       读模型（P5）：唯一的命名口径（terms.ts）、汇总接口（summary.ts）
 │  ├─ infra/ports.ts   可替换部件：时钟、回收站、图片文件、图库文件夹、后台任务（扫描 / 模型 / 联网）
 │  ├─ demo/            演示数据（fixtures、种子、占位图）、灌数据、演示用的假部件
 │  └─ db/              迁移（schema.sql 是 v1，migrations/ 是之后的版本）
 └─ apps/web/src/
    ├─ main.tsx / router.tsx
    ├─ styles/index.css          设计 token（亮 / 暗）
-   ├─ lib/                      api · queries · stores · events · format · hotkeys
+   ├─ lib/                      api · queries · stores · events · format · hotkeys · urlPrefs
+   ├─ blocks/                   页面区块注册表（P5）：每页由带稳定 id 的区块组成
    ├─ components/
    │  ├─ ui/                    基础组件（Button / Chip / Segmented / Dialog / Menu …）
    │  ├─ layout/                AppShell · Sidebar · PageHeader · 全局快捷键 · 主题同步
@@ -83,8 +86,24 @@ Node 后端 + 浏览器前端，`npm run dev` 就能用。以后要做成桌面�
 
 ### 4. 服务端数据走 TanStack Query，UI 状态走 zustand
 - 服务端数据只存在 Query 缓存里，失效策略极简：**任何修改成功 / 收到 SSE `library-changed` → 全部 invalidate**。本地后端请求很快，不值得做精细失效。
-- zustand 只放纯 UI 状态：偏好（持久化）、看图器、多选、撤销栈、浮层开关。
-- 页面筛选条件放 URL 查询参数，刷新 / 前进后退都保留。
+- zustand 只放纯 UI 状态：本机偏好（持久化）、看图器、多选、撤销栈、浮层开关。
+- 页面筛选条件放 URL 查询参数，刷新 / 前进后退都保留；会影响查询结果的本机偏好（图库的类型、收拢组图）也写进 URL（见「读模型」）。
+
+### 4a. 读模型：口径只定义一次，界面上的数由服务端算
+（[core-architecture.md](core-architecture.md) 第 6 节，P5 起。）
+
+- **命名口径**只在 `readmodel/terms.ts`：可见（`VISIBLE` / `LIVE_IMAGES`，视图 `v_images`）、计入统计（`COUNTED`，视图 `v_counted_images`）、插画（`ILLUSTRATION`，视图 `v_illust_images`）、
+  待处理队列（`QUEUE` 未识别「插画 · 漫画」、`SHELVED_QUEUE`、`ANNEX_QUEUE`、`ART_QUEUE_SCOPE`、`ART_SCOPE`）、待识别（`UNTAGGED_UNRECOGNIZED`、`TAGGABLE`）、图的作品（视图 `v_image_works`）、
+  在哪个队列（`QUEUE_OF`）。写新查询时从这里引用；`test/architecture/terms.test.ts` 扫描源码，口径模块之外内联这些条件就失败。字面写法（`missing = 0 AND trashed_at IS NULL`、`animated = 1`）
+  不要改成参数：部分索引靠它命中。统计里带子查询的计数写成 `SUM(CASE WHEN … THEN 1 ELSE 0 END)`（条件一定短路）。
+- **图片的状态是三个事实**：`tagged`（这份文件识别过没有）、`characterCount`、`queue`（服务端按 `QUEUE_OF` 算，和 `packages/shared` 的 `triageQueue` 同一条规则，测试逐个组合比对）；
+  另有 `excluded`。没有 `status` 了。
+- **汇总接口** `GET /api/summary`（`readmodel/summary.ts`）：侧栏、首页、命令面板、统计条要显示的计数，和 `/api/stats` 同一遍扫描、同一份缓存。待处理数、已认出比例只在这里定义，
+  前端只展示（`useSummary()`）。和旧数字的对账在 `readmodel/summary.test.ts`。
+- **前后端共用的规则**在 `packages/shared/src/rules.ts`、`search.ts`：服务端的提示文案、网页的显示、选择器的搜索都用同一份（名称和说明、模糊判断、队列、话 / 册、无题、排除标签归一化、剩余时间）。
+- **设置的归属**：图库设置在服务端（`Settings`：图库文件夹、识别、Danbooru、查重、画面筛选、主题），本机偏好在浏览器（`usePrefs`：模糊、底色、密度、行高、视图、收拢、图库类型、阅读器、阅读进度）。
+  判断标准是「换一台设备还该不该一样」。会影响查询结果的本机偏好写进 URL（`lib/urlPrefs.ts`、图库的 `?kind=`）。
+- **页面区块**：`apps/web/src/blocks/registry.ts` 登记每页的区块（稳定 id、标题、用到的公开查询），页面用 `PageBlocks` 按注册表的顺序渲染；以后的个人布局和插件按区块 id 引用。
 
 ### 5. 撤销
 所有修改接口返回 `MutationResult { message, undoToken }`。服务端 `UndoStack` 保存反向操作（最近 50 条，内存）。前端 toast 上有「撤销」按钮，顶栏撤销按钮 / Ctrl+Z 撤销最近一次。这让「排除」「归类」「移到回收站」这类批量操作可以放心大胆地做。

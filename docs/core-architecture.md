@@ -1,6 +1,6 @@
 # Emaki 核心架构设计（v2 草案）
 
-> 状态：D1、D2、D3、D4、D5、D7、D8 已批准（2026-11-17）；D6 和插件挪到下一阶段（第 13 节）。P0、P1、P2、P3、P4 已完成（P3 完成于 2026-11-17，P4 完成于 2026-11-18：P4a 入库与分析收口，P4b 是 D5），见第 12 节。依据的代码快照：fork 的起点（`codex/flexible-collections` @ 13c677d 加上当时未提交的改动，2026-11-17）。
+> 状态：D1、D2、D3、D4、D5、D7、D8 已批准（2026-11-17）；D6 和插件挪到下一阶段（第 13 节）。P0、P1、P2、P3、P4、P5 已完成（P3 完成于 2026-11-17，P4 完成于 2026-11-18：P4a 入库与分析收口，P4b 是 D5；P5 读模型与前端完成于 2026-11-18），见第 12 节。依据的代码快照：fork 的起点（`codex/flexible-collections` @ 13c677d 加上当时未提交的改动，2026-11-17）。
 > 现状盘点和已知的不一致见 [core-architecture-inventory.md](core-architecture-inventory.md)。本文里「附录 #n」指那里的第 n 条。
 
 ## 0. 要解决什么
@@ -301,6 +301,73 @@ P4a 把 `reclassifyByPath` 扩成分析唯一的事务内入口 `analyze`，前�
 - **前后端共用的展示规则放进 `packages/shared`**：类型、分级、任务的名称；「能否不打码显示」的判断（现在有好几套，附录 #30）；搜索文本的归一化（前端没用共享的 `searchKey`）；无题时的显示名（现在有三种写法）。
 - **设置只有一份。** 分清「图库设置」（服务端）和「本机偏好」（浏览器）。现在 `ui.blurSensitive`、`ui.density` 写进服务端却从来没读过，生效的其实是浏览器本地那份（附录 #32）。会影响查询结果的本机偏好要写进 URL 或传给服务端，否则 AI 助手看到的页面和用户看到的不一样。
 
+### 6.1 P5 的实现（2026-11-18）
+
+**命名口径**（附录 #24–#26）：`apps/server/src/readmodel/terms.ts` 是唯一的定义，SQL 片段加上迁移里的视图：
+
+| 口径 | 片段 / 视图 | 含义 |
+| --- | --- | --- |
+| 可见 | `VISIBLE`（要 JOIN `library_roots r`）、`LIVE_IMAGES`（不 JOIN）、视图 `v_images` | 文件在（`FILE_LIVE`：没丢、没进回收站）、所在图库文件夹可见（`ROOT_ACTIVE`）；被排除的也算可见 |
+| 计入统计 | `COUNTED()`、`COUNTED_LIVE`、视图 `v_counted_images` | 可见且没被排除。张数、角色张数、队列都只数它 |
+| 插画 | `ILLUSTRATION`、视图 `v_illust_images` | 角色张数、作品张数、图库默认只看它 |
+| 要找角色的类型 / 别册 | `ART_KINDS_SQL`（插画、漫画）、`ANNEX_KINDS_SQL`（截图、文字、照片、表情） | |
+| 待处理队列（按大类） | `QUEUE`（未识别「插画 · 漫画」）、`SHELVED_QUEUE`（放下的）、`ANNEX_QUEUE`（照片 · 文字等）、`ART_QUEUE_SCOPE`（「插画 · 漫画」的范围，含放下的和已认出的）、`ART_SCOPE`（逐张找角色的图，不看漫画设置：Pixiv 资格用它） | 「插画 · 漫画」= 插画，加上设置开着时的漫画页（`QUEUE_KINDS_SQL`），不在整本处理的合集里（`NOT_IN_BOOK`）、不在漫画区（`IN_COMIC`），没有角色也没归原创（`UNRECOGNIZED`） |
+| 待识别 | `UNTAGGED_UNRECOGNIZED`（队列里还没识别的插画）、`TAGGABLE` / `TAG_PENDING`（识别任务会看的图 / 其中还没识别的：首页识别进度、导入面板、识别任务领图同一份） | |
+| 图的作品 | 视图 `v_image_works`；大查询里用 `imageWorkRows`、`WORK_HAS_ILLUSTRATION`（同口径的三支，直接连底表） | 关联角色的作品 ∪ 手动指定的作品（原创图只算原创）∪ 原创图 →「原创」作品 |
+| 在哪个队列 | `QUEUE_OF`（图片接口的 `queue`） | 和 `packages/shared` 的 `triageQueue` 是同一条规则 |
+
+- 字面写法不变（`missing = 0 AND trashed_at IS NULL`、`animated = 1` 这些部分索引要的条件仍是字面 SQL），统计、未识别、列表、合集、缩略图、识别、画师补跑、Pixiv 资格、排除、标签张数、扫描、导入都引用它。
+- `test/architecture/terms.test.ts` 扫描源码里所有字符串（含模板），口径模块之外出现这些条件的内联写法（可见、图库文件夹可见、有没有角色、整本处理的合集、漫画设置、类型集合、插画、待识别、图的作品、敏感分级）就失败；允许清单只许变短（现在是空的）。
+  `src/readmodel/terms.test.ts` 用一个覆盖所有组合的库（6 类 × 5 种可见性 × 角色 × 原创 × 放下 × 5 种合集 × 漫画区 × 漫画设置）逐个比对 SQL 的 `QUEUE_OF` 和 JS 的 `triageQueue`，以及按索引找的 `BOOK_OR_COMIC_IDS`、`WORK_HAS_ILLUSTRATION` 和逐行判断的等价。
+- 统计的作品数用 `WORK_HAS_ILLUSTRATION`，和作品列表（`imageCount > 0`）同一口径（附录 #26）；放下的张数改成和队列同一个范围（以前不看漫画区）。
+
+**状态拆成三个事实**（附录 #27）：图片接口（`ImageItem`）去掉 `status`，改给 `tagged`（这份文件识别过没有，P4a 起换了文件就是 false）、`characterCount`、
+`queue`（`art` / `shelved` / `annex` / `book` / `null`，服务端按 `QUEUE_OF` 算，列表里单独一条查询，不进排序的列）和 `excluded`。
+看图器信息栏、网格悬停的「未识别」、未识别页改类型时「离不离开队列」都读这些事实；改类型的预判用共用的 `queueAfterKindChange`（关掉漫画设置时漫画不再假定留在队列）。
+列表的旧筛选 `ListImagesQuery.status` 还在（MCP、合集页「只看没认出的」在用），含义写在 `ImageStatus` 上。
+
+**汇总接口** `GET /api/summary`（`LibrarySummary`，`readmodel/summary.ts`，附录 #28、#29）：侧栏、首页、命令面板、统计条、图库标题要显示的计数都从这里来，前端不再加减。
+数都来自统计那一遍扫描，和 `/api/stats` 共用一份缓存。两个唯一的定义：
+
+- **待处理数** `triage.total` = 等你确认的张数 `triage.images`（未识别「插画 · 漫画」里模型看过还没认出的：有建议 + 没认出；漫画页不等识别）+ 成册待整理的条目数 `triage.books`（同一系列算一条）。
+  不含待识别 `triage.waiting`（识别跑完会自动处理）、放下的、照片 · 文字等（别册不催）。侧栏角标、首页「待处理」、命令面板都是它；命令面板「运行识别」旁边写待识别的张数。
+- **已认出比例** `recognition.ratio` = `recognized / scope`。分母 `scope` = 「插画 · 漫画」队列的范围（插画，加上设置开着时的漫画页；不在整本处理的合集里、不在漫画区；含放下的），
+  分子 = 其中有角色或归为原创的。放下的不算认出。以前分母是全部插画 + 漫画，分子只扣队列里的，成册的页、漫画区的页被当成认出（附录 #29）。识别进行中首页写「已看过」（`tagging.seenRatio`）。
+- 对账：`readmodel/summary.test.ts` 在演示数据和契约数据上逐项核对每个数是旧数的哪个加减（例如 `triage.images = unrecognizedCount − untaggedCount = 有建议 + 没认出`，
+  旧分母 − `scope` = 成册、漫画区、关掉设置时的漫画页），并和按口径直接数的结果一致。
+
+**共用的展示规则**（`packages/shared/src/rules.ts`，附录 #30、#38）：类型、分级、任务、合集类型的名称和说明（服务端的提示文案也用）；「能否不打码显示」只有 `blurReason` 一套，
+场合是参数：`browse`（普通浏览：没识别的图按存的分级）、`cautious`（本子的封面和页 `bookBlurContext`、胶片条里还没拿到分级的图：分级不可信就打码）、
+`showcase`（今日一枚、放映、书的底页：开着模糊时只放分级可信的全年龄图，服务端挑图用同一条 `showcaseQuery`）；敏感分级 `SENSITIVE_RATINGS` 服务端的「敏感」主题也用。
+在哪个队列 `triageQueue`；「话 / 册」`CHAPTER_MARKS` / `volumeUnit`（服务端 `parseName` 用同一组）；无题的显示名 `collectionTitle`；排除标签的归一化 `normalizeExclusionTag`
+（服务端做，网页表单只预览）；剩余时间 `formatEta`（任务带结构化的 `etaSeconds`）；组图整理的文件夹名 `organizeFolderName`。搜索的归一化 `searchKey` / `matchesQuery` / `searchRank`，
+网页的作品、画师、组图选择器和命令面板都用它。
+
+**设置的归属**（附录 #32）：按「换一台设备、一个浏览器，这个设置还该不该一样」判断。
+
+| | 放哪 | 包括 |
+| --- | --- | --- |
+| 图库设置 | 服务端 `settings` 表（`Settings`），助手、后台任务读得到 | 图库文件夹、识别、Danbooru、查重、自定义画面、主题（`ui.theme`） |
+| 本机偏好 | 浏览器 `usePrefs`（localStorage） | 模糊（开关、范围、照片、文字、悬停显示）、底色、网格密度和行高、书架 / 列表、封面裁剪、图库看哪些类型、收拢组图、阅读器的单双页和方向、侧栏收起 |
+
+- `ui.blurSensitive`、`ui.density` 删掉：服务端读写都丢掉（接口收到也丢），迁移 039 清掉存着的旧值；设置页、首次使用引导只改本机偏好。
+- 会影响查询结果的本机偏好写进 URL：图库的类型 `?kind=`、收拢组图 `?collapse=`（`lib/urlPrefs.ts`）。URL 没写时把偏好补进去（不多一条历史），URL 写了以 URL 为准，改了同时改偏好和 URL；
+  助手拿到的页面上下文（地址）和用户看到的一致。
+- 阅读进度留在这台设备上：它是浏览痕迹，不是整理决定，不该参与撤销、触发变更传播和刷新，每翻一页写一次库也不值得；只监听本机，多设备接着读不是现在的场景。
+- 主题按这条规则其实更像本机偏好，现在仍存在服务端、前端读它（只有一份来源，不分裂）；搬动牵涉首屏防闪的内联脚本，留到下一阶段做个人布局时一起处理。
+
+**页面区块**（第 10 节要留的接口）：`apps/web/src/blocks/registry.ts` 登记每个页面的区块（稳定 id、标题、用到的公开查询），`PageBlocks` 按注册表的顺序渲染（不加包裹元素，布局和章节编号不变）：
+
+| 页面 | 区块 |
+| --- | --- |
+| 首页 | `home.import` 首次导入 · `home.stats` 统计条 · `home.daily` 今日一枚 · `home.triage` 待处理 · `home.recent` 最近 30 天在收 · `home.latest` 最新入库 · `home.annex` 别册 |
+| 角色总览 | `characters.top` 你最常看的（作用域淡入里）· `characters.recent` 最近 30 天在收 · `characters.works` 作品（总览）· `characters.list` 角色列表（其余视图） |
+| 角色扉页 | `character.hero` 扉页 · `character.related` 常一起出现 · `character.collections` 收录于 · `character.images` 全部插画 |
+| 作品页 | `work.hero` · `work.characters` 角色 · `work.collections` 收录于 · `work.images` 全部插画 |
+| 合集页 | 本子、画集：`collection.head` 封面和版权页 · `collection.cast` 出场角色 · `collection.contents` 目录；组图：`group.head` · `group.cast` · `group.contents` |
+
+`test/architecture/blocks.test.ts` 检查 id 唯一且固定、登记的查询都是服务端真实的 GET 接口或 SSE 事件、每页都按注册表渲染。这一阶段没有配置界面；个人布局（隐藏、换顺序）以后在 `PageBlocks` 里按 id 处理。
+
 ## 7. 后台任务
 
 - 任务只做两类事：产出证据（模型识别、Pixiv、Danbooru、查重比对），或者执行分析（缩略图、分类）。**任务不直接写决定**；决定由反应 `reevaluateAuto` 产生，自动决定和用户操作走同一套规则。
@@ -399,7 +466,7 @@ AI 助手已经能读写图库，还可以让它直接写新页面（比如各�
 **这一阶段要留好的接口**：
 
 - **页面拿数据只走公开的查询**（第 6 节的读模型、第 9 节的查询注册表），改数据只走命令（第 4 节）。页面里不藏业务规则，否则换一个页面就得把规则再抄一遍。
-- **页面由带稳定 id 的区块组成**。按 P5 整理前端时，把现有页面里的章节（比如角色页的「Top / 最近在收 / 作品」）整理成有名字的区块，配置和插件以后按 id 引用它们。
+- **页面由带稳定 id 的区块组成**。按 P5 整理前端时，把现有页面里的章节（比如角色页的「Top / 最近在收 / 作品」）整理成有名字的区块，配置和插件以后按 id 引用它们。P5 已做：区块注册表 `apps/web/src/blocks/registry.ts`（第 6.1 节）。
 - **设置能存个人布局**：区块的显示、隐藏、顺序，以及页面默认视图。第 6 节把「图库设置」和「本机偏好」分清，就是为这个铺路。
 - **查询和命令带权限范围**（第 4.1 节的 `scope`），以后给插件或 AI 生成的页面授权时直接用。
 
@@ -436,7 +503,7 @@ D1：扫描发现和用户替换都走 `recordFileChanged` → `image.fileChange
 删掉 `image_fingerprints`；回收站行的匹配规则；缓存回收；暂停持久化。附录 #10、#11、#23 关闭（`crossEntry.test.ts`、`library.closure.test.ts`、`domain/analysis/cacheGc.test.ts`）。
 **P4b 已完成**（2026-11-18）：D5，类型拆成「类型」+「是否动图」（`images.animated`，迁移 038），实现说明见第 13 节 D5；
 `crossEntry.test.ts`（同一张动图从扫描入库和改类型两条路进来结果一致）、`db/animated.migration.test.ts`、`queries/listImages.test.ts`（动图筛选和查询计划） | M |
-| **P5 读模型与前端** | 命名口径唯一；状态拆成三个事实；汇总接口；共用的展示规则移进 `packages/shared`；前端删掉自带的业务规则；设置只有一份 | 附录 #24–#30、#32、#38 关闭 | M |
+| **P5 读模型与前端**（已完成 2026-11-18） | 命名口径唯一；状态拆成三个事实；汇总接口；共用的展示规则移进 `packages/shared`；前端删掉自带的业务规则；设置只有一份 | 附录 #24–#30、#32、#38 关闭。已完成（实现说明见第 6.1 节）：`readmodel/terms.ts` 唯一的口径和 `test/architecture/terms.test.ts`；图片的 `tagged` / `characterCount` / `queue`；`GET /api/summary`（`readmodel/summary.ts`，对账 `readmodel/summary.test.ts`）；`packages/shared/src/rules.ts`；设置的归属（迁移 039、`lib/urlPrefs.ts`）；页面区块注册表（`test/architecture/blocks.test.ts`）。关闭测试 `test/architecture/readmodel.closure.test.ts`、`src/readmodel/terms.test.ts`、`packages/shared/src/rules.test.ts` | M |
 | **P6 命令注册表与接口** | 命令 / 查询注册表；HTTP 和 MCP 从注册表生成；记录 actor；带类型的事件；合并重复的接口 | `DataSource` 接口删除；附录 #33–#36 关闭 | M |
 | 下一阶段 | 个性化页面与插件（第 10 节），另行设计 | | |
 

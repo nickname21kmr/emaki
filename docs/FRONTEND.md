@@ -122,11 +122,30 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - `components/ui`：`Button` `IconButton`（必须有 label，自带 tooltip）`Chip` `ChipAvatar` `Badge` `CountBubble` `Segmented` `Input` `SearchInput` `Kbd` `Tooltip` `Dialog` `DialogFooter` `Menu*` `Switch` `Slider` `Progress` `Field` `Skeleton` `EmptyState` `ErrorState` `SectionTitle` `Seal` `RollingNumber`；另有 `Emblem.tsx`、`Toast.tsx`（不从 index 导出）
 - `components/layout`：`PageHeader`（右侧自带全局操作：跳到角色 ⌘K / 模糊开关 / 撤销 / 帮助）`PageBody` `useScrollContainer` `ThemeSync` `chapters.ts`
 - `components/media`：`Thumb`（所有插画都用它：主色占位、淡入、按分级 / 类型模糊，`blurBadge` 按尺寸自动选、`revealOnHover` 默认关）`ImageGrid`（虚拟化等高行网格 + 无限滚动 + 多选 + 点开看图器）`CharacterCover`（`variant="overlay"` Top 卡 / `"plate"` 书架图版）`CoverFan`（全站唯一的扇形叠放，1 / 2 / 3 / 5 张）`AvatarTile` + `RecentStrip`（圆头像「卡纸框」+ 图注）`BookPlate`（本子、画集的书）`CollectionsStrip`（「收录于」，只列本子和画集）`CollectionControls`（组图：`GroupBadge` 收拢格的张数角标、`CollapseGroupsMenu` 收拢菜单（自动 / 总是收拢 / 总是逐张）、`AddToGroupDialog` 收进组图；书架上的组图用 `CoverFan`，见 [collections.md](collections.md)）`KindBadge.tsx`（`KindBadge` 类型小印、`AnimatedMark` / `AnimatedGlyph` 动图标记、`TileMarks` 格子左下角那一行）`KindMenu` `CardGrid`
-- `lib/queries.ts`：全部数据 hook；修改一律用 `useMutate(fn)`，自动结果 toast + 撤销 + 刷新
-- `lib/stores.ts`：`usePrefs`（模糊开关与范围、照片 / 文字模糊、悬停显示、底色、书架 / 列表、行高、图库类型、阅读器单双页与翻页方向）`useLightbox`（`show(ids, index)` 打开看图器）`useSelection`（多选）`useOverlays` `useUndoStore`
-- `lib/motion.ts`、`lib/viewTransition.ts`、`lib/kinds.ts`（类型名、印章字、图标；`ANIMATED_LABEL`）、`lib/blur.ts`（模糊判断）、`lib/format.ts`（`formatCount` `formatCompact` `formatBytes` `formatRelative` `formatDate` `RATING_LABEL`）、`lib/hotkeys.ts`（`useHotkey('mod+k', fn)`）、`lib/events.ts`（SSE：`library-changed` 让 query 失效；识别进行中排名类列表最多一分钟重拉一次，未识别列表只标记过期）
+- `lib/queries.ts`：全部数据 hook；修改一律用 `useMutate(fn)`，自动结果 toast + 撤销 + 刷新。界面上显示的计数读 `useSummary()`（汇总接口，见下面「数字从哪来」）
+- `lib/stores.ts`：`usePrefs`（本机偏好：模糊开关与范围、照片 / 文字模糊、悬停显示、底色、网格密度、书架 / 列表、行高、图库类型、收拢组图、阅读器单双页与翻页方向）`useLightbox`（`show(ids, index)` 打开看图器）`useSelection`（多选）`useOverlays` `useUndoStore`
+- `lib/motion.ts`、`lib/viewTransition.ts`、`lib/kinds.ts`（类型的图标、`ANIMATED_LABEL`；类型名、印章字、说明转自 `packages/shared`）、`lib/blur.ts`（转出 `packages/shared` 的 `blurReason`）、`lib/format.ts`（`formatCount` `formatCompact` `formatBytes` `formatRelative` `formatDate`；`RATING_LABEL` 转自 shared）、`lib/hotkeys.ts`（`useHotkey('mod+k', fn)`）、`lib/events.ts`（SSE：`library-changed` 让 query 失效；识别进行中排名类列表最多一分钟重拉一次，未识别列表只标记过期）、`lib/urlPrefs.ts`（收拢组图的模式进 URL）
+- `blocks/`：页面区块注册表 `registry.ts` 和按注册表渲染的 `PageBlocks`（见下面「页面区块」）
 
-页面的筛选状态放在 URL 查询参数（`useSearchParams`），刷新后保留。
+页面的筛选状态放在 URL 查询参数（`useSearchParams`），刷新后保留。会影响列表里有哪些图的本机偏好也写进 URL：图库的类型 `?kind=`、收拢组图 `?collapse=`（没写时把偏好补进去，写了以 URL 为准），AI 助手拿到的页面地址和用户看到的一致。
+
+### 数字从哪来（P5）
+
+- **界面上显示的数都由服务端算**：侧栏、首页（统计条、待处理、别册）、命令面板、图库标题读汇总接口 `useSummary()`（`GET /api/summary`，`LibrarySummary`），组件里不做加减。
+  待处理数 `triage.total` = 等你确认的张数 `triage.images` + 成册待整理 `triage.books`（侧栏角标、首页「待处理」）；待识别 `triage.waiting` 另说（「另有 N 张等待识别」、命令面板「运行识别」旁边）；
+  已认出比例 `recognition.ratio`、已看过 `tagging.seenRatio`、别册张数 `images.annex`。定义见 [core-architecture.md](core-architecture.md) 第 6.1 节。
+- **图片的状态读三个事实**：`characterCount`、`tagged`、`queue`（`art` 未识别「插画 · 漫画」/ `shelved` 放下的 / `annex` 照片 · 文字等 / `book` 在整本处理的合集里 / `null`）。
+  不要从类型、角色自己推「未识别」：网格悬停在 `queue` 是 art / shelved / book 时写「未识别」；看图器信息栏在 art / shelved 时写「未识别」，book 时写书名和页码。
+  未识别页改类型时「这张离不离开列表」用共用的 `queueAfterKindChange`。
+- **共用的规则在 `packages/shared`**（`rules.ts`、`search.ts`）：类型 / 分级 / 任务 / 合集类型的名称和说明、「能否不打码显示」`blurReason`（场合 browse / cautious / showcase：本子的封面和页 `bookBlurContext`，
+  今日一枚、放映、书的底页 showcase）、「话 / 册」`volumeUnit`、无题的显示名 `collectionTitle`、剩余时间 `formatEta`（任务的 `etaSeconds`）、搜索 `matchesQuery` / `searchRank`（选择器都用它）。
+  `Thumb`、`ImageGrid` 的模糊参数是 `rated`（分级可信吗）+ `blurContext`，没有 `forceBlur` 了。
+
+### 页面区块（P5）
+
+首页、角色总览、角色扉页、作品页、合集页由带稳定 id 的区块组成，登记在 `blocks/registry.ts`（id、标题、用到的公开查询），页面用 `<PageBlocks page="…" render={{ 'home.stats': () => … }} />`
+按注册表的顺序渲染（不加包裹元素，章节编号照旧由 CSS 计数器生成）。新加一个章节：先在注册表里登记区块（`<页面>.<区块>`，id 发布后不改），再在页面的 `render` 里给它写渲染函数，
+返回 null 就是这次不显示；区块拿数据只走公开的查询（`test/architecture/blocks.test.ts` 核对）。以后的个人布局（隐藏、换顺序）按 id 在 `PageBlocks` 里处理。
 
 ---
 
@@ -136,9 +155,9 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 
 从上到下（T31）：
 - **首次导入面板** `ImportPanel`：7 天内有文件夹首次导入时显示，扫描、缩略图、识别、查重四步分别判断。
-- **统计条** `StatsStrip`：插画数（只数插画，旁边是 7 天柱状图，今天那根用朱色，下面写「另有 N 张在别册」）、角色数（识别中写「已看过 X%」）、作品数（「收得最多的是『…』」）、总体积；数字用 `RollingNumber`。
+- **统计条** `StatsStrip`：插画数（只数插画，旁边是 7 天柱状图，今天那根用朱色，下面写「另有 N 张在别册」）、角色数（识别中写「已看过 X%」，识别完写「已认出 X% 的插画」：分母是「插画 · 漫画」队列的范围，不含成册的页和漫画区）、作品数（「收得最多的是『…』」）、总体积；数字用 `RollingNumber`，都读 `useSummary()`。
 - **今日一枚** `DailyPlate`（SEL-9）：按日期种子每天抽一张大图版，右侧竖排角色名和图注；开着模糊时只抽已识别的全年龄图；R 换一张；「放映今天的 20 张」。
-- **待处理** `TriageCards`：未识别（另写「另有 N 本待整理」）、重复、能对上 Danbooru 的自建角色，按实际情况自适应，清空的显示「已清空」而不是隐藏。
+- **待处理** `TriageCards`：未识别（等你确认的张数，另写「另有 N 本待整理」，汇总接口的 `triage`）、重复、能对上 Danbooru 的自建角色，按实际情况自适应，清空的显示「已清空」而不是隐藏。
 - **最近 30 天在收**：圆头像行（`AvatarTile`）；30 天内没有新图时换成「收得最多」（`CharacterCover` overlay）。
 - **最新入库** `LatestImages`，**别册** `AnnexIndex`（五类别册各一格，最后一格是「动图 · 筛选」，见「动图」）。
 - 有后台任务时顶部一条 `JobBanner`；空库（`stats.imageCount === 0`）显示首次使用引导 `Onboarding`。
@@ -147,7 +166,7 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 
 目的：浏览全部插画，批量整理。
 
-- **头部**（sticky）：kicker「第一册 · 插画」，标题「图库」，副标题「6,147 张插画 · 另有 2,806 张在别册 →」。下面是类型目次 `KindIndex`（和别册共用）：「全部 N」· 插画 · 别册各类（类型印 + 斜体数字）·（细线）筛选 · 动图（D5，见「动图」），默认只显示插画，选「全部」写进 `usePrefs.galleryKinds`（D2，偏好里不认识的类型会去掉）；分类第一次生效后有一条可关闭的提示。再下面一行工具条：
+- **头部**（sticky）：kicker「第一册 · 插画」，标题「图库」，副标题「6,147 张插画 · 另有 2,806 张在别册 →」。下面是类型目次 `KindIndex`（和别册共用）：「全部 N」· 插画 · 别册各类（类型印 + 斜体数字）·（细线）筛选 · 动图（D5，见「动图」），默认只显示插画，选「全部」写进 `usePrefs.galleryKinds`（D2，偏好里不认识的类型会去掉），当前看的类型一直写在 URL 的 `?kind=` 里（P5）；分类第一次生效后有一条可关闭的提示。再下面一行工具条：
   - 左：`SearchInput`（搜文件名 / 标签，防抖 250ms，写入 `?q=`）
   - 中：筛选 chip——分级（全年龄 / 轻微 / 较敏感 / 限制级，可多选）、方向（竖 / 横 / 方）、动图（`?anim=1`，在当前类型里只看动图）、画面（腿·足 / 胸 / 泳装 / 兽耳 / 女仆·和服 / 多人，T34e）、只看收藏
   - 右：排序 `Menu`（最近添加 / 修改时间 / 文件名 / 体积 / 随机）、升降序、行高 `Slider`（120–400，存 `usePrefs.gridRowHeight`）
@@ -234,7 +253,7 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 2. **识别**：模型（只读文本 + 说明）、运行设备（`Segmented` CPU / GPU(DirectML)）、角色阈值 / 通用标签阈值 / 自动采纳阈值（`Slider` + 数值）、批大小。「对全部未识别图片运行识别」。
 3. **Danbooru**：启用联网同步 `Switch`、用户名、API Key（password 输入，只写不读，显示「已设置」）、上次同步时间、「立即同步」。
 4. **查重**：候选搜索范围 `Slider`（0–16，范围越大，参与原图核对的候选越多）、「重新查找」。
-5. **外观**：主题（跟随系统 / 浅色 / 深色，三张小预览卡片可选）、默认模糊敏感图片、网格密度。
+5. **外观**：主题（跟随系统 / 浅色 / 深色，三张小预览卡片可选；图库设置，存在服务端）、默认模糊敏感图片、网格密度（这两项和底色、封面裁剪一样是本机偏好，只存在这台设备上，P5）。
 6. **后台任务**：最近任务列表（`useJobs` + `useLiveJobs`）：类型、状态 Badge、进度条、开始时间、取消按钮。
 7. **关于**：版本、数据目录、快捷键入口。
 
@@ -283,7 +302,6 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 
 - 看图器：缩略图胶片条（合集阅读器已有，看图器还没有）。
 - 「设为封面」之后可以拖动选择焦点（`coverFocus`）。
-- 设置里的 `ui.blurSensitive` / `ui.density` 只在修改时写进 `usePrefs`，新浏览器首次打开不会读服务端默认值（可以加一个 PrefsSync）。
 - 「最近访问 / 最近使用」的角色存的是 localStorage 快照，角色被合并或删除后不会自动清掉。
 - 网格缩略图很多时会占满浏览器对同一域名的 6 个 HTTP/1.1 连接，看图器的原图要排队（真实后端可以考虑 HTTP/2，或给原图加 `fetchpriority="high"`）。
 
