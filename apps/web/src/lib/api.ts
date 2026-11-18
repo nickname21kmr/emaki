@@ -79,6 +79,7 @@ import type {
   UpdateArtistLinksBody,
   Work,
 } from '@emaki/shared';
+import { uuid } from './random';
 
 /**
  * 写命令的结果附带的说明（命令层放在响应头里，docs/core-architecture.md 第 4.1、9 节）：
@@ -155,7 +156,7 @@ export async function request<T>(method: string, path: string, body?: unknown): 
   const headers: Record<string, string> = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   // 写请求带 operationId（Idempotency-Key）：同一个键重试，服务端返回第一次的结果，不会做两遍
-  if (method !== 'GET') headers['Idempotency-Key'] = crypto.randomUUID();
+  if (method !== 'GET') headers['Idempotency-Key'] = uuid();
   try {
     res = await fetch(`/api${path}`, {
       method,

@@ -12,6 +12,7 @@ import {
 } from '@/lib/format';
 import { CONTENT_KINDS } from '@emaki/shared';
 import { cn } from '@/lib/cn';
+import { copyText } from '@/lib/clipboard';
 import { ANIMATED_LABEL, KIND_GLYPH, KIND_HINT, KIND_LABEL } from '@/lib/kinds';
 import { AnimatedGlyph } from '../KindBadge';
 import { PanelArtists } from './PanelArtists';
@@ -301,8 +302,7 @@ function HeadAvatar({ id, className }: { id: string; className?: string }) {
 function Details({ detail: d, onNavigate }: { detail: ImageDetail; onNavigate: () => void }) {
   const megapixels = (d.width * d.height) / 1_000_000;
   const copyPath = () => {
-    navigator.clipboard
-      .writeText(d.absPath)
+    copyText(d.absPath)
       .then(() => toast('已复制文件路径'))
       .catch(() => toast.error('复制失败'));
   };
