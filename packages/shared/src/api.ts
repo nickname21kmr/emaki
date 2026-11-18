@@ -6,7 +6,7 @@
  * 输入的 zod schema 在 `schemas.ts`），旧地址的兼容层在 `apps/server/src/http/compat.ts`。
  * 改接口时：schemas.ts（输入）→ 这里（响应类型）→ 注册表里的定义 → 前端 api.ts。
  */
-import type { AccessEvent } from './access.ts';
+import type { AccessEvent, MeEvent } from './access.ts';
 import type { ChangedEvent, CommandEvent, HelloEvent, ResyncEvent } from './events.ts';
 import type {
   Character,
@@ -856,6 +856,7 @@ export type LibraryChangedReason = 'mutation' | 'system' | JobKind;
  * GET /api/events —— Server-Sent Events（events.ts）
  * job、job-item 是进度，不补发；changed、command、auto-change 带 id，断线重连按 Last-Event-ID 补发，补不上推 resync。
  * 前端按 changed 的变化类型只刷新相关的查询（lib/events.ts）。
+ * access 只推给本机入口，me 只推给那台设备的局域网连接（access.ts），都不编号、不补发。
  */
 export type ServerEvent =
   | { type: 'job'; job: Job }
@@ -865,7 +866,8 @@ export type ServerEvent =
   | AutoChangeEvent
   | ResyncEvent
   | HelloEvent
-  | AccessEvent;
+  | AccessEvent
+  | MeEvent;
 
 /**
  * 识别胶卷（SEL-19）：tag 任务刚识别完的一张图。每批最多推一条、每秒最多 4 条；

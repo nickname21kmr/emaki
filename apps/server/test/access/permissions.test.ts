@@ -2,7 +2,8 @@
  * 设备的权限（docs/mobile.md 2.5、2.9）：由注册表按 scope 统一拦截，不在各个接口里分别判断。
  *
  * - 默认权限的设备：读得了，能收藏，能撤销；审计记录里执行者是 device:<id>，返回撤销令牌；
- * - 调 settings、organize-files 的命令 403；devices、desktop 的命令和查询无论怎么授权都 403（批准时传这些 scope 400）；
+ * - 读得到设置（settings.get 是 read，页面按设置渲染），改不了；调 settings、organize-files 的命令 403；
+ *   devices、desktop 的命令和查询无论怎么授权都 403（批准时传这些 scope 400）；
  * - 拦截在校验输入之前；改了权限下一个请求就生效；本机入口、助手、后台任务没有 grant，不受影响。
  */
 import {
@@ -120,23 +121,38 @@ describe('默认权限的设备', () => {
     expect(favorite()).toBe(0);
   });
 
-  it('设置、移动文件、回收站（单独的地址、通用入口、兼容层）都 403', async () => {
+  it('读得到设置（主题、首页、看图器要按它渲染），里面没有 Danbooru 的 API Key；改不了', async () => {
+    const { auth } = makeDevice(f.ds);
+    await f.ds.registry.execute('settings.update', { danbooruApiKey: 'secret-key-123' });
+    for (const url of ['/api/settings', '/api/queries/settings.get']) {
+      const res = await f.app.inject({ method: 'GET', url, headers: auth });
+      expect([url, res.statusCode]).toEqual([url, 200]);
+      expect(res.json()).toMatchObject({ ui: { theme: expect.any(String) }, danbooru: { hasApiKey: true }, libraryRoots: expect.any(Array) });
+      expect(res.body).not.toContain('secret-key-123');
+    }
+    const patch = await f.app.inject({ method: 'PATCH', url: '/api/settings', headers: auth, payload: { ui: { theme: 'dark' } } });
+    expect([patch.statusCode, patch.json().code]).toEqual([403, 'forbidden']);
+    // 改设置以外的 settings 查询照旧要 settings
+    expect((await f.app.inject({ method: 'GET', url: '/api/settings/source-mode?mode=broad', headers: auth })).statusCode).toBe(403);
+    await f.ds.registry.execute('settings.update', { danbooruApiKey: '' });
+  });
+
+  it('改设置、移动文件、回收站（单独的地址、通用入口、兼容层）都 403', async () => {
     const { auth } = makeDevice(f.ds);
     const i1 = f.id('i1');
     const calls = [
-      { method: 'GET', url: '/api/settings' },
       { method: 'PATCH', url: '/api/settings', payload: { ui: {} } },
       { method: 'POST', url: '/api/images/move', payload: { ids: [i1], rootId: f.id('root1'), folder: 'x' } },
       { method: 'POST', url: '/api/commands/library.trash', payload: { ids: [i1] } },
       { method: 'POST', url: '/api/images/bulk', payload: { ids: [i1], action: { type: 'trash' } } },
       { method: 'POST', url: '/api/jobs', payload: { kind: 'scan' } },
-      { method: 'GET', url: '/api/queries/settings.get' },
+      { method: 'POST', url: '/api/commands/settings.update', payload: { ui: {} } },
     ] as const;
     for (const c of calls) {
       const res = await f.app.inject({ ...c, headers: auth });
       expect([c.url, res.statusCode, res.json().code]).toEqual([c.url, 403, 'forbidden']);
     }
-    const settings = await f.app.inject({ method: 'GET', url: '/api/settings', headers: auth });
+    const settings = await f.app.inject({ method: 'PATCH', url: '/api/settings', headers: auth, payload: { ui: {} } });
     expect(settings.json().error).toBe('这台设备没有「图库设置、图库文件夹、识别方式」的权限');
   });
 
@@ -150,7 +166,8 @@ describe('默认权限的设备', () => {
     const asReader = <T,>(fn: () => Promise<T>) => runAsDevice('x', ['read'], fn);
     const forbidden = { statusCode: 403 };
     await expect(asReader(() => f.ds.registry.execute('settings.update', { nonsense: true }))).rejects.toMatchObject(forbidden);
-    await expect(asReader(() => f.ds.registry.query('settings.get'))).rejects.toMatchObject(forbidden);
+    await expect(asReader(() => f.ds.registry.query('settings.sourceModePreview', { mode: 'broad' }))).rejects.toMatchObject(forbidden);
+    await expect(asReader(() => f.ds.registry.query('settings.get'))).resolves.toBeTruthy();
     const calls = [
       { name: 'curation.setFavorite', input: {} },
       { name: 'curation.setRating', input: {} },
@@ -166,7 +183,8 @@ describe('默认权限的设备', () => {
     expect((await fav()).statusCode).toBe(200);
     await f.ds.registry.execute('devices.update', { id: device.id, scopes: ['read', 'settings'] });
     expect((await fav()).statusCode).toBe(403);
-    expect((await f.app.inject({ method: 'GET', url: '/api/settings', headers: auth })).statusCode).toBe(200);
+    const theme = { method: 'PATCH', url: '/api/settings', headers: auth, payload: { ui: { theme: 'system' } } } as const;
+    expect((await f.app.inject(theme)).statusCode).toBe(200);
   });
 });
 

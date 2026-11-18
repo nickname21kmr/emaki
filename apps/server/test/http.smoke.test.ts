@@ -9,6 +9,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
+import { SCOPES } from '@emaki/shared';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { EventBus } from '../src/core/events.ts';
@@ -520,6 +521,12 @@ describe('设置、文件夹、任务、SSE、撤销（注册表：settings.*、
     expect(json.dataSource).toBe('sqlite');
     // 助手关着时启动不建目录、不写文件
     expect(existsSync(path.join(dataState.dir, 'assistant'))).toBe(false);
+  });
+
+  route('GET /api/me', async () => {
+    // 本机入口：local，全部范围（局域网入口上的见 test/access/lan.test.ts）
+    const { status, json } = await call('GET', '/api/me');
+    expect([status, json]).toEqual([200, { kind: 'local', scopes: Object.keys(SCOPES) }]);
   });
 
   route('GET /api/settings/source-mode', async () => {

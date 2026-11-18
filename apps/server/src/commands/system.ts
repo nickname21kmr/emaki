@@ -375,7 +375,9 @@ export const systemQueries = [
     name: 'settings.get',
     summary: '图库设置和图库文件夹',
     input: EmptyInput,
-    scope: 'settings',
+    // 读是 read、改是 settings（docs/mobile.md 2.5）：主题、首页、看图器、移动对话框都要按设置渲染，手机默认也读得到。
+    // 这里没有秘密：Danbooru 的 API Key 只给 hasApiKey（datasource/sqlite/settings.ts）
+    scope: 'read',
     http: [{ method: 'GET', path: '/api/settings' }],
     run: (e) => readSettingsView(e.ctx),
   }),

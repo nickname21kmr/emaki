@@ -8,7 +8,8 @@
  * - 认证通过后在 runAsDevice 里处理请求：actor 是 device:<id>，注册表按这台设备的权限范围拦截（commands/registry.ts）；
  * - 只接受局域网里的地址（isLanAddress：私有地址、运营商 NAT / Tailscale、链路本地、回环），公网来的一律 403；
  * - 写请求照样核对 Origin（必须是 https://<Host>）和 sec-fetch-site，POST 必须是 JSON；
- * - 不挂 AI 助手的路由（/api/assistant/* 里有外部 MCP 的令牌）；SSE 不推 access 事件，设备被撤销时立即断开它的连接。
+ * - 不挂 AI 助手的路由（/api/assistant/* 里有外部 MCP 的令牌）；SSE 不推 access 事件，设备被撤销时立即断开它的连接，
+ *   改了它的名称、权限时给它的连接推一条 me（网页按新权限重新显示入口）。
  *
  * 判断「要不要凭证」看匹配到的路由（req.routeOptions.url，是路由表里的模板，不受 '/%61pi/…' 这种编码影响）；
  * 没匹配到路由的（404、前端路由回落）看解码后的路径是不是 /api 开头。
@@ -23,7 +24,6 @@ import { createFastify, mountShared, serveWeb } from '../app.ts';
 import type { Engine } from '../commands/registry.ts';
 import { config } from '../config.ts';
 import type { EventBus } from '../core/events.ts';
-import { HttpError } from '../http/errors.ts';
 import { parse } from '../http/validate.ts';
 import { currentActor, deviceIdOf, runAsDevice, runCall } from '../propagation/actor.ts';
 import type { Access, LanController, LanState } from './access.ts';
@@ -135,11 +135,19 @@ export async function buildLanApp(engine: Engine, bus: EventBus, access: Access,
   mountShared(app, engine, bus, {
     // 配对请求、校验码只给本机页面；command 事件（电脑上的操作和它们的撤销令牌）手机上的页面用不到，也不给
     skip: (e) => e.type === 'access' || e.type === 'command',
-    watch: (close) => {
+    // 撤销时断开这台设备的连接；改了它的名称、权限时只给它推一条 me（别的设备、本机页面都收不到），网页重新取 GET /api/me
+    watch: ({ close, send }) => {
       const id = deviceIdOf(currentActor());
-      return access.devices.onRevoked((revoked) => {
+      const offRevoked = access.devices.onRevoked((revoked) => {
         if (revoked === id) close();
       });
+      const offUpdated = access.devices.onUpdated((updated) => {
+        if (updated === id) send({ type: 'me' });
+      });
+      return () => {
+        offRevoked();
+        offUpdated();
+      };
     },
   });
   lanRoutes(app, access);
@@ -151,12 +159,8 @@ export async function buildLanApp(engine: Engine, bus: EventBus, access: Access,
 function lanRoutes(app: FastifyInstance, access: Access): void {
   app.get('/api/v1/hello', () => access.hello());
 
-  app.get('/api/v1/me', (): LanMe => {
-    const id = deviceIdOf(currentActor());
-    const d = id ? access.devices.get(id) : null;
-    if (!d) throw new HttpError(401, 'unauthorized', '需要先在电脑上批准这台设备');
-    return { deviceId: d.id, name: d.name, scopes: d.scopes };
-  });
+  // App 用；网页用两个入口都有的 GET /api/me（app.ts），实现是同一个
+  app.get('/api/v1/me', (): LanMe => access.deviceMe());
 
   const withCookie = <T extends PairStartResponse | PairStatus>(req: FastifyRequest, reply: FastifyReply, result: T): T => {
     if ('status' in result && result.status === 'approved' && (req.query as { cookie?: string }).cookie === '1')

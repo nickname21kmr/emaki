@@ -4,7 +4,7 @@
  * 最后推一条 hello（这次启动的 id、现在最后一条的 id）。
  *
  * 两个入口共用（app.ts、access/lan.ts）：局域网入口不推 access 事件（配对请求、校验码只给本机页面），
- * 设备被撤销时立即断开它的连接（options.watch）。
+ * 设备被撤销时立即断开它的连接、改了权限时只给它推一条 me（options.watch）。
  */
 import type { ServerEvent } from '@emaki/shared';
 import type { FastifyInstance } from 'fastify';
@@ -13,8 +13,11 @@ import type { EventBus } from '../core/events.ts';
 export interface EventRouteOptions {
   /** 不推给这个入口的事件 */
   skip?: (event: ServerEvent) => boolean;
-  /** 连接建立时调用（在请求的上下文里，能拿到 actor）：close() 立即断开这个连接。返回连接关掉时的清理函数 */
-  watch?: (close: () => void) => () => void;
+  /**
+   * 连接建立时调用（在请求的上下文里，能拿到 actor）：close() 立即断开这个连接，send() 只给这个连接推一条不编号的事件。
+   * 返回连接关掉时的清理函数
+   */
+  watch?: (conn: { close: () => void; send: (event: ServerEvent) => void }) => () => void;
 }
 
 export function eventRoutes(app: FastifyInstance, bus: EventBus, options: EventRouteOptions = {}): void {
@@ -56,9 +59,14 @@ export function eventRoutes(app: FastifyInstance, bus: EventBus, options: EventR
       unwatch?.();
     };
     // 被入口要求断开（设备撤销了）：先停止推送再结束响应
-    unwatch = options.watch?.(() => {
-      cleanup();
-      res.end();
+    unwatch = options.watch?.({
+      close: () => {
+        cleanup();
+        res.end();
+      },
+      send: (event) => {
+        if (!done) send(event);
+      },
     });
     req.raw.on('close', cleanup);
   });

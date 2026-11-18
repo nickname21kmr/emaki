@@ -197,13 +197,21 @@ describe('MCP 工具从注册表生成（附录 #35）', () => {
     for (const c of assistantCommands(demo.ds.registry)) expect(schema(toolName(c.name)).required, c.name).toContain('operationId');
   });
 
-  it('read_library 只读注册表里 scope 允许的查询（设置读不到），read_media 走查询 images.original', async () => {
+  it('read_library 只读注册表里 scope 允许的查询，read_media 走查询 images.original', async () => {
     const description = tools.find((t) => t.name === 'read_library')!.description!;
     expect(description).toContain('/api/images/:id');
     expect(description).toContain('/api/jobs');
-    expect(description).not.toContain('/api/settings');
-    const denied: any = await client.callTool({ name: 'read_library', arguments: { path: '/api/settings' } });
-    expect(denied.isError).toBe(true);
+    // 读设置（settings.get）是 read（docs/mobile.md 2.5：手机要按设置渲染），助手也读得到；里面没有秘密，Danbooru 的 Key 只有 hasApiKey。
+    // 其余 settings 的查询（识别方式的影响、可补采纳、模型列表、联网检查）仍然读不到
+    expect(description).toContain('/api/settings（');
+    const settings: any = await client.callTool({ name: 'read_library', arguments: { path: '/api/settings' } });
+    expect(settings.isError).toBeFalsy();
+    expect(JSON.parse(settings.content[0].text).danbooru).toEqual(expect.objectContaining({ hasApiKey: expect.any(Boolean) }));
+    expect(JSON.parse(settings.content[0].text).danbooru).not.toHaveProperty('apiKey');
+    for (const path of ['/api/settings/source-mode?mode=broad', '/api/tagger/promotable', '/api/tagger/models', '/api/system/network-check']) {
+      const denied: any = await client.callTool({ name: 'read_library', arguments: { path } });
+      expect([path, denied.isError]).toEqual([path, true]);
+    }
   });
 
   it('工具清单和 schema 的快照：助手的能力变了要看得见（改了就更新快照并在评审里说明）', async () => {

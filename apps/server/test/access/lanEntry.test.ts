@@ -3,7 +3,8 @@
  * access.configure 改了立即生效（关掉旧的、按新端口开），监听失败记进状态、不抛错。
  * 监听和广播换成记录调用的假实现（infra/ports.ts 的 lan）。
  *
- * 最后一条在随机端口上真的起 https：手机看到的证书指纹就是状态里的那个；设备被撤销时它开着的事件连接立即断开，事件里没有 access。
+ * 最后两条在随机端口上真的起 https：手机看到的证书指纹就是状态里的那个；设备被撤销时它开着的事件连接立即断开，事件里没有 access；
+ * 改了一台设备的名称、权限，只有它的事件连接收到 me（别的设备、本机页面都收不到）。
  */
 import type { AccessStatus, ServerEvent } from '@emaki/shared';
 import { createHash } from 'node:crypto';
@@ -43,6 +44,22 @@ function fakeNetwork() {
     failNext: (code: string) => void (fail = code),
     advertiseError: (msg: string) => errors.at(-1)!(new Error(msg)),
   };
+}
+
+/** 在真的 https 端口上连 /api/events：收到 hello 之后返回（text() 是到目前为止收到的全部） */
+function openEvents(port: number, headers: Record<string, string>) {
+  return new Promise<{ text: () => string; ended: Promise<void>; close: () => void }>((resolve, reject) => {
+    const req = https.get({ host: '127.0.0.1', port, path: '/api/events', headers, rejectUnauthorized: false }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      const ended = new Promise<void>((done) => res.on('end', done).on('close', done));
+      res.on('data', (c: string) => {
+        text += c;
+        if (text.includes('"type":"hello"')) resolve({ text: () => text, ended, close: () => req.destroy() });
+      });
+    });
+    req.on('error', reject);
+  });
 }
 
 let f: LanFixture;
@@ -154,21 +171,8 @@ describe('真的起 https（随机端口）', () => {
 
       const { device, auth } = makeDevice(f.ds);
       const other = makeDevice(f.ds, undefined, '另一台');
-      const open = (headers: Record<string, string>) =>
-        new Promise<{ text: () => string; ended: Promise<void> }>((resolve, reject) => {
-          const req = https.get({ host: '127.0.0.1', port, path: '/api/events', headers, rejectUnauthorized: false }, (res) => {
-            let text = '';
-            res.setEncoding('utf8');
-            const ended = new Promise<void>((done) => res.on('end', done).on('close', done));
-            res.on('data', (c: string) => {
-              text += c;
-              if (text.includes('"type":"hello"')) resolve({ text: () => text, ended });
-            });
-          });
-          req.on('error', reject);
-        });
-      const mine = await open(auth);
-      const theirs = await open(other.auth);
+      const mine = await openEvents(port, auth);
+      const theirs = await openEvents(port, other.auth);
       // 本机页面的事件不推给手机；领域变化照推
       f.ds.access.notify('changed');
       f.bus.publish({ type: 'changed', changes: ['curation.favoriteChanged'], reason: 'mutation', actor: 'user' });
@@ -194,6 +198,43 @@ describe('真的起 https（随机端口）', () => {
         }),
       );
       expect(again).toBe(401);
+      theirs.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('改了一台设备的名称或权限：只有它开着的事件连接收到 me，别的设备、本机页面收不到；之后 /api/me 是新的范围', async () => {
+    const app = await buildLanApp(f.ds, f.bus, f.ds.access, f.tls, { webDist: f.webDist });
+    try {
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const { port } = app.server.address() as AddressInfo;
+      const { device, auth } = makeDevice(f.ds);
+      const other = makeDevice(f.ds, undefined, '另一台');
+      const mine = await openEvents(port, auth);
+      const theirs = await openEvents(port, other.auth);
+      const count = (c: { text: () => string }) => c.text().split('"type":"me"').length - 1;
+
+      await f.ds.registry.execute('devices.update', { id: device.id, scopes: ['read', 'curate', 'settings'] });
+      await expect.poll(() => count(mine)).toBe(1);
+      await f.ds.registry.execute('devices.update', { id: device.id, name: '书房的平板' });
+      await expect.poll(() => count(mine)).toBe(2);
+      // 别的设备、本机页面（总线上的订阅者 = 本机入口的 SSE）都没有
+      f.bus.publish({ type: 'changed', changes: ['curation.ratingChanged'], reason: 'mutation', actor: 'user' });
+      await expect.poll(() => theirs.text()).toContain('curation.ratingChanged');
+      expect(count(theirs)).toBe(0);
+      expect(events.some((e) => e.type === 'me')).toBe(false);
+      // me 不编号：不带 id 行
+      expect(mine.text()).toContain('\ndata: {"type":"me"}\n\n');
+      expect(mine.text()).not.toMatch(/id: [^\n]+\ndata: \{"type":"me"\}/);
+
+      const me = await app.inject({ method: 'GET', url: '/api/me', headers: auth });
+      expect(me.json()).toEqual({ kind: 'device', deviceId: device.id, name: '书房的平板', scopes: ['read', 'curate', 'settings'] });
+      // 连接关掉以后不再订阅（不会往关掉的连接上写）
+      mine.close();
+      theirs.close();
+      await mine.ended;
+      await expect.poll(() => f.ds.access.devices['updatedListeners'].size).toBe(0);
     } finally {
       await app.close();
     }

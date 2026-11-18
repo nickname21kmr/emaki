@@ -6,7 +6,7 @@
  *   不认识的凭证不查库（局域网里随便发来的凭证不会打到数据库上）。
  * - 撤销只写 revoked_at、不删行：审计记录里的 device:<id> 还要显示名字；被撤销的凭证回 device_revoked（App 显示「已被电脑移除」）。
  * - 最后访问时间和地址：同一台设备至少隔 60 秒才写一次库。
- * - 撤销时通知订阅者：局域网入口据此立即断开这台设备开着的事件连接。
+ * - 撤销时通知订阅者：局域网入口据此立即断开这台设备开着的事件连接；改名称、权限时也通知，局域网入口给它的事件连接推一条 me。
  */
 import type { DeviceInfo, Scope } from '@emaki/shared';
 import { createHash, randomBytes } from 'node:crypto';
@@ -62,6 +62,7 @@ export class Devices {
   /** 设备 id → 上次写库的时间（毫秒） */
   private readonly seenWritten = new Map<string, number>();
   private readonly revokedListeners = new Set<(deviceId: string) => void>();
+  private readonly updatedListeners = new Set<(deviceId: string) => void>();
 
   constructor(
     private readonly db: Db,
@@ -137,13 +138,14 @@ export class Devices {
     return true;
   }
 
-  /** 改名称、权限（下一个请求就按新的权限） */
+  /** 改名称、权限（下一个请求就按新的权限；这台设备开着的事件连接收到一条 me） */
   update(id: string, patch: { name?: string; scopes?: readonly Scope[] }): Device | null {
     const e = this.entry(id);
     if (!e || e.device.revokedAt) return null;
     if (patch.name !== undefined) e.device.name = patch.name;
     if (patch.scopes !== undefined) e.device.scopes = [...patch.scopes];
     this.db.prepare('UPDATE devices SET name = ?, scopes = ? WHERE id = ?').run(e.device.name, JSON.stringify(e.device.scopes), id);
+    for (const fn of this.updatedListeners) fn(id);
     return e.device;
   }
 
@@ -178,5 +180,11 @@ export class Devices {
   onRevoked(fn: (deviceId: string) => void): () => void {
     this.revokedListeners.add(fn);
     return () => this.revokedListeners.delete(fn);
+  }
+
+  /** 订阅改名称、权限（局域网入口给这台设备的事件连接推 me 用）。返回取消订阅 */
+  onUpdated(fn: (deviceId: string) => void): () => void {
+    this.updatedListeners.add(fn);
+    return () => this.updatedListeners.delete(fn);
   }
 }

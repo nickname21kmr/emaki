@@ -106,11 +106,24 @@ export interface AccessStatus {
   devices: DeviceInfo[];
 }
 
-/** GET /api/v1/me：凭证还有效时返回这台设备 */
+/** GET /api/v1/me：凭证还有效时返回这台设备（App 用；scopes 是真正生效的范围，同 Me） */
 export interface LanMe {
   deviceId: string;
   name: string;
   scopes: Scope[];
+}
+
+/**
+ * GET /api/me：谁在调用（两个入口都有）。网页按它隐藏用不了的入口（apps/web/src/lib/capabilities.ts）。
+ * - 本机入口：local，scopes 是全部范围；
+ * - 局域网入口：这台设备，scopes 是真正生效的范围（存下的权限和可授予范围的交集，和注册表拦截用的是同一份）。
+ * 电脑上改了这台设备的名称或权限时，局域网入口只给它开着的事件连接推一条 MeEvent，网页重新取。
+ */
+export type Me = { kind: 'local'; scopes: Scope[] } | ({ kind: 'device' } & LanMe);
+
+/** SSE 事件（只推给那台设备的局域网连接）：电脑上改了它的名称或权限，网页重新取 GET /api/me。不编号、不补发 */
+export interface MeEvent {
+  type: 'me';
 }
 
 /** POST /api/access/tickets：二维码的内容（emaki://pair?…）和过期时间 */

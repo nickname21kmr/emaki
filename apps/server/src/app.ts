@@ -1,4 +1,4 @@
-import type { HealthResponse } from '@emaki/shared';
+import type { HealthResponse, Me } from '@emaki/shared';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import { existsSync } from 'node:fs';
@@ -42,6 +42,9 @@ export function mountShared(app: FastifyInstance, engine: SqliteDataSource, bus:
 
   registryRoutes(app, engine.registry);
   eventRoutes(app, bus, events);
+
+  // 谁在调用（docs/mobile.md 2.5）：本机入口是 local、全部范围；局域网入口是这台设备和它真正生效的范围。网页按它隐藏用不了的入口
+  app.get('/api/me', (): Me => engine.access.me());
 
   app.get(
     '/api/health',
