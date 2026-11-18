@@ -41,6 +41,7 @@ import { useLiveJobs } from './events';
 import { modKeyLabel } from './hotkeys';
 import { usePrefs, useUndoReveal, useUndoStore, type CollapseMode, type UndoEntry, type UndoFocus } from './stores';
 import { confirmText, madeHere, needsConfirm } from './undoPlace';
+import { useCollapseMode } from './urlPrefs';
 
 export const qk = {
   stats: ['stats'] as const,
@@ -155,8 +156,8 @@ export const collapseParam = (mode: CollapseMode): boolean | 'auto' => (mode ===
 
 /** 图片列表（无限滚动），配合 components/media/ImageGrid 使用 */
 export const useImagesInfinite = (q: Omit<ListImagesQuery, 'cursor'>) => {
-  // 收拢组图（全局偏好）：看一本合集的页时不收拢；auto 交给后端按结果张数决定
-  const mode = usePrefs((s) => s.collapseMode);
+  // 收拢组图（本机偏好，URL 里写了按 URL）：看一本合集的页时不收拢；auto 交给后端按结果张数决定
+  const mode = useCollapseMode();
   const query = { ...q, collapseCollections: q.collapseCollections ?? (q.collectionId ? false : collapseParam(mode)) };
   return useInfiniteQuery({
     queryKey: qk.images(query),

@@ -79,14 +79,8 @@ export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus
           .optional(),
         danbooru: z.object({ enabled: z.boolean(), username: z.string() }).partial().optional(),
         dedupe: z.object({ hammingThreshold: z.number().int().min(0).max(64) }).partial().optional(),
-        ui: z
-          .object({
-            theme: z.enum(['system', 'light', 'dark']),
-            blurSensitive: z.boolean(),
-            density: z.enum(['comfortable', 'compact']),
-          })
-          .partial()
-          .optional(),
+        // blurSensitive、density 是本机偏好（P5，附录 #32），收到也丢掉
+        ui: z.object({ theme: z.enum(['system', 'light', 'dark']) }).partial().optional(),
         browse: z
           .object({
             customThemes: z

@@ -511,7 +511,7 @@ export function buildDemoDb(now = Date.now()): DemoDb {
     },
     danbooru: { enabled: true, username: '', hasApiKey: false, lastSyncAt: new Date(now - 5 * DAY).toISOString() },
     dedupe: { hammingThreshold: 8, lastRunAt: new Date(now - 2 * 3600_000).toISOString() },
-    ui: { theme: 'system', blurSensitive: true, density: 'comfortable' },
+    ui: { theme: 'system' },
     browse: { customThemes: [] },
   };
 

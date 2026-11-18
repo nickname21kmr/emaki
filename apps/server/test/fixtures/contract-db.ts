@@ -233,7 +233,7 @@ export function buildContractDb(now: number): DemoDb {
     },
     danbooru: { enabled: false, username: '', hasApiKey: false, lastSyncAt: null },
     dedupe: { hammingThreshold: 8, lastRunAt: null },
-    ui: { theme: 'system', blurSensitive: true, density: 'comfortable' },
+    ui: { theme: 'system' },
     browse: { customThemes: [] },
   };
 

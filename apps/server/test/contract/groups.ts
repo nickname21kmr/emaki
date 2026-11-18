@@ -39,7 +39,8 @@ export function settingsContract(make: ContractFactory) {
       // 自动查 Pixiv 会联网，默认关
       expect(s.tagger.pixiv).toBe(false);
       expect(s.danbooru.hasApiKey).toBe(false);
-      expect(s.ui).toEqual({ theme: 'system', blurSensitive: true, density: 'comfortable' });
+      // 模糊开关、网格密度是本机偏好，不在图库设置里（P5，附录 #32）
+      expect(s.ui).toEqual({ theme: 'system' });
     });
 
     it('调低自动采纳阈值：保存时不动已有建议，显示达标张数，点按钮才归到角色（可撤销）', async () => {
@@ -92,7 +93,7 @@ export function settingsContract(make: ContractFactory) {
     it('修改设置：深合并，API key 只写不读', async () => {
       const e = env();
       const s = await e.ds.updateSettings({ ui: { theme: 'dark' }, danbooruApiKey: 'abc' });
-      expect(s.ui).toEqual({ theme: 'dark', blurSensitive: true, density: 'comfortable' });
+      expect(s.ui).toEqual({ theme: 'dark' });
       expect(s.danbooru.hasApiKey).toBe(true);
       expect(JSON.stringify(s)).not.toContain('abc');
       expect((await e.ds.getSettings()).ui.theme).toBe('dark');
@@ -106,7 +107,7 @@ export function settingsContract(make: ContractFactory) {
       await e.ds.updateSettings({ browse: { customThemes: [a, b] } });
       expect((await e.ds.getSettings()).browse.customThemes).toEqual([a, b]);
       // 改别的段不影响
-      await e.ds.updateSettings({ ui: { density: 'compact' } });
+      await e.ds.updateSettings({ ui: { theme: 'light' } });
       expect((await e.ds.getSettings()).browse.customThemes).toEqual([a, b]);
       await e.ds.updateSettings({ browse: { customThemes: [b] } });
       expect((await e.ds.getSettings()).browse.customThemes).toEqual([b]);

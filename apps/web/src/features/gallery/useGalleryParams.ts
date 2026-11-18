@@ -1,13 +1,16 @@
 import { BROWSE_THEMES, CONTENT_KINDS, type BrowseTheme, type ContentKind, type ImageSort, type ListImagesQuery, type Rating } from '@emaki/shared';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 import { themeQuery } from '@/lib/customTheme';
 import { useCustomThemes } from '@/lib/queries';
 import { usePrefs } from '@/lib/stores';
+import { withParam } from '@/lib/urlPrefs';
 
 /**
  * 图库的筛选状态全部放在 URL 里（?q= &kind= &anim= &rating= &orient= &fav= &sort= &order=），
  * 刷新 / 前进后退 / 从看图器点标签跳过来都能还原。
+ * 看哪些类型是本机偏好（usePrefs.galleryKinds），但它决定列表里有哪些图，所以也一直写在 URL 里：URL 没写时把偏好补进去，
+ * 助手拿到的页面上下文和用户看到的一致（P5，附录 #32）。
  */
 
 export type Orientation = NonNullable<ListImagesQuery['orientation']>;
@@ -55,8 +58,7 @@ function validKinds(stored: ContentKind[] | 'all'): ContentKind[] | 'all' {
   return kinds.length ? kinds : ['illustration'];
 }
 
-const sameKinds = (a: ContentKind[] | 'all', b: ContentKind[] | 'all') =>
-  a === b || (Array.isArray(a) && Array.isArray(b) && a.join() === b.join());
+const kindParam = (kind: ContentKind[] | 'all') => (kind === 'all' ? 'all' : kind.join(','));
 
 function parse(params: URLSearchParams, kindFallback: ContentKind[] | 'all'): GalleryFilters {
   const ratingSet = new Set((params.get('rating') ?? '').split(','));
@@ -80,7 +82,8 @@ function parse(params: URLSearchParams, kindFallback: ContentKind[] | 'all'): Ga
   };
 }
 
-export function useGalleryParams() {
+/** ownsKind：类型由这一页决定（图库）。别册页的类型来自路由，不把图库的类型偏好补进 URL */
+export function useGalleryParams({ ownsKind = true }: { ownsKind?: boolean } = {}) {
   const [params, setParams] = useSearchParams();
   const storedKinds = usePrefs((s) => s.galleryKinds);
   const kindPref = useMemo(() => validKinds(storedKinds), [storedKinds]);
@@ -102,9 +105,9 @@ export function useGalleryParams() {
             else next.delete(key);
           };
           set('q', merged.q.trim() || undefined);
-          // 类型：等于偏好时不写进 URL；用户换了类型就记成新偏好
+          // 类型：一直写在 URL 里；用户换了类型就记成新偏好
           if (patch.kind !== undefined) setKindPref(merged.kind);
-          set('kind', patch.kind !== undefined || sameKinds(merged.kind, kindPref) ? undefined : merged.kind === 'all' ? 'all' : merged.kind.join(','));
+          if (ownsKind || patch.kind !== undefined) set('kind', kindParam(merged.kind));
           set('anim', merged.animated ? '1' : undefined);
           set('rating', merged.rating.length ? RATINGS.filter((r) => merged.rating.includes(r)).join(',') : undefined);
           set('orient', merged.orientation);
@@ -121,8 +124,14 @@ export function useGalleryParams() {
         { replace: true },
       );
     },
-    [setParams, kindPref, setKindPref],
+    [setParams, kindPref, setKindPref, ownsKind],
   );
+
+  // URL 里还没写类型（从侧栏点进来）：把偏好补进去，不多一条历史
+  const kindMissing = ownsKind && params.get('kind') === null;
+  useEffect(() => {
+    if (kindMissing) setParams((prev) => (prev.get('kind') !== null ? prev : withParam(prev, 'kind', kindParam(kindPref))), { replace: true });
+  }, [kindMissing, kindPref, setParams]);
 
   // 自定义画面换成它的标签；id 找不到（被删了、设置还没加载）就当没选
   const customThemes = useCustomThemes();

@@ -58,6 +58,11 @@ export function toShelfUnits(list: CollectionSummary[], { keepOrder = false } = 
 export const unitWord = (items: Pick<CollectionSummary, 'folderName'>[]) => (items.some((c) => volumeUnit(c.folderName) === '话') ? '话' : '册');
 
 const KEY = (id: string) => `emaki.read.v1.${id}`;
+/**
+ * 阅读进度（读到第几页）留在这台设备上，不搬到服务端（P5 判断过，docs/core-architecture.md 第 6 节「设置的归属」）：
+ * 它是浏览的痕迹（像浏览器的历史、滚动位置），不是对图库的整理决定——不参与撤销、不该触发变更传播和 library-changed
+ * 让别的页面重拉，助手也不需要读写它；每翻一页写一次，放服务端就是每次翻页写库。Emaki 只监听本机，多设备接着读不是现在的场景
+ */
 export const readProgress = {
   get(id: string): number | null {
     try {

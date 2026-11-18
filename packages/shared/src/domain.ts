@@ -513,12 +513,12 @@ export interface Settings {
     /** 上次查重跑完的时间；从没跑过为 null（只读，客户端不能写） */
     lastRunAt: ISODate | null;
   };
+  /**
+   * 外观里存在图库的部分。设置分「图库设置」（服务端，这里）和「本机偏好」（浏览器 usePrefs）：按「换一台设备、一个浏览器还该不该一样」判断，
+   * 见 docs/core-architecture.md 第 6 节。模糊、密度、底色、行高、视图这些是本机偏好，不在这里（P5，附录 #32）
+   */
   ui: {
     theme: ThemePreference;
-    /** 敏感分级（questionable / explicit）默认模糊 */
-    blurSensitive: boolean;
-    /** 网格密度 */
-    density: 'comfortable' | 'compact';
   };
   browse: {
     /** 自定义画面筛选，最多 30 个，顺序即显示顺序 */

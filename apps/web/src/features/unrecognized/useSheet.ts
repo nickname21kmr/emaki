@@ -8,6 +8,7 @@ import { collapseParam, useMutate, useSettings, useUnrecognizedInfinite, type Un
 import { usePrefs, useSelection } from '@/lib/stores';
 import { useReconcileSelection } from '@/lib/useReconcileSelection';
 import type { AssignTarget, StampEvent } from './types';
+import { useCollapseMode } from '@/lib/urlPrefs';
 
 const SCOPE = 'unrecognized';
 const EMPTY: ReadonlySet<ID> = new Set();
@@ -18,7 +19,7 @@ const MAX_SELECT = 2000;
  * 乐观隐藏照 useTriage：先藏起来，失败再放回；拿到修改后的新数据再放掉隐藏标记。
  */
 export function useSheet(params: UnrecognizedParams, enabled: boolean) {
-  const mode = usePrefs((s) => s.collapseMode);
+  const mode = useCollapseMode();
   const query = useUnrecognizedInfinite({ ...params, collapseCollections: collapseParam(mode) }, 120);
   const comicInQueue = useSettings().data?.tagger.comicInUnrecognized ?? true;
   const { data, dataUpdatedAt } = query;

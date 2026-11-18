@@ -57,7 +57,7 @@ export function AnnexPage() {
 }
 
 function AnnexView({ scope, count }: { scope: AnnexScope | null; count: number | undefined }) {
-  const { filters, query: base, update, hasFilters, clearFilters, customThemes } = useGalleryParams();
+  const { filters, query: base, update, hasFilters, clearFilters, customThemes } = useGalleryParams({ ownsKind: false });
   const animatedView = scope === 'animated';
   const kind = animatedView ? null : scope;
   // 漫画分「成册 | 散页」（T38f）：成册看本子书架，散页只看不在合集里的漫画

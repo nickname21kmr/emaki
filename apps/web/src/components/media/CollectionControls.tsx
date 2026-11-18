@@ -13,6 +13,7 @@ import { formatCount } from '@/lib/format';
 import { useCollections, useMutate } from '@/lib/queries';
 import { useBlurPrefs, usePrefs, useSelection, type CollapseMode } from '@/lib/stores';
 import { Thumb } from './Thumb';
+import { useCollapseMode, useMirrorCollapseMode, useSetCollapseMode } from '@/lib/urlPrefs';
 
 /**
  * 组图的共用件：网格里的收拢角标、收拢开关、「收进组图」弹窗。
@@ -39,8 +40,10 @@ export const toggleImageSelection = (image: ImageItem) => {
  * 自动 = 当前筛选超过 AUTO_COLLAPSE_MIN 张才收拢，结果少时逐张展开。按钮着色表示当前列表正收拢着（collapsed 来自接口）。
  */
 export function CollapseGroupsMenu({ collapsed, className }: { collapsed?: boolean; className?: string }) {
-  const mode = usePrefs((s) => s.collapseMode);
-  const set = usePrefs((s) => s.setCollapseMode);
+  // 收拢会改变列表里有哪些格：模式写进 URL（?collapse=），助手看到的地址和用户看到的一致（附录 #32）
+  useMirrorCollapseMode();
+  const mode = useCollapseMode();
+  const set = useSetCollapseMode();
   const on = mode === 'on' || (mode === 'auto' && !!collapsed);
   return (
     <Menu
