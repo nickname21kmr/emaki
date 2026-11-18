@@ -254,6 +254,13 @@ interface SelectionState {
   ids: Set<ID>;
   /** 上一次点击的 id，用于 shift 连选 */
   anchor: ID | null;
+  /**
+   * 多选模式开着但一张还没选（触屏上点页头的「选择」进来，A1）。平时（电脑、长按）选中第一张就进入多选，
+   * 取消掉最后一张就退出，用不到它；clear() 和换作用域时关掉。
+   */
+  on: boolean;
+  /** 进入多选模式（还没选图）：之后点按图片是勾选，多选栏先出来 */
+  start: (scope: string) => void;
   setScope: (scope: string) => void;
   toggle: (id: ID) => void;
   /** shift+点击：从 anchor 选到 id（需要传入当前顺序） */
@@ -267,8 +274,10 @@ export const useSelection = create<SelectionState>((set, get) => ({
   scope: '',
   ids: new Set(),
   anchor: null,
+  on: false,
+  start: (scope) => set((s) => (s.scope === scope ? { on: true } : { scope, ids: new Set(), anchor: null, on: true })),
   setScope: (scope) => {
-    if (get().scope !== scope) set({ scope, ids: new Set(), anchor: null });
+    if (get().scope !== scope) set({ scope, ids: new Set(), anchor: null, on: false });
   },
   toggle: (id) =>
     set((s) => {
@@ -292,8 +301,12 @@ export const useSelection = create<SelectionState>((set, get) => ({
     if (ids.size === s.ids.size) return s;
     return { ids, anchor: s.anchor && ids.has(s.anchor) ? s.anchor : null };
   }),
-  clear: () => set({ ids: new Set(), anchor: null }),
+  clear: () => set({ ids: new Set(), anchor: null, on: false }),
 }));
+
+/** 这个作用域是不是在多选里（选了图，或者从「选择」进来还没选） */
+export const isSelecting = (s: Pick<SelectionState, 'scope' | 'ids' | 'on'>, scope: string | undefined): boolean =>
+  !!scope && s.scope === scope && (s.ids.size > 0 || s.on);
 
 // ------------------------------------------------------------------ 撤销栈（顶栏撤销按钮）
 

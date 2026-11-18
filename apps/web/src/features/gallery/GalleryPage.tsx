@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { PageBody, PageHeader } from '@/components/layout/PageHeader';
 import { useScrollContainer } from '@/components/layout/ScrollContainer';
-import { ImageGrid, ImageGridSkeleton } from '@/components/media/ImageGrid';
+import { ImageGrid, ImageGridSkeleton, SelectButton } from '@/components/media/ImageGrid';
 import { KindBadge } from '@/components/media/KindBadge';
 import { KIND_LABEL, kindTotal } from '@/lib/kinds';
 import { KindIndex } from '@/features/annex/KindIndex';
@@ -177,7 +177,12 @@ export function GalleryPage() {
           ) : undefined
         }
         title={filters.artist ? (artistName ?? filters.artist.replace(/_/g, ' ')) : '图库'}
-        actions={artist ? <ArtistMenu artist={artist} onMoved={(tag) => update({ artist: tag })} /> : undefined}
+        actions={
+          <>
+            {artist && <ArtistMenu artist={artist} onMoved={(tag) => update({ artist: tag })} />}
+            {images.length > 0 && <SelectButton scope={SCOPE} />}
+          </>
+        }
         subtitle={
           <Subtitle
             counts={counts}
@@ -199,6 +204,7 @@ export function GalleryPage() {
             hasFilters={hasFilters}
             onClearFilters={clearFilters}
             customThemes={customThemes}
+            sheetTop={<GalleryViewControls filters={filters} update={update} collapsed={list.data?.pages[0]?.collapsed} layout="sheet" />}
           />
         </div>
         {onlyIllust && <KindTip annex={(counts?.annex ?? 0)} />}
@@ -289,5 +295,5 @@ function Subtitle({
 
 function clearGallerySelection() {
   const sel = useSelection.getState();
-  if (sel.scope === SCOPE && sel.ids.size) sel.clear();
+  if (sel.scope === SCOPE && (sel.ids.size || sel.on)) sel.clear();
 }

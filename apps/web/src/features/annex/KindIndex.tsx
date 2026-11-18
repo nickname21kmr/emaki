@@ -97,7 +97,8 @@ export function KindIndex({
   return (
     <div className="@container/kindbar flex items-stretch border-y border-line">
       {nav}
-      <div className="flex shrink-0 items-center pl-3">{trailing}</div>
+      {/* 手机竖屏上收藏、排序在筛选面板里（GalleryToolbar 的 sheetTop），这一行整行给目次 */}
+      <div className="flex shrink-0 items-center pl-3 compact:hidden">{trailing}</div>
     </div>
   );
 }

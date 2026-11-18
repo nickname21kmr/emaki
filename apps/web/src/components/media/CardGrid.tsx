@@ -9,6 +9,8 @@ import { MountFrame, SelectCircle, useGridBox, useGridInteractions, useLightboxF
 import { GroupBadge, selectionIds, toggleImageSelection } from './CollectionControls';
 import { TileMarks } from './KindBadge';
 import { Thumb } from './Thumb';
+import { useLongPress } from '@/lib/useLongPress';
+import { cardMinWidth, useViewport } from '@/lib/viewport';
 
 /**
  * 别册的按类陈列（T32b，SEL-6）：列宽固定的卡片网格，按「行」虚拟化。
@@ -46,7 +48,9 @@ export function CardGrid({
   const { scrollRef, containerRef, width, scrollMargin } = useGridBox();
   const { selection, selecting, handleClick, gridId, ids } = useGridInteractions(images, selectionScope);
   const cfg = CFG[variant];
-  const cols = Math.max(1, Math.floor((width + cfg.gap) / (cfg.min + cfg.gap)));
+  // 手机竖屏上卡片的最小宽度收一点（lib/viewport.ts），一行至少两张
+  const min = cardMinWidth(useViewport(), cfg.min);
+  const cols = Math.max(1, Math.floor((width + cfg.gap) / (min + cfg.gap)));
   const cardW = width > 0 ? (width - cfg.gap * (cols - 1)) / cols : cfg.min;
   const cardH = Math.round(cardW * cfg.ratio);
   const rowH = cardH + cfg.caption + cfg.gap;
@@ -102,6 +106,7 @@ export function CardGrid({
                   selecting={selecting}
                   onClick={(e) => handleClick(e, image, index)}
                   onToggle={() => toggleImageSelection(image)}
+                  onLongPress={selectionScope ? () => void (!selected && toggleImageSelection(image)) : undefined}
                 />
               );
             })}
@@ -122,6 +127,7 @@ function Card({
   selecting,
   onClick,
   onToggle,
+  onLongPress,
 }: {
   image: ImageItem;
   variant: CardVariant;
@@ -132,13 +138,17 @@ function Card({
   selecting: boolean;
   onClick: (e: React.MouseEvent) => void;
   onToggle: () => void;
+  /** 触屏长按进入多选（A1） */
+  onLongPress?: () => void;
 }) {
   const scroll = useScrollPeek(variant === 'shot');
+  const longPress = useLongPress(onLongPress);
   const ratio = image.height / Math.max(image.width, 1);
   return (
     <figure className="min-w-0">
       <div
         {...scroll.handlers}
+        {...longPress}
         data-image-id={image.id}
         className={cn(
           'group/tile group/reveal relative overflow-hidden rounded-[var(--radius-plate-sm)] transition-[scale,box-shadow] duration-300 ease-[var(--ease-out-soft)]',

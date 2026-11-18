@@ -1,22 +1,25 @@
 import type { ID, ImageItem } from '@emaki/shared';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Check, Heart } from 'lucide-react';
+import { Check, CheckCheck, Heart } from 'lucide-react';
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useScrollContainer } from '@/components/layout/ScrollContainer';
 import { cn } from '@/lib/cn';
 import { api } from '@/lib/api';
 import { useMutate } from '@/lib/queries';
-import { useLightbox, useSelection } from '@/lib/stores';
+import { isSelecting, useLightbox, useSelection } from '@/lib/stores';
 import { pickRevealed } from '@/lib/undoPlace';
 import { GroupBadge, selectionIds, toggleImageSelection } from './CollectionControls';
 import { TileMarks } from './KindBadge';
 import { useUndoRevealTarget } from '@/lib/useUndoReveal';
 import { justify } from './justify';
-
-const NO_FLASH: ReadonlySet<ID> = new Set();
 import { Thumb } from './Thumb';
 import type { BlurContext } from '@/lib/blur';
 import { useCan } from '@/lib/capabilities';
+import { Button } from '@/components/ui';
+import { useLongPress } from '@/lib/useLongPress';
+import { gridGap, gridRowHeight, useViewport } from '@/lib/viewport';
+
+const NO_FLASH: ReadonlySet<ID> = new Set();
 
 export interface ImageGridProps {
   images: ImageItem[];
@@ -66,12 +69,16 @@ export function ImageGrid({
   total,
 }: ImageGridProps) {
   const { scrollRef, containerRef, width, scrollMargin } = useGridBox();
-  const rows = useMemo(() => justify(images, width, rowHeight, gap), [images, width, rowHeight, gap]);
+  // 目标行高和缝按窗口分级缩放（lib/viewport.ts 的 gridRowHeight：手机竖屏约 140、平板竖屏约 180，宽屏照用户的设置）
+  const viewport = useViewport();
+  const target = gridRowHeight(viewport, rowHeight);
+  const g = gridGap(viewport, gap);
+  const rows = useMemo(() => justify(images, width, target, g), [images, width, target, g]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: (i) => (rows[i]?.height ?? rowHeight) + gap,
+    estimateSize: (i) => (rows[i]?.height ?? target) + g,
     overscan: 4,
     scrollMargin,
   });
@@ -124,7 +131,7 @@ export function ImageGrid({
           <div
             key={vr.key}
             className="absolute left-0 flex w-full"
-            style={{ top: vr.start - scrollMargin, height: row.height, gap }}
+            style={{ top: vr.start - scrollMargin, height: row.height, gap: g }}
           >
             {row.widths.map((w, k) => {
               const index = row.start + k;
@@ -142,6 +149,8 @@ export function ImageGrid({
                   selecting={selecting}
                   onClick={(e) => handleClick(e, image, index)}
                   onToggle={() => toggleImageSelection(image)}
+                  // 触屏长按：进入多选并选中这一张（A1）；已经选中的不动
+                  onLongPress={selectionScope ? () => void (!selected && toggleImageSelection(image)) : undefined}
                   onFavorite={
                     canFavorite
                       ? () => favorite.mutate({ ids: selectionIds(image), value: !(image.collectionGroup?.allFavorite ?? image.favorite) })
@@ -243,7 +252,7 @@ export function useGridInteractions(images: ImageItem[], selectionScope?: string
     if (selectionScope) selection.setScope(selectionScope);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectionScope]);
-  const selecting = !!selectionScope && selection.scope === selectionScope && selection.ids.size > 0;
+  const selecting = isSelecting(selection, selectionScope);
   const showLightbox = useLightbox((s) => s.show);
 
   const handleClick = (e: React.MouseEvent, image: ImageItem, index: number) => {
@@ -268,6 +277,27 @@ export function useGridInteractions(images: ImageItem[], selectionScope?: string
     }
   };
   return { selection, selecting, handleClick, gridId, ids };
+}
+
+/**
+ * 页头的「选择」（A1）：触屏上没有悬停出现的勾选圈，给一个看得见的入口；点了进入多选，之后点按图片是勾选。
+ * 只在触屏上显示（外层 hidden touch:contents），电脑上照旧悬停勾选圈、Ctrl+点击。
+ */
+export function SelectButton({ scope }: { scope: string }) {
+  const on = useSelection((s) => isSelecting(s, scope));
+  return (
+    <span className="hidden touch:contents">
+      <Button
+        variant={on ? 'primary' : 'outline'}
+        size="md"
+        icon={<CheckCheck />}
+        className="rounded-full"
+        onClick={() => (on ? useSelection.getState().clear() : useSelection.getState().start(scope))}
+      >
+        {on ? '完成' : '选择'}
+      </Button>
+    </span>
+  );
 }
 
 /** 左上角的勾选圈（ImageGrid、CardGrid 共用） */
@@ -339,6 +369,7 @@ function Tile({
   blurContext,
   onFavorite,
   flash,
+  onLongPress,
 }: {
   image: ImageItem;
   width: number;
@@ -355,8 +386,11 @@ function Tile({
   rated?: boolean;
   blurContext?: BlurContext;
   onFavorite?: () => void;
+  /** 触屏长按（lib/useLongPress.ts） */
+  onLongPress?: () => void;
 }) {
   const thumbWidth = gridThumbWidth(width);
+  const longPress = useLongPress(onLongPress);
   const starred = image.collectionGroup?.allFavorite ?? image.favorite;
   const names = !selecting && width >= 120 && height >= 120;
   return (
@@ -364,11 +398,12 @@ function Tile({
       className={cn(
         'group/tile group/reveal relative shrink-0 overflow-hidden rounded-[var(--radius-plate-sm)] transition-[scale,box-shadow,translate,outline-color] duration-[280ms] ease-[var(--ease-out-soft)] hover:z-10',
         selected ? 'motion-safe:scale-[.955]' : 'hover:-translate-y-0.5 hover:shadow-lift',
-        'outline-offset-2',
+        'outline-offset-2 touch:select-none touch:[-webkit-touch-callout:none]',
         flash ? 'outline-[3px] outline-shu' : 'outline-[3px] outline-transparent',
       )}
       style={{ width, height }}
       data-image-id={image.id}
+      {...longPress}
     >
       <button
         type="button"
@@ -452,10 +487,11 @@ function Tile({
 /** 网格加载中的骨架 */
 export function ImageGridSkeleton({ rows = 3, rowHeight = 240 }: { rows?: number; rowHeight?: number }) {
   const widths = [[1.4, 0.7, 1, 1.5, 0.75], [0.7, 1.8, 0.75, 1], [1, 0.7, 1.3, 0.75, 1.1]];
+  const h = gridRowHeight(useViewport(), rowHeight);
   return (
     <div className="flex flex-col gap-1.5">
       {Array.from({ length: rows }, (_, r) => (
-        <div key={r} className="flex gap-1.5" style={{ height: rowHeight }}>
+        <div key={r} className="flex gap-1.5" style={{ height: h }}>
           {widths[r % widths.length]!.map((f, i) => (
             <div key={i} className="skeleton rounded-[var(--radius-plate-sm)]" style={{ flex: f }} />
           ))}

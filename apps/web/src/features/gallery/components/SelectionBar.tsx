@@ -66,6 +66,8 @@ export function SelectionBar({
   artist?: { tag: string; name: string; tags: string[] };
 }) {
   const ids = useSelection((s) => (s.scope === scope ? s.ids : EMPTY));
+  // 从页头的「选择」进来、还没选图（触屏，A1）：栏先出来，提示点按图片
+  const on = useSelection((s) => s.scope === scope && s.on);
   const setMany = useSelection((s) => s.setMany);
   const clear = useSelection((s) => s.clear);
   const lightboxOpen = useLightbox((s) => s.open);
@@ -84,7 +86,8 @@ export function SelectionBar({
   const afterMenu = useRef<(() => void) | null>(null);
 
   const count = ids.size;
-  const active = count > 0 && !lightboxOpen && !moving && !grouping;
+  const shown = count > 0 || on;
+  const active = shown && !lightboxOpen && !moving && !grouping;
   const allow = useAllowedActions(GALLERY_SELECTION_NEEDS);
 
   // toast 也弹在底部居中 —— 不管是谁弹的（这里的收藏、助手的撤销…），有 toast 时工具栏就抬高给它让位
@@ -154,9 +157,10 @@ export function SelectionBar({
 
   return (
     // assistant-cover-shift：助手附页覆盖在纸上时，在露出的那块里居中（index.css）
-    <div ref={shell} className="assistant-cover-shift pointer-events-none sticky bottom-6 z-30 flex h-0 justify-center @container/bar">
+    // 手机竖屏贴得低一点，在标签栏上面（A1）
+    <div ref={shell} className="assistant-cover-shift pointer-events-none sticky bottom-6 z-30 flex h-0 justify-center @container/bar compact:bottom-3">
       <AnimatePresence>
-        {count > 0 && (
+        {shown && (
           <motion.div
             role="toolbar"
             aria-label="批量操作"
@@ -196,6 +200,10 @@ export function SelectionBar({
               </Tooltip>
             )}
 
+            {count === 0 ? (
+              <span className="pr-3 pl-1 text-[13px] whitespace-nowrap text-fg-inverse/70">点按图片来选择</span>
+            ) : (
+            <>
             <span className="mx-1.5 h-5 w-px bg-fg-inverse/15 @max-[400px]/bar:mx-0.5 @max-[190px]/bar:hidden" />
 
             {allow.assign && <CharacterPicker
@@ -406,6 +414,8 @@ export function SelectionBar({
               {allow.exclude && <MenuItem icon={<Ban />} shortcut="E" onSelect={() => run({ type: 'exclude' })}>排除</MenuItem>}
               {allow.trash && <MenuItem icon={<Trash2 />} danger onSelect={() => run({ type: 'trash' })}>回收站</MenuItem>}
             </Menu>
+            </>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

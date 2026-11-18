@@ -15,6 +15,7 @@ import {
   Play,
   Plus,
   Shuffle,
+  SlidersHorizontal,
   X,
 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
@@ -26,6 +27,7 @@ import {
   MenuLabel,
   MenuRadioGroup,
   MenuRadioItem,
+  Sheet,
   Slider,
   Tooltip,
 } from '@/components/ui';
@@ -82,6 +84,7 @@ function orderLabel(sort: GallerySort, order: SortOrder): string {
  * 头部下方的工具条：左搜索 / 右筛选 chip。
  * 高度固定一行（chip 多了横向滚动），这样网格的位置不会因为筛选而跳动。
  * 收藏、排序、缩放不在这一行，在上面目次那一行的右端（GalleryViewControls），这一行整行留给筛选。
+ * 宽度 compact（手机竖屏，A1）：搜索框占满一行，chip 收进「筛选」按钮打开的底部面板（sheetTop 放在面板最上面，图库给收藏和排序）。
  */
 export function GalleryToolbar({
   filters,
@@ -90,6 +93,7 @@ export function GalleryToolbar({
   onClearFilters,
   customThemes,
   animatedChip = true,
+  sheetTop,
 }: {
   filters: GalleryFilters;
   update: (patch: Partial<GalleryFilters>) => void;
@@ -99,11 +103,67 @@ export function GalleryToolbar({
   customThemes: CustomTheme[];
   /** 显示「动图」chip（别册的动图页本身就是这个筛选，不显示） */
   animatedChip?: boolean;
+  /** 手机上筛选面板最上面的一段（图库：收藏、排序、收拢组图） */
+  sheetTop?: ReactNode;
 }) {
   const toggleRating = (r: GalleryFilters['rating'][number]) =>
     update({ rating: filters.rating.includes(r) ? filters.rating.filter((x) => x !== r) : [...filters.rating, r] });
   // 自定义画面的对话框：null = 关着；theme 为空 = 新建
   const [editing, setEditing] = useState<{ theme?: CustomTheme } | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  // 手机上「筛选」按钮旁边的数：开着几个筛选
+  const active =
+    filters.rating.length + (filters.orientation ? 1 : 0) + (filters.animated ? 1 : 0) + (filters.theme ? 1 : 0) + (filters.custom ? 1 : 0);
+
+  const ratingChips = RATINGS.map((r) => (
+    <Chip key={r} size="sm" selected={filters.rating.includes(r)} onClick={() => toggleRating(r)}>
+      {RATING_LABEL[r]}
+    </Chip>
+  ));
+  const orientChips = ORIENTATIONS.map((o) => (
+    <Chip key={o} size="sm" selected={filters.orientation === o} onClick={() => update({ orientation: filters.orientation === o ? undefined : o })}>
+      <span className="inline-flex items-center gap-1.5">
+        <OrientGlyph orientation={o} />
+        {ORIENT_LABEL[o]}
+      </span>
+    </Chip>
+  ));
+  const animatedChipEl = (
+    // 是否动图（D5）：不是类型，是在当前类型里再筛一层
+    <Tooltip content="只看动图：按帧数自动认出，和类型无关">
+      <Chip size="sm" selected={filters.animated} onClick={() => update({ animated: !filters.animated })}>
+        <span className="inline-flex items-center gap-1.5">
+          <Play className="size-2.5 fill-current" strokeWidth={0} aria-hidden />
+          动图
+        </span>
+      </Chip>
+    </Tooltip>
+  );
+  const themeChips = (
+    <>
+      {BROWSE_THEMES.map((t) => (
+        <Chip key={t} size="sm" selected={filters.theme === t} onClick={() => update({ theme: filters.theme === t ? undefined : t })}>
+          {THEME_META[t].label}
+        </Chip>
+      ))}
+      {customThemes.map((t) => (
+        <CustomChip
+          key={t.id}
+          theme={t}
+          selected={filters.custom === t.id}
+          onClick={() => update({ custom: filters.custom === t.id ? undefined : t.id })}
+          onEdit={() => setEditing({ theme: t })}
+        />
+      ))}
+    </>
+  );
+  const newThemeChip = (
+    <Tooltip content="用识别标签自己组一个">
+      <Chip size="sm" aria-label="新建画面" className="px-2 text-fg-muted" onClick={() => setEditing({})}>
+        <Plus className="size-3.5" />
+      </Chip>
+    </Tooltip>
+  );
 
   return (
     <div className="@container/toolbar">
@@ -119,80 +179,77 @@ export function GalleryToolbar({
             if (filters.custom === id) update({ custom: undefined });
           }}
         />
-        <GallerySearch value={filters.q} onCommit={(q) => update({ q })} className="w-[248px] shrink-0 @max-[600px]/toolbar:w-[168px]" />
+        <GallerySearch
+          value={filters.q}
+          onCommit={(q) => update({ q })}
+          className="w-[248px] shrink-0 @max-[600px]/toolbar:w-[168px] compact:min-w-0 compact:flex-1"
+        />
+
+        {/* 手机竖屏：「筛选」按钮，chip 都在底部面板里 */}
+        <span className="hidden compact:contents">
+          <Button
+            variant={active ? 'primary' : 'outline'}
+            size="md"
+            icon={<SlidersHorizontal />}
+            onClick={() => setSheetOpen(true)}
+            aria-haspopup="dialog"
+            className="rounded-full"
+          >
+            筛选{active > 0 && <span className="tabular opacity-70">{active}</span>}
+          </Button>
+          <Sheet
+            open={sheetOpen}
+            onOpenChange={setSheetOpen}
+            title="筛选"
+            actions={
+              hasFilters && (
+                <Button variant="ghost" size="sm" icon={<X />} onClick={onClearFilters}>
+                  清除筛选
+                </Button>
+              )
+            }
+          >
+            <div className="flex flex-col gap-5 pt-1">
+              {sheetTop}
+              <SheetGroup label="分级">{ratingChips}</SheetGroup>
+              <SheetGroup label="方向">
+                {orientChips}
+                {animatedChip && animatedChipEl}
+              </SheetGroup>
+              <SheetGroup label="画面">
+                {themeChips}
+                {newThemeChip}
+              </SheetGroup>
+            </div>
+          </Sheet>
+        </span>
 
         {/* 筛选 chip：放不下时横向滚动，左右渐隐。「+」和「清除筛选」跟在 chip 后面，但不在滚动区里，放不下时停在右端不会被挤走 */}
-        <div className="-ml-3 flex min-w-0 flex-1 items-center">
+        <div className="-ml-3 flex min-w-0 flex-1 items-center compact:hidden">
           <div className="min-w-0 overflow-x-auto scrollbar-none fade-x">
             <div className="flex w-max items-center gap-1.5 py-1 pr-8 pl-4">
               <GroupLabel>分级</GroupLabel>
-              {RATINGS.map((r) => (
-                <Chip key={r} size="sm" selected={filters.rating.includes(r)} onClick={() => toggleRating(r)}>
-                  {RATING_LABEL[r]}
-                </Chip>
-              ))}
+              {ratingChips}
 
               <Divider />
               <GroupLabel>方向</GroupLabel>
-              {ORIENTATIONS.map((o) => (
-                <Chip
-                  key={o}
-                  size="sm"
-                  selected={filters.orientation === o}
-                  onClick={() => update({ orientation: filters.orientation === o ? undefined : o })}
-                >
-                  <span className="inline-flex items-center gap-1.5">
-                    <OrientGlyph orientation={o} />
-                    {ORIENT_LABEL[o]}
-                  </span>
-                </Chip>
-              ))}
+              {orientChips}
 
               {animatedChip && (
                 <>
                   <Divider />
-                  {/* 是否动图（D5）：不是类型，是在当前类型里再筛一层 */}
-                  <Tooltip content="只看动图：按帧数自动认出，和类型无关">
-                    <Chip size="sm" selected={filters.animated} onClick={() => update({ animated: !filters.animated })}>
-                      <span className="inline-flex items-center gap-1.5">
-                        <Play className="size-2.5 fill-current" strokeWidth={0} aria-hidden />
-                        动图
-                      </span>
-                    </Chip>
-                  </Tooltip>
+                  {animatedChipEl}
                 </>
               )}
 
               <Divider />
               <GroupLabel>画面</GroupLabel>
-              {BROWSE_THEMES.map((t) => (
-                <Chip
-                  key={t}
-                  size="sm"
-                  selected={filters.theme === t}
-                  onClick={() => update({ theme: filters.theme === t ? undefined : t })}
-                >
-                  {THEME_META[t].label}
-                </Chip>
-              ))}
-              {customThemes.map((t) => (
-                <CustomChip
-                  key={t.id}
-                  theme={t}
-                  selected={filters.custom === t.id}
-                  onClick={() => update({ custom: filters.custom === t.id ? undefined : t.id })}
-                  onEdit={() => setEditing({ theme: t })}
-                />
-              ))}
+              {themeChips}
             </div>
           </div>
           {/* 往回压进滚动区右边留给渐隐的空白里，没溢出时紧跟在最后一个 chip 后面 */}
           <div className="-ml-6 flex shrink-0 items-center gap-1.5">
-            <Tooltip content="用识别标签自己组一个">
-              <Chip size="sm" aria-label="新建画面" className="px-2 text-fg-muted" onClick={() => setEditing({})}>
-                <Plus className="size-3.5" />
-              </Chip>
-            </Tooltip>
+            {newThemeChip}
             {hasFilters && (
               <button
                 type="button"
@@ -220,12 +277,47 @@ export function GalleryViewControls({
   filters,
   update,
   collapsed,
+  layout = 'bar',
 }: {
   filters: GalleryFilters;
   update: (patch: Partial<GalleryFilters>) => void;
   /** 当前列表收拢着组图（接口返回的 collapsed） */
   collapsed?: boolean;
+  /** bar：目次那一行的右端；sheet：手机上筛选面板的最上面（A1），排成两组 chip，没有缩放（行高按窗口定） */
+  layout?: 'bar' | 'sheet';
 }) {
+  if (layout === 'sheet')
+    return (
+      <>
+        <SheetGroup label="排序">
+          {SORTS.map((s) => (
+            <Chip key={s} size="sm" selected={filters.sort === s} onClick={() => update({ sort: s })}>
+              {SORT_LABEL[s]}
+            </Chip>
+          ))}
+          <Chip
+            size="sm"
+            disabled={filters.sort === 'random'}
+            onClick={() => update({ order: filters.order === 'desc' ? 'asc' : 'desc' })}
+            className="disabled:opacity-40"
+          >
+            <span className="inline-flex items-center gap-1 [&_svg]:size-3.5">
+              {filters.order === 'desc' ? <ArrowDownWideNarrow /> : <ArrowUpNarrowWide />}
+              {orderLabel(filters.sort, filters.order)}
+            </span>
+          </Chip>
+        </SheetGroup>
+        <SheetGroup label="显示">
+          <Chip size="sm" selected={filters.favorite} onClick={() => update({ favorite: !filters.favorite })}>
+            <span className="inline-flex items-center gap-1.5">
+              <Heart className={cn('size-3.5', filters.favorite && 'fill-current')} />
+              只看收藏
+            </span>
+          </Chip>
+          <CollapseGroupsMenu collapsed={collapsed} />
+        </SheetGroup>
+      </>
+    );
   return (
     <div className="flex items-center gap-0.5">
       {/* 只看收藏：常用的开关，开着时整个按钮变朱色，一眼看得出现在只显示收藏 */}
@@ -282,8 +374,9 @@ export function GalleryViewControls({
       </IconButton>
       <CollapseGroupsMenu collapsed={collapsed} />
 
-      <div className="mx-2.5 h-4 w-px shrink-0 bg-line-strong @max-[1300px]/kindbar:mx-1.5" />
-      <RowHeightSlider className="@max-[1300px]/kindbar:w-[84px]" />
+      {/* 窄屏的行高按窗口定（lib/viewport.ts），不放缩放滑块 */}
+      <div className="mx-2.5 h-4 w-px shrink-0 bg-line-strong @max-[1300px]/kindbar:mx-1.5 narrow:hidden" />
+      <RowHeightSlider className="@max-[1300px]/kindbar:w-[84px] narrow:hidden" />
     </div>
   );
 }
@@ -358,6 +451,16 @@ function CustomChip({
         <Pencil className="size-2.5" />
       </button>
     </span>
+  );
+}
+
+/** 手机筛选面板里的一组：小标题 + 一片可以折行的 chip */
+function SheetGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <section>
+      <h3 className="mb-2 text-[12px] font-medium text-fg-subtle">{label}</h3>
+      <div className="flex flex-wrap items-center gap-2">{children}</div>
+    </section>
   );
 }
 
