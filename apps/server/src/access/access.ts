@@ -148,7 +148,9 @@ export class Access {
       port: patch.port ?? c.port,
       name: patch.name === undefined ? c.name : patch.name,
     };
-    this.deps.db.prepare('UPDATE lan_access SET enabled = ?, port = ?, name = ? WHERE id = 1').run(next.enabled ? 1 : 0, next.port, next.name);
+    this.deps.db
+      .prepare('UPDATE lan_access SET enabled = ?, port = ?, name = ? WHERE id = 1')
+      .run(next.enabled ? 1 : 0, next.port, next.name);
     await this.controller?.apply();
     this.notify('changed');
     return this.status();
@@ -199,7 +201,10 @@ export class Access {
     const fp = this.tls().fingerprintHex;
     const { ticket, expiresAt } = this.pairing.createTicket();
     const hosts = lanAddresses().join(',');
-    return { uri: `emaki://pair?id=${c.serverId}&fp=${fp}&p=${c.port}&h=${hosts}&t=${ticket}`, expiresAt: new Date(expiresAt).toISOString() };
+    return {
+      uri: `emaki://pair?id=${c.serverId}&fp=${fp}&p=${c.port}&h=${hosts}&t=${ticket}`,
+      expiresAt: new Date(expiresAt).toISOString(),
+    };
   }
 
   /** 引擎关闭时：停掉配对的定时器、叫醒长轮询 */

@@ -1,7 +1,8 @@
 /**
  * 局域网入口的证书（docs/mobile.md 2.1、2.3）：第一次打开局域网入口时在这台电脑上生成一张自签证书，存在数据目录里，以后一直用这张。
  *
- * - 密钥用 Node 自带的 generateKeyPairSync（RSA 2048），证书由 node-forge 签发（X.509 v3、SHA-256、有效期 20 年，CN = `Emaki <serverId>`）；
+ * - 密钥用 Node 自带的 generateKeyPairSync（RSA 2048），证书由 node-forge 签发
+ *   （X.509 v3、SHA-256、有效期 20 年，CN = `Emaki <serverId>`）；
  * - 存在 `<dataDir>/lan/key.pem`、`cert.pem`；
  * - 指纹 = 证书 DER 的 sha256（Node 的 X509Certificate 解析）。App 配对时认准这个指纹（校验码也用它算，见 pairing.ts），
  *   所以不需要浏览器认可的证书；浏览器访问时会看到一次证书警告（docs/mobile.md 第 10 节 M2）。

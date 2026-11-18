@@ -15,7 +15,7 @@
  * LanEntry 按 lan_access 的 enabled / port 启停 https 监听和 mDNS 广播（discovery.ts）；access.configure 改了配置后立即生效。
  * 监听失败（端口被占用等）不抛到启动流程里，记进状态的 error。
  */
-import { LAN_PROTOCOL, type LanMe, type PairStartResponse, type PairStatus } from '@emaki/shared';
+import { DEVICE_GRANTABLE_SCOPES, LAN_PROTOCOL, type LanMe, type PairStartResponse, type PairStatus } from '@emaki/shared';
 import { PairRevealInput, PairStartInput } from '@emaki/shared/schemas';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createFastify, mountShared, serveWeb } from '../app.ts';
@@ -101,7 +101,8 @@ export async function buildLanApp(engine: Engine, bus: EventBus, access: Access,
     const auth = token ? access.devices.authenticate(token) : ({ error: 'unauthorized' } as const);
     if ('error' in auth) return void unauthorized(reply, auth.error);
     access.devices.seen(auth.device.id, addressOf(req));
-    runAsDevice(auth.device.id, auth.device.scopes, done);
+    // 只给可授予的范围：库里的权限就算被改出了 devices、desktop 也不生效
+    runAsDevice(auth.device.id, auth.device.scopes.filter((s) => DEVICE_GRANTABLE_SCOPES.includes(s)), done);
   });
 
   mountShared(app, engine, bus, {

@@ -166,7 +166,8 @@ async function discover(): Promise<void> {
   console.log('在局域网里搜 _emaki._tcp（5 秒）…');
   const browser = bonjour.find({ type: 'emaki' }, (s) => {
     const txt = (s.txt ?? {}) as Record<string, string>;
-    const line = `${txt.name ?? s.name}  id=${txt.id ?? '?'}  协议 v${txt.v ?? '?'}  地址 ${(s.addresses ?? []).join(', ') || s.host}  端口 ${s.port}`;
+    const where = (s.addresses ?? []).join(', ') || s.host;
+    const line = `${txt.name ?? s.name}  id=${txt.id ?? '?'}  协议 v${txt.v ?? '?'}  地址 ${where}  端口 ${s.port}`;
     if (!found.has(s.fqdn)) console.log(`• ${line}`);
     found.set(s.fqdn, line);
   });
@@ -196,7 +197,8 @@ async function pair(hostPort: string): Promise<void> {
     pairing: boolean;
   };
   if (hello?.app !== 'emaki') fail('对方不是 Emaki');
-  console.log(`电脑「${hello.name}」 id=${hello.serverId}  Emaki ${hello.version}  协议 v${hello.protocol}  地址 ${hello.addresses.join(', ')}`);
+  console.log(`电脑「${hello.name}」 id=${hello.serverId}  Emaki ${hello.version}  协议 v${hello.protocol}`);
+  console.log(`电脑的地址 ${hello.addresses.join(', ') || '（没有）'}`);
   if (!hello.pairing) fail('电脑现在不接受新的请求');
 
   // 1. 提交 nonceA 的哈希
