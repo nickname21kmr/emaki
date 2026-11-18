@@ -21,6 +21,9 @@ chrome-cdp-*/
 # 临时调试脚本
 *.tmp.ts
 
+# 假手机脚本（apps/server/scripts/lan-client.ts）保存的凭证
+lan-client.json
+
 # 免安装版打包输出
 release/
 

@@ -107,7 +107,7 @@ export class Pairing {
       const expires = this.tickets.get(body.ticket);
       if (expires === undefined || expires <= now) throw new HttpError(403, 'forbidden', '二维码已经过期或用过了，请在电脑上重新生成');
       this.tickets.delete(body.ticket);
-      const { device, token } = this.deps.devices.create({ name: body.name, model: body.model ?? null, scopes: DEVICE_DEFAULT_SCOPES });
+      const { device, token } = this.deps.devices.create({ name: body.name, model: body.model || null, scopes: DEVICE_DEFAULT_SCOPES });
       this.deps.notify('changed');
       return { status: 'approved', deviceId: device.id, token };
     }

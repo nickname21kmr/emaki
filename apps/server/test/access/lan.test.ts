@@ -10,6 +10,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { buildLanApp } from '../../src/access/lan.ts';
 import { COMPAT_ROUTES } from '../../src/http/compat.ts';
 import { stripComments } from '../architecture/sqlWrites.ts';
 import { lanFixture, makeDevice, type LanFixture } from './harness.ts';
@@ -77,6 +78,19 @@ describe('没有凭证：所有 /api/ 都拒绝（hello、配对除外）', () =
       const opts = { method: r.method as 'GET', url: fill(r.path), ...(hasBody(r.method) ? { payload: {} } : {}) };
       expect([r.path, (await f.app.inject(opts)).statusCode]).toEqual([r.path, 401]);
       expect([r.path, (await f.app.inject({ ...opts, headers: auth })).statusCode]).toEqual([r.path, 404]);
+    }
+  });
+
+  it('没有构建前端（开发时）也一样：不存在的 /api/ 地址先要凭证，有凭证才是 404', async () => {
+    const bare = await buildLanApp(f.ds, f.bus, f.ds.access, f.tls, { webDist: path.join(f.dir, 'no-web') });
+    try {
+      const { auth } = makeDevice(f.ds);
+      for (const url of ['/api/assistant/settings', '/api/no-such-route', '/%61pi/assistant/sessions'])
+        expect([url, (await bare.inject({ method: 'GET', url })).statusCode]).toEqual([url, 401]);
+      expect((await bare.inject({ method: 'GET', url: '/api/assistant/settings', headers: auth })).statusCode).toBe(404);
+      expect((await bare.inject({ method: 'GET', url: '/api/v1/hello' })).statusCode).toBe(200);
+    } finally {
+      await bare.close();
     }
   });
 
