@@ -1,7 +1,7 @@
 import { assertOrganizeReady, organizeCollection } from './organizeCollection.ts';
 import { randomUUID } from 'node:crypto';
 /**
- * 合集的查询与修改（T38c）。摘要统一由 loadSummaries 算（口径在 domain/collections/summary.ts）。
+ * 合集的查询与修改（T38c）。摘要统一由 loadAll 算（口径在 domain/collections/summary.ts），列表、统计、详情各自只读要用的（Scope）。
  * 写操作全部走 ctx.mutate，任何写都把合集转成 origin='manual'（自动判定不会再删它）。
  */
 import {
@@ -60,13 +60,31 @@ interface PageRow {
   has_char: number;
 }
 
+type Ranked = { id: number; pageCount: number; manual: boolean }[];
+
 interface Loaded {
   /** comic：在按漫画导入的范围里的书，不找角色（不算待整理），页面分级可信（不强制模糊） */
   row: CollectionRow & { root_path: string; comic: boolean };
   summary: CollectionSummary;
   pages: PageRow[];
-  cast: { id: number; pageCount: number; manual: boolean }[];
-  works: { id: number; pageCount: number; manual: boolean }[];
+  /** 完整的出场角色、作品：只有 Scope 里要了才算（没要是 undefined） */
+  cast?: Ranked;
+  works?: Ranked;
+}
+
+/**
+ * 读多少（大库上合集有几千本，全读一遍 + 全算角色、作品的命中要两三百毫秒）：
+ * - 摘要（列表、统计）只要页、手动关联，和本子的角色命中（本子有没有出场角色决定待整理）；
+ * - 按角色筛选要全部合集的出场角色，按作品筛选要作品；详情只读这一本和同系列的几本。
+ * 摘要的每个字段和全量算的完全一样（collections.test.ts 逐本比对）。
+ */
+interface Scope {
+  /** 只读这些合集；不给 = 全部 */
+  ids?: number[];
+  /** 完整的出场角色 */
+  cast: boolean;
+  /** 作品 */
+  works: boolean;
 }
 
 const leafOf = (dir: string) => dir.slice(dir.lastIndexOf('/') + 1);
@@ -98,15 +116,19 @@ export class CollectionQueries {
     private readonly catalog: () => CharacterCatalog,
   ) {}
 
-  /** 4.1：全部 active 合集的摘要 */
-  private loadAll(): Map<number, Loaded> {
+  /** 4.1：active 合集的摘要（读多少见 Scope） */
+  private loadAll(scope: Scope): Map<number, Loaded> {
     const db = this.ctx.db;
+    const params = scope.ids ? { ids: JSON.stringify(scope.ids) } : {};
+    // 合集的范围：两种写法都是字面 SQL，合集 id 走绑定参数
+    const inScope = scope.ids ? 'IN (SELECT value FROM json_each(@ids))' : 'IS NOT NULL';
     const rows = db
       .prepare(
         `SELECT c.*, r.path AS root_path FROM collections c JOIN library_roots r ON r.id = c.root_id
-         WHERE c.state = 'active' AND ${COLLECTION_VISIBLE}`,
+         WHERE c.state = 'active' AND ${COLLECTION_VISIBLE}${scope.ids ? ` AND c.id ${inScope}` : ''}`,
       )
-      .all() as (CollectionRow & { root_path: string; comic: boolean })[];
+      .all(params) as (CollectionRow & { root_path: string; comic: boolean })[];
+    if (!rows.length) return new Map();
     const comics = ComicAreas.load(db);
     for (const r of rows) r.comic = !!comics.of(r.root_id, r.rel_dir);
     const pagesBy = new Map<number, PageRow[]>();
@@ -114,32 +136,39 @@ export class CollectionQueries {
       .prepare(
         `SELECT i.id, i.collection_id, i.page_no, i.width, i.height, i.rating, i.content_kind, i.dominant_color, i.tagged_at, i.added_at, i.modified_at,
                 ${HAS_CHARACTER('i')} AS has_char
-         FROM v_counted_images i WHERE i.collection_id IS NOT NULL ORDER BY i.collection_id, i.page_no`,
+         FROM v_counted_images i WHERE i.collection_id ${inScope} ORDER BY i.collection_id, i.page_no`,
       )
-      .all() as PageRow[]) {
+      .all(params) as PageRow[]) {
       const list = pagesBy.get(p.collection_id);
       if (list) list.push(p);
       else pagesBy.set(p.collection_id, [p]);
     }
     const hits = (sql: string) => {
       const m = new Map<number, Map<number, number>>();
-      for (const r of db.prepare(sql).all() as { c: number; x: number; n: number }[]) {
+      for (const r of db.prepare(sql).all(params) as { c: number; x: number; n: number }[]) {
         const inner = m.get(r.c) ?? new Map<number, number>();
         inner.set(r.x, r.n);
         m.set(r.c, inner);
       }
       return m;
     };
+    // 角色命中：只要摘要时只算本子（从本子出发按合集索引找页，几千个组图的页不用碰）
     const charHits = hits(
-      `SELECT i.collection_id AS c, ic.character_id AS x, COUNT(*) AS n FROM v_counted_images i
-       JOIN image_characters ic ON ic.image_id = i.id WHERE i.collection_id IS NOT NULL GROUP BY 1, 2`,
+      scope.cast
+        ? `SELECT i.collection_id AS c, ic.character_id AS x, COUNT(*) AS n FROM v_counted_images i
+           JOIN image_characters ic ON ic.image_id = i.id WHERE i.collection_id ${inScope} GROUP BY 1, 2`
+        : `SELECT i.collection_id AS c, ic.character_id AS x, COUNT(*) AS n FROM collections dc
+           JOIN v_counted_images i ON i.collection_id = dc.id JOIN image_characters ic ON ic.image_id = i.id
+           WHERE dc.kind = 'doujin' AND dc.state = 'active' AND dc.id ${inScope} GROUP BY 1, 2`,
     );
     // 图的作品（imageWorkRows：和 v_image_works 同口径，直接连底表——连视图时 SQLite 会把整个 UNION 视图对每一行重扫一遍，副本上要 11 秒）
-    const workHits = hits(
-      `SELECT c, work_id AS x, COUNT(*) AS n
-       FROM (${imageWorkRows('v_counted_images i', 'i.collection_id IS NOT NULL', 'i.collection_id AS c')})
-       GROUP BY c, x`,
-    );
+    const workHits = scope.works
+      ? hits(
+          `SELECT c, work_id AS x, COUNT(*) AS n
+           FROM (${imageWorkRows('v_counted_images i', `i.collection_id ${inScope}`, 'i.collection_id AS c')})
+           GROUP BY c, x`,
+        )
+      : new Map<number, Map<number, number>>();
     const manual = (table: string, col: string) => {
       const m = new Map<number, number[]>();
       for (const r of db.prepare(`SELECT collection_id AS c, ${col} AS x FROM ${table} ORDER BY added_at, ${col}`).all() as {
@@ -151,17 +180,18 @@ export class CollectionQueries {
     };
     const manualChars = manual('collection_characters', 'character_id');
     const manualWorks = manual('collection_works', 'work_id');
-    // 角色所属作品直接读 character_works（顺序同 Derived 的 workIds）。不用 derived.get()：
+    // 角色所属作品直接读 character_works（顺序同 Derived 的 workIds），只有算作品时要（手动关联的角色的作品也并进来）。不用 derived.get()：
     // 侧栏统计也走这里，用户每点一次收藏 Derived 都会失效，为了这张小表整份重建要 1 秒以上
     const workIdsOf = new Map<number, number[]>();
-    for (const r of db.prepare('SELECT character_id AS c, work_id AS w FROM character_works ORDER BY character_id, position, work_id').all() as {
-      c: number;
-      w: number;
-    }[]) {
-      const list = workIdsOf.get(r.c);
-      if (list) list.push(r.w);
-      else workIdsOf.set(r.c, [r.w]);
+    if (scope.works) {
+      const sql = 'SELECT character_id AS c, work_id AS w FROM character_works ORDER BY character_id, position, work_id';
+      for (const r of db.prepare(sql).all() as { c: number; w: number }[]) {
+        const list = workIdsOf.get(r.c);
+        if (list) list.push(r.w);
+        else workIdsOf.set(r.c, [r.w]);
+      }
     }
+    const none = new Map<number, number>();
 
     const out = new Map<number, Loaded>();
     for (const row of rows) {
@@ -183,8 +213,8 @@ export class CollectionQueries {
           hasChar: p.has_char === 1,
           modifiedAt: p.modified_at,
         })),
-        charHits: charHits.get(row.id) ?? new Map(),
-        workHits: workHits.get(row.id) ?? new Map(),
+        charHits: charHits.get(row.id) ?? none,
+        workHits: workHits.get(row.id) ?? none,
         manualChars: manualChars.get(row.id) ?? [],
         manualWorks: manualWorks.get(row.id) ?? [],
         worksOfCharacter: (id) => workIdsOf.get(id) ?? [],
@@ -192,8 +222,8 @@ export class CollectionQueries {
       out.set(row.id, {
         row,
         pages,
-        cast: s.cast,
-        works: s.works,
+        cast: scope.cast ? s.cast : undefined,
+        works: scope.works ? s.works : undefined,
         summary: {
           id: toId(row.id),
           kind: row.kind as CollectionKind,
@@ -231,8 +261,10 @@ export class CollectionQueries {
     const wid = q.workId !== undefined ? parseId(q.workId) : null;
     if ((q.characterId !== undefined && cid === null) || (q.workId !== undefined && wid === null)) return [];
     const k = q.q ? searchKey(q.q) : '';
+    const ids = this.candidates(q, cid, wid);
+    if (ids && !ids.length) return [];
     const out: CollectionSummary[] = [];
-    for (const l of this.loadAll().values()) {
+    for (const l of this.loadAll({ ids, cast: cid !== null, works: wid !== null }).values()) {
       const s = l.summary;
       if (s.pageCount === 0) continue;
       if (q.kind && s.kind !== q.kind) continue;
@@ -241,12 +273,12 @@ export class CollectionQueries {
       if (k && ![s.title ?? '', s.folderName, s.circle, s.artist, s.parody, s.translator].some((x) => x && searchKey(x).includes(k))) continue;
       let match: number | undefined;
       if (cid !== null) {
-        const hit = l.cast.find((c) => c.id === cid);
+        const hit = l.cast!.find((c) => c.id === cid);
         if (!hit) continue;
         match = hit.pageCount;
       }
       if (wid !== null) {
-        const hit = l.works.find((w) => w.id === wid);
+        const hit = l.works!.find((w) => w.id === wid);
         if (!hit) continue;
         match = hit.pageCount;
       }
@@ -255,10 +287,66 @@ export class CollectionQueries {
     return out.sort(compareSummaries);
   }
 
+  /**
+   * 列表的筛选能先按索引缩小到哪些合集（类型、系列、角色、作品；几个一起给时取交集），没有这些筛选时 undefined = 全部。
+   * 只缩小范围、不做判断：留下的合集照常按摘要、出场角色、作品筛选，结果和全读一遍一样。
+   * 角色和作品从它们的索引出发找页（+i.collection_id：不让查询改走合集的索引把几万页扫一遍）
+   */
+  private candidates(q: ListCollectionsQuery, cid: number | null, wid: number | null): number[] | undefined {
+    const db = this.ctx.db;
+    const sets: number[][] = [];
+    const ids = (sql: string, params: Record<string, unknown>) => db.prepare(sql).pluck().all(params) as number[];
+    if (q.kind) sets.push(ids("SELECT id FROM collections WHERE kind = @kind AND state = 'active'", { kind: q.kind }));
+    if (q.seriesKey !== undefined) {
+      sets.push(ids("SELECT id FROM collections WHERE series_key = @key AND state = 'active'", { key: q.seriesKey }));
+    }
+    // 角色：这本里有它的页（出场的门槛由摘要判断），或者手动关联了它
+    if (cid !== null) {
+      sets.push(
+        ids(
+          `SELECT i.collection_id FROM image_characters ic JOIN v_counted_images i ON i.id = ic.image_id
+             WHERE ic.character_id = @cid AND +i.collection_id IS NOT NULL
+           UNION SELECT collection_id FROM collection_characters WHERE character_id = @cid`,
+          { cid },
+        ),
+      );
+    }
+    // 作品：这本里有图的作品是它的页（imageWorkRows，同 v_image_works 口径），手动关联了它，或者手动关联了它的角色（这些角色的作品也算手动的）
+    if (wid !== null) {
+      sets.push(
+        ids(
+          `SELECT c FROM (${imageWorkRows('v_counted_images i', '+i.collection_id IS NOT NULL', 'i.collection_id AS c')})
+             WHERE work_id = @wid
+           UNION SELECT collection_id FROM collection_works WHERE work_id = @wid
+           UNION SELECT cc.collection_id FROM collection_characters cc JOIN character_works cw ON cw.character_id = cc.character_id
+             WHERE cw.work_id = @wid`,
+          { wid },
+        ),
+      );
+    }
+    if (!sets.length) return undefined;
+    return sets.reduce((a, b) => {
+      const keep = new Set(b);
+      return a.filter((x) => keep.has(x));
+    });
+  }
+
+  /** 一本的摘要（新建之后返回给前端） */
+  private summaryOf(id: number): CollectionSummary {
+    return this.loadAll({ ids: [id], cast: false, works: false }).get(id)!.summary;
+  }
+
   get(idStr: ID): GetCollectionResponse | null {
     const id = parseId(idStr);
-    const all = this.loadAll();
-    const l = id === null ? undefined : all.get(id);
+    if (id === null) return null;
+    // 只读这一本和同系列的（系列列表要它们的摘要），不读全部合集
+    const seriesKey = this.ctx.db.prepare('SELECT series_key FROM collections WHERE id = ?').pluck().get(id) as string | null | undefined;
+    if (seriesKey === undefined) return null;
+    const ids = seriesKey
+      ? (this.ctx.db.prepare("SELECT id FROM collections WHERE series_key = ? AND state = 'active'").pluck().all(seriesKey) as number[])
+      : [id];
+    const all = this.loadAll({ ids, cast: true, works: true });
+    const l = all.get(id);
     if (!l) return null;
     const data = this.derived.get();
     const pages: CollectionPage[] = l.pages.map((p, i) => ({
@@ -281,11 +369,11 @@ export class CollectionQueries {
     return {
       collection: l.summary,
       pages,
-      cast: l.cast.flatMap((c) => {
+      cast: l.cast!.flatMap((c) => {
         const rec = data.characters.get(c.id);
         return rec ? [{ character: toCharacter(rec), pageCount: c.pageCount, manual: c.manual }] : [];
       }),
-      works: l.works.flatMap((w) => {
+      works: l.works!.flatMap((w) => {
         const rec = data.works.get(w.id);
         return rec ? [{ work: toWork(rec), pageCount: w.pageCount, manual: w.manual }] : [];
       }),
@@ -301,7 +389,7 @@ export class CollectionQueries {
   stats(): { collectionCounts: Record<CollectionKind, number>; pendingCollectionCount: number } {
     const counts: Record<CollectionKind, number> = { doujin: 0, artbook: 0, group: 0 };
     const pending = new Set<string>();
-    for (const { summary: s } of this.loadAll().values()) {
+    for (const { summary: s } of this.loadAll({ cast: false, works: false }).values()) {
       if (s.pageCount === 0) continue;
       counts[s.kind]++;
       if (s.pending) pending.add(s.seriesKey ?? `c${s.id}`);
@@ -365,9 +453,9 @@ export class CollectionQueries {
     if (body.organizeFiles) {
       const detached = this.update(String(collectionId), { organizeFiles: true });
       const combined = this.ctx.undo.result(detached.message, async () => { if (detached.undoToken) await this.ctx.undo.run(detached.undoToken); if (result.undoToken) await this.ctx.undo.run(result.undoToken); });
-      return { ...combined, collection: this.loadAll().get(collectionId)!.summary };
+      return { ...combined, collection: this.summaryOf(collectionId) };
     }
-    return { ...result, collection: this.loadAll().get(collectionId)!.summary };
+    return { ...result, collection: this.summaryOf(collectionId) };
   }
 
   private memberCollections(ids: number[]): number[] {
@@ -414,7 +502,7 @@ export class CollectionQueries {
       this.membersChanged(ids);
       return { message: `已新建${KIND_LABEL[body.kind]}「${body.title?.trim() || '新组图'}」，收进 ${ids.length} 张` };
     });
-    return { ...(body.organizeFiles ? organizeCollection(this.ctx, id, r) : r), collection: this.loadAll().get(id)!.summary };
+    return { ...(body.organizeFiles ? organizeCollection(this.ctx, id, r) : r), collection: this.summaryOf(id) };
   }
 
   update(idStr: ID, body: UpdateCollectionBody): MutationResult {
