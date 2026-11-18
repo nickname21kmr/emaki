@@ -118,9 +118,33 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
       need: pageNeed(p.to),
       run: go(p.to),
     })),
-    { value: 'go:/collections', section: 'go', label: '合集', keywords: ['collections', 'heji', '本子', '画集', 'doujin', 'artbook'], icon: LibraryBig, need: pageNeed('/collections'), run: go('/collections') },
-    { value: 'go:/excluded', section: 'go', label: '已排除', keywords: NAV_KEYWORDS['/excluded'] ?? [], icon: Ban, need: pageNeed('/excluded'), run: go('/excluded') },
-    { value: 'go:/settings', section: 'go', label: '设置', keywords: NAV_KEYWORDS['/settings'] ?? [], icon: SettingsIcon, need: pageNeed('/settings'), run: go('/settings') },
+    {
+      value: 'go:/collections',
+      section: 'go',
+      label: '合集',
+      keywords: ['collections', 'heji', '本子', '画集', 'doujin', 'artbook'],
+      icon: LibraryBig,
+      need: pageNeed('/collections'),
+      run: go('/collections'),
+    },
+    {
+      value: 'go:/excluded',
+      section: 'go',
+      label: '已排除',
+      keywords: NAV_KEYWORDS['/excluded'] ?? [],
+      icon: Ban,
+      need: pageNeed('/excluded'),
+      run: go('/excluded'),
+    },
+    {
+      value: 'go:/settings',
+      section: 'go',
+      label: '设置',
+      keywords: NAV_KEYWORDS['/settings'] ?? [],
+      icon: SettingsIcon,
+      need: pageNeed('/settings'),
+      run: go('/settings'),
+    },
   ];
 
   const actions: PaletteCommand[] = [

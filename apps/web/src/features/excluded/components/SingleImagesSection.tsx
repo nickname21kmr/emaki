@@ -27,7 +27,8 @@ export function SingleImagesSection({
   selection: SinglesSelection;
   /** 正在恢复的排除记录 id */
   busyId: ID | null;
-  onRestore: (e: Exclusion) => void;
+  /** 单张恢复（删掉这条排除记录，rules）；没有这项能力时不给 */
+  onRestore?: (e: Exclusion) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const showLightbox = useLightbox((s) => s.show);
@@ -54,7 +55,7 @@ export function SingleImagesSection({
             busy={busyId === ex.id}
             onClick={(e) => onTileClick(e, ex.target, i)}
             onToggle={() => selection.toggle(ex.target)}
-            onRestore={() => onRestore(ex)}
+            onRestore={onRestore && (() => onRestore(ex))}
           />
         ))}
       </div>
@@ -84,7 +85,7 @@ function SingleTile({
   busy: boolean;
   onClick: (e: React.MouseEvent) => void;
   onToggle: () => void;
-  onRestore: () => void;
+  onRestore?: () => void;
 }) {
   // 列表只给了图片 id；取详情是为了主色占位和分级（敏感图遵守模糊偏好）
   const { data: image, isError } = useImage(exclusion.target);
@@ -135,7 +136,7 @@ function SingleTile({
         <Check className="size-3.5" strokeWidth={3} />
       </button>
 
-      {!selecting && (
+      {!selecting && onRestore && (
         <Tooltip content="恢复这张">
           <button
             type="button"

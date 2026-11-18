@@ -24,7 +24,14 @@ export const assistantApi = {
 // 只在确定是电脑上（本机入口）时才读：局域网入口不挂助手的接口，手机上助手整个不加载（胶囊、快捷键、设置分区），不发任何 /api/assistant/* 请求
 export function useAssistantSettings() {
   const local = useCapabilities().known('assistant');
-  return useQuery({ queryKey: ['assistant-settings'], queryFn: assistantApi.settings, enabled: local, staleTime: 30000, refetchOnWindowFocus: true, refetchInterval: query => (query.state.data?.enabled ? 30000 : 120000) });
+  return useQuery({
+    queryKey: ['assistant-settings'],
+    queryFn: assistantApi.settings,
+    enabled: local,
+    staleTime: 30000,
+    refetchOnWindowFocus: true,
+    refetchInterval: (query) => (query.state.data?.enabled ? 30000 : 120000),
+  });
 }
 export function useAssistantSave() {
   const client = useQueryClient();

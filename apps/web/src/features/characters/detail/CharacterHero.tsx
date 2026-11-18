@@ -12,6 +12,7 @@ import { EASE_OUT } from '@/lib/motion';
 import { useLightbox } from '@/lib/stores';
 import { COVER_VT, useViewTransitionOn } from '@/lib/viewTransition';
 import { CopyTag } from './HeroControls';
+import { useAllowedActions, type Need } from '@/lib/capabilities';
 
 const EASE = EASE_OUT;
 /** 假名或汉字：有就竖排，没有（HK416 这类）就横排 */
@@ -23,6 +24,12 @@ const rise = (i: number) => ({
   animate: { opacity: 1, y: 0 },
   transition: { duration: 0.6, ease: EASE, delay: 0.08 + i * 0.05 },
 });
+
+/**
+ * 扉页右上角各项操作需要的能力（lib/capabilities.ts）：换封面、置顶、编辑、合并、恢复自动封面改的是角色目录（catalog），
+ * 移动到文件夹会动文件（organize-files），排除 / 恢复这个角色是排除规则（rules）
+ */
+const HERO_NEEDS = { edit: 'catalog', move: 'organize-files', exclude: 'rules' } as const satisfies Record<string, Need>;
 
 /**
  * 角色扉页（SEL-8）：左边装裱过的图版，中间竖排大名和读音，右边奥付式资料表。
@@ -71,6 +78,7 @@ export function CharacterHero({
   const reading = character.aliases.find((a) => a !== name && CJK.test(a));
   const latin = character.aliases.filter((a) => !CJK.test(a));
   const partner = related[0];
+  const allow = useAllowedActions(HERO_NEEDS);
   // 菜单项要打开弹窗时先记下，等菜单关完、本该把焦点还给「更多」时再开，弹窗的焦点才不会被抢回去
   const afterClose = useRef<(() => void) | null>(null);
   const later = (fn: () => void) => () => {
@@ -184,27 +192,31 @@ export function CharacterHero({
           </dl>
         </div>
 
-        {/* 右上角操作 */}
-        <motion.div
+        {/* 右上角操作（各自需要的能力见 HERO_NEEDS，这台设备没有的不画） */}
+        {(allow.edit || allow.move || allow.exclude) && <motion.div
           className="absolute top-0 right-0 flex items-center gap-0.5"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.5, delay: 0.3 }}
         >
-          <Button variant="ghost" size="sm" icon={<ImageUp />} onClick={onChangeCover} className="mr-1">
-            换封面
-          </Button>
-          <IconButton
-            label={character.pinned ? '取消置顶' : '置顶'}
-            active={character.pinned}
-            disabled={pinPending}
-            onClick={onTogglePin}
-          >
-            <Pin className={character.pinned ? 'fill-current text-shu' : undefined} />
-          </IconButton>
-          <IconButton label="编辑角色" onClick={onEdit}>
-            <PenLine />
-          </IconButton>
+          {allow.edit && (
+            <>
+              <Button variant="ghost" size="sm" icon={<ImageUp />} onClick={onChangeCover} className="mr-1">
+                换封面
+              </Button>
+              <IconButton
+                label={character.pinned ? '取消置顶' : '置顶'}
+                active={character.pinned}
+                disabled={pinPending}
+                onClick={onTogglePin}
+              >
+                <Pin className={character.pinned ? 'fill-current text-shu' : undefined} />
+              </IconButton>
+              <IconButton label="编辑角色" onClick={onEdit}>
+                <PenLine />
+              </IconButton>
+            </>
+          )}
           <Menu
             width={200}
             trigger={<IconButton label="更多"><Ellipsis /></IconButton>}
@@ -216,29 +228,37 @@ export function CharacterHero({
               fn();
             }}
           >
-            <MenuItem icon={<GitMerge />} onSelect={later(onMerge)}>
-              合并到其他角色…
-            </MenuItem>
-            <MenuItem icon={<FolderInput />} onSelect={later(onMove)}>
-              移动到文件夹…
-            </MenuItem>
-            {character.coverManual && (
+            {allow.edit && (
+              <MenuItem icon={<GitMerge />} onSelect={later(onMerge)}>
+                合并到其他角色…
+              </MenuItem>
+            )}
+            {allow.move && (
+              <MenuItem icon={<FolderInput />} onSelect={later(onMove)}>
+                移动到文件夹…
+              </MenuItem>
+            )}
+            {allow.edit && character.coverManual && (
               <MenuItem icon={<RotateCcw />} onSelect={onRestoreCover}>
                 恢复自动封面
               </MenuItem>
             )}
-            <MenuSeparator />
-            {onRestoreExcluded ? (
-              <MenuItem icon={<RotateCcw />} onSelect={onRestoreExcluded}>
-                恢复这个角色
-              </MenuItem>
-            ) : (
-              <MenuItem icon={<Ban />} danger onSelect={later(onExclude)}>
-                排除这个角色…
-              </MenuItem>
+            {allow.exclude && (
+              <>
+                <MenuSeparator />
+                {onRestoreExcluded ? (
+                  <MenuItem icon={<RotateCcw />} onSelect={onRestoreExcluded}>
+                    恢复这个角色
+                  </MenuItem>
+                ) : (
+                  <MenuItem icon={<Ban />} danger onSelect={later(onExclude)}>
+                    排除这个角色…
+                  </MenuItem>
+                )}
+              </>
             )}
           </Menu>
-        </motion.div>
+        </motion.div>}
       </section>
     </div>
   );

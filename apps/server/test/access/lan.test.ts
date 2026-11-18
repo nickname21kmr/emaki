@@ -141,7 +141,8 @@ describe('凭证：Bearer 或 Cookie', () => {
   it('/api/me（网页用）：这台设备和真正生效的范围——库里的权限就算被改出了 devices、desktop 也不算；/api/v1/me 同一份', async () => {
     const { device, auth } = makeDevice(f.ds, ['curate', 'read', 'settings']);
     const me = await f.app.inject({ method: 'GET', url: '/api/me', headers: auth });
-    expect([me.statusCode, me.json()]).toEqual([200, { kind: 'device', deviceId: device.id, name: 'Pixel 7', scopes: ['read', 'curate', 'settings'] }]);
+    expect(me.statusCode).toBe(200);
+    expect(me.json()).toEqual({ kind: 'device', deviceId: device.id, name: 'Pixel 7', scopes: ['read', 'curate', 'settings'] });
     f.ds.access.devices.get(device.id)!.scopes.push('devices', 'desktop');
     expect((await f.app.inject({ method: 'GET', url: '/api/me', headers: auth })).json().scopes).toEqual(['read', 'curate', 'settings']);
     expect((await f.app.inject({ method: 'GET', url: '/api/v1/me', headers: auth })).json()).toEqual({
@@ -151,7 +152,8 @@ describe('凭证：Bearer 或 Cookie', () => {
     });
     // 一项权限都没有也能问（不在注册表里，不受 scope 拦截）
     const bare = makeDevice(f.ds, []);
-    expect((await f.app.inject({ method: 'GET', url: '/api/me', headers: bare.auth })).json()).toMatchObject({ kind: 'device', scopes: [] });
+    const none = await f.app.inject({ method: 'GET', url: '/api/me', headers: bare.auth });
+    expect(none.json()).toMatchObject({ kind: 'device', scopes: [] });
   });
 
   it('不认识的凭证 401 unauthorized；撤销后立即 401 device_revoked（Bearer 和 Cookie 一样）', async () => {

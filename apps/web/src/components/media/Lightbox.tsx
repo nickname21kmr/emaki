@@ -288,11 +288,12 @@ function LightboxView({
   useHotkey('arrowleft', guard(() => go(-1)), { repeat: true });
   useHotkey('arrowright', guard(() => go(1)), { repeat: true });
   useHotkey('i', guard(toggleInfo));
-  useHotkey('f', guard(actions.toggleFavorite));
-  useHotkey('e', guard(actions.exclude));
-  useHotkey('o', guard(actions.toggleOriginal));
+  // 改动的快捷键和信息面板的按钮一样按这台设备的能力（IMAGE_ACTION_NEEDS）
+  useHotkey('f', guard(actions.toggleFavorite), { enabled: actions.allow.favorite });
+  useHotkey('e', guard(actions.exclude), { enabled: actions.allow.exclude });
+  useHotkey('o', guard(actions.toggleOriginal), { enabled: actions.allow.original });
   const [kindOpen, setKindOpen] = useState(false);
-  useHotkey('c', guard(() => setKindOpen(true)), { enabled: !!base && !kindOpen });
+  useHotkey('c', guard(() => setKindOpen(true)), { enabled: !!base && !kindOpen && actions.allow.kind });
   useHotkey('space', guard(() => setPaused((p) => !p)), { enabled: slideshow });
 
   // 引信烧完：等下一张的 960 缩略图解码好再前进，最后一张之后绕回开头
@@ -350,7 +351,8 @@ function LightboxView({
           idle={idle}
           playing={slideshow ? !paused : undefined}
           onTogglePlay={() => setPaused((p) => !p)}
-          kind={base ? (actions.kind ?? base.kind) : undefined}
+          // 顶栏的「归入…」也要 curate：没有时不画
+          kind={base && actions.allow.kind ? (actions.kind ?? base.kind) : undefined}
           kindOpen={kindOpen}
           onKindOpenChange={setKindOpen}
           onSetKind={actions.setKind}

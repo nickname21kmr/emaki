@@ -22,6 +22,7 @@ import { useBriefGuard } from '@/lib/guard';
 import { enterAction, reclaimBytes, resolveKeep } from './utils';
 import { pickRevealed } from '@/lib/undoPlace';
 import { useUndoRevealTarget } from '@/lib/useUndoReveal';
+import { useCan } from '@/lib/capabilities';
 
 type View = 'pending' | 'resolved';
 
@@ -125,6 +126,8 @@ export function DuplicatesPage() {
     focus: (v) => ({ groups: [v.id] }),
     onSuccess: (_, v) => dismiss([v.id]),
   });
+  // 「不是重复」是 duplicates（处理重复本身是 organize-files，整页要它，见 src/pages.ts）
+  const canIgnore = useCan('duplicates');
   const ignoreM = useMutate((id: ID) => api.ignoreDuplicate(id), {
     label: '标记不是重复',
     focus: (id) => ({ groups: [id] }),
@@ -341,7 +344,7 @@ export function DuplicatesPage() {
                       onActivate={() => setActiveId(g.id)}
                       onToggle={(imageId) => toggle(g, imageId)}
                       onResolve={() => resolveGroup(g)}
-                      onIgnore={() => ignoreGroup(g)}
+                      onIgnore={canIgnore ? () => ignoreGroup(g) : undefined}
                       lensOn={lensGroup === g.id}
                       onToggleLens={() => setLensGroup((cur) => (cur === g.id ? null : g.id))}
                       onOpen={(k) =>

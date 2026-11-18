@@ -4,6 +4,7 @@ import { useMemo, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Button, EmptyState, ErrorState, Spinner } from '@/components/ui';
 import { useCan } from '@/lib/capabilities';
+import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import type { CharactersView } from '@/lib/stores';
 import { CharacterRows, ListHeader, ListSkeleton } from './CharacterList';
@@ -225,7 +226,10 @@ function Empty({
         canVisit('/settings') && (
           <Link
             to="/settings"
-            className="inline-flex h-9 items-center rounded-md bg-ink px-3.5 text-sm font-medium text-fg-inverse transition-colors hover:bg-ink-hover"
+            className={cn(
+              'inline-flex h-9 items-center rounded-md bg-ink px-3.5 text-sm font-medium text-fg-inverse',
+              'transition-colors hover:bg-ink-hover',
+            )}
           >
             添加图片文件夹
           </Link>

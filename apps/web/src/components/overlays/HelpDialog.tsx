@@ -3,6 +3,7 @@ import { ArrowRight } from 'lucide-react';
 import { Fragment, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { Dialog, Kbd } from '@/components/ui';
+import { cn } from '@/lib/cn';
 import { useOverlays } from '@/lib/stores';
 import { useCanVisit } from '@/pages';
 import { PAGE_JUMPS, SHORTCUT_GROUPS, type ShortcutGroup, type ShortcutGroupId, type ShortcutItem } from './shortcuts';
@@ -131,7 +132,10 @@ function LocalNote({ onSettings }: { onSettings: (() => void) | null }) {
         <button
           type="button"
           onClick={onSettings}
-          className="flex shrink-0 items-center gap-1 rounded-full px-3 py-1.5 text-[12px] font-medium text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+          className={cn(
+            'flex shrink-0 items-center gap-1 rounded-full px-3 py-1.5 text-[12px] font-medium text-fg-muted',
+            'transition-colors hover:bg-hover hover:text-fg',
+          )}
         >
           设置
           <ArrowRight className="size-3.5" />

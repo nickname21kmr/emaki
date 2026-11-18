@@ -55,52 +55,7 @@ export function InfoPanel({
       <div key={base?.id} className="min-h-0 flex-1 animate-fade-in overflow-y-auto overscroll-contain scrollbar-thin">
         <Header base={base} artists={detail?.artists} collection={detail?.collection} />
 
-        <div className="grid grid-cols-5 gap-1 px-3 pb-4">
-          <ActionTile
-            icon={<Heart />}
-            label={actions.favorite ? '已收藏' : '收藏'}
-            tooltip={actions.favorite ? '取消收藏' : '收藏'}
-            shortcut="F"
-            active={actions.favorite}
-            disabled={!base}
-            onClick={actions.toggleFavorite}
-          />
-          <ActionTile
-            icon={<Sparkles />}
-            label={actions.original ? '已归原创' : '归为原创'}
-            tooltip={actions.original ? '移出原创' : '归为原创：画师自己的原创角色，不再出现在未识别'}
-            shortcut="O"
-            active={actions.original}
-            disabled={!base || (base.kind !== 'illustration' && base.kind !== 'comic')}
-            onClick={actions.toggleOriginal}
-          />
-          <ActionTile
-            icon={<FolderOpen />}
-            label="定位"
-            tooltip="在资源管理器中显示"
-            disabled={!base}
-            onClick={actions.reveal}
-          />
-          <ActionTile
-            icon={<Ban />}
-            label="排除"
-            tooltip="排除：不再出现在图库和统计里，文件不会被删除"
-            shortcut="E"
-            pending={actions.busy.exclude}
-            disabled={!base || !!actions.leaving}
-            onClick={actions.exclude}
-          />
-          <ActionTile
-            icon={<Trash2 />}
-            label="回收站"
-            tooltip={TRASH_HINT}
-            danger
-            pending={actions.busy.trash}
-            // 刚排除 / 移走的那张还停在原地：连点不会落到下一张
-            disabled={!base || !!actions.leaving}
-            onClick={actions.trash}
-          />
-        </div>
+        <ActionTiles base={base} actions={actions} />
 
         {detail ? (
           <>
@@ -118,17 +73,21 @@ export function InfoPanel({
             )}
 
             <Section title="分级">
-              <Segmented<Rating>
-                size="sm"
-                value={actions.rating ?? detail.rating}
-                onChange={actions.setRating}
-                options={RATINGS.map((r) => ({ value: r, label: RATING_LABEL[r] }))}
-              />
+              {actions.allow.rating ? (
+                <Segmented<Rating>
+                  size="sm"
+                  value={actions.rating ?? detail.rating}
+                  onChange={actions.setRating}
+                  options={RATINGS.map((r) => ({ value: r, label: RATING_LABEL[r] }))}
+                />
+              ) : (
+                <span className="text-[13px]">{RATING_LABEL[actions.rating ?? detail.rating]}</span>
+              )}
             </Section>
 
             <KindSection detail={detail} actions={actions} />
 
-            <Details detail={detail} onNavigate={onNavigate} />
+            <Details detail={detail} actions={actions} onNavigate={onNavigate} />
             <PanelTags tags={detail.tags} onTagClick={onTagClick} />
           </>
         ) : error ? (
@@ -150,6 +109,73 @@ export function InfoPanel({
 }
 
 /**
+ * 信息面板顶上的一排操作。每个按钮的能力在 IMAGE_ACTION_NEEDS 里，这台设备没有的不画，剩下的平分一行
+ * （手机上默认是收藏、归为原创、排除三个）。
+ */
+function ActionTiles({ base, actions }: { base: ImageItem | undefined; actions: ImageActions }) {
+  const tiles = [
+    actions.allow.favorite && (
+      <ActionTile
+        key="favorite"
+        icon={<Heart />}
+        label={actions.favorite ? '已收藏' : '收藏'}
+        tooltip={actions.favorite ? '取消收藏' : '收藏'}
+        shortcut="F"
+        active={actions.favorite}
+        disabled={!base}
+        onClick={actions.toggleFavorite}
+      />
+    ),
+    actions.allow.original && (
+      <ActionTile
+        key="original"
+        icon={<Sparkles />}
+        label={actions.original ? '已归原创' : '归为原创'}
+        tooltip={actions.original ? '移出原创' : '归为原创：画师自己的原创角色，不再出现在未识别'}
+        shortcut="O"
+        active={actions.original}
+        disabled={!base || (base.kind !== 'illustration' && base.kind !== 'comic')}
+        onClick={actions.toggleOriginal}
+      />
+    ),
+    actions.allow.reveal && (
+      <ActionTile key="reveal" icon={<FolderOpen />} label="定位" tooltip="在资源管理器中显示" disabled={!base} onClick={actions.reveal} />
+    ),
+    actions.allow.exclude && (
+      <ActionTile
+        key="exclude"
+        icon={<Ban />}
+        label="排除"
+        tooltip="排除：不再出现在图库和统计里，文件不会被删除"
+        shortcut="E"
+        pending={actions.busy.exclude}
+        disabled={!base || !!actions.leaving}
+        onClick={actions.exclude}
+      />
+    ),
+    actions.allow.trash && (
+      <ActionTile
+        key="trash"
+        icon={<Trash2 />}
+        label="回收站"
+        tooltip={TRASH_HINT}
+        danger
+        pending={actions.busy.trash}
+        // 刚排除 / 移走的那张还停在原地：连点不会落到下一张
+        disabled={!base || !!actions.leaving}
+        onClick={actions.trash}
+      />
+    ),
+  ].filter(Boolean);
+  if (!tiles.length) return null;
+  return (
+    <div className="grid gap-1 px-3 pb-4" style={{ gridTemplateColumns: `repeat(${tiles.length}, minmax(0, 1fr))` }}>
+      {tiles}
+    </div>
+  );
+}
+
+/**
  * 类型（T32a / T32b）：六枚印章一排，当前类型是白文实底，其余朱文；点一下就改（可撤销）。
  * 是动图的，下面一行写「动图」和为什么算（D5：另一个维度，按帧数自动认出，不能改，所以不是印章）。
  * 最下面一行是类型的判定依据；手动改过的可以恢复自动判断。
@@ -166,7 +192,7 @@ function KindSection({ detail, actions }: { detail: ImageDetail; actions: ImageA
               type="button"
               aria-pressed={k === kind}
               aria-label={KIND_LABEL[k]}
-              disabled={actions.kindBusy}
+              disabled={actions.kindBusy || !actions.allow.kind}
               onClick={() => k !== kind && actions.setKind(k)}
               className={cn('rounded-[4px] transition-opacity duration-150', k === kind ? 'opacity-100' : 'opacity-70 hover:opacity-100')}
             >
@@ -185,10 +211,19 @@ function KindSection({ detail, actions }: { detail: ImageDetail; actions: ImageA
       <p className="mt-2 text-[11px] leading-relaxed text-fg-subtle">
         {manual ? (
           <>
-            你手动归的 ·{' '}
-            <button type="button" onClick={() => actions.setKind('auto')} className="text-fg-muted underline-offset-2 hover:text-fg hover:underline">
-              恢复自动判断
-            </button>
+            你手动归的
+            {actions.allow.kind && (
+              <>
+                {' · '}
+                <button
+                  type="button"
+                  onClick={() => actions.setKind('auto')}
+                  className="text-fg-muted underline-offset-2 hover:text-fg hover:underline"
+                >
+                  恢复自动判断
+                </button>
+              </>
+            )}
           </>
         ) : (
           <>自动判断{detail.kindReason ? ` · ${detail.kindReason}` : ''}</>
@@ -299,7 +334,7 @@ function HeadAvatar({ id, className }: { id: string; className?: string }) {
   return <CharacterAvatar character={data.character} size={36} shape="circle" className={cn('ring-2 ring-sheet', className)} />;
 }
 
-function Details({ detail: d, onNavigate }: { detail: ImageDetail; onNavigate: () => void }) {
+function Details({ detail: d, actions, onNavigate }: { detail: ImageDetail; actions: ImageActions; onNavigate: () => void }) {
   const megapixels = (d.width * d.height) / 1_000_000;
   const copyPath = () => {
     copyText(d.absPath)
@@ -323,9 +358,10 @@ function Details({ detail: d, onNavigate }: { detail: ImageDetail; onNavigate: (
         </Row>
         <Row label="修改">{formatDateTime(d.modifiedAt)}</Row>
         <Row label="来源">
-          <PanelSource key={d.id} detail={d} />
+          <PanelSource key={d.id} detail={d} editable={actions.allow.source} />
         </Row>
-        {(d.collection || d.relPath.includes('/')) && (
+        {/* 不在合集里时这一行是「收进组图…」「成册…」（collections）：没有这项能力就不占地方 */}
+        {(d.collection || (actions.allow.collection && d.relPath.includes('/'))) && (
           <Row label={d.collection ? '收录于' : '合集'}>
             <PanelCollection detail={d} onNavigate={onNavigate} />
           </Row>

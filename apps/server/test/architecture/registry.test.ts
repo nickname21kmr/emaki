@@ -208,7 +208,13 @@ describe('MCP 工具从注册表生成（附录 #35）', () => {
     expect(settings.isError).toBeFalsy();
     expect(JSON.parse(settings.content[0].text).danbooru).toEqual(expect.objectContaining({ hasApiKey: expect.any(Boolean) }));
     expect(JSON.parse(settings.content[0].text).danbooru).not.toHaveProperty('apiKey');
-    for (const path of ['/api/settings/source-mode?mode=broad', '/api/tagger/promotable', '/api/tagger/models', '/api/system/network-check']) {
+    const stillDenied = [
+      '/api/settings/source-mode?mode=broad',
+      '/api/tagger/promotable',
+      '/api/tagger/models',
+      '/api/system/network-check',
+    ];
+    for (const path of stillDenied) {
       const denied: any = await client.callTool({ name: 'read_library', arguments: { path } });
       expect([path, denied.isError]).toEqual([path, true]);
     }

@@ -16,6 +16,7 @@ import { justify } from './justify';
 const NO_FLASH: ReadonlySet<ID> = new Set();
 import { Thumb } from './Thumb';
 import type { BlurContext } from '@/lib/blur';
+import { useCan } from '@/lib/capabilities';
 
 export interface ImageGridProps {
   images: ImageItem[];
@@ -82,6 +83,8 @@ export function ImageGrid({
 
   const { selection, selecting, handleClick, gridId, ids } = useGridInteractions(images, selectionScope, onOpen);
   const favorite = useMutate(({ ids, value }: { ids: ID[]; value: boolean }) => api.bulkImages({ ids, action: { type: 'favorite', value } }));
+  // 收藏要 curate（lib/capabilities.ts）：没有的设备上格子里只显示已收藏的心，点不了
+  const canFavorite = useCan('curate');
 
   useLightboxFeed(gridId, ids, { total, hasMore, loadingMore, onLoadMore }, (id) => {
     const at = images.findIndex((i) => selectionIds(i).includes(id));
@@ -139,7 +142,11 @@ export function ImageGrid({
                   selecting={selecting}
                   onClick={(e) => handleClick(e, image, index)}
                   onToggle={() => toggleImageSelection(image)}
-                  onFavorite={() => favorite.mutate({ ids: selectionIds(image), value: !(image.collectionGroup?.allFavorite ?? image.favorite) })}
+                  onFavorite={
+                    canFavorite
+                      ? () => favorite.mutate({ ids: selectionIds(image), value: !(image.collectionGroup?.allFavorite ?? image.favorite) })
+                      : undefined
+                  }
                   overlay={renderOverlay?.(image)}
                   badges={renderBadges?.(image)}
                   rated={rated?.(image)}
@@ -347,7 +354,7 @@ function Tile({
   badges?: ReactNode;
   rated?: boolean;
   blurContext?: BlurContext;
-  onFavorite: () => void;
+  onFavorite?: () => void;
 }) {
   const thumbWidth = gridThumbWidth(width);
   const starred = image.collectionGroup?.allFavorite ?? image.favorite;
@@ -403,7 +410,18 @@ function Tile({
           </span>
         </div>
       )}
-      {!selecting && (
+      {!selecting && !onFavorite && starred && (
+        <span
+          aria-label="已收藏"
+          className={cn(
+            'absolute right-1.5 bottom-1.5 z-10 flex size-7 items-center justify-center text-white',
+            '[&_svg]:size-4 [&_svg]:drop-shadow-[0_1px_2px_rgb(0_0_0/0.5)]',
+          )}
+        >
+          <Heart className="fill-white" />
+        </span>
+      )}
+      {!selecting && onFavorite && (
         <button
           type="button"
           aria-label={image.collectionGroup ? `${starred ? '取消收藏' : '收藏'}这 ${image.collectionGroup.count} 张` : starred ? '取消收藏' : '收藏'}

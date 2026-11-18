@@ -127,7 +127,11 @@ describe('默认权限的设备', () => {
     for (const url of ['/api/settings', '/api/queries/settings.get']) {
       const res = await f.app.inject({ method: 'GET', url, headers: auth });
       expect([url, res.statusCode]).toEqual([url, 200]);
-      expect(res.json()).toMatchObject({ ui: { theme: expect.any(String) }, danbooru: { hasApiKey: true }, libraryRoots: expect.any(Array) });
+      expect(res.json()).toMatchObject({
+        ui: { theme: expect.any(String) },
+        danbooru: { hasApiKey: true },
+        libraryRoots: expect.any(Array),
+      });
       expect(res.body).not.toContain('secret-key-123');
     }
     const patch = await f.app.inject({ method: 'PATCH', url: '/api/settings', headers: auth, payload: { ui: { theme: 'dark' } } });

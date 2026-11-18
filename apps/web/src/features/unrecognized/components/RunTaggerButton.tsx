@@ -1,5 +1,6 @@
 import { ScanSearch } from 'lucide-react';
 import { Button, Spinner, Tooltip } from '@/components/ui';
+import { useCan } from '@/lib/capabilities';
 import { cn } from '@/lib/cn';
 import { useTagJob } from '../useTagJob';
 
@@ -22,6 +23,8 @@ export function RunTaggerButton({
   className?: string;
 }) {
   const { running, progress, start } = useTagJob();
+  // 启动任务要 jobs（lib/capabilities.ts）：没有的设备上只看进度，不给按钮
+  const canStart = useCan('jobs');
 
   if (running) {
     return (
@@ -49,6 +52,7 @@ export function RunTaggerButton({
     );
   }
 
+  if (!canStart) return null;
   const button = (
     <Button variant={variant} size={size} icon={<ScanSearch />} onClick={start} className={className}>
       {label}

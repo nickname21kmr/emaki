@@ -9,7 +9,8 @@ const SITE_LABEL: Record<ImageSource['site'], string> = {
 };
 const control = 'rounded-md border border-line bg-transparent px-2 py-1.5 disabled:opacity-40';
 
-export function PanelSource({ detail }: { detail: ImageDetail }) {
+/** editable：改来源要 curate（IMAGE_ACTION_NEEDS），没有时只显示 */
+export function PanelSource({ detail, editable = true }: { detail: ImageDetail; editable?: boolean }) {
   const [editing, setEditing] = useState(false);
   const [url, setUrl] = useState('');
   const [artist, setArtist] = useState('');
@@ -34,7 +35,7 @@ export function PanelSource({ detail }: { detail: ImageDetail }) {
           ) : <span className="text-fg-subtle">{detail.sourceManual ? '已清除' : '未知'}</span>}
           <div className="mt-1 text-[11px] text-fg-subtle" title={detail.sourceManual ? '扫描时保留此设置，可通过「编辑来源」修改' : undefined}>{detail.sourceManual ? '手动设置' : '自动解析'}</div>
         </div>
-        {!editing && <button type="button" className="shrink-0 text-fg-muted hover:text-fg" onClick={() => {
+        {!editing && editable && <button type="button" className="shrink-0 text-fg-muted hover:text-fg" onClick={() => {
           setUrl(source?.url ?? ''); setArtist(source?.artist ?? ''); setEditing(true);
         }}>编辑来源</button>}
       </div>

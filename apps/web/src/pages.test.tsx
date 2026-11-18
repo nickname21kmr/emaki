@@ -20,13 +20,21 @@ import { TooltipProvider } from '@/components/ui';
 import { noAccessText } from '@/features/access/NoAccessPage';
 import { PageGate } from '@/features/access/PageGate';
 import { SECTIONS, useSettingsSections } from '@/features/settings/sections';
-import { ALL_CAPABILITIES, capabilitiesOf, type Need } from '@/lib/capabilities';
+import { IMAGE_ACTION_NEEDS } from '@/components/media/lightbox/useImageActions';
+import { SelectionBar, type SelectionAction } from '@/features/characters/detail/SelectionBar';
+import { GALLERY_SELECTION_NEEDS } from '@/features/gallery/components/SelectionBar';
+import { ALL_CAPABILITIES, allowedActions, capabilitiesOf, type Need } from '@/lib/capabilities';
 import { qk } from '@/lib/queries';
 import { canVisit, PAGES, pageOf, type PageId } from './pages';
 import { routes } from './router';
 
 const local: Me = { kind: 'local', scopes: Object.keys(SCOPES) as Scope[] };
-const device = (scopes: readonly Scope[] = DEVICE_DEFAULT_SCOPES): Me => ({ kind: 'device', deviceId: 'd1', name: 'Pixel 7', scopes: [...scopes] });
+const device = (scopes: readonly Scope[] = DEVICE_DEFAULT_SCOPES): Me => ({
+  kind: 'device',
+  deviceId: 'd1',
+  name: 'Pixel 7',
+  scopes: [...scopes],
+});
 const phone = capabilitiesOf(device());
 const desk = capabilitiesOf(local);
 
@@ -72,9 +80,13 @@ describe('路由：每一页都声明了需要的能力', () => {
   it('默认权限的手机：去不了设置、重复（要 organize-files）、首次使用引导；电脑上哪都能去', () => {
     const blocked = ['/settings', '/duplicates', '/welcome'];
     for (const to of blocked) expect([to, canVisit(phone, to)]).toEqual([to, false]);
-    for (const to of ['/', '/gallery', '/characters', '/characters/1', '/works/1', '/unrecognized', '/collections', '/annex/comic', '/excluded'])
-      expect([to, canVisit(phone, to)]).toEqual([to, true]);
-    for (const id of Object.keys(PAGES) as PageId[]) expect([id, canVisit(desk, PAGES[id].path.replace(/:\w+\??/g, '1'))]).toEqual([id, true]);
+    const open = ['/', '/gallery', '/characters', '/characters/1', '/works/1', '/unrecognized', '/collections', '/annex/comic'];
+    open.push('/excluded');
+    for (const to of open) expect([to, canVisit(phone, to)]).toEqual([to, true]);
+    for (const id of Object.keys(PAGES) as PageId[]) {
+      const to = PAGES[id].path.replace(/:\w+\??/g, '1');
+      expect([id, canVisit(desk, to)]).toEqual([id, true]);
+    }
   });
 });
 
@@ -106,7 +118,7 @@ describe('侧栏', () => {
 
   it('手机上（默认权限）没有重复、设置；加上 settings 之后有设置；电脑上全有', () => {
     const all = Object.values(sidebarItems(summary)).flat();
-    const shown = (caps: ReadonlySet<never> | ReturnType<typeof capabilitiesOf>) => all.filter((i) => canVisit(caps, i.to)).map((i) => i.label);
+    const shown = (caps: ReturnType<typeof capabilitiesOf>) => all.filter((i) => canVisit(caps, i.to)).map((i) => i.label);
     expect(shown(phone)).toEqual(['首页', '图库', '角色', '原创', '合集', '别册', '未识别', '已排除']);
     expect(shown(capabilitiesOf(device([...DEVICE_DEFAULT_SCOPES, 'settings'])))).toContain('设置');
     expect(shown(desk)).toHaveLength(all.length);
@@ -154,10 +166,39 @@ describe('命令面板', () => {
   }
   it('手机上（默认权限）没有前往设置 / 重复、切换主题、运行任务；电脑上都有', () => {
     const phoneList = render(<Probe />, device()).split(' ');
-    for (const v of ['go:/settings', 'go:/duplicates', 'act:theme', 'act:tag', 'act:dedupe', 'act:scan']) expect(phoneList).not.toContain(v);
+    const hidden = ['go:/settings', 'go:/duplicates', 'act:theme', 'act:tag', 'act:dedupe', 'act:scan'];
+    for (const v of hidden) expect(phoneList).not.toContain(v);
     for (const v of ['go:/', 'go:/gallery', 'go:/unrecognized', 'act:blur', 'act:help']) expect(phoneList).toContain(v);
     const deskList = render(<Probe />, local).split(' ');
-    for (const v of ['go:/settings', 'go:/duplicates', 'act:theme', 'act:tag', 'act:dedupe', 'act:scan']) expect(deskList).toContain(v);
+    for (const v of hidden) expect(deskList).toContain(v);
+  });
+});
+
+describe('看图器和多选栏的操作', () => {
+  it('看图器：手机上（默认权限）没有定位（desktop）、回收站（organize-files），收藏、归为原创、排除、改分级 / 类型 / 角色都在', () => {
+    const phoneAllow = allowedActions(IMAGE_ACTION_NEEDS, phone);
+    expect(phoneAllow).toMatchObject({ reveal: false, trash: false, favorite: true, original: true, exclude: true });
+    expect(phoneAllow).toMatchObject({ rating: true, kind: true, characters: true, artists: true, source: true, collection: true });
+    expect(Object.values(allowedActions(IMAGE_ACTION_NEEDS, desk)).every(Boolean)).toBe(true);
+    // 只能看的设备：什么都改不了
+    expect(Object.values(allowedActions(IMAGE_ACTION_NEEDS, capabilitiesOf(device(['read'])))).some(Boolean)).toBe(false);
+  });
+
+  it('图库的多选栏：手机上没有移动、回收站；每一项都声明了 need', () => {
+    for (const [k, need] of Object.entries(GALLERY_SELECTION_NEEDS)) expect([k, isNeed(need)]).toEqual([k, true]);
+    const allow = allowedActions(GALLERY_SELECTION_NEEDS, phone);
+    expect(allow).toMatchObject({ move: false, trash: false, assign: true, favorite: true, group: true, exclude: true });
+  });
+
+  it('角色 / 作品 / 合集页的多选栏按每个操作的 need 过滤', () => {
+    const act = (key: string, need: Need): SelectionAction => ({ key, label: key, icon: null, need, onClick: () => {} });
+    const actions = [act('收藏', 'curate'), act('移动到文件夹', 'organize-files'), act('组图', 'collections')];
+    const bar = (me: Me) => render(<SelectionBar count={2} actions={actions} onClear={() => {}} />, me);
+    const onPhone = bar(device());
+    expect(onPhone).toContain('收藏');
+    expect(onPhone).toContain('组图');
+    expect(onPhone).not.toContain('移动到文件夹');
+    expect(bar(local)).toContain('移动到文件夹');
   });
 });
 
@@ -179,7 +220,8 @@ describe('说明页', () => {
     expect(dup).toContain('重复');
     expect(dup).not.toContain('真正的页面');
     expect(render(<PageGate page="settings">{page}</PageGate>, device(), '/settings')).toContain('图库设置、图库文件夹、识别方式');
-    expect(render(<PageGate page="settings">{page}</PageGate>, device([...DEVICE_DEFAULT_SCOPES, 'settings']), '/settings')).toBe('<p>真正的页面</p>');
+    const withSettings = device([...DEVICE_DEFAULT_SCOPES, 'settings']);
+    expect(render(<PageGate page="settings">{page}</PageGate>, withSettings, '/settings')).toBe('<p>真正的页面</p>');
     expect(render(<PageGate page="gallery">{page}</PageGate>, device(), '/gallery')).toBe('<p>真正的页面</p>');
     expect(render(<PageGate page="duplicates">{page}</PageGate>, local, '/duplicates')).toBe('<p>真正的页面</p>');
     expect(render(<PageGate page="duplicates">{page}</PageGate>, undefined, '/duplicates')).toBe('');
