@@ -153,6 +153,17 @@ describe('AI 助手的修改进网页的撤销栈（附录 #35）', () => {
     handleServerEvent(client, invalidate, command({ undo: 'barrier', undoToken: null }));
     expect(useUndoStore.getState().entries).toEqual([]);
   });
+
+  it('手机（device:<id>）的操作不进电脑页面的撤销栈：手机从自己的响应拿令牌（docs/mobile.md 2.5）', () => {
+    const { client } = fakeClient();
+    const { invalidate } = createInvalidator(client);
+    handleServerEvent(client, invalidate, command({ actor: 'device:abc123', undoToken: 'device-tok' }));
+    handleServerEvent(client, invalidate, command({ actor: 'job:tag', undoToken: 'job-tok' }));
+    expect(useUndoStore.getState().entries).toEqual([]);
+    // 助手的照旧
+    handleServerEvent(client, invalidate, command());
+    expect(useUndoStore.getState().entries.map((e) => e.token)).toEqual(['assistant-tok']);
+  });
 });
 
 describe('撤销屏障来自命令注册表（附录 #33）', () => {
