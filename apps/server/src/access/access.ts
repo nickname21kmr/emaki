@@ -14,6 +14,7 @@ import type { Db } from '../db/connection.ts';
 import { ConflictError, HttpError } from '../http/errors.ts';
 import { loadOrCreateCert, readCert, type LanTls } from './cert.ts';
 import { deviceInfo, Devices, type Device } from './devices.ts';
+import { lanAddresses } from './discovery.ts';
 import { Pairing } from './pairing.ts';
 
 /** App 低于这个版本时提示升级（hello 里给） */
@@ -39,14 +40,6 @@ export interface LanController {
   state(): LanState;
   /** 按现在的配置启停：关掉旧的、按新端口开（不抛错，失败记进 state().error） */
   apply(): Promise<void>;
-}
-
-/** 电脑所有网卡上的 IPv4（不含本机回环）：hello 和二维码里给，App 换地址时挨个试（包括 Tailscale 的 100.x） */
-export function lanAddresses(): string[] {
-  const out: string[] = [];
-  for (const list of Object.values(os.networkInterfaces()))
-    for (const a of list ?? []) if (a.family === 'IPv4' && !a.internal && !out.includes(a.address)) out.push(a.address);
-  return out;
 }
 
 interface ConfigRow {

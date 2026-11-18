@@ -166,7 +166,8 @@ async function discover(): Promise<void> {
   console.log('在局域网里搜 _emaki._tcp（5 秒）…');
   const browser = bonjour.find({ type: 'emaki' }, (s) => {
     const txt = (s.txt ?? {}) as Record<string, string>;
-    const where = (s.addresses ?? []).join(', ') || s.host;
+    // 电脑按网卡分别广播，TXT 的 addr 就是手机所在这块网卡上电脑的地址（access/discovery.ts）
+    const where = txt.addr ?? ((s.addresses ?? []).join(', ') || s.host);
     const line = `${txt.name ?? s.name}  id=${txt.id ?? '?'}  协议 v${txt.v ?? '?'}  地址 ${where}  端口 ${s.port}`;
     if (!found.has(s.fqdn)) console.log(`• ${line}`);
     found.set(s.fqdn, line);
