@@ -145,6 +145,16 @@ describe('统计、作品、角色、搜索（routes/library.ts）', () => {
     expect(json).toMatchObject({ imageCount: 32, characterCount: 7, workCount: 3, unrecognizedCount: 7, excludedCount: 4 });
   });
 
+  route('GET /api/summary', async () => {
+    const { status, json } = await call('GET', '/api/summary');
+    expect(status).toBe(200);
+    const stats = (await call('GET', '/api/stats')).json;
+    // 汇总接口的数和 /api/stats 对得上（逐项的对账在 readmodel/summary.test.ts）
+    expect(json.images).toMatchObject({ total: stats.imageCount, illustrations: stats.kindCounts.illustration });
+    expect(json.triage.images + json.triage.books).toBe(json.triage.total);
+    expect(json).toMatchObject({ characters: 7, works: 3, recognition: { scope: expect.any(Number) } });
+  });
+
   route('GET /api/content-kinds', async () => {
     const { status, json } = await call('GET', '/api/content-kinds');
     expect(status).toBe(200);

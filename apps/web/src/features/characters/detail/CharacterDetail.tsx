@@ -19,6 +19,7 @@ import { MergeCharacterDialog } from './MergeCharacterDialog';
 import { folderNameOf, MoveImagesDialog } from '@/components/media/MoveImagesDialog';
 import { RelatedCharacters, RelatedCharactersSkeleton } from './RelatedCharacters';
 import { useInView } from './useInView';
+import { PageBlocks } from '@/blocks/PageBlocks';
 
 type DialogKind = 'edit' | 'merge' | 'move' | 'exclude' | 'cover' | null;
 
@@ -127,35 +128,46 @@ export function CharacterDetail({ id }: { id: ID }) {
     <>
       {header}
       <PageBody className="flex flex-col gap-10">
-        <CharacterHero
-          character={character}
-          works={data.works}
-          related={data.related}
-          newSinceLastVisit={newSinceLastVisit}
-          heroRef={heroRef}
-          onTogglePin={() => pin.mutate(!character.pinned)}
-          pinPending={pin.isPending}
-          onEdit={() => setDialog('edit')}
-          onMerge={() => setDialog('merge')}
-          onMove={() => setDialog('move')}
-          onExclude={() => setDialog('exclude')}
-          onRestoreExcluded={restoreExcluded}
-          onChangeCover={() => setDialog('cover')}
-          onRestoreCover={() => restoreCover.mutate()}
-        />
-        {/* 先用列表缓存顶上的那一帧还没有「常一起出现」（SEL-14） */}
-        {isPlaceholderData ? <RelatedCharactersSkeleton /> : <RelatedCharacters related={data.related} name={character.name} />}
-        <CollectionsStrip characterId={id} />
-        <CharacterImages
-          character={character}
-          newSinceLastVisit={newSinceLastVisit}
-          sectionRef={imagesRef}
-          dialogOpen={dialog !== null}
-          excluded={
-            excludedRule && restoreExcluded
-              ? { imageCount: excludedRule.imageCount, restoring: unexclude.isPending, onRestore: restoreExcluded }
-              : null
-          }
+        {/* 区块按注册表的顺序（blocks/registry.ts 的 character） */}
+        <PageBlocks
+          page="character"
+          render={{
+            'character.hero': () => (
+              <CharacterHero
+                character={character}
+                works={data.works}
+                related={data.related}
+                newSinceLastVisit={newSinceLastVisit}
+                heroRef={heroRef}
+                onTogglePin={() => pin.mutate(!character.pinned)}
+                pinPending={pin.isPending}
+                onEdit={() => setDialog('edit')}
+                onMerge={() => setDialog('merge')}
+                onMove={() => setDialog('move')}
+                onExclude={() => setDialog('exclude')}
+                onRestoreExcluded={restoreExcluded}
+                onChangeCover={() => setDialog('cover')}
+                onRestoreCover={() => restoreCover.mutate()}
+              />
+            ),
+            // 先用列表缓存顶上的那一帧还没有「常一起出现」（SEL-14）
+            'character.related': () =>
+              isPlaceholderData ? <RelatedCharactersSkeleton /> : <RelatedCharacters related={data.related} name={character.name} />,
+            'character.collections': () => <CollectionsStrip characterId={id} />,
+            'character.images': () => (
+              <CharacterImages
+                character={character}
+                newSinceLastVisit={newSinceLastVisit}
+                sectionRef={imagesRef}
+                dialogOpen={dialog !== null}
+                excluded={
+                  excludedRule && restoreExcluded
+                    ? { imageCount: excludedRule.imageCount, restoring: unexclude.isPending, onRestore: restoreExcluded }
+                    : null
+                }
+              />
+            ),
+          }}
         />
       </PageBody>
 

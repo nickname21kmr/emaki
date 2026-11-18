@@ -195,6 +195,16 @@ export const volumeUnit = (folderName: string): '话' | '册' => (CHAPTER_MARKS.
 export const collectionTitle = (c: { title: string | null; folderName?: string | null }) =>
   c.title ?? (c.folderName ? `无题 #${c.folderName.slice(0, 6)}` : '无题');
 
+/**
+ * 组图「整理到子文件夹」时子文件夹的名字：去掉文件名里不能用的字符和开头的点、$、空格，最长 70 个字；没有标题用「组图」。
+ * 服务端真的建文件夹用它，网页的确认弹窗用它预览（以前两边各写一份）
+ */
+export const organizeFolderName = (title: string | null): string =>
+  (title ?? '组图')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+    .replace(/^[.$ ]+/, '')
+    .slice(0, 70) || '组图';
+
 // ------------------------------------------------------------------ 排除规则
 
 /** 标签规则的目标：去掉首尾空白、小写、空白换成下划线（Danbooru 标签不含空格） */

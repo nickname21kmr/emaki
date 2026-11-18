@@ -2,8 +2,8 @@ import path from 'node:path';
 import { moveImages, normalizeSubdir, revertMoveLog, type MoveGroup, type MoveRow } from '../../domain/library/move.ts';
 import { assertFilesIdle } from '../../domain/library/guard.ts';
 import type { SqliteContext } from './context.ts';
-import type { MutationResult } from '@emaki/shared';
 import { ConflictError } from '../../http/errors.ts';
+import { organizeFolderName, type MutationResult } from '@emaki/shared';
 
 /** 建合集、改合集之前先看能不能动文件（和移动同一条检查，domain/library/guard.ts） */
 export function assertOrganizeReady(ctx: SqliteContext, imageIds: number[]): void {
@@ -16,12 +16,7 @@ export function assertOrganizeReady(ctx: SqliteContext, imageIds: number[]): voi
  */
 export function organizeCollection(ctx: SqliteContext, collectionId: number, previous: MutationResult): MutationResult {
   const c = ctx.db.prepare('SELECT title FROM collections WHERE id = ?').get(collectionId) as { title: string | null };
-  const folder = normalizeSubdir(
-    (c.title ?? '组图')
-      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
-      .replace(/^[.$ ]+/, '')
-      .slice(0, 70) || '组图',
-  );
+  const folder = normalizeSubdir(organizeFolderName(c.title));
   const rows = ctx.db
     .prepare(
       `SELECT i.id, i.root_id, i.rel_path, i.file_name, i.collection_id, r.path AS root_path

@@ -14,6 +14,7 @@ import { DailyPlate } from './components/DailyPlate';
 import { ImportPanel } from './components/ImportPanel';
 import { greeting, importPhase, type ImportPhase } from './utils';
 import { useRunningJob } from '@/lib/events';
+import { PageBlocks } from '@/blocks/PageBlocks';
 
 /**
  * 首页：打开应用第一眼看到「最近收了什么、有什么待处理」。
@@ -38,13 +39,19 @@ export function HomePage() {
   else
     body = (
       <div className="flex flex-col gap-10">
-        {phase && <ImportPanel summary={s} phase={phase} />}
-        <StatsStrip summary={s} />
-        {s.images.illustrations > 0 && <DailyPlate />}
-        <TriageCards summary={s} />
-        <RecentCharacters summary={s} />
-        <LatestImages summary={s} />
-        <AnnexIndex />
+        {/* 区块按注册表的顺序（blocks/registry.ts 的 home） */}
+        <PageBlocks
+          page="home"
+          render={{
+            'home.import': () => phase && <ImportPanel summary={s} phase={phase} />,
+            'home.stats': () => <StatsStrip summary={s} />,
+            'home.daily': () => s.images.illustrations > 0 && <DailyPlate />,
+            'home.triage': () => <TriageCards summary={s} />,
+            'home.recent': () => <RecentCharacters summary={s} />,
+            'home.latest': () => <LatestImages summary={s} />,
+            'home.annex': () => <AnnexIndex />,
+          }}
+        />
       </div>
     );
 
