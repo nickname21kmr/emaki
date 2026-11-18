@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { annexTotal, kindTotal } from './kinds';
 
-const counts = { illustration: 6147, comic: 1200, screenshot: 900, text: 300, photo: 200, meme: 150, animated: 56 };
+const counts = { illustration: 6147, comic: 1200, screenshot: 900, text: 300, photo: 200, meme: 150 };
 const all = Object.values(counts).reduce((a, b) => a + b, 0);
 
 describe('kindTotal', () => {

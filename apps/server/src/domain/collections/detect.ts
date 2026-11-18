@@ -6,7 +6,7 @@
  *   A 文件名是页码（≥ 80% 像页码，页码覆盖 ≥ 70%）
  *   B 版心统一 + 下载器编号式文件名 + 书页比例
  *   C 目录名像同人志 / 画集 / 连载，并且结构有一半像书
- * 三道排除：页数 < 8 或 > 2000、杂项目录名单、截图 / 照片 / 表情 / 动图页超过 20%。
+ * 三道排除：页数 < 8 或 > 2000、杂项目录名单、截图 / 照片 / 表情 / 动图页超过 20%（D5 起动图不是类型，按 animated 数，和类型无关）。
  * 改规则要把 DETECTOR_VERSION 加一。
  */
 import { CHAPTER, TRANSLATOR, VOLUME_NAME } from './parseName.ts';
@@ -61,6 +61,8 @@ export interface DirPage {
   modifiedAt: string;
   /** images.content_kind */
   kind: string;
+  /** images.animated（D5）：动图页不算书页 */
+  animated: boolean;
   /** 识别过、手动改过，或按非默认规则判过类型（RV-C-1） */
   judged: boolean;
 }
@@ -116,7 +118,7 @@ export function dirFeatures(pages: DirPage[]): DirFeatures {
       .length / n;
   const portrait = pages.filter((p) => p.height >= p.width * 1.2).length / n;
   // 文字页不算：书里有后记和招募页
-  const nonBook = pages.filter((p) => p.kind === 'screenshot' || p.kind === 'photo' || p.kind === 'meme' || p.kind === 'animated').length / n;
+  const nonBook = pages.filter((p) => p.kind === 'screenshot' || p.kind === 'photo' || p.kind === 'meme' || p.animated).length / n;
   const judged = pages.filter((p) => p.judged);
   const comic = judged.filter((p) => p.kind === 'comic').length;
   return {

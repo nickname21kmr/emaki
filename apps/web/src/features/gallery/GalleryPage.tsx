@@ -109,7 +109,7 @@ export function GalleryPage() {
         description={
           filters.q
             ? '可以搜文件名，或 Danbooru 风格的标签，比如 long_hair、smile。'
-            : '当前的分级、方向或收藏筛选下没有图片，放宽一些条件试试。'
+            : '当前的分级、方向、动图或收藏筛选下没有图片，放宽一些条件试试。'
         }
         action={
           <Button variant="outline" onClick={clearFilters}>
@@ -136,7 +136,7 @@ export function GalleryPage() {
             loadingMore={isFetchingNextPage}
             onLoadMore={loadMore}
             rowHeight={rowHeight}
-            renderOverlay={showKind ? (img) => <KindBadge kind={img.kind} /> : undefined}
+            renderBadges={showKind ? (img) => <KindBadge kind={img.kind} /> : undefined}
           />
         </div>
         <GridFooter loadingMore={isFetchingNextPage} done={!hasNextPage} total={total} />

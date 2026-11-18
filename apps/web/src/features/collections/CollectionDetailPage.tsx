@@ -609,14 +609,10 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
           onLoadMore={loadMore}
           onOpen={group ? undefined : (img) => navigate(`/collections/${c.id}/read?p=${pageNo.get(img.id) ?? 1}`)}
           forceBlur={(img) => c.kind === 'doujin' && !tagged.get(img.id)}
-          renderOverlay={
+          renderBadges={
             group
               ? undefined
-              : (img) => (
-                  <span className="pointer-events-none absolute bottom-1.5 left-1.5 rounded-[4px] bg-sheet/90 px-1.5 text-[11px] text-fg-muted numeral tabular">
-                    {pageNo.get(img.id)}
-                  </span>
-                )
+              : (img) => <span className="rounded-[4px] bg-sheet/90 px-1.5 text-[11px] text-fg-muted numeral tabular">{pageNo.get(img.id)}</span>
           }
         />
       )}

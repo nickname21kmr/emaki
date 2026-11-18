@@ -197,7 +197,8 @@ describe('DedupeService + 接口（:memory:）', () => {
   it('does not use a known animation cover as evidence of a duplicate', async () => {
     const a = addImage('a.png', 's1', H);
     addImage('b.png', 's2', H);
-    ds.ctx.db.prepare('UPDATE images SET frame_count = 2 WHERE id = ?').run(a);
+    // 是否动图由分析模块按帧数写（D5），查重看这一列
+    ds.ctx.db.prepare('UPDATE images SET frame_count = 2, animated = 1 WHERE id = ?').run(a);
     expect((await ds.dedupe.runOnce()).build.groups).toEqual([]);
   });
 

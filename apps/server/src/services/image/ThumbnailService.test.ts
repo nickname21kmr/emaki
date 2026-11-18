@@ -10,6 +10,7 @@ import { sharp } from './sharpConfig.ts';
 import { ThumbnailService } from './ThumbnailService.ts';
 import { animationHtml } from '../../../test/helpers/htmlAnimation.ts';
 import { htmlAnimationCache } from './htmlAnimation.ts';
+import type { Change } from '../../propagation/changes.ts';
 import { readFile } from 'node:fs/promises';
 
 const SHA = 'ab'.repeat(32);
@@ -81,7 +82,7 @@ describe('ThumbnailService.runBackfill', () => {
     expect(svc.pendingCount()).toBe(0);
   });
 
-  it('旧库已有缩略图的动画 WebP 也会补帧数和分类，保留手工类型',async()=>{
+  it('旧库已有缩略图的动画 WebP 也会补帧数、判成动图（D5：类型不变），手工类型照样是动图',async()=>{
     const animation=await htmlAnimationCache(await animationHtml(),dir);
     const input=await readFile(animation);
     writeFileSync(path.join(dir,'lib','animation.webp'),input);
@@ -89,11 +90,23 @@ describe('ThumbnailService.runBackfill', () => {
     await processPixels(input,'webp',SHA,thumbs);
     expect(svc.pendingCount()).toBe(1);
     await svc.runBackfill(ctx);
-    expect(db.prepare('SELECT frame_count,content_kind FROM images WHERE id=1').get()).toEqual({frame_count:2,content_kind:'animated'});
+    expect(db.prepare('SELECT frame_count,animated,content_kind FROM images WHERE id=1').get()).toEqual({frame_count:2,animated:1,content_kind:'illustration'});
     expect(svc.pendingCount()).toBe(0);
-    db.exec("UPDATE images SET frame_count=NULL,content_kind='illustration',content_kind_manual=1");
+    db.exec("UPDATE images SET frame_count=NULL,animated=0,content_kind='meme',content_kind_manual=1");
     await svc.runBackfill(ctx);
-    expect(db.prepare('SELECT frame_count,content_kind FROM images WHERE id=1').get()).toEqual({frame_count:2,content_kind:'illustration'});
+    expect(db.prepare('SELECT frame_count,animated,content_kind FROM images WHERE id=1').get()).toEqual({frame_count:2,animated:1,content_kind:'meme'});
+  });
+
+  it('还没读过帧数的 GIF 先算动图，读到只有一帧就不是（D5），声明 image.animatedChanged',async()=>{
+    const gif=await sharp({create:{width:4,height:3,channels:3,background:'#336699'}}).gif().toBuffer();
+    writeFileSync(path.join(dir,'lib','still.gif'),gif);
+    db.prepare("UPDATE images SET rel_path='still.gif',file_name='still.gif',format='gif',width=4,height=3,frame_count=NULL,animated=1,thumb_at=?").run(T);
+    await processPixels(gif,'gif',SHA,thumbs);
+    const seen:Change[]=[];
+    const tracked=new ThumbnailService({db,thumbsRoot:thumbs,now:()=>0,changes:{apply:(fn)=>db.transaction(()=>fn((c)=>seen.push(c)))()}});
+    await tracked.runBackfill(ctx);
+    expect(db.prepare('SELECT frame_count,animated,content_kind FROM images WHERE id=1').get()).toEqual({frame_count:1,animated:0,content_kind:'illustration'});
+    expect(seen.filter((c)=>c.ids.length).map((c)=>[c.type,c.ids])).toEqual([['image.animatedChanged',[1]]]);
   });
 
   it('补静态图片帧数时保留已有分类及其判定依据',async()=>{

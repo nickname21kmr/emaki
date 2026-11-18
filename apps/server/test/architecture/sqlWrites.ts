@@ -301,6 +301,8 @@ export const IMAGE_COLUMN_GROUPS: Record<string, string> = {
   theme: 'analysis',
   art_score: 'analysis',
   frame_count: 'analysis',
+  // 是否动图（D5）：按帧数、格式派生
+  animated: 'analysis',
   // 证据：识别进度和文件名解析出的来源
   tagged_at: 'evidence',
   tagger_model: 'evidence',

@@ -11,7 +11,7 @@ import { tagsOfArtist } from '../artists.ts';
 import type { Db } from '../../../db/connection.ts';
 import { hydrateImages, IMAGE_COLS, type ImageRow } from '../hydrate.ts';
 import { THEME_FILTERS } from '../../../services/classify/theme.ts';
-import { ART_KINDS_SQL, UNRECOGNIZED, decodeCursor, encodeCursor, IMAGE_IN_WORK, LIVE_IMAGES, parseId } from '../sql.ts';
+import { ANIMATED_SQL, ART_KINDS_SQL, UNRECOGNIZED, decodeCursor, encodeCursor, IMAGE_IN_WORK, LIVE_IMAGES, parseId } from '../sql.ts';
 
 const EMPTY_PAGE: Page<ImageItem> = { items: [], nextCursor: null, total: 0 };
 
@@ -137,6 +137,8 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
       p.kinds = JSON.stringify(q.kind);
     }
   }
+  // 是否动图（D5）：和类型是两个维度。只看动图时按入库时间翻页走部分索引 idx_images_animated_live（字面条件，见 ANIMATED_SQL）
+  if (q.animated !== undefined) both(q.animated ? ANIMATED_SQL : 'i.animated = 0');
   // 合集（T38c）：具体 id = 这一本的页；none = 不在合集里的图
   let collection: number | null = null;
   if (q.collectionId === 'none') both('i.collection_id IS NULL');

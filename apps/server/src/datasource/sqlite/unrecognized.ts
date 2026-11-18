@@ -146,7 +146,7 @@ export class UnrecognizedQueries {
     return this.cached;
   }
 
-  /** 两个大类、四个分段、十个主题、五类别册的张数；artKind 只算插画或漫画（retaggable、art.kinds、annex 不变） */
+  /** 两个大类、四个分段、十个主题、四类别册的张数；artKind 只算插画或漫画（retaggable、art.kinds、annex 不变） */
   summary(artKind?: UnrecognizedArtKind): UnrecognizedSummary {
     const { got, retaggable } = this.counts();
     const n = (cks: readonly string[], k: string) => cks.reduce((sum, ck) => sum + (got.get(`${ck}|${k}`) ?? 0), 0);

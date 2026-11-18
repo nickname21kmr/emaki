@@ -104,6 +104,8 @@ export function engineReactions(hooks: EngineHooks, events: ChangeEvents): { que
         'image.returned',
         'image.trashed',
         'image.restored',
+        // 动图只认文件完全相同（D5）：读到帧数后变成 / 不再是动图的图要重新比
+        'image.animatedChanged',
         'visibility.changed',
         'root.visibilityChanged',
       ],

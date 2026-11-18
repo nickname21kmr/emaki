@@ -75,7 +75,8 @@ export const compareSummaries = (a: CollectionSummary, b: CollectionSummary) =>
   Number(a.id) - Number(b.id);
 
 /** RV-C-15：一个目录下的直接成员（不含子目录），不用 LIKE */
-const DIR_MEMBERS = `SELECT i.id, i.file_name, i.width, i.height, i.modified_at, i.content_kind, i.content_kind_source, i.content_kind_manual, i.tagged_at
+const DIR_MEMBERS = `SELECT i.id, i.file_name, i.width, i.height, i.modified_at, i.content_kind, i.content_kind_source, i.content_kind_manual, i.animated,
+    i.tagged_at
   FROM images i JOIN library_roots r ON r.id = i.root_id
   WHERE ${VISIBLE} AND i.excluded_by IS NULL AND i.root_id = @root
     AND (CASE WHEN @dir = '' THEN instr(i.rel_path, '/') = 0
@@ -612,6 +613,7 @@ export class CollectionQueries {
       content_kind: string;
       content_kind_source: string | null;
       content_kind_manual: number;
+      animated: number;
       tagged_at: string | null;
     }[];
     return rows.map((r) => ({
@@ -622,6 +624,7 @@ export class CollectionQueries {
         height: r.height,
         modifiedAt: r.modified_at,
         kind: r.content_kind,
+        animated: r.animated === 1,
         judged: isJudged(r),
       },
     }));

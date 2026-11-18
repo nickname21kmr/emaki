@@ -109,6 +109,8 @@ export class LibraryQueries {
           COALESCE(SUM(i.excluded_by IS NULL AND ${QUEUE_KINDS_SQL} AND ${UNRECOGNIZED} AND ${NOT_IN_BOOK}
              AND i.shelved_at IS NOT NULL), 0) AS shelved_count,
           COALESCE(SUM(i.excluded_by IS NULL AND i.original_at IS NOT NULL), 0) AS original_count,
+          -- 动图（D5）：跨类型，animated 在覆盖索引里（迁移 038）
+          COALESCE(SUM(i.excluded_by IS NULL AND i.animated = 1), 0) AS animated_count,
           ${kindSums}
          FROM images i INDEXED BY idx_images_live_stats WHERE ${LIVE_IMAGES}`,
       )
@@ -124,6 +126,7 @@ export class LibraryQueries {
       pending_tag_count: number;
       shelved_count: number;
       original_count: number;
+      animated_count: number;
     };
     const kindCounts = Object.fromEntries(CONTENT_KINDS.map((k) => [k, 0])) as Record<ContentKind, number>;
     for (const k of CONTENT_KINDS) kindCounts[k] = row[`k_${k}`];
@@ -196,6 +199,7 @@ export class LibraryQueries {
       recentImport: imp.at ? { at: imp.at, count: imp.count, pending: imp.pending } : null,
       lastAddedAt: row.last_added_at,
       kindCounts,
+      animatedCount: row.animated_count,
       pendingTagCount: row.pending_tag_count,
       ...this.collectionStats(),
       originalWorkId: originalWork === undefined ? null : toId(originalWork),
@@ -203,7 +207,7 @@ export class LibraryQueries {
     };
   }
 
-  /** 别册首页（T27）：每一类的张数、30 天内张数、最多的顶层文件夹、最新 3 张预览；按 CONTENT_KINDS 顺序，7 项 */
+  /** 别册首页（T27）：每一类的张数、30 天内张数、最多的顶层文件夹、最新 3 张预览；按 CONTENT_KINDS 顺序，6 项（动图不是类型，D5） */
   listContentKinds(): ContentKindSummary[] {
     const db = this.ctx.db;
     const cutoff = iso(this.ctx.clock() - RECENT_DAYS * DAY);

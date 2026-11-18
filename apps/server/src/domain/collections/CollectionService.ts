@@ -42,6 +42,7 @@ interface Row {
   content_kind: string;
   content_kind_source: string | null;
   content_kind_manual: number;
+  animated: number;
   tagged_at: string | null;
   collection_id: number | null;
   page_no: number | null;
@@ -101,7 +102,7 @@ export interface RefreshResult {
 
 /** 条件字面包含 trashed_at IS NULL AND missing = 0（T22 的部分索引） */
 const ROW_SQL = `SELECT i.id, i.root_id, i.rel_path, i.file_name, i.width, i.height, i.modified_at, i.content_kind, i.content_kind_source,
-    i.content_kind_manual, i.tagged_at, i.collection_id, i.page_no, i.collection_detached, COALESCE(c.membership, 'folder') AS membership, i.source_site, i.source_post_id, c.origin AS collection_origin
+    i.content_kind_manual, i.animated, i.tagged_at, i.collection_id, i.page_no, i.collection_detached, COALESCE(c.membership, 'folder') AS membership, i.source_site, i.source_post_id, c.origin AS collection_origin
   FROM images i JOIN library_roots r ON r.id = i.root_id LEFT JOIN collections c ON c.id = i.collection_id
   WHERE r.enabled = 1 AND r.removed_at IS NULL AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL`;
 
@@ -207,7 +208,8 @@ export class CollectionService {
     if (!c) return [];
     if (c.membership && c.membership !== 'folder') {
       const rows = this.db.prepare(`${ROW_SQL} AND i.collection_id = ?`).all(c.id) as Row[];
-      const pages = rows.map(r => ({ id: r.id, fileName: r.file_name, width: r.width, height: r.height, modifiedAt: r.modified_at, kind: r.content_kind, judged: isJudged(r), row: r }));
+      const pages = rows.map(r => ({ id: r.id, fileName: r.file_name, width: r.width, height: r.height, modifiedAt: r.modified_at, kind: r.content_kind,
+        animated: r.animated === 1, judged: isJudged(r), row: r }));
       return this.number(c.id, { rootId: c.root_id, dir: c.rel_dir, pages, comic: null }, c.page_order).ids;
     }
     return transact(this.db, () => {
@@ -273,7 +275,7 @@ export class CollectionService {
         c = { id, page_order: 'name' } as CollectionRow;
       }
       const pages = members.map(r => ({ id: r.id, fileName: r.file_name, width: r.width, height: r.height,
-        modifiedAt: r.modified_at, kind: r.content_kind, judged: isJudged(r), row: r }));
+        modifiedAt: r.modified_at, kind: r.content_kind, animated: r.animated === 1, judged: isJudged(r), row: r }));
       changed += this.number(c.id, { rootId: members[0]!.root_id, dir: '', comic: null, pages }, c.page_order).changed;
     }
     // Creation can grow this table from one row to thousands. Refresh planner statistics before browsing.
@@ -301,6 +303,7 @@ export class CollectionService {
         height: r.height,
         modifiedAt: r.modified_at,
         kind: r.content_kind,
+        animated: r.animated === 1,
         judged: isJudged(r),
         row: r,
       });

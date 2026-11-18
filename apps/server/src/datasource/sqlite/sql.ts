@@ -74,7 +74,12 @@ export const UNRECOGNIZED = '(NOT EXISTS (SELECT 1 FROM image_characters ic WHER
 /** 插画和漫画：要找角色的图（T27 补充） */
 export const ART_KINDS_SQL = `i.content_kind IN ('illustration','comic')`;
 /** 别册：既不是插画也不是漫画 */
-export const ANNEX_KINDS_SQL = `i.content_kind IN ('screenshot','text','photo','meme','animated')`;
+export const ANNEX_KINDS_SQL = `i.content_kind IN ('screenshot','text','photo','meme')`;
+/**
+ * 是动图（D5：和类型是两个维度，分析模块按帧数、格式写）。字面写 = 1：按入库时间翻页走部分索引 idx_images_animated_live
+ * （迁移 038，条件 animated = 1 AND trashed_at IS NULL AND missing = 0），不要改成参数
+ */
+export const ANIMATED_SQL = 'i.animated = 1';
 /** 按漫画导入的范围（整个图库文件夹或里面的子文件夹）：不识别、不找角色 */
 export const IN_COMIC_I = IN_COMIC('i');
 /**

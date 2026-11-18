@@ -77,6 +77,8 @@ export interface ImageRow {
   excludedBy: ID | null;
   /** 被「重复」处理移到回收站 */
   trashed: boolean;
+  /** 帧数（读文件头拿到的）；不写 = 还没读过。多帧的是动图（D5，isAnimated） */
+  frameCount?: number | null;
   /** 内容类型（T27）；不写 = 插画（契约夹具不动，BI-7） */
   kind?: ContentKind;
   /** 规则判出的类型：「恢复自动判断」回到它；不写 = 按 classifyContent 现算 */
@@ -341,16 +343,22 @@ export function buildDemoDb(now = Date.now()): DemoDb {
     });
   }
 
-  // 内容类型（T27）：按 id 哈希分配，约 漫画 12%、截图 8%、表情 4%、文字 3%、照片 2%、动图 2%，其余插画
+  // 内容类型（T27）：按 id 哈希分配，约 漫画 12%、截图 8%、表情 4%、文字 3%、照片 2%，其余插画。
+  // 是否动图（D5）是另一个维度：约 2% 的插画是动的（以前单列成「动图」类型的那一批），表情里约三分之一是动的；都是多帧 GIF
   for (const img of images.values()) {
     const h = hashString(img.id + 'kind') % 100;
-    const kind: ContentKind =
-      h < 12 ? 'comic' : h < 20 ? 'screenshot' : h < 24 ? 'meme' : h < 27 ? 'text' : h < 29 ? 'photo' : h < 31 ? 'animated' : 'illustration';
+    const kind: ContentKind = h < 12 ? 'comic' : h < 20 ? 'screenshot' : h < 24 ? 'meme' : h < 27 ? 'text' : h < 29 ? 'photo' : 'illustration';
+    if ((h >= 29 && h < 31) || (kind === 'meme' && hashString(img.id + 'anim') % 3 === 0)) {
+      img.format = 'gif';
+      img.frameCount = 6 + (hashString(img.id + 'frames') % 42);
+      img.fileName = img.fileName.replace(/\.\w+$/, '.gif');
+      img.relPath = img.relPath.replace(/[^/]+$/, img.fileName);
+    }
     if (kind === 'illustration') continue;
     img.kind = kind;
     img.autoKind = kind;
-    img.kindSource = kind === 'animated' ? 'format' : 'tags';
-    img.kindEvidence = kind === 'animated' ? 'GIF 动图' : `识别标签（演示数据）`;
+    img.kindSource = 'tags';
+    img.kindEvidence = `识别标签（演示数据）`;
   }
 
   // 画师识别（演示）：识别过的图约七成认出了来源里的画师。只用哈希，不打乱随机序列
@@ -462,6 +470,8 @@ export function buildDemoDb(now = Date.now()): DemoDb {
         height: Math.round(original.height * scale),
         bytes: Math.round(original.bytes * scale * scale * (fmt === 'webp' ? 0.4 : 0.7)),
         format: fmt,
+        // 画面相同的副本是转成静态图的（动图只认文件完全相同，D5）
+        frameCount: kind === 'exact' ? original.frameCount : null,
         addedAt: new Date(Math.min(now, Date.parse(original.addedAt) + r() * 60 * DAY)).toISOString(),
         favorite: false,
       });

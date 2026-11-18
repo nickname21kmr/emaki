@@ -2,17 +2,21 @@ import { ANNEX_KINDS, type ContentKind } from '@emaki/shared';
 import { motion } from 'motion/react';
 import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router';
+import { AnimatedGlyph } from '@/components/media/KindBadge';
 import { RollingNumber, Seal } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { formatCompact } from '@/lib/format';
-import { KIND_GLYPH, KIND_LABEL } from '@/lib/kinds';
+import { ANIMATED_LABEL, KIND_GLYPH, KIND_LABEL } from '@/lib/kinds';
 import { SPRING } from '@/lib/motion';
 import { useStats } from '@/lib/queries';
 
-export type KindScope = 'all' | ContentKind;
+/** 目次里选中的一项：一个类型、全部，或者别册里跨类型的「动图」筛选（D5） */
+export type KindScope = 'all' | ContentKind | 'animated';
 
 /**
- * 目次（T32b，SEL-5）：图库和别册共用的一行。「全部 · 插画」之后是 kicker「别册」和六类别册。
+ * 目次（T32b，SEL-5）：图库和别册共用的一行。「全部 · 插画」之后是 kicker「别册」和五类别册，
+ * 最后隔一道细线是 kicker「筛选」和「动图」：动图不是类型（D5），不用类型印，用细线圆圈里的播放三角；
+ * 点进去是 /annex/animated，各类里会动的图都在那里。
  * 全部、插画属于图库（onGallery 回调或跳到 /gallery?kind=…），别册各类跳到 /annex/<kind>。
  * trailing：放在这一行右端、不跟着目次横向滚动的东西（图库把收藏、排序、缩放放在这里）。
  */
@@ -35,7 +39,7 @@ export function KindIndex({
     } else navigate(`/annex/${k}`);
   };
   const item = (k: KindScope) => {
-    const n = k === 'all' ? stats?.imageCount : counts?.[k];
+    const n = k === 'all' ? stats?.imageCount : k === 'animated' ? stats?.animatedCount : counts?.[k];
     const active = current === k;
     const empty = k !== 'all' && k !== 'illustration' && n === 0;
     return (
@@ -50,9 +54,9 @@ export function KindIndex({
           empty && 'pointer-events-none opacity-40',
         )}
       >
-        {k !== 'all' && <Seal variant="zhu" size={20} glyph={KIND_GLYPH[k]} />}
+        {k === 'animated' ? <AnimatedGlyph size={20} /> : k !== 'all' && <Seal variant="zhu" size={20} glyph={KIND_GLYPH[k]} />}
         <span className={cn('font-serif-cjk font-semibold tracking-[.08em]', active ? 'text-fg' : 'text-fg-muted')}>
-          {k === 'all' ? '全部' : KIND_LABEL[k]}
+          {k === 'all' ? '全部' : k === 'animated' ? ANIMATED_LABEL : KIND_LABEL[k]}
         </span>
         {n !== undefined && (
           // 图库里这一行右端还放着收藏、排序、缩放：放不下时先不显示张数，免得后面几类被挤出去
@@ -82,6 +86,11 @@ export function KindIndex({
       {item('illustration')}
       <span className="kicker mx-2 shrink-0 self-center">别册</span>
       {ANNEX_KINDS.map(item)}
+      <span aria-hidden className="mx-2 my-3.5 w-px shrink-0 bg-line" />
+      <span className="kicker mr-1 shrink-0 self-center" title="不是类型：各类里会动的图（按帧数自动认出）">
+        筛选
+      </span>
+      {item('animated')}
     </nav>
   );
   if (!trailing) return nav;

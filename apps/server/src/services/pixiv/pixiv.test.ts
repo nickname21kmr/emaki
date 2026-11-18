@@ -54,9 +54,9 @@ beforeEach(() => {
 });
 afterEach(() => db.close());
 
-it.each(['html','gif','webp'])('动图也能自动登记与手动补跑 Pixiv，保持动图分类（%s）',async format=>{
+it.each(['html','gif','webp'])('动的插画也能自动登记与手动补跑 Pixiv，保持类型和是否动图（%s，D5）',async format=>{
   db.exec('DELETE FROM pixiv_character_checks');
-  db.prepare("UPDATE images SET format=?,content_kind='animated' WHERE id=1").run(format);
+  db.prepare("UPDATE images SET format=?,frame_count=4,animated=1,content_kind='illustration' WHERE id=1").run(format);
   db.exec("UPDATE images SET content_kind='photo' WHERE id=2");
   queuePixivImages(ctx,[1,2]);
   expect(pendingPixivCount(ctx)).toBe(1);
@@ -66,19 +66,26 @@ it.each(['html','gif','webp'])('动图也能自动登记与手动补跑 Pixiv，
   const client={artwork:vi.fn().mockResolvedValue(art(1,['アリス']))};
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
   expect(links()).toHaveLength(1);
-  expect(db.prepare('SELECT content_kind FROM images WHERE id=1').pluck().get()).toBe('animated');
+  expect(db.prepare('SELECT content_kind,animated FROM images WHERE id=1').get()).toEqual({content_kind:'illustration',animated:1});
   queuePixivImages(ctx,[1]);
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
   expect(client.artwork).toHaveBeenCalledTimes(1);
 });
 
 it('启动补登遗漏动图，不重置已完成、主动撤销或还没识别的记录',()=>{
-  db.exec("DELETE FROM pixiv_character_checks; UPDATE images SET content_kind='animated',tagged_at='before'");
+  db.exec("DELETE FROM pixiv_character_checks; UPDATE images SET animated=1,tagged_at='before'");
   queueUnseenPixivAnimations(ctx);
   expect(pendingPixivCount(ctx)).toBe(2);
   db.exec("UPDATE pixiv_character_checks SET checked_at='done',result='dismissed'; DELETE FROM pixiv_character_checks WHERE image_id=2; UPDATE images SET tagged_at=NULL WHERE id=2");
   queueUnseenPixivAnimations(ctx);
   expect(db.prepare('SELECT image_id,result,checked_at FROM pixiv_character_checks').all()).toEqual([{image_id:1,result:'dismissed',checked_at:'done'}]);
+});
+
+it('动的表情不查 Pixiv：资格按类型，是否动图不影响（D5）',()=>{
+  db.exec("DELETE FROM pixiv_character_checks; UPDATE images SET animated=1,tagged_at='before'; UPDATE images SET content_kind='meme' WHERE id=2");
+  queueUnseenPixivAnimations(ctx);
+  queuePixivImages(ctx);
+  expect(db.prepare('SELECT image_id FROM pixiv_character_checks ORDER BY image_id').pluck().all()).toEqual([1]);
 });
 
 it('指定范围补标签只处理选定图片，同投稿其他待查图片保留',async()=>{

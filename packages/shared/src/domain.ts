@@ -29,13 +29,14 @@ export type ImageFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'avif' | 'bmp' | 'ht
 
 /**
  * 图片内容类型（T27）。插画是默认类型；其余统称「别册」：不计入角色张数、不进未识别队列（漫画除外，见 T27 补充）。
+ * 类型互斥；「是否动图」是另一个维度（D5，ImageItem.animated），不是类型：动的插画就是插画，动的表情就是表情。
  */
-export type ContentKind = 'illustration' | 'comic' | 'screenshot' | 'text' | 'photo' | 'meme' | 'animated';
-export const CONTENT_KINDS: readonly ContentKind[] = ['illustration', 'comic', 'screenshot', 'text', 'photo', 'meme', 'animated'];
+export type ContentKind = 'illustration' | 'comic' | 'screenshot' | 'text' | 'photo' | 'meme';
+export const CONTENT_KINDS: readonly ContentKind[] = ['illustration', 'comic', 'screenshot', 'text', 'photo', 'meme'];
 /** 别册里的类型 = 除插画以外的全部 */
 export const ANNEX_KINDS: readonly ContentKind[] = CONTENT_KINDS.filter((k) => k !== 'illustration');
-/** 类型是怎么判出来的 */
-export type ContentKindSource = 'name' | 'folder' | 'camera' | 'format' | 'size' | 'tags' | 'manual' | 'default';
+/** 类型是怎么判出来的（D5 之前动图按格式判，'format' 不再出现） */
+export type ContentKindSource = 'name' | 'folder' | 'camera' | 'size' | 'tags' | 'manual' | 'default';
 
 /** 图片来源站点，从文件名 / EXIF / 侧车文件推断（例如 pixiv 的 `12345678_p0.png`）。 */
 export interface ImageSource {
@@ -155,6 +156,8 @@ export interface ImageItem {
   status: ImageStatus;
   /** 内容类型（T27） */
   kind: ContentKind;
+  /** 是动图（D5）：分析模块按帧数、格式判断（多帧的 GIF / WebP / PNG、HTML 逐帧动画），和类型无关，不能手动改 */
+  animated: boolean;
   characterIds: ID[];
   /** 与 characterIds 同序、同长度：网格悬停时显示「这是谁」（T33，BR-5） */
   characterNames: string[];
@@ -182,6 +185,8 @@ export interface ImageDetail extends ImageItem {
   kindSource: ContentKindSource | null;
   /** 给人看的判定依据，例如「文件夹「表情包2」」「识别标签 comic 0.93」；手动设置时为 null */
   kindReason: string | null;
+  /** 为什么算动图，例如「GIF · 24 帧」「HTML 逐帧动画 · 12 帧」；不是动图为 null（D5） */
+  animatedReason: string | null;
   /** 所在合集（T38c）；pageNo 是可见页里的序号，恒在 1..pageCount 之间（RV-C-8） */
   collection: {
     id: ID;
@@ -404,6 +409,8 @@ export interface LibraryStats {
   lastAddedAt: ISODate | null;
   /** 计入张数的图按类型计数（各项之和 = imageCount） */
   kindCounts: Record<ContentKind, number>;
+  /** 计入张数的图里是动图的张数（D5：跨类型，动的插画也算在 kindCounts.illustration 里） */
+  animatedCount: number;
   /** 全部类型里还没跑过识别的计入张数（首页识别进度用） */
   pendingTagCount: number;
   /** 合集本数（页数 > 0 的） */

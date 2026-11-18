@@ -258,10 +258,11 @@ export class DedupeService {
     const cand = findCandidates(this.loadRows(), this.d.getThreshold());
     ctx?.setTotal(cand.pairs.length);
     const sources = this.d.db.prepare(
-      'SELECT i.id, i.rel_path, i.frame_count, r.path AS root_path FROM v_counted_images i JOIN library_roots r ON r.id = i.root_id',
-    ).all() as { id: number; rel_path: string; frame_count: number | null; root_path: string }[];
+      'SELECT i.id, i.rel_path, i.animated, r.path AS root_path FROM v_counted_images i JOIN library_roots r ON r.id = i.root_id',
+    ).all() as { id: number; rel_path: string; animated: number; root_path: string }[];
     const files = new Map(sources.map((r) => [r.id, toAbs(r.root_path, r.rel_path)]));
-    const animated = new Set(sources.filter((r) => (r.frame_count ?? 1) > 1).map((r) => r.id));
+    // 动图只认文件完全相同（sha 相同已经在候选里合并了），不拿首帧比画面：是否动图看分析模块的判断（D5）
+    const animated = new Set(sources.filter((r) => r.animated === 1).map((r) => r.id));
     const pairKey = (a: DedupeRow, b: DedupeRow) => [a.sha256, b.sha256].sort().join(':');
     const decisions = new Map<string, ImageComparison>();
     const get = this.d.db.prepare('SELECT result FROM duplicate_comparisons WHERE sha_a = ? AND sha_b = ? AND version = ?');

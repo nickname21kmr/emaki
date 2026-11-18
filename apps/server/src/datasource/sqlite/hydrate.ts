@@ -30,6 +30,9 @@ export interface ImageRow {
   content_kind_source: ContentKindSource | null;
   content_kind_evidence: string | null;
   content_kind_manual: number;
+  /** 是动图（D5，分析模块按帧数、格式写） */
+  animated: number;
+  frame_count: number | null;
   page_no: number | null;
   original_at: string | null;
 }
@@ -37,7 +40,7 @@ export interface ImageRow {
 export const IMAGE_COLS = `i.id, i.root_id, i.rel_path, i.file_name, i.width, i.height, i.bytes, i.format, i.sha256,
   i.dominant_color, i.rating, i.favorite, i.source_site, i.source_post_id, i.source_artist, i.source_url,
   i.added_at, i.modified_at, i.excluded_by, i.tagged_at,
-  i.content_kind, i.content_kind_source, i.content_kind_evidence, i.content_kind_manual, i.page_no, i.original_at`;
+  i.content_kind, i.content_kind_source, i.content_kind_evidence, i.content_kind_manual, i.animated, i.frame_count, i.page_no, i.original_at`;
 
 function groupPairs(rows: { image_id: number; other: number }[]): Map<number, number[]> {
   const m = new Map<number, number[]>();
@@ -91,6 +94,7 @@ export function hydrateImages(db: Db, rows: ImageRow[]): ImageItem[] {
             ? 'recognized'
             : 'unrecognized',
       kind: r.content_kind,
+      animated: r.animated === 1,
       characterIds: c.map(toId),
       characterNames: names.get(r.id) ?? [],
       workIds: (works.get(r.id) ?? []).map(toId),

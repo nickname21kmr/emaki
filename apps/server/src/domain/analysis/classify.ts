@@ -1,15 +1,15 @@
 /**
- * 分析模块的分类：内容类型（自动）、主题、画质分（T27、T27 补充）。全项目只有分析模块写这几列（单一写入者），
+ * 分析模块的分类：内容类型（自动）、是否动图（D5）、主题、画质分（T27、T27 补充）。全项目只有分析模块写这几列（单一写入者），
  * 什么时候算由唯一的入口 analyze（analyze.ts）决定，别处不直接调这里。
  *
- * content_kind_manual=1 的行只写 theme、art_score（manual 只保护类型）；任何重算都不动 shelved_at。
+ * content_kind_manual=1 的行只写是否动图、theme、art_score（manual 只保护类型；是否动图按帧数派生，不是手动选项）；任何重算都不动 shelved_at。
  */
 import type { ContentKind, ContentKindSource, ImageFormat } from '@emaki/shared';
 import { transact, type Db, type Statement } from '../../db/connection.ts';
 import type { ProbeFacts } from '../../propagation/changes.ts';
 import { stmt } from '../tx.ts';
 import { IN_COMIC } from '../../services/classify/comicAreas.ts';
-import { classifyContent, CLASSIFIER_VERSION, SIGNAL_TAGS } from '../../services/classify/rules.ts';
+import { classifyContent, CLASSIFIER_VERSION, isAnimated, SIGNAL_TAGS } from '../../services/classify/rules.ts';
 import { artScore, classifyTheme, THEME_TAG_NAMES, type StoredTheme } from '../../services/classify/theme.ts';
 
 export interface ClassRow {
@@ -31,6 +31,8 @@ export interface Classification {
   kind: ContentKind;
   source: ContentKindSource;
   evidence: string | null;
+  /** 是动图（D5，和类型无关） */
+  animated: boolean;
   theme: StoredTheme | null;
   artScore: number | null;
 }
@@ -50,13 +52,19 @@ export function computeClassification(r: ClassRow, tags: [string, number][] | nu
     width: r.width,
     height: r.height,
     format: r.format,
-    pages: r.frame_count ?? 1,
     camera: r.camera,
     tags: tagged ? new Map(tags) : null,
     comicRoot: !!r.comic_root,
   });
   const score = tagged ? artScore({ w: r.width, h: r.height, fileName: r.file_name }, tags) : null;
-  return { kind: c.kind, source: c.source, evidence: c.evidence, theme: tagged ? classifyTheme(tags, score) : null, artScore: score };
+  return {
+    kind: c.kind,
+    source: c.source,
+    evidence: c.evidence,
+    animated: isAnimated({ format: r.format, frames: r.frame_count }),
+    theme: tagged ? classifyTheme(tags, score) : null,
+    artScore: score,
+  };
 }
 
 interface ClassStatements {
@@ -71,26 +79,30 @@ function classificationStatements(db: Db): ClassStatements {
   return {
     auto: stmt(
       db,
-      `UPDATE images SET content_kind = @kind, content_kind_source = @source, content_kind_evidence = @evidence,
+      `UPDATE images SET content_kind = @kind, content_kind_source = @source, content_kind_evidence = @evidence, animated = @animated,
          content_kind_version = @version, theme = @theme, art_score = @artScore WHERE id = @id AND content_kind_manual = 0`,
     ),
-    manual: stmt(db, 'UPDATE images SET content_kind_version = @version, theme = @theme, art_score = @artScore WHERE id = @id AND content_kind_manual = 1'),
+    manual: stmt(
+      db,
+      `UPDATE images SET animated = @animated, content_kind_version = @version, theme = @theme, art_score = @artScore
+       WHERE id = @id AND content_kind_manual = 1`,
+    ),
     autoProbed: stmt(
       db,
       `UPDATE images SET frame_count = @frames, camera = @camera, content_kind = @kind, content_kind_source = @source,
-         content_kind_evidence = @evidence, content_kind_version = @version, theme = @theme, art_score = @artScore
+         content_kind_evidence = @evidence, animated = @animated, content_kind_version = @version, theme = @theme, art_score = @artScore
        WHERE id = @id AND content_kind_manual = 0`,
     ),
     manualProbed: stmt(
       db,
-      `UPDATE images SET frame_count = @frames, camera = @camera, content_kind_version = @version, theme = @theme, art_score = @artScore
-       WHERE id = @id AND content_kind_manual = 1`,
+      `UPDATE images SET frame_count = @frames, camera = @camera, animated = @animated, content_kind_version = @version, theme = @theme,
+         art_score = @artScore WHERE id = @id AND content_kind_manual = 1`,
     ),
   };
 }
 
 function writeClassification(stmts: ClassStatements, r: ClassRow, c: Classification, probed: boolean): void {
-  const p = { id: r.id, version: CLASSIFIER_VERSION, theme: c.theme, artScore: c.artScore };
+  const p = { id: r.id, version: CLASSIFIER_VERSION, animated: c.animated ? 1 : 0, theme: c.theme, artScore: c.artScore };
   const q = probed ? { ...p, frames: r.frame_count ?? null, camera: r.camera } : p;
   if (r.content_kind_manual) (probed ? stmts.manualProbed : stmts.manual).run(q);
   else (probed ? stmts.autoProbed : stmts.auto).run({ ...q, kind: c.kind, source: c.source, evidence: c.evidence });

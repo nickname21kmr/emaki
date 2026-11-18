@@ -214,6 +214,8 @@ export interface ListImagesQuery extends PageQuery {
   original?: boolean;
   /** 内容类型；不传或 'all' = 全部类型 */
   kind?: ContentKind[] | 'all';
+  /** 是否动图（D5，和类型是两个维度）：true = 只看动图，false = 只看静态图；不传 = 都要 */
+  animated?: boolean;
   /** true = 分级可信（识别过，或手动设过分级） */
   rated?: boolean;
   /** 随机排序的种子（0–1073741823），只在 sort='random' 时生效：同一个种子结果相同 */
@@ -477,8 +479,8 @@ export type UnrecognizedArea = (typeof UNRECOGNIZED_AREAS)[number];
 /** 插画和漫画的分段：有建议 / 没认出 / 待识别 / 放下的 */
 export const UNRECOGNIZED_BUCKETS = ['suggested', 'unsure', 'untagged', 'shelved'] as const;
 export type UnrecognizedBucket = (typeof UNRECOGNIZED_BUCKETS)[number];
-/** 「照片 · 文字等」大类里的五类 */
-export const UNRECOGNIZED_ANNEX_KINDS = ['screenshot', 'text', 'photo', 'meme', 'animated'] as const;
+/** 「照片 · 文字等」大类里的四类（D5 起动图不是类型：动的插画和静态插画一样在「插画 · 漫画」里） */
+export const UNRECOGNIZED_ANNEX_KINDS = ['screenshot', 'text', 'photo', 'meme'] as const;
 export type UnrecognizedAnnexKind = (typeof UNRECOGNIZED_ANNEX_KINDS)[number];
 /** 「插画 · 漫画」大类里再按类型分：插画 / 漫画（content_kind = 'comic' 的单页；按漫画导入的文件夹本来就不在未识别里） */
 export const UNRECOGNIZED_ART_KINDS = ['illustration', 'comic'] as const;
@@ -494,7 +496,7 @@ export interface ListUnrecognizedQuery extends PageQuery {
   bucket?: UnrecognizedBucket;
   /** 只在 art + bucket='unsure' 时有效 */
   theme?: UnrecognizedTheme;
-  /** 只对 annex 有效；不传 = 五类合起来 */
+  /** 只对 annex 有效；不传 = 四类合起来 */
   kind?: UnrecognizedAnnexKind;
   /** 只对 art 有效：只看插画或只看漫画，total 和三个分段计数也只算这一类。不传 = 两种都要 */
   artKind?: UnrecognizedArtKind;
@@ -561,7 +563,7 @@ export type UnrecognizedTheme = (typeof UNRECOGNIZED_THEMES)[number];
 export const BROWSE_THEMES = ['legs', 'chest', 'swim', 'kemono', 'costume', 'multi'] as const;
 export type BrowseTheme = (typeof BROWSE_THEMES)[number];
 
-/** GET /api/content-kinds —— 按 CONTENT_KINDS 顺序，7 项，count 可以为 0 */
+/** GET /api/content-kinds —— 按 CONTENT_KINDS 顺序，6 项，count 可以为 0（动图不是类型，张数见 LibraryStats.animatedCount） */
 export type ListContentKindsResponse = ContentKindSummary[];
 
 /**

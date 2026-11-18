@@ -51,6 +51,8 @@ export type Change =
   // 分析、证据
   /** 最终类型变了（自动重判、手动修改都算） */
   | ImageChange<'image.kindChanged'>
+  /** 是否动图变了（D5：分析模块按帧数、格式派生，和类型是两个维度；读到帧数、换了文件时才会变） */
+  | ImageChange<'image.animatedChanged'>
   /** 最终来源变了 */
   | ImageChange<'image.sourceChanged'>
   | ImageChange<'evidence.changed', { provider: EvidenceProvider }>
@@ -100,6 +102,7 @@ const IMAGE_SCOPED = new Set<ChangeType>([
   'image.trashed',
   'image.restored',
   'image.kindChanged',
+  'image.animatedChanged',
   'image.sourceChanged',
   'evidence.changed',
   'curation.charactersChanged',

@@ -11,7 +11,7 @@
 import { searchKey } from '@emaki/shared';
 import type { Db } from '../db/connection.ts';
 import { mockDominantColor, workColorFromHue } from '../util/color.ts';
-import { CLASSIFIER_VERSION } from '../services/classify/rules.ts';
+import { CLASSIFIER_VERSION, isAnimated } from '../services/classify/rules.ts';
 import { artScore, classifyTheme } from '../services/classify/theme.ts';
 import { DETECTOR_VERSION } from '../domain/collections/detect.ts';
 import { markSourcesCurrent } from '../services/source/backfill.ts';
@@ -140,10 +140,10 @@ export function seedDemoDb(db: Db, demo: DemoDb, opts: { now: number }): IdMap {
     const insImg = db.prepare(`INSERT INTO images (root_id, rel_path, file_name, width, height, bytes, format, sha256, dominant_color,
         rating, rating_manual, favorite, source_site, source_post_id, source_artist, source_url, source_manual, added_at, modified_at, tagged_at,
         excluded_by, trashed_at, content_kind, content_kind_source, content_kind_evidence, content_kind_manual, content_kind_version, camera,
-        shelved_at, original_at, collection_id, page_no, collection_detached)
+        frame_count, animated, shelved_at, original_at, collection_id, page_no, collection_detached)
       VALUES (@root, @relPath, @fileName, @width, @height, @bytes, @format, @sha256, @dominant, @rating, @ratingManual, @favorite,
         @site, @postId, @artist, @url, @sourceManual, @addedAt, @modifiedAt, @taggedAt, @excludedBy, @trashedAt,
-        @kind, @kindSource, @kindEvidence, @kindManual, @kindVersion, '', @shelvedAt, @originalAt, @collectionId, @pageNo, @detached)`);
+        @kind, @kindSource, @kindEvidence, @kindManual, @kindVersion, '', @frames, @animated, @shelvedAt, @originalAt, @collectionId, @pageNo, @detached)`);
     for (const img of demo.images.values()) {
       const id = Number(
         insImg.run({
@@ -175,6 +175,9 @@ export function seedDemoDb(db: Db, demo: DemoDb, opts: { now: number }): IdMap {
           kindEvidence: img.kindEvidence ?? null,
           kindManual: img.kindManual ? 1 : 0,
           kindVersion: CLASSIFIER_VERSION,
+          // 是否动图按分析模块的规则算（D5），启动回填不会再改它
+          frames: img.frameCount ?? null,
+          animated: isAnimated({ format: img.format, frames: img.frameCount }) ? 1 : 0,
           shelvedAt: img.shelvedAt ?? null,
           originalAt: img.originalAt ?? null,
           collectionId: img.collectionId ? need(map.collections, img.collectionId, '合集') : null,

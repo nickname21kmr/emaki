@@ -6,7 +6,7 @@
  * 只是候选（有歧义、作品对不上、多页多角色……）的是 0；采不采纳由 decideAuto 按设置里 Pixiv 的自动阈值决定
  * （没单独设就用 autoAcceptThreshold），不再有自己的 automatic 判断和写死的 0.8。
  *
- * 资格（要不要联网去查）和模型一致：插画、漫画、动图（漫画页不看「未识别里也列出漫画页」，附录 #1）、没放下、
+ * 资格（要不要联网去查）和模型一致：插画、漫画（动的插画、动的漫画也在内，D5；漫画页不看「未识别里也列出漫画页」，附录 #1）、没放下、
  * 不在整本处理的合集里、不在漫画区、来源是 Pixiv 投稿、还没有角色、投稿不是明确不存在的。模型分数落在哪一档都不影响。
  */
 import type { Db } from '../../db/connection.ts';
@@ -26,7 +26,7 @@ export const PIXIV_CONFIDENCE = {
 } as const;
 
 /** 能去查 Pixiv 的图（i 是 v_counted_images 的别名），不看原创 */
-export const PIXIV_ELIGIBLE_BASE = `i.content_kind IN ('illustration','comic','animated') AND i.shelved_at IS NULL
+export const PIXIV_ELIGIBLE_BASE = `i.content_kind IN ('illustration','comic') AND i.shelved_at IS NULL
   AND ${NOT_IN_BOOK} AND NOT ${IN_COMIC('i')} AND i.source_site='pixiv' AND i.source_post_id IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id=i.id)
   AND NOT EXISTS (SELECT 1 FROM pixiv_unavailable_posts p WHERE p.post_id=i.source_post_id)`;
@@ -52,12 +52,12 @@ export function queuePixivImages(db: Db, ids?: number[]): void {
     .run(...(automatic ? [JSON.stringify(ids)] : []));
 }
 
-/** 以前只查静态图时漏掉的动图补登记 */
+/** 以前只查静态图时漏掉的动图补登记（有资格的动图：动的插画、漫画） */
 export function queueUnseenPixivAnimations(db: Db): void {
   const ids = db
     .prepare(
       `SELECT i.id FROM v_counted_images i WHERE ${PIXIV_ELIGIBLE}
-       AND i.content_kind='animated' AND i.tagged_at IS NOT NULL
+       AND i.animated = 1 AND i.tagged_at IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM pixiv_character_checks p WHERE p.image_id=i.id)`,
     )
     .pluck()

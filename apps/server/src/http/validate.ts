@@ -27,6 +27,9 @@ export const idParam = z.object({ id: z.string().min(1) });
 
 export const ratingSchema = z.enum(['general', 'sensitive', 'questionable', 'explicit']);
 
-export const kindSchema = z.enum(['illustration', 'comic', 'screenshot', 'text', 'photo', 'meme', 'animated']);
+/** 内容类型（D5 起没有 animated：动图是另一个维度，筛选用 animated=true） */
+export const kindSchema = z.enum(['illustration', 'comic', 'screenshot', 'text', 'photo', 'meme'], {
+  error: (issue) => (issue.input === 'animated' ? '「动图」不是类型了，按是否动图筛选请用 animated=true' : undefined),
+});
 /** 查询串里的类型：kind=all 或 kind=comic,screenshot；有未知值返回 400 */
 export const qKinds = z.union([z.literal('all'), qList(kindSchema)]);

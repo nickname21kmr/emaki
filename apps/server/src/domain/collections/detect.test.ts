@@ -6,6 +6,7 @@ interface Opts {
   w?: number | ((i: number) => number);
   h?: number | ((i: number) => number);
   kind?: string | ((i: number) => string);
+  animated?: boolean | ((i: number) => boolean);
   judged?: boolean;
 }
 function at<T>(v: T | ((i: number) => T), i: number): T {
@@ -28,6 +29,7 @@ function mk(n: number, o: Opts = {}): DirPage[] {
       height: at(o.h ?? 1700, k),
       modifiedAt: `2024-01-01T00:${pad(Math.floor(i / 60), 2)}:${pad(i % 60, 2)}.000Z`,
       kind: at(o.kind ?? 'illustration', k),
+      animated: at(o.animated ?? false, k),
       judged: o.judged ?? false,
     };
   });
@@ -58,6 +60,12 @@ describe('decideCollection + autoKind', () => {
   it('⑤ 截图页超过 20%', () => {
     const pages = mk(10, { names: names(10, (i) => `${i + 1}.png`), kind: (i) => (i < 3 ? 'screenshot' : 'illustration'), judged: true });
     expect(run('x', pages)).toBeNull();
+  });
+  it('⑤b 动图页超过 20%（D5：按是否动图数，动的插画也算）', () => {
+    const pages = mk(10, { names: names(10, (i) => `${i + 1}.png`), animated: (i) => i < 3, judged: true });
+    expect(run('x', pages)).toBeNull();
+    // 同样的文件夹，静态的：成册
+    expect(run('x', mk(10, { names: names(10, (i) => `${i + 1}.png`), judged: true }))).not.toBeNull();
   });
   it('⑥ 不足 8 页', () => {
     expect(run('Book', mk(7))).toBeNull();

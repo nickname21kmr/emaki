@@ -9,7 +9,7 @@ import type { Db } from '../../db/connection.ts';
 import { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import { CopyrightResolver, type CopyrightSource } from '../catalog/copyrights.ts';
 import { toAbs } from '../fs/paths.ts';
-import { analyze, recordProbes } from '../../domain/analysis/analyze.ts';
+import { analyze, recordCameras } from '../../domain/analysis/analyze.ts';
 import { collectingTx } from '../../domain/tx.ts';
 import { readCameraFromExif, readJpegExifHead } from '../image/exif.ts';
 import type { TagStage } from '../pipeline.ts';
@@ -304,7 +304,7 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
           );
           const hits = cams.filter(([, c]) => c).map(([r]) => r.id);
           applyAnalysis((emit) => {
-            recordProbes(db, cams.map(([r, camera]) => ({ id: r.id, camera })));
+            recordCameras(db, cams.map(([r, camera]) => ({ id: r.id, camera })));
             analyze({ db, changed: emit }, hits);
           });
           if (!hits.length || !params.skipCamera) return rows;

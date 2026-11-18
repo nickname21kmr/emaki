@@ -88,6 +88,8 @@ export function collectionReactions(service: CollectionService, propagation: Pro
         'image.trashed',
         'image.restored',
         'image.kindChanged',
+        // 动图页太多的文件夹不成册（D5 之前动图是类型，跟着类型变化走）
+        'image.animatedChanged',
         'visibility.changed',
         'evidence.changed',
       ],

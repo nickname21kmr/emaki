@@ -78,7 +78,7 @@ it('respects comic import mode and supports the same HTML animation adapter',asy
   ds.ctx.db.prepare("UPDATE library_roots SET content_mode='auto' WHERE id=?").run(rootId);
   const html=await source('124815237_动画.html',await animationHtml());
   const animated=item(await run([{path:html}],'动画'));
-  expect(await ds.getImage(animated.imageId)).toMatchObject({format:'html',kind:'animated'});
+  expect(await ds.getImage(animated.imageId)).toMatchObject({format:'html',kind:'illustration',animated:true,animatedReason:'HTML 逐帧动画 · 2 帧'});
   expect((await ds.getOriginal(animated.imageId))?.contentType).toBe('image/webp');
 });
 

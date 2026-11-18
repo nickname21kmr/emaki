@@ -47,7 +47,8 @@ describe('契约夹具上的关键查询', () => {
       shelvedCount: 0,
       recentImport: null,
       lastAddedAt: '2026-09-27T11:59:00.000Z',
-      kindCounts: { illustration: 32, comic: 0, screenshot: 0, text: 0, photo: 0, meme: 0, animated: 0 },
+      kindCounts: { illustration: 32, comic: 0, screenshot: 0, text: 0, photo: 0, meme: 0 },
+      animatedCount: 0,
       pendingTagCount: 1,
       collectionCounts: { doujin: 0, artbook: 0, group: 0 },
       pendingCollectionCount: 0,
@@ -70,7 +71,7 @@ describe('契约夹具上的关键查询', () => {
         retaggable: 6,
         kinds: { illustration: { total: 7, suggested: 5, unsure: 1, untagged: 1, shelved: 0 }, comic: none },
       },
-      annex: { total: 0, kinds: { screenshot: 0, text: 0, photo: 0, meme: 0, animated: 0 } },
+      annex: { total: 0, kinds: { screenshot: 0, text: 0, photo: 0, meme: 0 } },
     });
   });
 
@@ -139,13 +140,15 @@ describe('演示数据（演示模式打开时看到的）', () => {
       imageCount: 8953,
       characterCount: 88,
       workCount: 23,
-      unrecognizedCount: 574,
+      // D5：以前单列成「动图」类型的 191 张现在是动的插画（插画、本周新收、未识别、角色张数跟着多了），表情里约三分之一是动的
+      unrecognizedCount: 588,
       duplicateGroupCount: 36,
       excludedCount: 176,
-      untaggedCount: 135,
+      untaggedCount: 140,
       pendingTagCount: 194,
-      addedLast7Days: [34, 23, 14, 33, 43, 44, 48],
-      kindCounts: { illustration: 6147, comic: 1122, screenshot: 698, text: 271, photo: 175, meme: 349, animated: 191 },
+      addedLast7Days: [34, 23, 14, 34, 43, 45, 50],
+      kindCounts: { illustration: 6338, comic: 1122, screenshot: 698, text: 271, photo: 175, meme: 349 },
+      animatedCount: 300,
       // 4 本和以前一样；另外 25 组是真实规则「同一投稿自动成组」：重复组里的副本和原图来源相同（以前 mock 没有这条规则）
       collectionCounts: { doujin: 3, artbook: 1, group: 25 },
       pendingCollectionCount: 2,
@@ -167,18 +170,20 @@ describe('演示数据（演示模式打开时看到的）', () => {
 
   it('未识别汇总', async () => {
     const s = await demo.ds.unrecognizedSummary();
-    expect([s.art.total, s.art.suggested, s.art.unsure, s.art.untagged]).toEqual([574, 234, 205, 135]);
+    expect([s.art.total, s.art.suggested, s.art.unsure, s.art.untagged]).toEqual([588, 236, 212, 140]);
     expect(s.art.kinds.comic.total).toBe(95);
-    expect(s.annex).toEqual({ total: 128, kinds: { screenshot: 55, text: 19, photo: 15, meme: 25, animated: 14 } });
+    // D5：原来在「照片 · 文字等」里的 14 张动图是动的插画，进了「插画 · 漫画」
+    expect(s.annex).toEqual({ total: 114, kinds: { screenshot: 55, text: 19, photo: 15, meme: 25 } });
   });
 
   it('Top 角色', async () => {
+    // 角色张数只数插画：D5 之后动的插画也算（以前是「动图」类型，不算）
     expect((await demo.ds.topCharacters({ limit: 5 })).map((c) => [c.name, c.imageCount])).toEqual([
-      ['圣园未花', 744],
-      ['美甘妮露', 179],
-      ['老师', 175],
-      ['百合园圣娅', 168],
-      ['砂狼白子', 136],
+      ['圣园未花', 768],
+      ['美甘妮露', 185],
+      ['老师', 176],
+      ['百合园圣娅', 175],
+      ['樱井美代', 142],
     ]);
   });
 });

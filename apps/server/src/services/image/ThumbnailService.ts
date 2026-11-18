@@ -3,7 +3,7 @@
  * 缓存按 sha256 存：<dataDir>/thumbs/v1/ab/<sha256>_<w>.webp，完全重复的图共用一份；文件内容换了 sha 就变了，自然是新的缩略图，
  * 旧 sha 的缓存没人引用后由缓存回收删掉（domain/analysis/cacheGc.ts）。
  * 这里只生成文件；算出来的主色、dHash、生成时间、解码错误、帧数、相机都交给分析模块写（domain/analysis/analyze.ts，P4a），
- * 帧数、相机让类型变了时由分析模块声明 image.kindChanged。
+ * 相机让类型变了时由分析模块声明 image.kindChanged，帧数让是否动图变了时声明 image.animatedChanged（D5：帧数不影响类型）。
  */
 import type { ImageFormat, ThumbWidth } from '@emaki/shared';
 import { existsSync } from 'node:fs';
@@ -14,7 +14,7 @@ import type { JobContext } from '../../core/jobs.ts';
 import type { Db } from '../../db/connection.ts';
 import { writeFileAtomic } from '../fs/atomicWrite.ts';
 import { toAbs } from '../fs/paths.ts';
-import { analyze, markNonJpegCameras, recordDecodeError, recordPixels, recordProbes } from '../../domain/analysis/analyze.ts';
+import { analyze, markNonJpegCameras, recordCameras, recordDecodeError, recordFrames, recordPixels } from '../../domain/analysis/analyze.ts';
 import { collectingTx } from '../../domain/tx.ts';
 import type { Change } from '../../propagation/changes.ts';
 import { computeDHash } from './dhash.ts';
@@ -52,7 +52,7 @@ export class ThumbnailService {
       thumbsRoot: string;
       now?: () => number;
       /**
-       * 变更传播（P2）：帧数、相机让类型变了时声明 image.kindChanged（合集、Pixiv 资格由反应处理，附录 #3、#17），
+       * 变更传播（P2）：帧数、相机让类型或是否动图变了时声明 image.kindChanged / image.animatedChanged（合集、Pixiv 资格、查重由反应处理，附录 #3、#17），
        * 缓存和 library-changed 由变更传播按 job:thumbnail 弱刷新、节流推送（RV-T-9）。不给时（单元测试）只开事务
        */
       changes?: { apply<T>(fn: (emit: (c: Change) => void) => T): T };
@@ -157,14 +157,12 @@ export class ThumbnailService {
     const known = this.d.db.prepare('SELECT frame_count FROM images WHERE id=?').pluck().get(row.id);
     if (known != null) return;
     const probe = await probeImage(input);
-    // 看图时（HTTP 生成缩略图）也会走到这里：分析模块写帧数并重判类型，类型真的变了才声明变化，免得每张新图都让前端整页重新拉取
+    // 看图时（HTTP 生成缩略图）也会走到这里：分析模块写帧数、按帧数判是否动图（D5；帧数不影响类型，类型和判定依据不动），
+    // 是否动图真的变了才声明变化，免得每张新图都让前端整页重新拉取
     const ids = this.d.db.prepare('SELECT id FROM images WHERE sha256=?').pluck().all(row.sha256) as number[];
     const tx = collectingTx(this.d.db);
     this.d.db.transaction(() => {
-      const probes = ids.map((id) => ({ id, frames: probe.pages }));
-      // 只有多帧的才可能改类型：单帧的只记帧数，不重判
-      if ((probe.pages > 1 && probe.format !== 'gif') || probe.format === 'html') analyze(tx, ids, { probes });
-      else recordProbes(this.d.db, probes);
+      recordFrames(tx, ids.map((id) => ({ id, frames: probe.pages })));
     })();
     if (tx.changes.length) this.apply((emit) => tx.changes.forEach(emit));
   }
@@ -207,7 +205,7 @@ export class ThumbnailService {
       const hits = cams.filter(([, c]) => c).map(([id]) => id);
       // 分析模块写相机；读到相机的当场重判类型（类型变了由它声明 image.kindChanged）
       this.apply((emit) => {
-        recordProbes(db, cams.map(([id, camera]) => ({ id, camera })));
+        recordCameras(db, cams.map(([id, camera]) => ({ id, camera })));
         analyze({ db, changed: emit }, hits);
       });
       found += hits.length;

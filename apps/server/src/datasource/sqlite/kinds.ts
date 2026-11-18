@@ -20,10 +20,10 @@ export const KIND_LABEL: Record<ContentKind, string> = {
   text: '文字',
   photo: '照片',
   meme: '表情',
-  animated: '动图',
 };
 
 export function assertKindValue(v: unknown): asserts v is ContentKind | 'auto' {
+  if (v === 'animated') throw new BadRequestError('「动图」不是类型了：是不是动图按帧数自动判断，不能手动改');
   if (v !== 'auto' && !CONTENT_KINDS.includes(v as ContentKind)) throw new BadRequestError(`未知的图片类型：${String(v)}`);
 }
 

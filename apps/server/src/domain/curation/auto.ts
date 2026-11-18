@@ -7,7 +7,7 @@
  * 规则：
  * 1. 加关联：图片没放下、没归原创、不在漫画区、没被排除（且可见）时，证据里分数达到这个来源自动阈值的候选
  *    （阈值按来源取自设置，见 reevaluate.ts 的 autoSettings）都关联上；用户否决过的不加；
- *    候选还没有角色时，插画、漫画、动图上可以建档，别的类型只在同一轮里别的图会建这个角色时复用（和先后无关，附录 #1）。
+ *    候选还没有角色时，插画、漫画上可以建档（动的也一样，D5），别的类型只在同一轮里别的图会建这个角色时复用（和先后无关，附录 #1）。
  * 2. 撤回（D2）：只在某个来源的证据刚换过时（fresh：首次识别、重新识别、Pixiv 补充、来源失效）；
  *    自动的、依据的就是这个来源的关联，新证据里没有这个候选或分数低于这个来源的自动阈值，就撤回。
  *    手动的、来历不明的（rule 是 legacy）永远不动。阈值调高不会撤回（没有新证据），补采纳只会新增。
@@ -23,8 +23,11 @@ import type { ContentKind } from '@emaki/shared';
 import type { CharacterEvidenceProvider } from '../evidence/store.ts';
 import { LEGACY_RULE_PREFIX, RULES, type Decision } from './provenance.ts';
 
-/** 能自动建档的类型：插画、漫画、动图（截图、文字、照片、表情上认出的新角色只进建议，BI-15） */
-export const AUTO_CREATE_KINDS: ReadonlySet<ContentKind> = new Set<ContentKind>(['illustration', 'comic', 'animated']);
+/**
+ * 能自动建档的类型：插画、漫画（截图、文字、照片、表情上认出的新角色只进建议，BI-15）。
+ * 是否动图不影响（D5）：动的插画和静态插画一样建档；以前类型 animated 也能建档，那些图现在按其余规则判成插画、漫画或别的类型
+ */
+export const AUTO_CREATE_KINDS: ReadonlySet<ContentKind> = new Set<ContentKind>(['illustration', 'comic']);
 
 /** 图片上已有的原创决定 */
 export interface OriginalFacts {

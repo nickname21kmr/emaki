@@ -5,7 +5,8 @@
  * - 文件内容变了（image.fileChanged，D1）：扫描发现外部改了文件、用户替换文件完全一样——清掉旧文件算出来的像素派生（缩略图任务按新文件重新生成），
  *   按新的尺寸、格式、帧数、相机重判类型；主题、画质分跟着「这份文件版本有没有识别结果」走（证据模块的反应先把识别标成过期，见 evidence/reactions.ts）；
  * - 图移动了（三条移动路径和扫描发现的移动一样）或者按漫画导入的设置变了：按新路径重判类型、漫画文件夹里的页按漫画判并去掉自动关联的角色。
- * 最终类型变了声明 image.kindChanged；去掉角色由归类模块声明 curation.charactersChanged（经 emit）。
+ * 最终类型变了声明 image.kindChanged，是否动图变了声明 image.animatedChanged（D5：只有帧数、格式变了才会变，入库、换了文件）；
+ * 去掉角色由归类模块声明 curation.charactersChanged（经 emit）。
  * 缩略图、识别这类昂贵的部分由提交后的排队反应交给后台任务（propagation/engine.ts）。
  */
 import type { Db } from '../../db/connection.ts';
@@ -26,7 +27,7 @@ export const analyzeReaction: Reaction = {
   name: 'analyze',
   on: ['image.added', 'image.fileChanged', 'image.moved', 'root.modeChanged'],
   phase: 'tx',
-  emits: ['image.kindChanged', 'curation.charactersChanged'],
+  emits: ['image.kindChanged', 'image.animatedChanged', 'curation.charactersChanged'],
   run({ ctx, changes, emit }) {
     const db = ctx.db;
     const tx = { db, changed: emit };

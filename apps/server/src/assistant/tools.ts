@@ -53,7 +53,7 @@ export function createLibraryMcp(app: FastifyInstance, ds: DataSource, file: str
     server.registerTool('describe_database', { description: '查看当前 SQLite 表/视图定义和字段语义，用于设计查询。', inputSchema: {}, annotations: read }, async () => {
       host.assertEnabled();
       return json({ schema: await queryLibrary(db, "SELECT type,name,sql FROM sqlite_schema WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' AND tbl_name <> 'settings' ORDER BY name", [], 500),
-        semantics: '主键在 API 中使用字符串；时间为 ISO UTC；布尔值 0/1。images missing/trashed_at/excluded_by 会影响页面可见范围。*_manual 表示人工设置；关联的来源和置信度请查看表定义。original 是原创标记，不代表一个具名角色。前端筛选口径可通过 read_library 对照。' });
+        semantics: '主键在 API 中使用字符串；时间为 ISO UTC；布尔值 0/1。images missing/trashed_at/excluded_by 会影响页面可见范围。*_manual 表示人工设置；关联的来源和置信度请查看表定义。original 是原创标记，不代表一个具名角色。content_kind 是互斥的类型；images.animated=1 是动图（按帧数判断，和类型无关，动的插画仍是 illustration）。前端筛选口径可通过 read_library 对照。' });
     });
     server.registerTool('query_database', { description: '执行单条只读 SELECT/WITH/EXPLAIN SQL，支持关联、聚合、抽样。结果最多 1MB，truncated 表示需要分页或聚合。5 秒查询时限。',
       inputSchema: { sql: z.string().min(1).max(30000), params: z.array(z.union([z.string(), z.number(), z.null()])).max(5000).default([]), limit: z.number().int().min(1).max(5000).default(200) }, annotations: read }, async ({ sql, params, limit }) => {
@@ -86,7 +86,8 @@ export function createLibraryMcp(app: FastifyInstance, ds: DataSource, file: str
   server.registerTool('update_images', { description: '通过 Emaki 业务接口批量修改图片，触发页面刷新并返回可撤销 token。operationId 是本次操作唯一标识，重试使用同一个值；先用 SQL 或页面选择确定 ids。',
     inputSchema: { operationId: z.string().min(1).max(100), ids, action: z.discriminatedUnion('type', [
       z.object({ type: z.literal('assign'), characterId: z.string() }), z.object({ type: z.literal('unassign'), characterId: z.string() }),
-      z.object({ type: z.literal('kind'), value: z.enum(['illustration', 'photo', 'screenshot', 'comic', 'text', 'meme', 'animated', 'auto']) }),
+      z.object({ type: z.literal('kind'), value: z.enum(['illustration', 'photo', 'screenshot', 'comic', 'text', 'meme', 'auto'])
+        .describe('内容类型；是否动图不是类型（按帧数自动判断，图片的 animated 字段），不能改') }),
       z.object({ type: z.literal('favorite'), value: z.boolean() }), z.object({ type: z.literal('original'), value: z.boolean() }),
       z.object({ type: z.literal('shelve'), value: z.boolean() }), z.object({ type: z.literal('exclude') }), z.object({ type: z.literal('restore') }),
       z.object({ type: z.literal('rating'), value: z.enum(['general', 'sensitive', 'questionable', 'explicit']) }),

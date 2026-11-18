@@ -81,14 +81,15 @@ describe('decideAuto', () => {
     expect(decideAuto(image({ inBook: true }), ev, none, settings, catalog()).link).toHaveLength(1);
   });
 
-  it('新角色：插画、漫画、动图上建档；截图只复用同一轮里别的图建的', () => {
+  it('新角色：插画、漫画上建档（动的也一样，D5：是否动图不是 decideAuto 的输入）；截图、表情只复用同一轮里别的图建的', () => {
     const ev = [tagger([['carol', 0.9]])];
-    for (const kind of ['illustration', 'comic', 'animated'] as const) {
+    for (const kind of ['illustration', 'comic'] as const) {
       const d = decideAuto(image({ kind }), ev, none, settings, catalog());
       expect(d.createCharacters).toEqual([{ tag: 'carol' }]);
       expect(d.link).toEqual([{ characterId: null, tag: 'carol', provider: 'tagger', score: 0.9 }]);
     }
     expect(decideAuto(image({ kind: 'screenshot' }), ev, none, settings, catalog())).toEqual({ link: [], unlink: [], createCharacters: [] });
+    expect(decideAuto(image({ kind: 'meme' }), ev, none, settings, catalog())).toEqual({ link: [], unlink: [], createCharacters: [] });
     const shared = decideAuto(image({ kind: 'screenshot' }), ev, none, settings, catalog(['carol']));
     expect(shared.createCharacters).toEqual([]);
     expect(shared.link).toEqual([{ characterId: null, tag: 'carol', provider: 'tagger', score: 0.9 }]);

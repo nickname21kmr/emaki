@@ -126,7 +126,7 @@ export function WorkImages({ workId, gridKey, dialogOpen = false }: { workId: ID
           total={total}
           loadingMore={query.isFetchingNextPage}
           onLoadMore={loadMore}
-          renderOverlay={filters.allKinds ? (img) => <KindBadge kind={img.kind} /> : undefined}
+          renderBadges={filters.allKinds ? (img) => <KindBadge kind={img.kind} /> : undefined}
         />
       </div>
     );

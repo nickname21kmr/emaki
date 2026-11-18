@@ -19,7 +19,6 @@ import { EventBus } from '../../src/core/events.ts';
 import { declareTagged } from '../../src/domain/evidence/reactions.ts';
 import { SqliteDataSource } from '../../src/datasource/sqlite/SqliteDataSource.ts';
 import { patchSettingsInternal, readSettings } from '../../src/datasource/sqlite/settings.ts';
-import { backfillClassification } from '../../src/domain/analysis/classify.ts';
 import { CharacterCatalog } from '../../src/domain/catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../../src/services/catalog/copyrights.ts';
 import type { PixivArtwork } from '../../src/services/pixiv/client.ts';
@@ -229,8 +228,8 @@ describe('自动关联：同一份模型证据，从哪个入口进来结果都�
   });
 
   // 附录 #3（P3b 已关闭）：以前只有手动改类型会重新评估自动关联（kinds.ts）。帧数检测、相机识别、扫描重判这些自动改类型的路径不会。
-  // 这里模拟缩略图任务的帧数检测：PNG 读出 2 帧 → 自动重判成动图 → 类型真的变了就声明 image.kindChanged
-  // （ThumbnailService.frameMetadata 做的就是这三步）。现在两条路都由 reevaluateAuto 订阅 image.kindChanged
+  // 这里模拟扫描发现图挪进了「3话」文件夹：分析模块按新路径重判成漫画 → 类型真的变了就声明 image.kindChanged。
+  // 现在两条路都由 reevaluateAuto 订阅 image.kindChanged（D5 之前用的是帧数检测判成动图；动图不再是类型，帧数不改类型）
   it('自动改类型和手动改类型一样会重新评估（附录 #3，P3b 已关闭）', async () => {
     const manual = await engine();
     const auto = await engine();
@@ -239,12 +238,11 @@ describe('自动关联：同一份模型证据，从哪个入口进来结果都�
       recognize(ds, [{ id: 1, general: [[UI_TAG, 0.9]], character: [[NEW_TAG, 0.9]] }]);
       expect(kindOf(ds, 1)).toBe('screenshot');
     }
-    await manual.updateImage('1', { kind: 'animated' });
-    auto.ctx.db.prepare('UPDATE images SET frame_count = 2 WHERE id = 1').run();
-    backfillClassification(auto.ctx.db, { ids: [1] });
-    auto.ctx.apply(() => auto.ctx.changed({ type: 'image.kindChanged', ids: [1] }));
+    await manual.updateImage('1', { kind: 'comic' });
+    auto.ctx.db.prepare("UPDATE images SET rel_path = '某漫画 3话/image_1.png' WHERE id = 1").run();
+    auto.ctx.apply(() => auto.ctx.changed({ type: 'image.moved', ids: [1], reason: 'scan' }));
 
-    expect(kindOf(auto, 1)).toBe('animated');
+    expect(kindOf(auto, 1)).toBe('comic');
     expect(linkedTags(manual, 1)).toEqual([NEW_TAG]);
     expect(provenance(auto, 1)).toEqual(provenance(manual, 1));
   });
@@ -642,7 +640,7 @@ describe('文件内容变了：用户替换和扫描发现外部修改走同一�
     const facts = (x: number) =>
       ds.ctx.db
         .prepare(
-          `SELECT width, height, format, sha256, frame_count, content_kind, theme, art_score, tagged_at, tagger_model, artist_checked_at,
+          `SELECT width, height, format, sha256, frame_count, animated, content_kind, theme, art_score, tagged_at, tagger_model, artist_checked_at,
              dhash, dominant_color, thumb_at, decode_error, favorite, rating, rating_manual, missing, trashed_at FROM images WHERE id = ?`,
         )
         .get(x);
@@ -650,7 +648,9 @@ describe('文件内容变了：用户替换和扫描发现外部修改走同一�
     expect(facts(a)).toMatchObject({
       format: 'webp',
       frame_count: 2,
-      content_kind: 'animated',
+      // D5：两帧的 WebP 是动图；类型照其余规则判（还没识别，默认插画）
+      animated: 1,
+      content_kind: 'illustration',
       // 这份文件版本还没有识别结果：识别时间、主题、画质分为空，排队重新识别；画师也重认
       tagged_at: null,
       theme: null,
@@ -685,5 +685,100 @@ describe('文件内容变了：用户替换和扫描发现外部修改走同一�
       ['Bob', 'manual', false],
       [NEW_TAG, 'auto', true],
     ]);
+  });
+});
+
+describe('动图（D5，P4b）：是否动图和类型是两个维度', () => {
+  /** 一个真的图库文件夹（临时目录）：放文件、扫描 */
+  async function libraryEngine() {
+    const ds = await engine();
+    const lib = path.join(opened.at(-1)!.dir, 'lib');
+    mkdirSync(lib);
+    ds.ctx.db.prepare('UPDATE library_roots SET path = ?, last_scan_at = NULL WHERE id = 1').run(lib.replace(/\\/g, '/'));
+    const job: JobContext = { signal: new AbortController().signal, setTotal() {}, advance() {}, setMessage() {}, shouldYield: () => false, requeue() {}, yielded: false };
+    const scan = async () => {
+      ds.requests.requestFull();
+      await runAs('job:scan', () => ds.scanner.scan(job));
+      ds.ctx.propagation.jobFinished('scan');
+    };
+    const id = (name: string) => ds.ctx.db.prepare('SELECT id FROM images WHERE file_name = ?').pluck().get(name) as number;
+    // 修改时间放在过去：刚写的文件扫描会当成还在写入、下次再看
+    const put = (name: string, bytes: Buffer) => {
+      const file = path.join(lib, name);
+      writeFileSync(file, bytes);
+      utimesSync(file, new Date('2025-01-01'), new Date('2025-01-01'));
+    };
+    return { ds, put, scan, id };
+  }
+  /** 两帧的动画 WebP（delays 不同内容就不同）；转换用的缓存放在图库文件夹外面 */
+  const animatedWebp = async (delays: number[]) =>
+    readFileSync(await htmlAnimationCache(await animationHtml(delays), path.join(opened.at(-1)!.dir, 'data')));
+
+  // 一条路：扫描入库，识别出是插画（动的插画就是插画）；另一条路：识别标签让它判成了截图，用户改成插画。
+  // 两条路的类型、是否动图、角色关联和来历、未识别队列、Pixiv 资格、动图筛选都一样
+  it('同一张动图，从扫描入库和从改类型两条路进来，结果一致', async () => {
+    const results = [];
+    for (const route of ['scan', 'kind'] as const) {
+      const { ds, put, scan, id } = await libraryEngine();
+      // a：认出图库里还没有的角色（插画上可以建档）；b：Pixiv 投稿，模型只给了建议（留在未识别里，能去查 Pixiv）
+      put('a.webp', await animatedWebp([30, 60]));
+      put('12345678_p0.webp', await animatedWebp([40, 80]));
+      await scan();
+      const [a, b] = [id('a.webp'), id('12345678_p0.webp')];
+      expect(ds.ctx.db.prepare('SELECT frame_count, animated, content_kind FROM images WHERE id IN (?, ?)').all(a, b)).toEqual([
+        { frame_count: 2, animated: 1, content_kind: 'illustration' },
+        { frame_count: 2, animated: 1, content_kind: 'illustration' },
+      ]);
+      const ui = route === 'kind' ? ([[UI_TAG, 0.9]] as Scores) : [];
+      recognize(ds, [
+        { id: a, general: ui, character: [[NEW_TAG, 0.9]] },
+        { id: b, general: ui, character: [[KNOWN, 0.6]] },
+      ]);
+      if (route === 'kind') {
+        // 判成了截图：新角色不建档，两张都在未识别的「照片 · 文字等」里，不去查 Pixiv；是动图不受影响
+        expect([kindOf(ds, a), kindOf(ds, b)]).toEqual(['screenshot', 'screenshot']);
+        expect(linkedTags(ds, a)).toEqual([]);
+        expect((await ds.unrecognizedSummary({})).annex.kinds.screenshot).toBe(2);
+        expect(pendingPixivCount(ds.ctx)).toBe(0);
+        await ds.bulkImages({ ids: [String(a), String(b)], action: { type: 'kind', value: 'illustration' } });
+      }
+      const summary = await ds.unrecognizedSummary({});
+      const animatedIllust = await ds.listImages({ kind: ['illustration'], animated: true });
+      results.push({
+        facts: [a, b].map((x) => ds.ctx.db.prepare('SELECT content_kind, animated, frame_count FROM images WHERE id = ?').get(x)),
+        links: [provenance(ds, a), provenance(ds, b)],
+        art: summary.art.kinds.illustration,
+        annex: summary.annex.total,
+        pixiv: pendingPixivCount(ds.ctx),
+        filtered: animatedIllust.items.map((i) => i.fileName).sort(),
+        stats: { illustration: (await ds.getStats()).kindCounts.illustration, animated: (await ds.getStats()).animatedCount },
+      });
+    }
+    expect(results[0]).toMatchObject({
+      facts: [
+        { content_kind: 'illustration', animated: 1, frame_count: 2 },
+        { content_kind: 'illustration', animated: 1, frame_count: 2 },
+      ],
+      links: [[[NEW_TAG, 'auto', true]], []],
+      // 动的插画和静态插画一样进「插画 · 漫画」的未识别队列（有建议的那一段），不在「照片 · 文字等」里
+      art: { total: 1, suggested: 1 },
+      annex: 0,
+      pixiv: 1,
+      filtered: ['12345678_p0.webp', 'a.webp'],
+      stats: { illustration: 2, animated: 2 },
+    });
+    expect(results[1]).toEqual(results[0]);
+  });
+
+  it('改类型不动「是否动图」；动图不能当类型选', async () => {
+    const { ds, put, scan, id } = await libraryEngine();
+    put('a.webp', await animatedWebp([30, 60]));
+    await scan();
+    const a = String(id('a.webp'));
+    for (const kind of ['meme', 'photo', 'illustration', 'auto'] as const) {
+      await ds.updateImage(a, { kind });
+      expect((await ds.getImage(a))).toMatchObject({ kind: kind === 'auto' ? 'illustration' : kind, animated: true, animatedReason: 'WEBP · 2 帧' });
+    }
+    await expect(ds.updateImage(a, { kind: 'animated' as never })).rejects.toThrow('「动图」不是类型了');
   });
 });

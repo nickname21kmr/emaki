@@ -33,6 +33,7 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
         favorite: qBool.optional(),
         original: qBool.optional(),
         kind: qKinds.optional(),
+        animated: qBool.optional(),
         rated: qBool.optional(),
         seed: qNumber.min(0).max(1073741823).optional(),
         sort: z.enum(['addedAt', 'modifiedAt', 'fileName', 'bytes', 'random', 'page']).optional(),

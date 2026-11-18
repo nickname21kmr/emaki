@@ -9,6 +9,7 @@ import { useMutate } from '@/lib/queries';
 import { useLightbox, useSelection } from '@/lib/stores';
 import { pickRevealed } from '@/lib/undoPlace';
 import { GroupBadge, selectionIds, toggleImageSelection } from './CollectionControls';
+import { TileMarks } from './KindBadge';
 import { useUndoRevealTarget } from '@/lib/useUndoReveal';
 import { justify } from './justify';
 
@@ -25,8 +26,10 @@ export interface ImageGridProps {
   /** 目标行高 */
   rowHeight?: number;
   gap?: number;
-  /** 自定义每张图上的叠加层（右下角信息等） */
+  /** 自定义每张图上的叠加层（自己定位，例如右上角的「新」点） */
   renderOverlay?: (image: ImageItem) => ReactNode;
+  /** 左下角的小标记（类型印、合集页码，不用定位）：和动图标记排成一行，悬停显示角色名时淡出 */
+  renderBadges?: (image: ImageItem) => ReactNode;
   /** 整个列表的总数（看图器显示「N / 总数」并跨分页翻，BR-B1） */
   total?: number;
   /** 哪些图强制按敏感模糊（没识别过的本子页） */
@@ -52,6 +55,7 @@ export function ImageGrid({
   rowHeight = 240,
   gap = 6,
   renderOverlay,
+  renderBadges,
   onOpen,
   forceBlur,
   total,
@@ -133,6 +137,7 @@ export function ImageGrid({
                   onToggle={() => toggleImageSelection(image)}
                   onFavorite={() => favorite.mutate({ ids: selectionIds(image), value: !(image.collectionGroup?.allFavorite ?? image.favorite) })}
                   overlay={renderOverlay?.(image)}
+                  badges={renderBadges?.(image)}
                   forceBlur={forceBlur?.(image)}
                 />
               );
@@ -317,6 +322,7 @@ function Tile({
   onClick,
   onToggle,
   overlay,
+  badges,
   forceBlur,
   onFavorite,
   flash,
@@ -332,11 +338,13 @@ function Tile({
   onClick: (e: React.MouseEvent) => void;
   onToggle: () => void;
   overlay?: ReactNode;
+  badges?: ReactNode;
   forceBlur?: boolean;
   onFavorite: () => void;
 }) {
   const thumbWidth = gridThumbWidth(width);
   const starred = image.collectionGroup?.allFavorite ?? image.favorite;
+  const names = !selecting && width >= 120 && height >= 120;
   return (
     <div
       className={cn(
@@ -368,7 +376,7 @@ function Tile({
 
       <GroupBadge image={image} forceBlur={forceBlur} />
       {/* 悬停：底部渐变 + 这是谁（BR-5）；多选时和窄格子不显示 */}
-      {!selecting && width >= 120 && height >= 120 && (
+      {names && (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-linear-to-t from-black/55 via-black/20 to-transparent opacity-0 transition-opacity duration-300 group-hover/tile:opacity-100">
           <span
             className={cn(
@@ -403,6 +411,10 @@ function Tile({
         </button>
       )}
       {overlay}
+      {/* 左下角：类型印、页码、动图标记（D5）；悬停显示角色名时让位 */}
+      <TileMarks animated={image.animated} fadeOnHover={names}>
+        {badges}
+      </TileMarks>
 
       <MountFrame selected={selected} />
       {selectable && <SelectCircle selected={selected} selecting={selecting} onToggle={onToggle} />}

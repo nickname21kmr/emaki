@@ -1,5 +1,5 @@
 import { selectionIds } from '@/components/media/CollectionControls';
-import type { BulkImageAction, ContentKind, ID, ImageItem, Rating } from '@emaki/shared';
+import { UNRECOGNIZED_ANNEX_KINDS, type BulkImageAction, type ContentKind, type ID, type ImageItem, type Rating } from '@emaki/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -11,7 +11,7 @@ import type { AssignTarget, StampEvent } from './types';
 
 const SCOPE = 'unrecognized';
 const EMPTY: ReadonlySet<ID> = new Set();
-const ANNEX: readonly string[] = ['screenshot', 'text', 'photo', 'meme', 'animated'];
+const ANNEX: readonly string[] = UNRECOGNIZED_ANNEX_KINDS;
 const MAX_SELECT = 2000;
 
 /**

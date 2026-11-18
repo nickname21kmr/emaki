@@ -1,9 +1,10 @@
 /**
- * 内容类型的文案与图标（T27 / T32a）。插画是主角，其余六类统称「别册」。
- * 键位顺序 = CONTENT_KINDS 顺序：1 插画 2 漫画 3 截图 4 文字 5 照片 6 表情 7 动图。
+ * 内容类型的文案与图标（T27 / T32a）。插画是主角，其余五类统称「别册」。
+ * 键位顺序 = CONTENT_KINDS 顺序：1 插画 2 漫画 3 截图 4 文字 5 照片 6 表情。
+ * 「动图」不是类型（D5）：是另一个维度（ImageItem.animated），按帧数自动判断，文案在下面的 ANIMATED_*。
  */
 import type { ContentKind, ContentKindSource } from '@emaki/shared';
-import { BookOpen, Camera, FileText, Film, Image, Smartphone, Sticker, type LucideIcon } from 'lucide-react';
+import { BookOpen, Camera, FileText, Image, Smartphone, Sticker, type LucideIcon } from 'lucide-react';
 
 export const KIND_LABEL: Record<ContentKind, string> = {
   illustration: '插画',
@@ -12,7 +13,6 @@ export const KIND_LABEL: Record<ContentKind, string> = {
   text: '文字',
   photo: '照片',
   meme: '表情',
-  animated: '动图',
 };
 
 /** 朱文小印上的字（T32b） */
@@ -23,7 +23,6 @@ export const KIND_GLYPH: Record<ContentKind, string> = {
   text: '文',
   photo: '照',
   meme: '表',
-  animated: '动',
 };
 
 export const KIND_HINT: Record<ContentKind, string> = {
@@ -33,7 +32,6 @@ export const KIND_HINT: Record<ContentKind, string> = {
   text: '文档、笔记、满屏文字、二维码',
   photo: '相机拍的照片、真人、实物',
   meme: '表情包、梗图、反应图',
-  animated: 'GIF、动画 WebP / PNG、HTML 逐帧动画',
 };
 
 export const KIND_ICON: Record<ContentKind, LucideIcon> = {
@@ -43,19 +41,21 @@ export const KIND_ICON: Record<ContentKind, LucideIcon> = {
   text: FileText,
   photo: Camera,
   meme: Sticker,
-  animated: Film,
 };
 
 export const SOURCE_LABEL: Record<ContentKindSource, string> = {
   name: '文件名',
   folder: '文件夹',
   camera: '相机信息',
-  format: '格式',
   size: '尺寸',
   tags: '识别标签',
   manual: '手动',
   default: '默认',
 };
+
+/** 动图（D5）：不是类型，是跨类型的筛选 */
+export const ANIMATED_LABEL = '动图';
+export const ANIMATED_HINT = 'GIF、动画 WebP / PNG、HTML 逐帧动画，按帧数自动认出';
 
 /** 当前看的这几类一共多少张；'all' 就是全库 */
 export const kindTotal = (counts: Record<ContentKind, number>, total: number, kind: ContentKind[] | 'all') =>

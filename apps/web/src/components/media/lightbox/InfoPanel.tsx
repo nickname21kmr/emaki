@@ -13,7 +13,8 @@ import {
 import { CONTENT_KINDS } from '@emaki/shared';
 import { cn } from '@/lib/cn';
 import { unitOfFolder } from '@/lib/collections';
-import { KIND_GLYPH, KIND_HINT, KIND_LABEL } from '@/lib/kinds';
+import { ANIMATED_LABEL, KIND_GLYPH, KIND_HINT, KIND_LABEL } from '@/lib/kinds';
+import { AnimatedGlyph } from '../KindBadge';
 import { PanelArtists } from './PanelArtists';
 import { PanelCharacters } from './PanelCharacters';
 import { PanelCollection } from './PanelCollection';
@@ -149,8 +150,9 @@ export function InfoPanel({
 }
 
 /**
- * 类型（T32a / T32b）：七枚印章一排，当前类型是白文实底，其余朱文；点一下就改（可撤销）。
- * 下面一行是判定依据；手动改过的可以恢复自动判断。
+ * 类型（T32a / T32b）：六枚印章一排，当前类型是白文实底，其余朱文；点一下就改（可撤销）。
+ * 是动图的，下面一行写「动图」和为什么算（D5：另一个维度，按帧数自动认出，不能改，所以不是印章）。
+ * 最下面一行是类型的判定依据；手动改过的可以恢复自动判断。
  */
 function KindSection({ detail, actions }: { detail: ImageDetail; actions: ImageActions }) {
   const kind = actions.kind ?? detail.kind;
@@ -173,6 +175,13 @@ function KindSection({ detail, actions }: { detail: ImageDetail; actions: ImageA
           </Tooltip>
         ))}
       </div>
+      {detail.animated && (
+        <p className="mt-2.5 flex items-center gap-1.5 text-[11.5px] text-fg-muted">
+          <AnimatedGlyph size={16} />
+          <span className="font-medium text-fg">{ANIMATED_LABEL}</span>
+          <span className="text-fg-subtle">· {detail.animatedReason ?? '按帧数认出'} · 和类型无关，自动判断</span>
+        </p>
+      )}
       <p className="mt-2 text-[11px] leading-relaxed text-fg-subtle">
         {manual ? (
           <>

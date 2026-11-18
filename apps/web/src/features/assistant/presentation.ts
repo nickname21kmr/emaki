@@ -1,5 +1,5 @@
 import type { AssistantBackend, AssistantCard, AssistantContext, AssistantMessage, AssistantModel, AssistantSession } from '@emaki/shared';
-import { KIND_LABEL } from '../../lib/kinds';
+import { ANIMATED_LABEL, KIND_LABEL } from '../../lib/kinds';
 import { THEME_META } from '../unrecognized/themes';
 import type { Unseen } from './dock';
 
@@ -34,7 +34,7 @@ export function contextPageLabel(page: string): string {
     }
   } else if (section === 'works' && parts[1]) labels[0] = '作品详情';
   else if (section === 'collections' && parts[1]) labels[0] = parts[2] === 'read' ? '合集阅读' : '合集详情';
-  else if (section === 'annex') { const name = kind(parts[1]); if (name) labels.push(name); }
+  else if (section === 'annex') { const name = parts[1] === 'animated' ? ANIMATED_LABEL : kind(parts[1]); if (name) labels.push(name); }
   else if (section === 'unrecognized') {
     if (p.get('area') === 'annex') labels.push('照片 · 文字等', ...(kind(p.get('kind')) ? [kind(p.get('kind'))!] : []));
     else {
@@ -46,6 +46,7 @@ export function contextPageLabel(page: string): string {
   const theme = p.get('theme');
   if ((section === 'gallery' || (section === 'unrecognized' && p.get('area') !== 'annex' && p.get('bucket') === 'unsure')) && theme && Object.hasOwn(THEME_META, theme)) labels.push(THEME_META[theme as keyof typeof THEME_META].label);
   if (section === 'gallery') {
+    if (p.get('anim') === '1') labels.push('只看动图');
     if (p.get('fav') === '1') labels.push('已收藏');
     if (p.has('custom')) labels.push('自定义画面');
     if (p.get('artist')) labels.push(`画师：${p.get('artist')}`);

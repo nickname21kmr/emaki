@@ -92,7 +92,7 @@ import { htmlAnimationCache, readHtmlAnimation } from '../../services/image/html
 import { sha256Buffer } from '../../services/fs/hash.ts';
 import { classifyStale, restoreKinds, type KindSnapshot } from '../../domain/analysis/analyze.ts';
 import { recordRootModeUndo, syncRootModes } from '../../domain/analysis/rootMode.ts';
-import { CLASSIFIER_VERSION } from '../../services/classify/rules.ts';
+import { CLASSIFIER_VERSION, describeAnimation } from '../../services/classify/rules.ts';
 import type { UndoRecorder } from './undo.ts';
 import { ComicAreas, IN_COMIC } from '../../services/classify/comicAreas.ts';
 import { CollectionService } from '../../domain/collections/CollectionService.ts';
@@ -820,6 +820,7 @@ export class SqliteDataSource implements DataSource {
       ).map((r) => ({ characterId: toId(r.character_id), decision: r.decision, source: r.evidence_provider, score: r.evidence_score })),
       kindSource: row.content_kind_manual ? 'manual' : row.content_kind_source,
       kindReason: row.content_kind_manual ? null : describeKindReason(row.content_kind_source, row.content_kind_evidence),
+      animatedReason: row.animated ? describeAnimation({ format: row.format, frames: row.frame_count }) : null,
       collection: this.imageCollection(n),
       artists: imageArtists(this.ctx.db, n),
       sourceManual: !!this.ctx.stmt('SELECT source_manual FROM images WHERE id = ?').pluck().get(n),

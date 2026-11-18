@@ -175,7 +175,7 @@ export function TaggerSection({
           label="自动采纳阈值"
           hint={
             <>
-              达标时直接关联已有角色。插画、漫画和动图也可自动新建角色，其他类型的新角色留在「未识别」。已有建议可在这里补采纳。
+              达标时直接关联已有角色。插画、漫画（动的也一样）也可自动新建角色，其他类型的新角色留在「未识别」。已有建议可在这里补采纳。
               <span className="mt-2 block"><PromoteSuggestionsButton threshold={tagger.autoAcceptThreshold} /></span>
             </>
           }

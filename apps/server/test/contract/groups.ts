@@ -269,7 +269,8 @@ export function statsContract(make: ContractFactory) {
         shelvedCount: 0,
         recentImport: null,
         lastAddedAt: new Date(NOW - 60_000).toISOString(),
-        kindCounts: { illustration: 32, comic: 0, screenshot: 0, text: 0, photo: 0, meme: 0, animated: 0 },
+        kindCounts: { illustration: 32, comic: 0, screenshot: 0, text: 0, photo: 0, meme: 0 },
+      animatedCount: 0,
         pendingTagCount: 1,
         collectionCounts: { doujin: 0, artbook: 0, group: 0 },
         pendingCollectionCount: 0,
@@ -1358,7 +1359,7 @@ export function kindsContract(make: ContractFactory) {
       const u = await e.ds.listUnrecognized({});
       expect([u.total, u.annexCount]).toEqual([6, 1]);
       const kinds = await e.ds.listContentKinds();
-      expect(kinds.map((k) => k.kind)).toEqual(['illustration', 'comic', 'screenshot', 'text', 'photo', 'meme', 'animated']);
+      expect(kinds.map((k) => k.kind)).toEqual(['illustration', 'comic', 'screenshot', 'text', 'photo', 'meme']);
       expect(kinds[2]).toMatchObject({ count: 1, recentCount: 1 });
       expect(kinds[2]!.previews.map((p) => e.back('image', p.id))).toEqual(['i24']);
 
