@@ -83,7 +83,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     private val _screen = MutableStateFlow<Screen>(Screen.Find)
     val screen: StateFlow<Screen> = _screen.asStateFlow()
 
-    private val _deviceName = MutableStateFlow(store.deviceName() ?: DeviceInfo.defaultName)
+    private val _deviceName = MutableStateFlow(store.deviceName() ?: DeviceInfo.defaultName(app))
     val deviceName: StateFlow<String> = _deviceName.asStateFlow()
 
     /** 现在在跑的流程（换页时取消：比如等批准时点「取消」） */
@@ -112,7 +112,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     fun setDeviceName(name: String) {
         store.setDeviceName(name)
-        _deviceName.value = store.deviceName() ?: DeviceInfo.defaultName
+        _deviceName.value = store.deviceName() ?: DeviceInfo.defaultName(getApplication())
     }
 
     // ---------------------------------------------------------------- 之后每次打开

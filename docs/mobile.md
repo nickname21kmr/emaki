@@ -135,7 +135,7 @@
 
 ### 3.4 打包和分发
 - APK 自己签名，放在 fork 的 GitHub Releases。签名密钥生成后在电脑上留一份备份：密钥丢了，以后的新版本就装不上，只能卸载重装。
-  密钥（2026-11-19 生成）在 x99e 的 `/root/android/keys/`，构建和备份的做法见 `apps/android/README.md`。
+  密钥（2026-11-19 生成）在 x99e 的 `/root/emaki-dev/android/keys/`，构建和备份的做法见 `apps/android/README.md`。
 - App 的版本和 `hello` 里的「最低 App 版本」对应，太旧时提示升级。`hello` 的协议版本比 App 认识的新时也提示升级。
 
 ### 3.5 实现（2026-11-19）

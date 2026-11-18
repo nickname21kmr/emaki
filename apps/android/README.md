@@ -27,15 +27,15 @@
 ```bash
 # 把这个目录同步过去（build 产物不带）
 rsync -az --delete --exclude .gradle --exclude build --exclude app/build --exclude .kotlin --exclude emulator.log \
-  apps/android/ x99:/root/emaki-android/
+  apps/android/ x99:/root/emaki-dev/app/
 
 ssh x99
-source /root/android/env.sh                      # JDK 17、Android SDK 35、build-tools 35、emulator、adb
-export GRADLE_USER_HOME=/root/android/gradle-home  # Gradle 的缓存也放在 /root/android 下
-cd /root/emaki-android
+source /root/emaki-dev/android/env.sh                      # JDK 17、Android SDK 35、build-tools 35、emulator、adb
+export GRADLE_USER_HOME=/root/emaki-dev/android/gradle-home  # Gradle 的缓存也放在 /root/emaki-dev/android 下
+cd /root/emaki-dev/app
 ./gradlew testDebugUnitTest                      # 单元测试（JVM，不要模拟器）
 ./gradlew assembleDebug                          # app/build/outputs/apk/debug/app-debug.apk
-./gradlew assembleRelease -Pemaki.signing=/root/android/keys/signing.properties
+./gradlew assembleRelease -Pemaki.signing=/root/emaki-dev/android/keys/signing.properties
                                                  # app/build/outputs/apk/release/app-release.apk（已签名）
 ```
 
@@ -43,12 +43,12 @@ x99e 能直连 Google Maven、Maven Central、services.gradle.org；Gradle 本�
 
 ## 签名密钥
 
-- release 用的密钥在 x99e 的 **`/root/android/keys/`**：`emaki-release.jks`（PKCS12，RSA 4096，有效期 100 年，别名 `emaki`）
+- release 用的密钥在 x99e 的 **`/root/emaki-dev/android/keys/`**：`emaki-release.jks`（PKCS12，RSA 4096，有效期 100 年，别名 `emaki`）
   和 `signing.properties`（storeFile、storePassword、keyAlias、keyPassword）。两个文件都是 600 权限，**不进仓库**（`.gitignore` 挡着 `*.jks`、`signing.properties`）。
 - 证书指纹（SHA-256）：`69:98:B3:C8:F2:52:38:12:B2:9A:82:A5:AE:E2:5B:AC:54:F2:5F:E6:41:85:A0:89:60:8A:38:BA:9B:FF:D7:F3`。
   核对一个 APK 是不是用这把密钥签的：`$ANDROID_HOME/build-tools/35.0.0/apksigner verify --print-certs app-release.apk`。
 - **要备份**：密钥丢了，以后的新版本就装不上，只能卸载重装（App 里保存的配对也跟着没了）。把整个目录拷一份到电脑上，例如
-  `scp -r x99:/root/android/keys <电脑上的备份目录>`，和 `signing.properties` 里的密码一起放在只有自己能看的地方（docs/mobile.md 3.4）。
+  `scp -r x99:/root/emaki-dev/android/keys <电脑上的备份目录>`，和 `signing.properties` 里的密码一起放在只有自己能看的地方（docs/mobile.md 3.4）。
 - 没给 `-Pemaki.signing`（或环境变量 `EMAKI_SIGNING`）时 release 也能构建，只是没签名、装不上。
 
 ## 在真机上装
