@@ -12,11 +12,12 @@ import { COLLECTION_META, displayTitle, readProgress, unitWord } from '@/lib/col
 import { useHotkey } from '@/lib/hotkeys';
 import { useCollection } from '@/lib/queries';
 import { useBlurPrefs, useLightbox, useOverlays, usePrefs } from '@/lib/stores';
+import { readerSpreadFits, useViewport } from '@/lib/viewport';
 import { previousPath } from './previousPath';
 import { buildSpreads, spreadIndexOf } from './spreads';
 
 /**
- * 阅读器（T38e）：本子默认双页右开，画集单页左开（按类型记住）；窗口窄于 1100px 一律单页。
+ * 阅读器（T38e）：本子默认双页右开，画集单页左开（按类型记住）；竖屏和窄窗口一律单页（横屏而且宽度 ≥ 840 才双页，A1）。
  * 键盘：← → / 空格 / PageUp PageDown 翻页，Home End 首末页，D 单双页，R 方向，I 看图器，B 模糊，Esc 回扉页。
  * 读到最后一开再往后，出现结尾卡；同系列有下一话时可以直接接着读。
  */
@@ -64,13 +65,9 @@ function Reader({ data }: { data: GetCollectionResponse }) {
   const setRtl = usePrefs((s) => s.setReaderRtl);
   const toggleBlur = usePrefs((s) => s.toggleBlurSensitive);
 
-  // 窄窗口一律单页
-  const [wideEnough, setWideEnough] = useState(() => window.innerWidth >= 1100);
-  useEffect(() => {
-    const on = () => setWideEnough(window.innerWidth >= 1100);
-    window.addEventListener('resize', on);
-    return () => window.removeEventListener('resize', on);
-  }, []);
+  // 竖屏、窄窗口一律单页；横屏而且宽度 expanded 才能双页（lib/viewport.ts 的 readerSpreadFits，A1）
+  const viewport = useViewport();
+  const wideEnough = readerSpreadFits(viewport);
   const spreadOn = spreadPref && wideEnough;
   const spreads = useMemo(() => buildSpreads(pages, spreadOn), [pages, spreadOn]);
   const p = Math.min(n, Math.max(1, Number(params.get('p')) || readProgress.get(c.id) || 1));

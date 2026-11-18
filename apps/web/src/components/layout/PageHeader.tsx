@@ -2,17 +2,18 @@ import { motion } from 'motion/react';
 import { EASE_OUT } from '@/lib/motion';
 import { Emblem } from '@/components/ui/Emblem';
 import { useQueryClient } from '@tanstack/react-query';
-import { CircleHelp, Eye, EyeOff, Search, Undo2 } from 'lucide-react';
+import { CircleHelp, Ellipsis, Eye, EyeOff, Search, Undo2 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useLocation } from 'react-router';
 import { useScrollContainer } from '@/components/layout/ScrollContainer';
 import { getChapter } from './chapters';
-import { IconButton, Kbd } from '@/components/ui';
+import { IconButton, Kbd, Menu, MenuItem, MenuSeparator } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { modKeyLabel } from '@/lib/hotkeys';
 import { requestUndo, undoTitle } from '@/lib/queries';
 import { placeText } from '@/lib/undoPlace';
 import { useBlurPrefs, useOverlays, usePrefs, useUndoStore } from '@/lib/stores';
+import { stickyHeaderFits, useViewport } from '@/lib/viewport';
 
 /**
  * 页面头部（画册的「卷首」）：
@@ -50,7 +51,10 @@ export function PageHeader({
   chapter?: boolean;
 }) {
   const headRef = useRef<HTMLElement>(null);
-  const stuck = useStuck(!!sticky, headRef);
+  // 手机横屏不吸顶（lib/viewport.ts 的 stickyHeaderFits）
+  const viewport = useViewport();
+  sticky = !!sticky && stickyHeaderFits(viewport);
+  const stuck = useStuck(sticky, headRef);
   const scrollRef = useScrollContainer();
   const { pathname } = useLocation();
   const auto = getChapter(pathname);
@@ -91,37 +95,44 @@ export function PageHeader({
       <header
         ref={headRef}
         className={cn(
-          'px-8 pb-4 @container/head',
-          stuck.value ? 'pt-3' : chapter ? 'pt-7' : 'pt-6',
+          // 窄屏（A1）：左右留白收窄；手机横屏（short）上下也收紧
+          'px-8 pb-4 @container/head narrow:px-5 compact:px-4 compact:pb-3',
+          stuck.value ? 'pt-3' : chapter ? 'pt-7 compact:pt-4 short:pt-3' : 'pt-6 compact:pt-4 short:pt-3',
           sticky && 'sticky top-0 z-20 bg-sheet paper',
           stuck.value && 'shadow-[0_1px_0_var(--c-line)]',
           className,
         )}
       >
-        {/* 标题至少留 14rem；放不下时右边那排按钮换到下一行靠右，不压住标题也不被挤出纸外 */}
-        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+        {/* 标题至少留 14rem；放不下时右边那排按钮换到下一行靠右，不压住标题也不被挤出纸外。
+            手机竖屏（A1）：标题和按钮同一行，副标题换到下面整行（见下面 compact 的那份） */}
+        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3 compact:gap-x-3">
           {chapter ? (
-            <div className="min-w-0 flex-[1_1_14rem] animate-fade-in">
+            <div className="min-w-0 flex-[1_1_14rem] animate-fade-in compact:basis-24">
               {showChapter && (
-                <div className="kicker flex items-center">
+                <div className="kicker flex items-center short:hidden">
                   {kicker ?? (
                     <>
                       <Emblem size={14} className="mr-2" />
-                      <span className="font-semibold text-brand">{auto.mark}</span>
-                      <span className="ml-3">{auto.sub}</span>
+                      <span className="font-semibold text-brand compact:shrink-0">{auto.mark}</span>
+                      <span className="ml-3 compact:min-w-0 compact:truncate">{auto.sub}</span>
                     </>
                   )}
                 </div>
               )}
-              <div className={cn('flex min-w-0 items-baseline gap-4', showChapter && 'mt-2.5')}>
-                <h1 className={cn('display-title shrink-0', stuck.value ? 'text-[20px]' : 'text-[34px]')}>{title}</h1>
-                {subtitle && !stuck.value && <div className="min-w-0 truncate text-[13px] text-fg-muted tabular">{subtitle}</div>}
+              {/* 手机竖屏：标题变小（副标题在下面整行） */}
+              <div className={cn('flex min-w-0 items-baseline gap-4', showChapter && 'mt-2.5 short:mt-0')}>
+                <h1 className={cn('display-title shrink-0', stuck.value ? 'text-[20px]' : 'text-[34px] compact:text-[26px] short:text-[24px]')}>
+                  {title}
+                </h1>
+                {subtitle && !stuck.value && <div className="min-w-0 truncate text-[13px] text-fg-muted tabular compact:hidden">{subtitle}</div>}
               </div>
             </div>
           ) : (
-            <div className="min-w-0 flex-[1_1_14rem] animate-fade-in">
-              <h1 className={cn('leading-tight font-semibold tracking-tight', stuck.value ? 'text-[18px]' : 'text-[22px]')}>{title}</h1>
-              {subtitle && !stuck.value && <div className="mt-1 text-[13px] text-fg-muted tabular">{subtitle}</div>}
+            <div className="min-w-0 flex-[1_1_14rem] animate-fade-in compact:basis-24">
+              <h1 className={cn('leading-tight font-semibold tracking-tight compact:text-[19px]', stuck.value ? 'text-[18px]' : 'text-[22px]')}>
+                {title}
+              </h1>
+              {subtitle && !stuck.value && <div className="mt-1 text-[13px] text-fg-muted tabular compact:hidden">{subtitle}</div>}
             </div>
           )}
           <div className="ml-auto flex shrink-0 items-center gap-1.5 @max-[400px]/head:shrink @max-[400px]/head:flex-wrap @max-[400px]/head:justify-end">
@@ -129,8 +140,12 @@ export function PageHeader({
             <GlobalActions />
           </div>
         </div>
-        {showChapter && <div aria-hidden className={cn('rule-double mt-5', fresh && 'animate-unroll')} />}
-        {children && <div className={stuck.value ? 'mt-3' : 'mt-4'}>{children}</div>}
+        {/* 手机竖屏的副标题：整行，可以折行，不截断（和上面那份是同一个内容，按宽度只显示一份） */}
+        {subtitle && !stuck.value && (
+          <div className="mt-1.5 hidden text-[12.5px] leading-snug text-fg-muted tabular compact:block">{subtitle}</div>
+        )}
+        {showChapter && <div aria-hidden className={cn('rule-double mt-5 compact:mt-4 short:hidden', fresh && 'animate-unroll')} />}
+        {children && <div className={stuck.value ? 'mt-3' : 'mt-4 short:mt-3'}>{children}</div>}
       </header>
       {gap > 0 && <div aria-hidden style={{ height: gap }} />}
     </>
@@ -163,7 +178,10 @@ function useStuck(enabled: boolean, headRef: RefObject<HTMLElement | null>) {
   return { sentinel, value, fullH };
 }
 
-/** 截图右上角那一排：跳到角色（⌘K）、模糊开关、撤销、帮助 */
+/**
+ * 截图右上角那一排：跳到角色（⌘K）、模糊开关、撤销、帮助。
+ * 宽度 compact（A1）：跳到角色只剩放大镜（点开是全宽的命令面板），模糊、撤销、帮助收进「…」菜单。
+ */
 export function GlobalActions() {
   const client = useQueryClient();
   const setCommandOpen = useOverlays((s) => s.setCommandOpen);
@@ -187,13 +205,13 @@ export function GlobalActions() {
       <button
         onClick={() => setCommandOpen(true)}
         aria-label="跳到角色"
-        className="group ml-1 flex h-9 w-52 shrink-0 items-center gap-2 rounded-full bg-sunken pr-1.5 pl-3.5 text-[13px] text-fg-subtle transition-colors hover:bg-hover hover:text-fg-muted @max-[600px]/head:w-9 @max-[600px]/head:justify-center @max-[600px]/head:px-0"
+        className="group ml-1 flex h-9 w-52 shrink-0 items-center gap-2 rounded-full bg-sunken pr-1.5 pl-3.5 text-[13px] text-fg-subtle transition-colors touch-hit hover:bg-hover hover:text-fg-muted @max-[600px]/head:w-9 @max-[600px]/head:justify-center @max-[600px]/head:px-0 compact:ml-0 compact:w-9 compact:justify-center compact:px-0"
       >
         <Search className="size-4" />
-        <span className="flex-1 text-left @max-[600px]/head:hidden">跳到角色</span>
-        <Kbd className="@max-[600px]/head:hidden">{modKeyLabel === '⌘' ? '⌘K' : 'Ctrl K'}</Kbd>
+        <span className="flex-1 text-left @max-[600px]/head:hidden compact:hidden">跳到角色</span>
+        <Kbd className="@max-[600px]/head:hidden compact:hidden">{modKeyLabel === '⌘' ? '⌘K' : 'Ctrl K'}</Kbd>
       </button>
-      <IconButton label={blur ? `显示${what}` : `模糊${what}`} shortcut="B" active={blur} onClick={toggleBlur}>
+      <IconButton label={blur ? `显示${what}` : `模糊${what}`} shortcut="B" active={blur} onClick={toggleBlur} className="compact:hidden">
         {blur ? <EyeOff /> : <Eye />}
       </IconButton>
       <IconButton
@@ -201,19 +219,43 @@ export function GlobalActions() {
         shortcut={`${modKeyLabel} Z`}
         disabled={!lastUndo}
         onClick={() => void requestUndo(client)}
+        className="compact:hidden"
       >
         <UndoNod />
       </IconButton>
-      <IconButton label="快捷键与帮助" shortcut="?" onClick={() => setHelpOpen(true)}>
+      <IconButton label="快捷键与帮助" shortcut="?" onClick={() => setHelpOpen(true)} className="compact:hidden">
         <CircleHelp />
       </IconButton>
+      {/* 只在手机竖屏出现：外面包一层 contents，电脑上整个不占位 */}
+      <span className="hidden compact:contents">
+        <Menu
+          align="end"
+          width={220}
+          trigger={
+            <IconButton label="更多操作" className={cn(blur && 'text-shu-fg')}>
+              <Ellipsis />
+            </IconButton>
+          }
+        >
+          <MenuItem icon={blur ? <Eye /> : <EyeOff />} onSelect={toggleBlur}>
+            {blur ? `显示${what}` : `模糊${what}`}
+          </MenuItem>
+          <MenuItem icon={<Undo2 />} disabled={!lastUndo} onSelect={() => void requestUndo(client)}>
+            <span className="line-clamp-2">{lastUndo ? undoTitle(lastUndo) + placeText(lastUndo, now) : '没有可撤销的操作'}</span>
+          </MenuItem>
+          <MenuSeparator />
+          <MenuItem icon={<CircleHelp />} onSelect={() => setHelpOpen(true)}>
+            帮助
+          </MenuItem>
+        </Menu>
+      </span>
     </>
   );
 }
 
 /** 页面主体的标准内边距容器 */
 export function PageBody({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cn('px-8 pb-16', className)}>{children}</div>;
+  return <div className={cn('px-8 pb-16 narrow:px-5 compact:px-4 compact:pb-10', className)}>{children}</div>;
 }
 
 /** 撤销栈变长时撤销图标点一下头（SEL-11） */

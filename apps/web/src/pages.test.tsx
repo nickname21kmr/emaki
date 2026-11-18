@@ -12,7 +12,7 @@ import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, type RouteObject } from 'react-router';
 import { describe, expect, it } from 'vitest';
-import { sidebarItems } from '@/components/layout/Sidebar';
+import { moreAlert, sidebarItems, tabBarItems } from '@/components/layout/Sidebar';
 import { ScrollContainerContext } from '@/components/layout/ScrollContainer';
 import { usePaletteCommands } from '@/components/overlays/palette/commands';
 import { PAGE_JUMPS } from '@/components/overlays/shortcuts';
@@ -114,6 +114,20 @@ describe('侧栏', () => {
       '/excluded',
       '/settings',
     ]);
+  });
+
+  it('底部标签栏（手机竖屏，A1）：首页、图库、角色、合集常驻，其余进「更多」；项和侧栏同一套，也按页过滤', () => {
+    const { tabs, more } = tabBarItems(summary);
+    expect(tabs.map((i) => i.label)).toEqual(['首页', '图库', '角色', '合集']);
+    expect(more.map((i) => i.label)).toEqual(['原创', '别册', '未识别', '重复', '已排除', '设置']);
+    // 和侧栏一项不多一项不少
+    const side = Object.values(sidebarItems(summary)).flat();
+    expect([...tabs, ...more].map((i) => i.to).sort()).toEqual(side.map((i) => i.to).sort());
+    // 手机（默认权限）的「更多」里没有重复、设置
+    expect(more.filter((i) => canVisit(phone, i.to)).map((i) => i.label)).toEqual(['原创', '别册', '未识别', '已排除']);
+    // 「更多」里有待处理的（未识别、重复有数）时「更多」上点朱点；别册的张数不算
+    expect(moreAlert(more)).toBe(true);
+    expect(moreAlert(more.filter((i) => i.to === '/annex' || i.to === '/settings'))).toBe(false);
   });
 
   it('手机上（默认权限）没有重复、设置；加上 settings 之后有设置；电脑上全有', () => {

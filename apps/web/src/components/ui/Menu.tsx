@@ -51,7 +51,8 @@ export function Menu({
 }
 
 const contentClass = cn(
-  'z-[60] max-h-[min(480px,var(--radix-dropdown-menu-content-available-height))] overflow-y-auto rounded-lg bg-raised p-1.5 shadow-pop ring-1 ring-line scrollbar-thin',
+  // 窄屏上不超出屏幕：最宽是窗口减两边各 8px（电脑上菜单本来就没这么宽）
+  'z-[60] max-h-[min(480px,var(--radix-dropdown-menu-content-available-height))] max-w-[calc(100vw-16px)] overflow-y-auto rounded-lg bg-raised p-1.5 shadow-pop ring-1 ring-line scrollbar-thin',
   'origin-[var(--radix-dropdown-menu-content-transform-origin)] data-[state=open]:animate-rise',
 );
 

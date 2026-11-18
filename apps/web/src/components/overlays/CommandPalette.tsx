@@ -39,6 +39,8 @@ export function CommandPalette() {
           className={cn(
             'fixed top-[18vh] left-1/2 z-50 w-[min(600px,calc(100vw-32px))] -translate-x-1/2 overflow-hidden',
             'rounded-[18px] bg-raised shadow-pop ring-1 ring-line outline-none',
+            // 手机竖屏（A1）：贴着顶边铺满宽度（页头的放大镜点开就是这里），让出状态栏
+            'compact:top-0 compact:w-full compact:rounded-t-none compact:pt-[env(safe-area-inset-top)]',
             'data-[state=open]:animate-rise data-[state=closed]:animate-[fade-in_120ms_ease-in_reverse_both]',
           )}
           // 页面级单键快捷键（数字、E、F…）不应该穿透面板；带 Ctrl/⌘ 的放行，⌘K 要能关掉面板
@@ -183,7 +185,8 @@ function PaletteFooter({ onHelp }: { onHelp: () => void }) {
   const selected = useCommandState((s) => s.value);
   const verb = VERB[selected?.split(':')[0] ?? ''] ?? '打开';
   return (
-    <div className="flex h-10 items-center justify-between gap-4 border-t border-line bg-sheet px-4 text-[11.5px] text-fg-subtle">
+    // 键盘提示：触屏上没有用，不显示
+    <div className="flex h-10 items-center justify-between gap-4 border-t border-line bg-sheet px-4 text-[11.5px] text-fg-subtle touch:hidden">
       <div className="flex items-center gap-3.5">
         <span className="flex items-center gap-1.5">
           <span className="flex gap-0.5">

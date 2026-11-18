@@ -20,6 +20,20 @@
 
 @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
 
+/*
+ * 窗口分级（A1，lib/viewport.ts 的 BREAKPOINTS，docs/FRONTEND.md「窗口分级」）。
+ * 桌面优先：组件里照旧写电脑上的样式，这几个变体只在窄屏、矮屏、触屏上覆盖，宽屏 + 鼠标时一条都不生效。
+ *   touch:   主要指针是触屏（平板横屏也是）       narrow: 宽度 < 840（compact + medium）
+ *   medium:  600 ≤ 宽度 < 840（平板竖屏）        short:  高度 < 480（手机横屏）
+ *   compact: 宽度 < 600（手机竖屏）
+ * 定义的先后就是生效的先后：同一属性上 compact: 盖过 narrow:。
+ */
+@custom-variant touch (@media (pointer: coarse));
+@custom-variant narrow (@media (width < 840px));
+@custom-variant medium (@media (600px <= width < 840px));
+@custom-variant short (@media (height < 480px));
+@custom-variant compact (@media (width < 600px));
+
 /* 语义颜色用 inline：工具类直接引用 var(--c-*)，所以任何子树写 data-theme="light|dark" 都能局部换肤（设置页的主题预览就靠这个） */
 @theme inline {
   --color-canvas: var(--c-canvas);
@@ -89,6 +103,8 @@
   --animate-fade-in: fade-in 0.4s var(--ease-out-soft) both;
   --animate-unroll: unroll 0.9s var(--ease-out-soft) both;
   --animate-rise: rise 0.5s var(--ease-out-soft) both;
+  /* 底部面板从底边升起（A1，components/ui/Sheet.tsx、compact 下的 Dialog） */
+  --animate-sheet-up: sheet-up 0.34s var(--ease-out-soft) both;
   /* 竖排大名像一笔写下来：自上而下展开（SEL-8） */
   --animate-brush: brush 0.9s var(--ease-out-soft) both;
   --animate-shimmer: shimmer 1.6s linear infinite;
@@ -122,6 +138,11 @@
     from {
       opacity: 0;
       transform: translateY(8px);
+    }
+  }
+  @keyframes sheet-up {
+    from {
+      transform: translateY(100%);
     }
   }
   @keyframes shimmer {
@@ -580,6 +601,23 @@
   scrollbar-width: none;
   &::-webkit-scrollbar {
     display: none;
+  }
+}
+
+/*
+ * 触控目标（A1）：触屏上可点的东西至少 44×44。视觉尺寸不变，用一层透明的 ::after 把点击区域往外扩到 44
+ * （本来就够大的不缩）。没定位的宿主在触屏上补一个 relative（已经是 absolute / fixed / sticky 的不动）；电脑上整条不生效。
+ */
+@utility touch-hit {
+  @media (pointer: coarse) {
+    &:where(:not(.absolute, .fixed, .sticky)) {
+      position: relative;
+    }
+    &::after {
+      content: '';
+      position: absolute;
+      inset: min(0px, calc((100% - 44px) / 2));
+    }
   }
 }
 
