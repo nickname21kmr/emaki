@@ -7,7 +7,7 @@
  * - 写请求核对 Origin（https://<Host>）和 sec-fetch-site，POST 必须是 JSON；
  * - 不挂 AI 助手的路由（有凭证也是 404）。
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildLanApp, isLanAddress } from '../../src/access/lan.ts';
@@ -98,6 +98,15 @@ describe('没有凭证：所有 /api/ 都拒绝（hello、配对除外）', () =
   it('百分号编码的路径路由时会解码，照样要凭证', async () => {
     for (const url of ['/%61pi/images', '/a%70i/health', '/%61pi/settings', '/%61pi/assistant/settings', '/api/v1/pair/x/../../images'])
       expect([url, (await f.app.inject({ method: 'GET', url })).statusCode]).toEqual([url, 401]);
+  });
+
+  it('服务开着时重新构建了网页：新文件马上能取到，不用重启（不存在的文件、/api/ 地址照旧）', async () => {
+    writeFileSync(path.join(f.webDist, 'assets', 'rebuilt-abc123.js'), 'console.log(2)');
+    const fresh = await f.app.inject({ method: 'GET', url: '/assets/rebuilt-abc123.js' });
+    expect([fresh.statusCode, fresh.body]).toEqual([200, 'console.log(2)']);
+    // 不存在的资源文件回落到 index.html（前端路由同理）；不存在的 /api/ 地址先要凭证
+    expect((await f.app.inject({ method: 'GET', url: '/assets/missing.js' })).body).toContain('<title>Emaki</title>');
+    expect((await f.app.inject({ method: 'GET', url: '/api/no-such-route' })).statusCode).toBe(401);
   });
 
   it('静态文件、前端路由回落、hello 不要凭证', async () => {

@@ -78,7 +78,8 @@ function tokenOf(req: FastifyRequest): string | null {
 /** 这个请求要不要凭证 */
 function needsToken(req: FastifyRequest): boolean {
   const route = req.routeOptions.url;
-  if (route !== undefined) return route.startsWith('/api') && !PUBLIC_ROUTES.has(route);
+  // 网页静态文件的通配路由（app.ts 的 serveWeb）也会接住不存在的 /api/ 地址：它和没匹配到路由一样，看路径
+  if (route !== undefined && route !== '/*') return route.startsWith('/api') && !PUBLIC_ROUTES.has(route);
   // 没匹配到路由：解码后是 /api 开头的（不存在的接口、AI 助手的路由）也要凭证，其余是前端路由，回落到 index.html
   let p = req.url.split('?')[0] ?? '';
   try {
