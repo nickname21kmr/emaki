@@ -24,10 +24,12 @@ import {
 import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
+import { allowed, useCapabilities, type Need } from '@/lib/capabilities';
 import { formatCount } from '@/lib/format';
 import { qk, requestUndo, undoTitle, useMutate, useSettings, useStartJob, useSummary } from '@/lib/queries';
 import { placeText } from '@/lib/undoPlace';
 import { useOverlays, usePrefs, useUndoStore } from '@/lib/stores';
+import { pageNeed } from '@/pages';
 import { GLOBAL_KEYS, PAGE_JUMPS, type KeyCombo } from '../shortcuts';
 
 export interface PaletteCommand {
@@ -41,6 +43,8 @@ export interface PaletteCommand {
   keywords: string[];
   icon: LucideIcon;
   keys?: KeyCombo;
+  /** 需要的能力（lib/capabilities.ts）：没有的不列出来。前往某页的取那一页声明的（src/pages.ts） */
+  need: Need;
   run: () => void;
 }
 
@@ -54,10 +58,11 @@ const THEME_MESSAGE: Record<ThemePreference, string> = {
 const done = (message: string): MutationResult => ({ ok: true, message, undoToken: null });
 
 /**
- * 命令面板里的命令：前往各页面 + 常用操作。
+ * 命令面板里的命令：前往各页面 + 常用操作。这台设备用不了的不列出来（每条声明 need，在最后统一过滤）。
  * close 在每条命令执行前调用——面板关掉后 mutation 仍会跑完（回调挂在 mutation 上）。
  */
 export function usePaletteCommands(close: () => void): PaletteCommand[] {
+  const { caps } = useCapabilities();
   const navigate = useNavigate();
   const client = useQueryClient();
   const blur = usePrefs((s) => s.blurSensitive);
@@ -110,11 +115,12 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
       keywords: NAV_KEYWORDS[p.to] ?? [],
       icon: NAV_ICON[p.to] ?? House,
       keys: [p.key],
+      need: pageNeed(p.to),
       run: go(p.to),
     })),
-    { value: 'go:/collections', section: 'go', label: '合集', keywords: ['collections', 'heji', '本子', '画集', 'doujin', 'artbook'], icon: LibraryBig, run: go('/collections') },
-    { value: 'go:/excluded', section: 'go', label: '已排除', keywords: NAV_KEYWORDS['/excluded'] ?? [], icon: Ban, run: go('/excluded') },
-    { value: 'go:/settings', section: 'go', label: '设置', keywords: NAV_KEYWORDS['/settings'] ?? [], icon: SettingsIcon, run: go('/settings') },
+    { value: 'go:/collections', section: 'go', label: '合集', keywords: ['collections', 'heji', '本子', '画集', 'doujin', 'artbook'], icon: LibraryBig, need: pageNeed('/collections'), run: go('/collections') },
+    { value: 'go:/excluded', section: 'go', label: '已排除', keywords: NAV_KEYWORDS['/excluded'] ?? [], icon: Ban, need: pageNeed('/excluded'), run: go('/excluded') },
+    { value: 'go:/settings', section: 'go', label: '设置', keywords: NAV_KEYWORDS['/settings'] ?? [], icon: SettingsIcon, need: pageNeed('/settings'), run: go('/settings') },
   ];
 
   const actions: PaletteCommand[] = [
@@ -125,6 +131,8 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
       keywords: ['blur', 'nsfw', 'sensitive', '模糊', '敏感', 'mohu', 'mh'],
       icon: blur ? Eye : EyeOff,
       keys: GLOBAL_KEYS.blur,
+      // 本机偏好
+      need: null,
       run: act(() => {
         usePrefs.getState().toggleBlurSensitive();
         toast(blur ? '已显示敏感图片' : '已模糊敏感图片');
@@ -136,6 +144,8 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
       label: isDark ? '切换到浅色主题' : '切换到深色主题',
       keywords: ['theme', 'dark', 'light', '主题', '深色', '浅色', '暗色', 'zhuti', 'zt'],
       icon: isDark ? Sun : Moon,
+      // 主题存在图库设置里（settings.update）
+      need: 'settings',
       run: act(() => applyTheme(isDark ? 'light' : 'dark')),
     },
     ...(themePref !== 'system'
@@ -146,6 +156,7 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
             label: '主题跟随系统',
             keywords: ['theme', 'system', 'auto', '主题', '系统', '自动', 'zhuti'],
             icon: Monitor,
+            need: 'settings' as const,
             run: act(() => applyTheme('system')),
           },
         ]
@@ -158,6 +169,7 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
       meta: summary?.triage.waiting ? `${formatCount(summary.triage.waiting)} 张待识别` : undefined,
       keywords: ['tag', 'tagger', 'recognize', '识别', '打标', 'shibie', 'sb'],
       icon: ScanFace,
+      need: 'jobs',
       run: act(() => startJob.mutate('tag')),
     },
     {
@@ -167,6 +179,7 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
       meta: summary?.duplicates ? `已有 ${formatCount(summary.duplicates)} 组` : undefined,
       keywords: ['dedupe', 'duplicate', '重复', '查重', 'chongfu', 'cf'],
       icon: ScanSearch,
+      need: 'jobs',
       run: act(() => startJob.mutate('dedupe')),
     },
     {
@@ -175,6 +188,7 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
       label: '扫描图库文件夹',
       keywords: ['scan', 'rescan', 'refresh', '扫描', '刷新', 'saomiao', 'sm'],
       icon: FolderSync,
+      need: 'jobs',
       run: act(() => startJob.mutate('scan')),
     },
     ...(lastUndo
@@ -186,6 +200,7 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
             keywords: ['undo', '撤销', 'chexiao', 'cx'],
             icon: Undo2,
             keys: GLOBAL_KEYS.undo,
+            need: 'history' as const,
             // 别的页面的、太久以前的先问一声（和 Ctrl+Z 一样）
             run: act(() => void requestUndo(client)),
           },
@@ -198,11 +213,12 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
       keywords: ['help', 'shortcut', 'keyboard', '帮助', '快捷键', 'bangzhu', 'kjj'],
       icon: Keyboard,
       keys: GLOBAL_KEYS.help,
+      need: null,
       run: act(() => setHelpOpen(true)),
     },
   ];
 
-  return [...nav, ...actions];
+  return allowed([...nav, ...actions], caps);
 }
 
 /** 本地过滤命令：标签或任一关键词包含输入即可（共用的 matchesQuery） */

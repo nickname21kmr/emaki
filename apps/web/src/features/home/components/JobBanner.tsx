@@ -7,6 +7,7 @@ import { api, withMeta } from '@/lib/api';
 import { useRunningJob } from '@/lib/events';
 import { formatCount, formatPercent } from '@/lib/format';
 import { useMutate } from '@/lib/queries';
+import { useCan } from '@/lib/capabilities';
 import { EASE_OUT_SOFT, JOB_LABEL } from '../utils';
 
 /**
@@ -15,6 +16,7 @@ import { EASE_OUT_SOFT, JOB_LABEL } from '../utils';
  */
 export function JobBanner() {
   const job = useRunningJob();
+  const canCancel = useCan('jobs');
   // cancelJob 只返回 { ok }，补成 MutationResult 好让 useMutate 统一出 toast
   const cancel = useMutate((id: ID) =>
     api.cancelJob(id).then((r) => withMeta({ ok: true as const, message: '已取消后台任务', undoToken: null }, r)),
@@ -58,15 +60,17 @@ export function JobBanner() {
                 `已处理 ${formatCount(job.progress)}`
               )}
             </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              loading={cancel.isPending}
-              onClick={() => cancel.mutate(job.id)}
-              className="-mr-2.5 text-fg-subtle hover:text-fg"
-            >
-              取消
-            </Button>
+            {canCancel && (
+              <Button
+                variant="ghost"
+                size="sm"
+                loading={cancel.isPending}
+                onClick={() => cancel.mutate(job.id)}
+                className="-mr-2.5 text-fg-subtle hover:text-fg"
+              >
+                取消
+              </Button>
+            )}
 
             <ThinProgress value={fraction} glint={job.kind === 'tag'} />
           </div>

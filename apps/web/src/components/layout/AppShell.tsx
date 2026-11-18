@@ -10,6 +10,8 @@ import { ScrollContainerContext } from './ScrollContainer';
 import { Sidebar } from './Sidebar';
 import { AssistantLauncher, AssistantSpacer } from '@/features/assistant/AssistantLauncher';
 import { AccessPrompts } from '@/features/access/AccessPrompts';
+import { useCapabilities } from '@/lib/capabilities';
+import { useCanVisit } from '@/pages';
 
 /**
  * 整体布局：暖灰「桌面」上左边一条窄导航，右边一张圆角「纸」（主内容，独立滚动）。
@@ -22,6 +24,10 @@ export function AppShell() {
   const { pathname, key } = useLocation();
   const navType = useNavigationType();
   const settings = useSettings().data;
+  // 首次使用引导要能加文件夹（settings）：手机上空库也留在首页
+  const canVisit = useCanVisit();
+  const { ready } = useCapabilities();
+  const canWelcome = ready && canVisit('/welcome');
 
   // 按历史条目记住滚动位置：后退 / 前进时恢复（SEL-14）
   const positions = useRef(new Map<string, number>());
@@ -52,7 +58,7 @@ export function AppShell() {
   }, [pathname]);
 
   // 还没有任何图库文件夹 → 首次使用引导。必须放在所有 hook 之后（hook 数量不能随数据变化）
-  if (settings && settings.libraryRoots.length === 0) return <Navigate to="/welcome" replace />;
+  if (settings && settings.libraryRoots.length === 0 && canWelcome) return <Navigate to="/welcome" replace />;
 
   return (
     <ScrollContainerContext.Provider value={scrollRef}>

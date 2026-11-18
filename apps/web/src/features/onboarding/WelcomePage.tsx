@@ -11,6 +11,7 @@ import { LibraryRootsEditor } from '@/features/settings/components/LibraryRootsE
 import { useMergedJobs } from '@/features/settings/hooks';
 import { isActiveJob, jobFraction, JOB_LABEL } from '@/features/settings/jobMeta';
 import { api } from '@/lib/api';
+import { useCan } from '@/lib/capabilities';
 import { cn } from '@/lib/cn';
 import { useServerEvents } from '@/lib/events';
 import { formatCount } from '@/lib/format';
@@ -240,6 +241,7 @@ function StartStep({ onBack }: { onBack: () => void }) {
   const stats = useStats().data;
   const { jobs } = useMergedJobs();
   const startTag = useStartJob(() => '已开始识别角色');
+  const canStart = useCan('jobs');
 
   // 每类任务取最近的一次
   const latest = useMemo(() => {
@@ -279,18 +281,21 @@ function StartStep({ onBack }: { onBack: () => void }) {
         </ul>
       )}
 
-      <div className="mt-8 flex flex-col items-start gap-2">
-        <Button
-          variant="outline"
-          icon={<ScanFace />}
-          loading={startTag.isPending || tagRunning}
-          disabled={empty}
-          onClick={() => startTag.mutate('tag')}
-        >
-          开始识别角色
-        </Button>
-        <p className="text-xs text-fg-subtle">第一次会下载约 1.3 GB 的识别模型，之后离线可用。</p>
-      </div>
+      {/* 启动任务要 jobs（lib/capabilities.ts）：手机上即使给了 settings 也可能没有 */}
+      {canStart && (
+        <div className="mt-8 flex flex-col items-start gap-2">
+          <Button
+            variant="outline"
+            icon={<ScanFace />}
+            loading={startTag.isPending || tagRunning}
+            disabled={empty}
+            onClick={() => startTag.mutate('tag')}
+          >
+            开始识别角色
+          </Button>
+          <p className="text-xs text-fg-subtle">第一次会下载约 1.3 GB 的识别模型，之后离线可用。</p>
+        </div>
+      )}
 
       <StepFooter>
         <Button variant="ghost" icon={<ArrowLeft />} onClick={onBack}>

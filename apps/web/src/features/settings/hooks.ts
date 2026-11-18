@@ -16,7 +16,7 @@ import { api, withMeta } from '@/lib/api';
 import { useLiveJobs } from '@/lib/events';
 import { qk, useJobs, useMutate, useStartJob as useStartJobBase } from '@/lib/queries';
 import { isActiveJob, JOB_LABEL } from './jobMeta';
-import { SECTIONS, sectionDomId, type SectionId } from './sections';
+import { sectionDomId, useSettingsSections, type SectionId } from './sections';
 
 /** 没有撤销的简单结果，交给 useMutate 统一出 toast */
 const done = (message: string): MutationResult => ({ ok: true, message, undoToken: null });
@@ -156,8 +156,6 @@ export function useNow(enabled: boolean, ms = 1000) {
 
 // ------------------------------------------------------------------ 目录 / 滚动定位
 
-const FIRST: SectionId = SECTIONS[0].id;
-const LAST: SectionId = SECTIONS[SECTIONS.length - 1]?.id ?? FIRST;
 
 /**
  * 左侧目录的高亮 + 点击跳转。滚动容器是 AppShell 的「纸」而不是 window。
@@ -165,7 +163,11 @@ const LAST: SectionId = SECTIONS[SECTIONS.length - 1]?.id ?? FIRST;
  */
 export function useSectionNav(ready: boolean) {
   const scrollRef = useScrollContainer();
-  const [active, setActive] = useState<SectionId>(FIRST);
+  // 这台设备看得到的分组（手机上少几节）
+  const sections = useSettingsSections();
+  const first: SectionId = sections[0]?.id ?? 'about';
+  const last: SectionId = sections[sections.length - 1]?.id ?? first;
+  const [active, setActive] = useState<SectionId>(first);
   const lockUntil = useRef(0);
 
   useEffect(() => {
@@ -176,10 +178,10 @@ export function useSectionNav(ready: boolean) {
       raf = 0;
       if (Date.now() < lockUntil.current) return;
       // 到底了就算最后一节（「关于」很短，永远顶不到上面）
-      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 4) return setActive(LAST);
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 4) return setActive(last);
       const top = el.getBoundingClientRect().top;
-      let current = FIRST;
-      for (const s of SECTIONS) {
+      let current = first;
+      for (const s of sections) {
         const node = document.getElementById(sectionDomId(s.id));
         if (node && node.getBoundingClientRect().top - top <= 160) current = s.id;
       }
@@ -194,7 +196,7 @@ export function useSectionNav(ready: boolean) {
       el.removeEventListener('scroll', onScroll);
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [scrollRef, ready]);
+  }, [scrollRef, ready, sections, first, last]);
 
   const jump = useCallback((id: SectionId, behavior: ScrollBehavior = 'smooth') => {
     const node = document.getElementById(sectionDomId(id));

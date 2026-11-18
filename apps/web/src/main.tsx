@@ -1,14 +1,16 @@
-import { ApiRequestError } from './lib/api';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MotionConfig } from 'motion/react';
 import { lazy, StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
-import { RouterProvider } from 'react-router';
+import { createBrowserRouter, RouterProvider } from 'react-router';
 import { Toaster } from 'sonner';
 import { ThemeSync } from '@/components/layout/ThemeSync';
 import { TooltipProvider } from '@/components/ui';
+import { api, ApiRequestError } from './lib/api';
+import { watchForbidden } from './lib/capabilities';
 import { useDeviceAuth } from './lib/deviceAuth';
-import { router } from './router';
+import { qk } from './lib/queries';
+import { routes } from './router';
 import './styles/index.css';
 
 const queryClient = new QueryClient({
@@ -23,6 +25,12 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// 谁在调用（lib/capabilities.ts）：一开始就去问，页面等它的时间最短；请求回 403 forbidden 时重新问（权限可能刚在电脑上改了）
+void queryClient.prefetchQuery({ queryKey: qk.me, queryFn: api.me, retry: 2, retryDelay: 500 });
+watchForbidden(queryClient);
+
+const router = createBrowserRouter(routes);
 
 // 局域网入口上没有凭证时才用到（本机入口不下载它）
 const PairingPage = lazy(() => import('./features/access/PairingPage').then((m) => ({ default: m.PairingPage })));

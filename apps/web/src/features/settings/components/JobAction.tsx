@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import type { ReactNode } from 'react';
 import { Button, IconButton, Progress, type ButtonProps } from '@/components/ui';
+import { useCan } from '@/lib/capabilities';
 import { formatCount } from '@/lib/format';
 import { useActiveJob, useCancelJob, useStartJob } from '../hooks';
 import { JOB_VERB, jobFraction } from '../jobMeta';
@@ -19,6 +20,7 @@ const swap = {
 /**
  * 启动某类后台任务的按钮。这类任务在跑时，按钮原地换成迷你进度条 + 取消，
  * 这样「立即扫描」「立即同步」旁边就能看到进度，不用跳去「后台任务」一节。
+ * 启动、取消任务要 jobs（lib/capabilities.ts）：没有的设备上整个不显示。
  */
 export function JobAction({
   kind,
@@ -37,6 +39,8 @@ export function JobAction({
   const start = useStartJob();
   // 点过之后等这类任务结束，把结果弹出来
   const arm = useJobResultToast(kind);
+  const canRun = useCan('jobs');
+  if (!canRun) return null;
   return (
     <AnimatePresence mode="wait" initial={false}>
       {job ? (

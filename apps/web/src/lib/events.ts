@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { api, type CommandMeta } from './api';
+import { refreshMe } from './capabilities';
 import { qk } from './queries';
 import { useUndoStore } from './stores';
 
@@ -351,7 +352,8 @@ export function openEventStream(
 
 /**
  * 一条 SSE 事件（useServerEvents 收到的，测试也直接调）：changed 按变化类型刷新并记下事件 id（写操作等它）；
- * command 是 AI 助手做的、可撤销的修改时放进撤销栈；resync 全部刷新；hello 记下这次连着的后端和位置
+ * command 是 AI 助手做的、可撤销的修改时放进撤销栈；resync 全部刷新；hello 记下这次连着的后端和位置；
+ * me（只有局域网入口上的设备收到）重新取 /api/me
  */
 export function handleServerEvent(client: QueryClient, invalidate: ReturnType<typeof createInvalidator>['invalidate'], event: ServerEvent) {
   switch (event.type) {
@@ -361,9 +363,15 @@ export function handleServerEvent(client: QueryClient, invalidate: ReturnType<ty
       else noteEvent(event.lastId);
       // access 事件不补发：连上时重新取一次手机访问的状态（局域网入口上取过一次是 null（403），不再取）
       if (client.getQueryData(qk.access) !== null) void client.invalidateQueries({ queryKey: qk.access });
+      // me 事件也不补发：断线期间电脑上可能改了这台设备的权限（本机入口上不取）
+      refreshMe(client);
       break;
     case 'access':
       handleAccessEvent(client, event);
+      break;
+    case 'me':
+      // 电脑上改了这台设备的名称或权限（只推给这台设备）：重新取 /api/me，入口马上跟着变
+      refreshMe(client);
       break;
     case 'resync':
       void invalidate(undefined, null);

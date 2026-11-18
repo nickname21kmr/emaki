@@ -12,6 +12,7 @@ import { Button, EmptyState, ErrorState, Skeleton } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { formatBytes, formatCount } from '@/lib/format';
 import { useArtists, useImagesInfinite, useSettings, useSummary } from '@/lib/queries';
+import { useCanVisit } from '@/pages';
 import { usePrefs, useSelection } from '@/lib/stores';
 import { ArtistMenu } from './components/ArtistMenu';
 import { GalleryToolbar, GalleryViewControls } from './components/GalleryToolbar';
@@ -40,6 +41,7 @@ export function GalleryPage() {
   // 张数读汇总接口（别册张数由服务端算，附录 #28）
   const counts = useSummary().data?.images;
   const { data: settings } = useSettings();
+  const canVisit = useCanVisit();
   const rowHeight = usePrefs((s) => s.gridRowHeight);
   const list = useImagesInfinite(query);
   const images = useMemo(() => list.data?.pages.flatMap((p) => p.items) ?? [], [list.data]);
@@ -87,9 +89,11 @@ export function GalleryPage() {
         title="图库文件夹都停用了"
         description="停用的文件夹不参与浏览、统计和扫描。到设置里重新启用，原来的图和整理结果都还在。"
         action={
-          <Button variant="primary" onClick={() => navigate('/settings#library')}>
-            去启用
-          </Button>
+          canVisit('/settings#library') && (
+            <Button variant="primary" onClick={() => navigate('/settings#library')}>
+              去启用
+            </Button>
+          )
         }
       />
     ) : libraryEmpty ? (
@@ -98,9 +102,11 @@ export function GalleryPage() {
         title="图库还是空的"
         description="添加一个存放插画的文件夹，Emaki 会在本地扫描、识别角色并整理它们。这些本机任务不上传图片。"
         action={
-          <Button variant="primary" icon={<FolderPlus className="size-4" />} onClick={() => navigate('/settings')}>
-            添加图片文件夹
-          </Button>
+          canVisit('/settings') && (
+            <Button variant="primary" icon={<FolderPlus className="size-4" />} onClick={() => navigate('/settings')}>
+              添加图片文件夹
+            </Button>
+          )
         }
       />
     ) : (

@@ -75,6 +75,8 @@ export const qk = {
   health: ['health'] as const,
   /** 设置 →「手机访问」和批准提示（GET /api/access）；null = 这个入口上看不了（局域网入口的设备没有 devices 权限） */
   access: ['access'] as const,
+  /** 谁在调用（GET /api/me）：网页按它隐藏用不了的入口（lib/capabilities.ts） */
+  me: ['me'] as const,
 };
 
 // ------------------------------------------------------------------ 读取
@@ -218,8 +220,8 @@ export const useUnrecognizedSummary = (artKind?: UnrecognizedArtKind) =>
     staleTime: 5_000,
   });
 
-export const useDuplicates = (resolved = false) =>
-  useQuery({ queryKey: qk.duplicates(resolved), queryFn: () => api.duplicates({ resolved }) });
+export const useDuplicates = (resolved = false, enabled = true) =>
+  useQuery({ queryKey: qk.duplicates(resolved), queryFn: () => api.duplicates({ resolved }), enabled });
 
 export const useExclusions = () => useQuery({ queryKey: qk.exclusions, queryFn: api.exclusions });
 
@@ -272,6 +274,21 @@ export const useAccessStatus = (enabled = true) =>
       }
     },
     enabled,
+  });
+
+/**
+ * 谁在调用（GET /api/me）：本机入口 local、全部范围；局域网入口是这台设备和它真正生效的范围。能力的计算在 lib/capabilities.ts。
+ * 权限变了由服务端推 me 事件（lib/events.ts）、请求回 403 forbidden 时重新取（watchForbidden），所以不过期；
+ * 设备上窗口重新获得焦点时也取一次（手机从后台切回来）。连不上时少重试几次：取不到按本机入口处理，页面不一直等它
+ */
+export const useMe = () =>
+  useQuery({
+    queryKey: qk.me,
+    queryFn: api.me,
+    staleTime: Infinity,
+    refetchOnWindowFocus: (q) => q.state.data?.kind === 'device',
+    retry: 2,
+    retryDelay: 500,
   });
 
 /** 后端版本、数据源（demo / sqlite）、数据目录；进程内不会变 */

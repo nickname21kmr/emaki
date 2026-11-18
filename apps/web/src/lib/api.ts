@@ -6,6 +6,7 @@ import type {
   AccessStatus,
   AccessTicket,
   DeviceInfo,
+  Me,
   Scope,
   AcceptSuggestionBody,
   DomainChange,
@@ -179,8 +180,8 @@ export async function request<T>(method: string, path: string, body?: unknown): 
   const data = text ? (JSON.parse(text) as unknown) : undefined;
   if (!res.ok) {
     const err = data as Partial<ApiError> | undefined;
-    // 局域网入口上没有凭证 / 被电脑移除了：整页换成「连接到电脑」（lib/deviceAuth.ts）
-    noteResponse(res.status, err?.code);
+    // 局域网入口上没有凭证 / 被电脑移除了：整页换成「连接到电脑」；403 forbidden 时重新取 /api/me（lib/deviceAuth.ts）
+    noteResponse(res.status, err?.code, path);
     throw new ApiRequestError(res.status, err?.code ?? 'internal', err?.error ?? `请求失败（${res.status}）`);
   }
   const meta = readMeta(res);
@@ -283,6 +284,8 @@ export const api = {
     tokens.length <= 50 ? get<UndoStatusResponse>('/undo/status', { tokens }) : post<UndoStatusResponse>('/undo/status', { tokens }),
 
   health: () => get<HealthResponse>('/health'),
+  /** 谁在调用：本机入口 local、全部范围；局域网入口是这台设备和它真正生效的范围（lib/capabilities.ts） */
+  me: () => get<Me>('/me'),
   /** 由后端弹出系统「选择文件夹」对话框；用户取消时 path 为 null */
   pickFolder: () => post<PickFolderResponse>('/system/pick-folder'),
   /** 移到图库里的某个文件夹（磁盘上真的移动），可撤销 */

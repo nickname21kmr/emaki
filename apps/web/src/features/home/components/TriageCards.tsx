@@ -8,6 +8,7 @@ import { cn } from '@/lib/cn';
 import { useRunningJob } from '@/lib/events';
 import { formatBytes, formatCount } from '@/lib/format';
 import { useCharactersInfinite, useDuplicates, useSettings, useUnrecognizedInfinite } from '@/lib/queries';
+import { useCanVisit } from '@/pages';
 import { AvatarRow, PhotoPair } from './PeekStack';
 
 type CardState = 'active' | 'waiting' | 'cleared' | 'hidden';
@@ -35,8 +36,10 @@ interface Card {
  * 有事的卡变宽，在等和已清空的收成紧凑条；三张都没事时整块只剩一行。
  */
 export function TriageCards({ summary: s }: { summary: LibrarySummary }) {
+  // 这台设备去不了的页（src/pages.ts，手机上默认没有「重复」）不放卡片，也不去拉它的数据
+  const canVisit = useCanVisit();
   const unrecognized = useUnrecognizedInfinite({ area: 'art', bucket: 'unsure' }, 12);
-  const duplicates = useDuplicates(false);
+  const duplicates = useDuplicates(false, canVisit('/duplicates'));
   const custom = useCharactersInfinite({ source: 'custom', sort: 'imageCount' });
   const settings = useSettings();
   const dedupeJob = useRunningJob('dedupe');
@@ -122,7 +125,8 @@ export function TriageCards({ summary: s }: { summary: LibrarySummary }) {
     },
   ];
 
-  const shown = cards.filter((c) => c.state !== 'hidden');
+  const shown = cards.filter((c) => c.state !== 'hidden' && canVisit(c.to));
+  if (!shown.length) return null;
   const active = shown.filter((c) => c.state === 'active');
   const quiet = shown.filter((c) => c.state !== 'active');
 

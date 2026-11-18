@@ -8,7 +8,7 @@
  *
  * 数据只认 GET /api/access 的 requests（SSE 的 access 事件让它重新取，requested 时先放进缓存）：请求过期、在设置页里处理掉、
  * 别的标签页处理掉（重新取的 requests 里没有它了）时，提示自动收起。设置页里「等你批准的请求」那一段在屏幕上时不弹
- * （请求就列在那里，浮在上面只会重复、还会盖住开关）。局域网入口上这个查询是 null（403），什么也不显示。
+ * （请求就列在那里，浮在上面只会重复、还会盖住开关）。局域网入口上的设备没有 devices 能力：不发这个查询，什么也不显示。
  */
 import type { PairRequestInfo } from '@emaki/shared';
 import { Check, Smartphone, X } from 'lucide-react';
@@ -18,6 +18,7 @@ import { useNavigate } from 'react-router';
 import { Button } from '@/components/ui';
 import { useNow } from '@/features/settings/hooks';
 import { DURATION, EASE_OUT } from '@/lib/motion';
+import { useCapabilities } from '@/lib/capabilities';
 import { useAccessStatus } from '@/lib/queries';
 import { formatCountdown } from './format';
 import { useApproveRequest, useRejectRequest } from './hooks';
@@ -37,7 +38,8 @@ export function visiblePrompts(
 }
 
 export function AccessPrompts() {
-  const requests = useAccessStatus().data?.requests;
+  // 确定是电脑上（/api/me 回来了）才去问：手机上这个查询是 403
+  const requests = useAccessStatus(useCapabilities().known('devices')).data?.requests;
   const now = useNow(!!requests?.length);
   const listOnScreen = useRequestListOnScreen((s) => s.onScreen);
   const [handled, setHandled] = useState<ReadonlySet<string>>(new Set());
