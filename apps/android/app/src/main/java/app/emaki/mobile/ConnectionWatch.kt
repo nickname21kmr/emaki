@@ -7,11 +7,14 @@ import app.emaki.mobile.core.SavedServer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -25,7 +28,10 @@ import kotlinx.coroutines.withTimeoutOrNull
  *   每次都是完整的重连（Reconnector：NSD 按电脑标识找、上次的地址、hello 给过的其他地址），所以电脑换了地址也接得上；
  *   找到了就换到主界面（toScreen：保存新地址），WebView 按新地址重建、重新写 Cookie；
  * - 在后台不探（省电）：foreground(false) 停掉自动重连，回到前台时马上再试；
- * - kick()：点了「重试」、换了网络：不等了，马上试，间隔从头算。
+ * - kick()：点了「重试」、换了网络：不等了，马上试，间隔从头算；
+ * - 自动重连的同时在局域网里搜这台电脑（sightings：NsdManager 搜 `_emaki._tcp`，给出每条广播的电脑标识）：
+ *   看到保存的那台（不管地址变没变）就马上做一次完整的重连，不等间隔。同一台电脑的广播会连着来好几条（每块网卡一条，还会刷新），
+ *   正在重连、或者刚试完 2 秒内来的不再触发。离开这个页面、App 到后台时停止搜索。
  */
 class ConnectionWatch(
     private val scope: CoroutineScope,
@@ -35,6 +41,8 @@ class ConnectionWatch(
     private val toScreen: (SavedServer, ReconnectResult) -> Screen,
     private val steps: List<Long> = Backoff.STEPS,
     private val recheckMs: Long = RECHECK_MS,
+    private val sightings: () -> Flow<String> = { emptyFlow() },
+    private val now: () -> Long = System::currentTimeMillis,
     private val log: (String) -> Unit = {},
 ) {
     private val foreground = MutableStateFlow(false)
@@ -91,29 +99,55 @@ class ConnectionWatch(
         }
     }
 
-    private suspend fun keepTrying(server: SavedServer) {
+    private suspend fun keepTrying(server: SavedServer) = coroutineScope {
         val backoff = Backoff(steps)
         // 之前（在主界面时）攒下的不算
         kicks.tryReceive()
-        while (true) {
-            setTrying(true)
-            val r = reconnect(server)
-            val s = screen.value as? Screen.Offline ?: return
-            if (r !is ReconnectResult.Offline) {
-                log("自动重连：连上了 ${(r as? ReconnectResult.Online)?.address ?: r.javaClass.simpleName}")
-                screen.value = toScreen(server, r)
-                return
+        // 搜到这台电脑时：正在试、已经叫过一次还没开始试、刚试完不久，都不再叫（同一台电脑的广播会连着来好几条）
+        var attempting = false
+        var sightingPending = false
+        var lastEnded = Long.MIN_VALUE / 2
+        val search = launch {
+            sightings().collect { id ->
+                if (id != server.serverId || attempting || sightingPending || now() - lastEnded < SIGHTING_QUIET_MS) return@collect
+                log("局域网里搜到了「${server.name}」，马上重连")
+                sightingPending = true
+                kicks.trySend(Unit)
             }
-            screen.value = s.copy(certMismatch = r.certMismatch, trying = false)
-            val wait = backoff.next()
-            val kicked = withTimeoutOrNull(wait) { kicks.receive() } != null
-            if (kicked) backoff.reset()
+        }
+        try {
+            while (true) {
+                attempting = true
+                sightingPending = false
+                setTrying(true)
+                val r = try {
+                    reconnect(server)
+                } finally {
+                    attempting = false
+                    lastEnded = now()
+                }
+                val s = screen.value as? Screen.Offline ?: return@coroutineScope
+                if (r !is ReconnectResult.Offline) {
+                    log("自动重连：连上了 ${(r as? ReconnectResult.Online)?.address ?: r.javaClass.simpleName}")
+                    screen.value = toScreen(server, r)
+                    return@coroutineScope
+                }
+                screen.value = s.copy(certMismatch = r.certMismatch, trying = false)
+                val wait = backoff.next()
+                val kicked = withTimeoutOrNull(wait) { kicks.receive() } != null
+                if (kicked) backoff.reset()
+            }
+        } finally {
+            search.cancel()
         }
     }
 
     companion object {
         /** 核实不通时隔多久再试一次 */
         const val RECHECK_MS = 1_000L
+
+        /** 刚试完这么久之内搜到的广播不再触发重连（同一批广播里后到的几条） */
+        const val SIGHTING_QUIET_MS = 2_000L
     }
 
     private fun setTrying(on: Boolean) {

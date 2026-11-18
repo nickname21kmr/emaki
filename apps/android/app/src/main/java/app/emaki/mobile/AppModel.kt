@@ -32,6 +32,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.io.IOException
 
@@ -97,6 +98,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         alive = LinkCheck()::alive,
         reconnect = { saved -> reconnector.run(saved) { discovery.find(saved.serverId) } },
         toScreen = ::toScreen,
+        sightings = { discovery.sightings().map { it.serverId } },
         log = { Log.i(TAG, it) },
     )
 

@@ -8,6 +8,7 @@ import app.emaki.mobile.core.ReconnectResult
 import app.emaki.mobile.core.SavedServer
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -235,5 +236,119 @@ class ConnectionWatchTest {
         w2.networkChanged()
         advanceTimeBy(1_001)
         assertEquals(Screen.Offline(server, null), screen2.value)
+    }
+
+    // ---------------------------------------------------------------- 「电脑不在线」页面上在局域网里搜这台电脑
+
+    /** 假的发现源（NsdManager）：emit 一个电脑标识就是搜到一条广播；subscriptionCount 是现在有没有在搜 */
+    private class FakeNsd {
+        val flow = MutableSharedFlow<String>()
+        val searching get() = flow.subscriptionCount.value > 0
+    }
+
+    private fun TestScope.watchWithNsd(
+        nsd: FakeNsd,
+        start: Screen = Screen.Offline(server, null),
+        gate: (suspend () -> Unit)? = null,
+        results: List<ReconnectResult> = emptyList(),
+    ): Triple<ConnectionWatch, MutableStateFlow<Screen>, Fake> {
+        val screen = MutableStateFlow(start)
+        val fake = Fake(ArrayDeque(results))
+        val w = ConnectionWatch(
+            scope = backgroundScope,
+            screen = screen,
+            alive = { _, _ -> false },
+            reconnect = {
+                fake.at += currentTime
+                gate?.invoke()
+                fake.results.removeFirstOrNull() ?: offline
+            },
+            toScreen = { s, r -> if (r is ReconnectResult.Online) Screen.Main(s, r.address) else Screen.Offline(s, null) },
+            sightings = { nsd.flow },
+            now = { currentTime },
+        )
+        return Triple(w, screen, fake)
+    }
+
+    @Test
+    fun `搜到保存的那台电脑：不等间隔，马上完整重连一次（换了地址也接上）`() = runTest {
+        val nsd = FakeNsd()
+        val (w, screen, fake) = watchWithNsd(nsd, results = listOf(offline, ReconnectResult.Online(moved, hello, me)))
+        w.foreground(true)
+        runCurrent()
+        assertTrue("不在线页面在前台时在搜", nsd.searching)
+        advanceTimeBy(2_500) // 第一次试在 0 秒，下一次本来在 3 秒
+        nsd.flow.emit("srv-1")
+        runCurrent()
+        assertEquals(listOf(0L, 2_500L), fake.at)
+        assertEquals(moved, (screen.value as Screen.Main).address)
+    }
+
+    @Test
+    fun `搜到别的电脑：不理`() = runTest {
+        val nsd = FakeNsd()
+        val (w, _, fake) = watchWithNsd(nsd)
+        w.foreground(true)
+        runCurrent()
+        advanceTimeBy(2_500)
+        nsd.flow.emit("srv-other")
+        runCurrent()
+        assertEquals(listOf(0L), fake.at)
+        advanceTimeBy(501)
+        assertEquals(listOf(0L, 3_000L), fake.at)
+    }
+
+    @Test
+    fun `同一台电脑的广播连着来好几条、正在重连时又来：只重连一次`() = runTest {
+        val nsd = FakeNsd()
+        var hold: CompletableDeferred<Unit>? = null
+        val (w, _, fake) = watchWithNsd(nsd, gate = { hold?.await() })
+        w.foreground(true)
+        runCurrent()
+        advanceTimeBy(2_500)
+        // 每块网卡一条，挤在一起到
+        hold = CompletableDeferred()
+        repeat(3) { nsd.flow.emit("srv-1") }
+        runCurrent()
+        assertEquals(listOf(0L, 2_500L), fake.at)
+        // 正在重连（还没回来）时又来几条
+        repeat(3) { nsd.flow.emit("srv-1") }
+        runCurrent()
+        hold!!.complete(Unit)
+        hold = null
+        runCurrent()
+        // 刚试完 2 秒内来的也不算
+        advanceTimeBy(1_000)
+        nsd.flow.emit("srv-1")
+        runCurrent()
+        assertEquals(listOf(0L, 2_500L), fake.at)
+        // 之后照常按间隔（搜到时间隔从头算：3 秒）
+        advanceTimeBy(2_001)
+        assertEquals(listOf(0L, 2_500L, 5_500L), fake.at)
+        // 过了 2 秒再来一条（30 秒一次的刷新）：再重连一次
+        advanceTimeBy(2_500)
+        nsd.flow.emit("srv-1")
+        runCurrent()
+        assertEquals(listOf(0L, 2_500L, 5_500L, 8_001L), fake.at)
+    }
+
+    @Test
+    fun `离开不在线页面、App 到后台：停止搜索`() = runTest {
+        val nsd = FakeNsd()
+        val (w, screen, _) = watchWithNsd(nsd)
+        runCurrent()
+        assertFalse("没到前台不搜", nsd.searching)
+        w.foreground(true)
+        runCurrent()
+        assertTrue(nsd.searching)
+        w.foreground(false)
+        runCurrent()
+        assertFalse("到后台停止搜索", nsd.searching)
+        w.foreground(true)
+        runCurrent()
+        assertTrue(nsd.searching)
+        screen.value = Screen.Reconnecting("书房的电脑") // 比如点了「换地址」
+        runCurrent()
+        assertFalse("离开页面停止搜索", nsd.searching)
     }
 }

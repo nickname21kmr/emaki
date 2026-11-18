@@ -78,6 +78,38 @@ class Discovery(context: Context) {
         }
     }
 
+    /**
+     * 每解析出一条广播就给一条（不去重）：同一台电脑每块网卡广播一条，重新上线、刷新时还会再来。
+     * 「电脑不在线」页面用它（ConnectionWatch）：看到保存的那台电脑就马上重连，去重在那边做。收集结束时停止搜索。
+     * 和 browse() 分开写，不动「找电脑」页面和重连在用的那一个。
+     */
+    fun sightings(): Flow<FoundServer> = callbackFlow {
+        val found = Channel<NsdServiceInfo>(Channel.UNLIMITED)
+        val listener = object : NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(serviceType: String) {}
+            override fun onDiscoveryStopped(serviceType: String) {}
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                Log.w(TAG, "开始搜索失败：$errorCode")
+            }
+
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
+            override fun onServiceFound(info: NsdServiceInfo) {
+                found.trySend(info)
+            }
+
+            override fun onServiceLost(info: NsdServiceInfo) {}
+        }
+        // 一条一条解析（老版本的 NsdManager 同时只能解析一个）
+        launch {
+            for (info in found) resolve(info)?.let { trySend(it) }
+        }
+        nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
+        awaitClose {
+            found.close()
+            runCatching { nsd.stopServiceDiscovery(listener) }
+        }
+    }
+
     /** 按电脑标识找，找到就返回它的地址（调用方自己限时） */
     suspend fun find(serverId: String): HostPort? =
         browse().mapNotNull { list -> list.firstOrNull { it.serverId == serverId }?.address }.first()
