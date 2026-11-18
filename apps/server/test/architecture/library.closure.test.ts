@@ -356,8 +356,10 @@ describe('附录 #23：回收站里的行不再永远是移动匹配的候选', 
     // 旧行还在（已处理的重复组要显示被删的图），还在回收站里；y 的旧行让出了路径
     const old = env.ds.ctx.db.prepare('SELECT id, rel_path, trashed_at IS NOT NULL AS t FROM images WHERE id IN (?, ?) ORDER BY id').all(x, y) as { id: number; rel_path: string; t: number }[];
     expect(old.map((r) => r.t)).toEqual([1, 1]);
-    expect(old[0]!.rel_path).toBe('a/x.png');
-    expect(old[1]!.rel_path).toBe(`.emaki-discarded/${y}/a/y.png`);
+    // 扫描是并发读文件的，x、y 谁先入库（id 谁小）不固定：按 id 找，不按位置
+    const rel = new Map(old.map((r) => [r.id, r.rel_path]));
+    expect(rel.get(Number(x))).toBe('a/x.png');
+    expect(rel.get(Number(y))).toBe(`.emaki-discarded/${y}/a/y.png`);
     // 再扫一遍不变
     await scan(env);
     expect(idOf(env, 'y.png')).toBe(y2);
