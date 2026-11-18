@@ -126,7 +126,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     private fun reconnect(saved: SavedServer) {
         _screen.value = Screen.Reconnecting(saved.name)
         flow {
+            val t0 = System.currentTimeMillis()
             val result = reconnector.run(saved) { discovery.find(saved.serverId) }
+            Log.i(TAG, "重连用了 ${System.currentTimeMillis() - t0} ms：${result.javaClass.simpleName}")
             applyReconnect(saved, result)
         }
     }

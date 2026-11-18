@@ -23,7 +23,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -304,6 +307,7 @@ fun FailedScreen(title: String, message: String, onRetry: (() -> Unit)?, onBack:
 // ---------------------------------------------------------------- 对话框
 
 /** 手动输入地址：`主机:端口`，端口默认 5175 */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun AddressDialog(title: String, initial: String, onSubmit: (HostPort) -> Unit, onDismiss: () -> Unit) {
     val p = LocalPaper.current
@@ -320,7 +324,7 @@ fun AddressDialog(title: String, initial: String, onSubmit: (HostPort) -> Unit, 
         containerColor = p.raised,
         title = { Text(title, fontFamily = SerifCjk, fontWeight = FontWeight.SemiBold) },
         text = {
-            Column {
+            Column(Modifier.semantics { testTagsAsResourceId = true }) {
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it.trim() },
@@ -347,6 +351,7 @@ fun AddressDialog(title: String, initial: String, onSubmit: (HostPort) -> Unit, 
     )
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun DeviceNameDialog(initial: String, onSubmit: (String) -> Unit, onDismiss: () -> Unit) {
     val p = LocalPaper.current
@@ -356,7 +361,7 @@ fun DeviceNameDialog(initial: String, onSubmit: (String) -> Unit, onDismiss: () 
         containerColor = p.raised,
         title = { Text("设备名称", fontFamily = SerifCjk, fontWeight = FontWeight.SemiBold) },
         text = {
-            Column {
+            Column(Modifier.semantics { testTagsAsResourceId = true }) {
                 OutlinedTextField(
                     value = text,
                     onValueChange = { if (it.length <= 60) text = it },

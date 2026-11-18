@@ -234,7 +234,7 @@ fun ChoiceRow(icon: ImageVector, title: String, detail: String?, onClick: () -> 
         Icon(icon, null, Modifier.size(22.dp), tint = p.fg)
         Column(Modifier.weight(1f)) {
             Text(title, color = p.fg, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (detail != null) Text(detail, color = p.fgMuted, fontSize = 12.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (detail != null) Text(detail, color = p.fgMuted, fontSize = 12.5.sp, lineHeight = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         Icon(Glyphs.ChevronRight, null, Modifier.size(18.dp), tint = p.fgSubtle)
     }

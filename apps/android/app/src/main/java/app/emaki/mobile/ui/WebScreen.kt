@@ -199,6 +199,8 @@ private fun createWebView(
     WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
     val main = Handler(Looper.getMainLooper())
     val web = WebView(context)
+    // 一定要 MATCH_PARENT：AndroidView 默认给 WRAP_CONTENT，WebView 会按内容定高，网页的 height: 100% 变成 0，整页空白
+    web.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
     var certFailed = false
 
     fun isComputer(uri: Uri?): Boolean {
