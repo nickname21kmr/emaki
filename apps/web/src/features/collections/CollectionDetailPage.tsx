@@ -1,4 +1,4 @@
-import type { BulkImageAction, CollectionKind, GetCollectionResponse, ID, ImageItem, Rating } from '@emaki/shared';
+import { bookBlurContext, type BulkImageAction, type CollectionKind, type GetCollectionResponse, type ID, type ImageItem, type Rating } from '@emaki/shared';
 import {
   ArrowDownAZ,
   BookOpenText,
@@ -608,7 +608,8 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
           loadingMore={list.isFetchingNextPage}
           onLoadMore={loadMore}
           onOpen={group ? undefined : (img) => navigate(`/collections/${c.id}/read?p=${pageNo.get(img.id) ?? 1}`)}
-          forceBlur={(img) => c.kind === 'doujin' && !tagged.get(img.id)}
+          rated={(img) => !!tagged.get(img.id)}
+          blurContext={bookBlurContext(c.kind)}
           renderBadges={
             group
               ? undefined

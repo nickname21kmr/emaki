@@ -3,7 +3,7 @@ import { EyeOff } from 'lucide-react';
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { imageUrl } from '@/lib/api';
 import { cn } from '@/lib/cn';
-import { blurLabel, blurReason } from '@/lib/blur';
+import { blurLabel, blurReason, type BlurContext } from '@/lib/blur';
 import { useBlurPrefs, usePrefs } from '@/lib/stores';
 import { useCoverPosition } from './useCoverPosition';
 
@@ -46,7 +46,8 @@ export function Thumb({
   revealed,
   revealOnHover = false,
   imgStyle,
-  forceBlur,
+  rated,
+  blurContext = 'browse',
   original = false,
 }: {
   image: ThumbSource;
@@ -62,8 +63,10 @@ export function Thumb({
   revealOnHover?: boolean;
   /** 追加到 img 的内联样式（object-fit、滚动翻看这类要精确控制过渡的场合） */
   imgStyle?: CSSProperties;
-  /** 分级不可信时强制按敏感模糊（没识别过的本子页，RV-C-12）；总开关关着时不起作用 */
-  forceBlur?: boolean;
+  /** 分级可信吗（识别过）；不传当作可信。和 blurContext 一起交给共用的 blurReason（附录 #30） */
+  rated?: boolean;
+  /** 展示场合（packages/shared 的 BlurContext）：cautious 时分级不可信就打码（没识别过的本子页，RV-C-12），角标写「未识别」 */
+  blurContext?: BlurContext;
   /** 大幅展示时先用缩略图占位，原图解码完成后切换；失败时保留缩略图。 */
   original?: boolean;
 }) {
@@ -88,10 +91,8 @@ export function Thumb({
   const [loaded, setLoaded] = useState(() => loadedUrls.has(src));
   const prefs = useBlurPrefs();
   const hoverPref = usePrefs((s) => s.revealOnHover);
-  const own = revealed ? null : blurReason(image, prefs);
-  // 强制模糊（分级不可信）时角标写「未识别」，不写分级名
-  const forced = !revealed && own === null && !!forceBlur && prefs.blurSensitive;
-  const reason = own ?? (forced ? 'rating' : null);
+  // 能否不打码只有一套判断（packages/shared 的 blurReason）；分级不可信时原因是 unrated，角标写「未识别」
+  const reason = revealed ? null : blurReason({ rating: image.rating, kind: image.kind, rated }, prefs, blurContext);
   const blurred = reason !== null;
   const reveal = blurred && revealOnHover && hoverPref;
   // 悬停显示：停 0.35 秒再变清晰，快速扫过不触发；必须用 blur-[0px]，blur-none 会让过渡跳变
@@ -146,7 +147,7 @@ export function Thumb({
           </span>
           <span className="hidden h-7 items-center gap-1.5 rounded-full bg-black/30 px-3 text-[11.5px] font-medium text-white/90 backdrop-blur-sm @min-[240px]:inline-flex">
             <EyeOff className="size-3.5" />
-            {forced ? '未识别' : blurLabel(reason, image.rating)}
+            {blurLabel(reason, image.rating)}
           </span>
         </div>
       )}

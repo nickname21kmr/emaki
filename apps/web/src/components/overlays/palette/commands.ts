@@ -1,4 +1,4 @@
-import { JOB_LABEL, type MutationResult, type Settings, type ThemePreference } from '@emaki/shared';
+import { JOB_LABEL, matchesQuery, type MutationResult, type Settings, type ThemePreference } from '@emaki/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Ban,
@@ -205,11 +205,9 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
   return [...nav, ...actions];
 }
 
-/** 本地过滤命令：标签或任一关键词包含输入即可 */
+/** 本地过滤命令：标签或任一关键词包含输入即可（共用的 matchesQuery） */
 export function matchCommand(cmd: PaletteCommand, query: string): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  return [cmd.label, ...cmd.keywords].some((s) => s.toLowerCase().includes(q));
+  return matchesQuery(query, [cmd.label, ...cmd.keywords]);
 }
 
 // 和侧边栏同一套图标，用户一眼能对上

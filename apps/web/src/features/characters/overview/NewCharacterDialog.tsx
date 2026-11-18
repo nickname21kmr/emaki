@@ -1,4 +1,4 @@
-import type { CreateCharacterBody, ID, Character } from '@emaki/shared';
+import { searchKey, type CreateCharacterBody, type ID, type Character } from '@emaki/shared';
 import { TriangleAlert } from 'lucide-react';
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
@@ -214,14 +214,15 @@ export function useDuplicateHint(name: string, opts: { except?: ID; sameWork?: r
 
   const { data } = useSearch(debounced);
   if (!debounced || debounced !== name || !data) return null;
-  const key = debounced.toLowerCase();
+  // 同名：归一化后相等（共用的 searchKey，附录 #38）
+  const key = searchKey(debounced);
   for (const hit of data) {
     if (hit.type !== 'character') continue;
     const c = hit.character;
     if (c.id === opts.except) continue;
     const works = opts.sameWork;
     if (works && !(works.length === 0 ? c.workIds.length === 0 : c.workIds.some((w) => works.includes(w)))) continue;
-    if (c.name.toLowerCase() === key || c.aliases.some((a) => a.toLowerCase() === key)) {
+    if (searchKey(c.name) === key || c.aliases.some((a) => searchKey(a) === key)) {
       return { id: c.id, name: c.name, workName: hit.workName };
     }
   }

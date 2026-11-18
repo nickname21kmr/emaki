@@ -1,4 +1,4 @@
-import { AUTO_COLLAPSE_MIN, type CollectionSummary, type ID, type ImageItem } from '@emaki/shared';
+import { AUTO_COLLAPSE_MIN, collectionTitle, matchesQuery, type CollectionSummary, type ID, type ImageItem } from '@emaki/shared';
 import { Command } from 'cmdk';
 import { CornerDownLeft, Layers, Plus, Search } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -6,7 +6,7 @@ import { Link } from 'react-router';
 import { Dialog, IconButton, Kbd, Menu, MenuLabel, MenuRadioGroup, MenuRadioItem, Skeleton } from '@/components/ui';
 import { useDebounced } from '@/features/gallery/useDebounced';
 import { api } from '@/lib/api';
-import { shouldBlur } from '@/lib/blur';
+import { shouldBlur, type BlurContext } from '@/lib/blur';
 import { cn } from '@/lib/cn';
 import { displayTitle, groupOrigin } from '@/lib/collections';
 import { formatCount } from '@/lib/format';
@@ -69,13 +69,13 @@ export function CollapseGroupsMenu({ collapsed, className }: { collapsed?: boole
  * 收拢格右上角的张数：和模糊角标同一种小圆角（网格里不用 backdrop-filter，原则 6）。
  * 图被模糊时让到模糊角标左边。点它去组图页；点格子本身照常打开看图器。
  */
-export function GroupBadge({ image, forceBlur }: { image: ImageItem; forceBlur?: boolean }) {
+export function GroupBadge({ image, rated, blurContext }: { image: ImageItem; rated?: boolean; blurContext?: BlurContext }) {
   const prefs = useBlurPrefs();
   const g = image.collectionGroup;
   if (!g) return null;
-  const blurred = shouldBlur(image, prefs) || (!!forceBlur && prefs.blurSensitive);
+  const blurred = shouldBlur({ rating: image.rating, kind: image.kind, rated }, prefs, blurContext);
   const partial = g.count < g.total;
-  const title = g.title ?? '无题';
+  const title = collectionTitle(g);
   return (
     <Link
       to={`/collections/${g.id}`}
@@ -146,8 +146,8 @@ function GroupPickerPanel({ ids, excludeId, onDone }: { ids: ID[]; excludeId?: I
 
   const groups = useMemo(() => {
     const all = (list.data ?? []).filter((c) => c.kind === 'group' && c.id !== excludeId);
-    const key = q.toLowerCase();
-    const hit = key ? all.filter((c) => displayTitle(c).toLowerCase().includes(key)) : all;
+    // 搜索归一化用共用的 matchesQuery（附录 #38）
+    const hit = all.filter((c) => matchesQuery(q, [displayTitle(c), c.folderName]));
     // 手动收集的在前，再按最近加图排
     return hit
       .sort((a, b) => Number(b.membership !== 'post') - Number(a.membership !== 'post') || (b.lastAddedAt ?? '').localeCompare(a.lastAddedAt ?? ''))

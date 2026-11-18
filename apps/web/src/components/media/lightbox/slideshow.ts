@@ -1,4 +1,4 @@
-import type { ID, ImageItem, ListImagesQuery } from '@emaki/shared';
+import { showcaseQuery, type ID, type ImageItem, type ListImagesQuery } from '@emaki/shared';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -10,11 +10,11 @@ import { rememberImages } from './cache';
 export const SLIDE_MS = 6000;
 
 /**
- * 放映只放插画；开着模糊时只放分级可信的全年龄图
- * （没识别过的图分级默认是全年龄，可能其实是限制级）。
+ * 放映只放插画；开着模糊时只放分级可信的全年龄图（showcase 场合：没识别过的图分级默认是全年龄，可能其实是限制级）。
+ * 条件是共用的 showcaseQuery，和 blurReason 的 showcase 分支同一条规则（附录 #30）
  */
 export function slideFilter(blur = usePrefs.getState().blurSensitive): ListImagesQuery {
-  return { kind: ['illustration'], ...(blur ? { rating: ['general'], rated: true } : {}) };
+  return { kind: ['illustration'], ...showcaseQuery(blur) };
 }
 
 /** 依次按几组条件分页拉图，去重，凑满 max 张为止 */

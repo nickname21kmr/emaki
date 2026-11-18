@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { matchesQuery, searchKey } from './search.ts';
+import { matchesQuery, searchKey, searchRank } from './search.ts';
 
 describe('searchKey', () => {
   it('全角转半角、转小写', () => expect(searchKey('ＭＩＫＡ')).toBe('mika'));
@@ -8,4 +8,15 @@ describe('searchKey', () => {
   it('空白、下划线、中点都忽略', () => expect(searchKey('hatsune_miku')).toBe(searchKey('Hatsune Miku')));
   it('空查询永远命中', () => expect(matchesQuery('  ', ['x'])).toBe(true));
   it('任一候选包含即命中', () => expect(matchesQuery('未花', ['圣园未花', null])).toBe(true));
+});
+
+describe('searchRank（选择器的排序档位）', () => {
+  it('以查询开头排最前', () => expect(searchRank('ning', ['ningen_mame'])).toBe(2));
+  it('包含排第二', () => expect(searchRank('mame', ['ningen_mame'])).toBe(1));
+  it('没命中是 0', () => expect(searchRank('xyz', ['ningen_mame', null])).toBe(0));
+  it('下划线和空格算一样、片假名等同平假名', () => {
+    expect(searchRank('ningen mame', ['ningen_mame'])).toBe(2);
+    expect(searchRank('みか', ['ミカ'])).toBe(2);
+  });
+  it('空查询算命中', () => expect(searchRank('', ['x'])).toBe(2));
 });

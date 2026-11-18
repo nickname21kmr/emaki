@@ -15,6 +15,7 @@ import { justify } from './justify';
 
 const NO_FLASH: ReadonlySet<ID> = new Set();
 import { Thumb } from './Thumb';
+import type { BlurContext } from '@/lib/blur';
 
 export interface ImageGridProps {
   images: ImageItem[];
@@ -32,8 +33,10 @@ export interface ImageGridProps {
   renderBadges?: (image: ImageItem) => ReactNode;
   /** 整个列表的总数（看图器显示「N / 总数」并跨分页翻，BR-B1） */
   total?: number;
-  /** 哪些图强制按敏感模糊（没识别过的本子页） */
-  forceBlur?: (image: ImageItem) => boolean;
+  /** 每张的分级可不可信（识别过没有）；和 blurContext 一起决定模糊（共用的 blurReason，附录 #30） */
+  rated?: (image: ImageItem) => boolean;
+  /** 展示场合：本子页是 cautious（分级不可信就打码，bookBlurContext），默认 browse */
+  blurContext?: BlurContext;
   /** 点击图片的默认行为是打开看图器；传这个可以覆盖 */
   onOpen?: (image: ImageItem, index: number) => void;
 }
@@ -57,7 +60,8 @@ export function ImageGrid({
   renderOverlay,
   renderBadges,
   onOpen,
-  forceBlur,
+  rated,
+  blurContext,
   total,
 }: ImageGridProps) {
   const { scrollRef, containerRef, width, scrollMargin } = useGridBox();
@@ -138,7 +142,8 @@ export function ImageGrid({
                   onFavorite={() => favorite.mutate({ ids: selectionIds(image), value: !(image.collectionGroup?.allFavorite ?? image.favorite) })}
                   overlay={renderOverlay?.(image)}
                   badges={renderBadges?.(image)}
-                  forceBlur={forceBlur?.(image)}
+                  rated={rated?.(image)}
+                  blurContext={blurContext}
                 />
               );
             })}
@@ -323,7 +328,8 @@ function Tile({
   onToggle,
   overlay,
   badges,
-  forceBlur,
+  rated,
+  blurContext,
   onFavorite,
   flash,
 }: {
@@ -339,7 +345,8 @@ function Tile({
   onToggle: () => void;
   overlay?: ReactNode;
   badges?: ReactNode;
-  forceBlur?: boolean;
+  rated?: boolean;
+  blurContext?: BlurContext;
   onFavorite: () => void;
 }) {
   const thumbWidth = gridThumbWidth(width);
@@ -369,12 +376,13 @@ function Tile({
           className="size-full"
           blurBadge="corner"
           revealOnHover
-          forceBlur={forceBlur}
+          rated={rated}
+          blurContext={blurContext}
           imgClassName="group-hover/tile:scale-[1.03]"
         />
       </button>
 
-      <GroupBadge image={image} forceBlur={forceBlur} />
+      <GroupBadge image={image} rated={rated} blurContext={blurContext} />
       {/* 悬停：底部渐变 + 这是谁（BR-5）；多选时和窄格子不显示 */}
       {names && (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-linear-to-t from-black/55 via-black/20 to-transparent opacity-0 transition-opacity duration-300 group-hover/tile:opacity-100">

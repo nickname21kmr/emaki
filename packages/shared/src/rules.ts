@@ -94,12 +94,17 @@ export interface BlurSubject {
 
 /**
  * 展示的场合。同一套判断，按场合决定「分级还不可信」和「轻微」怎么处理：
- * - browse：普通浏览（网格、看图器、角色封面）。还没识别的图分级默认是全年龄，照常按分级处理——不然刚导入的图满屏都是糊的。
- * - book：本子的封面和页。本子大多敏感，分级还不可信（没识别过）的一律打码 / 换布面；画集、组图的页按 browse。
+ * - browse：普通浏览（网格、看图器、角色封面、画集和组图的页）。还没识别的图分级默认是全年龄，照常按分级处理——
+ *   不然刚导入的图满屏都是糊的。
+ * - cautious：分级还不可信（rated = false）就打码。本子的封面和页（本子大多敏感，没识别过的分级多半不对，见 bookBlurContext），
+ *   看图器胶片条里还没拿到分级的图。
  * - showcase：无人值守的大幅展示（今日一枚、放映、书封面下面露出的底页）。开着模糊时只放分级可信的全年龄图：
  *   没人在旁边按「显示」，宁可少放也不能放错；「轻微」也不放。
  */
-export type BlurContext = 'browse' | 'book' | 'showcase';
+export type BlurContext = 'browse' | 'cautious' | 'showcase';
+
+/** 合集里的封面和页按哪个场合：本子 cautious（本子大多敏感，RV-C-12），画集、组图 browse */
+export const bookBlurContext = (kind: CollectionKind): BlurContext => (kind === 'doujin' ? 'cautious' : 'browse');
 
 /**
  * 能否不打码显示：返回打码的原因，null = 可以直接显示（唯一的一套判断，附录 #30）。

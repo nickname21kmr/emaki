@@ -1,4 +1,4 @@
-import type { UnrecognizedAnnexKind, UnrecognizedTheme } from '@emaki/shared';
+import type { UnrecognizedTheme } from '@emaki/shared';
 
 /**
  * 「没认出」按画面主题分组（T34b）：组名、一句话说明、怎么分进来的，以及处理小贴士。
@@ -42,12 +42,6 @@ export const THEME_META: Record<UnrecognizedTheme, { label: string; hint: string
 
 export const PRECEDENCE_NOTE = '一张图只放一组：先认漫画、不像插画、敏感，再看多人、泳装、兽耳、女仆·和服，最后才是腿·足、胸。';
 
-export const ANNEX_HINT: Record<UnrecognizedAnnexKind, string> = {
-  screenshot: '手机电脑截屏、视频截图',
-  text: '文档、笔记、满屏文字',
-  photo: '相机拍的照片、真人、实物',
-  meme: '表情、梗图',
-};
 
 export const ORDER_NOTE = {
   theme: '越像插画越靠前',

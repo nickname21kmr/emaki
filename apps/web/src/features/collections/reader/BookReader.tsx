@@ -1,4 +1,4 @@
-import type { CollectionPage, GetCollectionResponse } from '@emaki/shared';
+import { bookBlurContext, type BlurContext, type CollectionPage, type GetCollectionResponse } from '@emaki/shared';
 import { ArrowLeft, Info, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -105,8 +105,10 @@ function Reader({ data }: { data: GetCollectionResponse }) {
     }
   };
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set());
-  const blurred = (pg: CollectionPage) =>
-    !revealBook && !revealed.has(pg.imageId) && (shouldBlur({ rating: pg.rating, kind: pg.kind }, prefs) || (prefs.blurSensitive && c.kind === 'doujin' && !pg.tagged));
+  // 本子页分级不可信（没识别过）时打码：场合由 bookBlurContext 决定，判断只有共用的 blurReason 一套（附录 #30）
+  const context = bookBlurContext(c.kind);
+  const pageRevealed = (pg: CollectionPage) => revealBook || revealed.has(pg.imageId);
+  const blurred = (pg: CollectionPage) => !pageRevealed(pg) && shouldBlur({ rating: pg.rating, kind: pg.kind, rated: pg.tagged }, prefs, context);
 
   // 预读前后一开的原图
   useEffect(() => {
@@ -231,7 +233,14 @@ function Reader({ data }: { data: GetCollectionResponse }) {
                     className="overflow-hidden"
                     style={{ aspectRatio: `${pg.width} / ${pg.height}`, height: 'calc(100vh - 146px)', maxWidth }}
                   >
-                    <Thumb image={{ id: pg.imageId, rating: pg.rating, dominantColor: pg.dominantColor, modifiedAt: pg.modifiedAt }} width={960} forceBlur blurBadge="center" className="size-full" />
+                    <Thumb
+                      image={{ id: pg.imageId, rating: pg.rating, kind: pg.kind, dominantColor: pg.dominantColor, modifiedAt: pg.modifiedAt }}
+                      rated={pg.tagged}
+                      blurContext={context}
+                      width={960}
+                      blurBadge="center"
+                      className="size-full"
+                    />
                   </button>
                 ) : (
                   <img
@@ -257,7 +266,7 @@ function Reader({ data }: { data: GetCollectionResponse }) {
         <div className="h-[2px] bg-white/10">
           <div className={cn('h-full bg-shu transition-[width] duration-300', rtl && 'ml-auto')} style={{ width: `${(p / n) * 100}%` }} />
         </div>
-        <Filmstrip pages={pages} current={group} rtl={rtl} blurred={blurred} onPick={(no) => goTo(spreadIndexOf(spreads, no))} />
+        <Filmstrip pages={pages} current={group} rtl={rtl} blurred={blurred} context={context} onPick={(no) => goTo(spreadIndexOf(spreads, no))} />
       </footer>
     </div>
   );
@@ -269,12 +278,15 @@ function Filmstrip({
   current,
   rtl,
   blurred,
+  context,
   onPick,
 }: {
   pages: CollectionPage[];
   current: number[];
   rtl: boolean;
+  /** 和主视图同一个判断：主视图里显示出来的页，胶片条里也不糊 */
   blurred: (pg: CollectionPage) => boolean;
+  context: BlurContext;
   onPick: (pageNo: number) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -304,10 +316,12 @@ function Filmstrip({
               aria-label={`第 ${pg.pageNo} 页`}
             >
               <Thumb
-                image={{ id: pg.imageId, rating: pg.rating, dominantColor: pg.dominantColor, modifiedAt: pg.modifiedAt }}
+                image={{ id: pg.imageId, rating: pg.rating, kind: pg.kind, dominantColor: pg.dominantColor, modifiedAt: pg.modifiedAt }}
                 width={240}
                 blurBadge="none"
-                forceBlur={blurred(pg)}
+                rated={pg.tagged}
+                blurContext={context}
+                revealed={!blurred(pg)}
                 className="h-[72px] w-full rounded-[3px]"
               />
             </button>

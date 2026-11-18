@@ -2,17 +2,19 @@
  * 合集（T38d）的文案、书架分组、阅读进度。
  * 合集是总称：本子、画集按文件夹成册；组图是收在一起的散图（手动挑的，或同一投稿自动收拢）。
  */
-import type { CollectionKind, CollectionSummary } from '@emaki/shared';
+import { bookBlurContext, COLLECTION_KIND_META, collectionTitle, volumeUnit, type CollectionKind, type CollectionSummary, type CoverRef } from '@emaki/shared';
 import { BookImage, BookOpen, Layers, type LucideIcon } from 'lucide-react';
-import { shouldBlur, type BlurPrefs } from './blur';
+import { blurReason, type BlurPrefs } from './blur';
 
-export const COLLECTION_META: Record<CollectionKind, { label: string; unit: string; glyph: string; icon: LucideIcon; hint: string }> = {
-  group: { label: '组图', unit: '组', glyph: '组', icon: Layers, hint: '收在一起的散图，逐张照常识别' },
-  doujin: { label: '本子', unit: '本', glyph: '本', icon: BookOpen, hint: '按页码顺序读' },
-  artbook: { label: '画集', unit: '册', glyph: '画', icon: BookImage, hint: '里面的插画照常计入角色' },
-};
+const ICON: Record<CollectionKind, LucideIcon> = { group: Layers, doujin: BookOpen, artbook: BookImage };
 
-export const displayTitle = (c: Pick<CollectionSummary, 'title' | 'folderName'>) => c.title ?? `无题 #${c.folderName.slice(0, 6)}`;
+/** 合集类型的名称、量词、印字、说明只有一份（packages/shared 的 COLLECTION_KIND_META），这里只加图标 */
+export const COLLECTION_META = Object.fromEntries(
+  (Object.keys(COLLECTION_KIND_META) as CollectionKind[]).map((k) => [k, { ...COLLECTION_KIND_META[k], icon: ICON[k] }]),
+) as Record<CollectionKind, (typeof COLLECTION_KIND_META)[CollectionKind] & { icon: LucideIcon }>;
+
+/** 无题时的显示名只有一种写法（packages/shared 的 collectionTitle，附录 #38） */
+export const displayTitle = (c: Pick<CollectionSummary, 'title' | 'folderName'>) => collectionTitle(c);
 
 /** 展会 · 社团（作者） */
 export function byline(c: Pick<CollectionSummary, 'event' | 'circle' | 'artist'>): string {
@@ -52,9 +54,8 @@ export function toShelfUnits(list: CollectionSummary[], { keepOrder = false } = 
   );
 }
 
-/** 连载按「话」，其余按「册」 */
-export const unitOfFolder = (folderName: string) => (/[话話回章]\s*$/.test(folderName) ? '话' : '册');
-export const unitWord = (items: Pick<CollectionSummary, 'folderName'>[]) => (items.some((c) => unitOfFolder(c.folderName) === '话') ? '话' : '册');
+/** 连载按「话」，其余按「册」：和服务端解析卷号 / 话数用同一个判断（packages/shared 的 volumeUnit） */
+export const unitWord = (items: Pick<CollectionSummary, 'folderName'>[]) => (items.some((c) => volumeUnit(c.folderName) === '话') ? '话' : '册');
 
 const KEY = (id: string) => `emaki.read.v1.${id}`;
 export const readProgress = {
@@ -76,14 +77,22 @@ export const readProgress = {
 };
 
 /**
- * 布面：开着模糊时，封面敏感、没有封面，或本子封面还没识别过（分级不可信，本子封面大多敏感），都换成布面精装。
+ * 布面：开着模糊时，没有封面，或者封面不能不打码显示（共用的 blurReason：封面敏感；本子封面还没识别过、分级不可信，
+ * 本子封面大多敏感，bookBlurContext），都换成布面精装。
  */
 export function shouldCloth(c: Pick<CollectionSummary, 'covers' | 'kind' | 'coverTagged'>, prefs: BlurPrefs): boolean {
   if (!prefs.blurSensitive) return false;
   const cover = c.covers[0];
   if (!cover) return true;
-  return shouldBlur({ rating: cover.rating }, prefs) || (c.kind === 'doujin' && !c.coverTagged);
+  return blurReason({ rating: cover.rating, rated: c.coverTagged }, prefs, bookBlurContext(c.kind)) !== null;
 }
+
+/**
+ * 书封面下面露出的底页：无人值守地露出来，按 showcase（开着模糊时只露分级可信的全年龄页）。
+ * 封面识别过才当底页的分级可信（底页和封面同一批识别）
+ */
+export const showUnderPage = (c: Pick<CollectionSummary, 'coverTagged'>, under: Pick<CoverRef, 'rating'>, prefs: BlurPrefs) =>
+  blurReason({ rating: under.rating, rated: c.coverTagged }, prefs, 'showcase') === null;
 
 /** 组图的来历，写在书卡、详情页的小字里 */
 export const groupOrigin = (c: Pick<CollectionSummary, 'membership'>) => (c.membership === 'post' ? '同一投稿' : '手动收集');

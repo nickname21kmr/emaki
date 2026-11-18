@@ -1,4 +1,4 @@
-import type { CollectionKind, CollectionSummary } from '@emaki/shared';
+import { matchesQuery, type CollectionKind, type CollectionSummary } from '@emaki/shared';
 import { Check, UserRoundPlus } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
@@ -37,10 +37,8 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
   const all = list.data ?? [];
   // 画师：识别出来的才有（设置 → 识别 里打开「识别画师」）；搜索框也筛画师名
   const artistsQ = useArtists();
-  const needle = debounced.toLowerCase();
-  const artists = (artistsQ.data ?? []).filter(
-    (a) => !needle || [a.name, a.tag, a.twitter ?? '', ...a.tags, ...a.aliases].some((n) => n.toLowerCase().replace(/_/g, ' ').includes(needle.replace(/_/g, ' '))),
-  );
+  // 搜索归一化用共用的 matchesQuery（附录 #38）
+  const artists = (artistsQ.data ?? []).filter((a) => matchesQuery(debounced, [a.name, a.tag, a.twitter, ...a.tags, ...a.aliases]));
   const by = (k: CollectionKind) => all.filter((c) => c.kind === k);
   const [showPosts, setShowPosts] = useState(false);
   const pages = (xs: CollectionSummary[]) => xs.reduce((n, c) => n + c.pageCount, 0);
