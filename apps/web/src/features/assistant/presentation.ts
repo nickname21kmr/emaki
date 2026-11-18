@@ -409,9 +409,33 @@ export function layoutTranscript(messages: readonly AssistantMessage[], status: 
   return turns;
 }
 
-const MUTATING = ['update_images', 'edit_source', 'accept_suggestion'];
+/**
+ * 改图片的工具。P6 起 MCP 工具从命令注册表生成（curation.setFavorite → curation_set_favorite），
+ * 以前的 update_images / edit_source / accept_suggestion 还认（旧对话里有）
+ */
+const TOOL_FIELD: Record<string, string> = {
+  curation_link: '人物',
+  curation_unlink: '人物',
+  curation_replace: '人物',
+  curation_set_kind: '类型',
+  curation_set_favorite: '收藏',
+  curation_set_rating: '分级',
+  curation_set_shelved: '放下',
+  curation_set_original: '原创',
+  curation_set_artists: '画师',
+  curation_reset_artists: '画师',
+  curation_set_source: '来源',
+  visibility_exclude_images: '排除',
+  visibility_restore_images: '排除',
+  catalog_create_character: '角色',
+  catalog_update_character: '角色',
+  // P6 之前的工具名
+  edit_source: '来源',
+  accept_suggestion: '人物',
+  edit_character: '角色',
+};
+const MUTATING = ['update_images', ...Object.keys(TOOL_FIELD).filter((k) => k.startsWith('curation_') || k.startsWith('visibility_')), 'edit_source', 'accept_suggestion'];
 const ACTION_FIELD: Record<string, string> = { assign: '人物', unassign: '人物', kind: '类型', favorite: '收藏', rating: '分级', exclude: '排除', restore: '排除', artist: '画师' };
-const TOOL_FIELD: Record<string, string> = { edit_source: '来源', accept_suggestion: '人物', edit_character: '角色' };
 
 /** 从工具输出里取 MutationResult.message；输出可能是 MCP 包了一层的转义 JSON */
 function mutationMessage(output: string): string {
@@ -438,7 +462,7 @@ function parseInput(input?: string): Record<string, unknown> | null {
 
 /**
  * 勘误条（§9）：找改了图库的那次工具调用，取它返回的那句话、改了哪类字段、哪些图。
- * 先找输出里含这个 undoToken 的工具；找不到就取本轮里最近一次成功的 update_images / edit_source / accept_suggestion。
+ * 先找输出里含这个 undoToken 的工具；找不到就取本轮里最近一次成功的改图片的工具（curation_*、visibility_*，以前的 update_images 这些）。
  * 契约里没有改前的值，不编造。
  */
 export function erratumOf(messages: readonly AssistantMessage[], index: number): Erratum {
@@ -453,9 +477,11 @@ export function erratumOf(messages: readonly AssistantMessage[], index: number):
   const sentence = (source?.tool?.output && mutationMessage(source.tool.output)) || '图库已更新';
   if (!source) return { sentence, imageIds: [] };
   const input = parseInput(source.tool?.input);
-  const raw = input?.ids ?? input?.imageIds ?? (input?.imageId != null ? [input.imageId] : []);
-  const imageIds = Array.isArray(raw) ? raw.filter(id => typeof id === 'string' || typeof id === 'number').map(String) : [];
   const name = toolName(source.text);
+  // 归类的命令里 id 就是图片（curation_set_source、curation_replace）；编目的 id 是角色
+  const one = input?.imageId ?? (name.startsWith('curation_') ? input?.id : undefined);
+  const raw = input?.ids ?? input?.imageIds ?? (one != null ? [one] : []);
+  const imageIds = Array.isArray(raw) ? raw.filter(id => typeof id === 'string' || typeof id === 'number').map(String) : [];
   const action = (input?.action as { type?: unknown } | undefined)?.type;
   const field = name === 'update_images' ? (typeof action === 'string' && ACTION_FIELD[action]) || '图片' : TOOL_FIELD[name];
   return { sentence, imageIds, ...(field ? { field } : {}) };

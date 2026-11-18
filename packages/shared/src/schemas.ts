@@ -216,7 +216,8 @@ const moveFields = {
 };
 export const MoveImagesInput = z.object(moveFields).refine((b) => (b.ids === undefined) !== (b.characterId === undefined), '要么给 ids，要么给 characterId');
 export const MovePreviewInput = z
-  .object({ ...moveFields, ids: qList(z.string()).pipe(z.array(z.string()).min(1).max(50000)).optional() })
+  // GET 的查询串里空的 dir 不出现：不给就是图库文件夹本身
+  .object({ ...moveFields, ids: qList(z.string()).pipe(z.array(z.string()).min(1).max(50000)).optional(), dir: z.string().max(400).default('') })
   .refine((b) => b.ids !== undefined || b.characterId !== undefined, '要么给 ids，要么给 characterId');
 export const AddRootInput = z.object({ path: z.string().min(1), merge: z.boolean().optional(), mode: RootModeSchema.optional(), comicRating: RatingSchema.optional() });
 export const UpdateRootFields = z

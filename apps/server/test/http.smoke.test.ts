@@ -122,7 +122,7 @@ function route(key: string, body: () => Promise<void>) {
   it(key, body);
 }
 
-describe('统计、作品、角色、搜索（routes/library.ts）', () => {
+describe('统计、作品、角色、搜索（注册表：统计、作品、角色、搜索的查询和命令）', () => {
   route('POST /api/images/:id/replace', async () => {
     expect((await call('POST','/api/images/img1/replace',{})).status).toBe(400);
     const response=await call('POST','/api/images/img1/replace',{path:'D:/download.png'});
@@ -269,7 +269,7 @@ describe('统计、作品、角色、搜索（routes/library.ts）', () => {
   });
 });
 
-describe('合集（routes/collections.ts）', () => {
+describe('合集（注册表：collections.*）', () => {
   const create = async () => (await call('POST', '/api/collections', { fromImageId: 'i1', kind: 'artbook' })).json.collection.id as string;
 
   route('GET /api/collections', async () => {
@@ -314,7 +314,7 @@ describe('合集（routes/collections.ts）', () => {
   });
 });
 
-describe('图片、未识别、重复、排除（routes/images.ts）', () => {
+describe('图片、未识别、重复、排除（注册表：images.*、curation.*，兼容层 http/compat.ts）', () => {
   route('GET /api/images', async () => {
     const { status, json } = await call('GET', '/api/images?rating=general,sensitive&sort=addedAt&order=desc&limit=5&favorite=false');
     expect(status).toBe(200);
@@ -481,7 +481,7 @@ describe('图片、未识别、重复、排除（routes/images.ts）', () => {
   });
 });
 
-describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts）', () => {
+describe('设置、文件夹、任务、SSE、撤销（注册表：settings.*、library.*Root、jobs.*、history.*；http/events.ts、app.ts）', () => {
   route('GET /api/health', async () => {
     const { status, json } = await call('GET', '/api/health');
     expect(status).toBe(200);

@@ -1,8 +1,9 @@
 /**
  * 所有数据读取 / 修改的 React hook。页面只用这里的 hook。
  *
- * 缓存失效策略很简单：任何修改成功后 invalidate 全部 query（本地应用，数据量小，请求都很快），
- * 另外后端通过 SSE 推 `library-changed` 时也会全部失效（见 lib/events.ts）。
+ * 缓存失效（附录 #36）：后端每次提交推一条 changed 事件（SSE），带着变了哪些事实，lib/events.ts 只让相关的 query 失效。
+ * 写操作成功后不再自己全部重新获取：等响应头里那条事件的刷新做完（settleRefresh），SSE 断着时才自己按变化类型刷新。
+ * 撤销栈里怎么记（可撤销 / 撤销屏障 / 不占位置）由命令注册表决定，在响应头里（metaOf）。
  */
 import { showResultToast, undoViaToast } from '@/components/ui/Toast';
 import type {
@@ -36,8 +37,8 @@ import {
   type QueryClient,
 } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { api, ApiRequestError } from './api';
-import { useLiveJobs } from './events';
+import { api, ApiRequestError, metaOf, withMeta } from './api';
+import { settleRefresh, useLiveJobs } from './events';
 import { modKeyLabel } from './hotkeys';
 import { usePrefs, useUndoReveal, useUndoStore, type CollapseMode, type UndoEntry, type UndoFocus } from './stores';
 import { confirmText, madeHere, needsConfirm } from './undoPlace';
@@ -262,12 +263,15 @@ const TRASH_NOTE = '文件已经放进系统回收站，要找回请去系统回
 const barrierId = () => `barrier:${crypto.randomUUID()}`;
 
 /**
- * 一次写操作在撤销栈里记什么：有 token 记 token；回收站那种撤销不了的占位；
- * 其余改了图库 / 设置的写操作传 barrier（占位的说法）也占一格，Ctrl+Z 不会悄悄越过它去撤更早的
+ * 一次写操作在撤销栈里记什么：有 token 记 token；回收站那种撤销不了的占位；不可撤销的命令（改设置、启动任务……）也占一格（撤销屏障），
+ * Ctrl+Z 不会悄悄越过它去撤更早的。是不是屏障由命令注册表决定（响应头 x-emaki-undo，metaOf），前端不再自己猜；
+ * 没有说明的（不是命令的接口、旧后端）照旧：没有 token 就按 barrier（占位的说法）占一格
  */
 export function entryOf(result: MutationResult, barrier?: string | null): UndoEntry | null {
   if (result.undoToken) return { token: result.undoToken, label: result.message };
   if (result.irreversible) return { token: barrierId(), label: result.message, barrier: true };
+  const meta = metaOf(result);
+  if (meta) return meta.undo === 'barrier' ? { token: barrierId(), label: barrier || result.message, barrier: true, note: PLAIN_NOTE } : null;
   if (barrier) return { token: barrierId(), label: barrier, barrier: true, note: PLAIN_NOTE };
   return null;
 }
@@ -374,15 +378,20 @@ async function runUndo(token: string, client: QueryClient): Promise<UndoOutcome>
   if (undoViaToast(token)) return 'ok';
   try {
     let message: string;
+    let last: MutationResult | undefined;
     if (entry?.tokens) {
-      for (const t of [...entry.tokens].reverse()) await api.undo(t);
+      for (const t of [...entry.tokens].reverse()) last = await api.undo(t);
       message = `已撤销：${entry.label}`;
-    } else message = (await api.undo(token)).message;
+    } else {
+      last = await api.undo(token);
+      message = last.message;
+    }
     useUndoStore.getState().remove(token);
     // 别的页面做的：给个「去看看」；本页做的：刷新后把撤回来的东西指给用户看
     const where = afterUndone(entry);
     toast(message, where === 'elsewhere' && entry ? { action: { label: '去看看', onClick: () => goToUndone(entry) } } : undefined);
-    await invalidateAll(client);
+    // 撤销的重放也推 changed 事件：等它刷新完（几个令牌一起撤的，最后一个的事件最新）
+    await settleRefresh(client, metaOf(last));
     return 'ok';
   } catch (err) {
     forgetFailedUndo(token, err);
@@ -524,7 +533,8 @@ export function useStartJob(message: (job: Job) => string) {
     (typeof input === 'string' ? api.startJob(input) : api.startJob(input.kind, input)).then((job): MutationResult => {
       const live = useLiveJobs.getState();
       if (!live.jobs[job.id]) live.upsert(job);
-      return { ok: true, message: message(job), undoToken: null };
+      // 启动任务是不可撤销的命令：撤销屏障来自注册表（响应头），带过来
+      return withMeta({ ok: true, message: message(job), undoToken: null }, job);
     }),
   );
 }
@@ -544,7 +554,7 @@ export function errorMessage(err: unknown): string {
 }
 
 /**
- * 通用修改 hook：成功 → toast（带撤销）+ 全部刷新；失败 → 错误 toast。
+ * 通用修改 hook：成功 → toast（带撤销）+ 刷新相关的查询（等 SSE 那条事件的刷新，只刷新一遍）；失败 → 错误 toast。
  *
  *   const assign = useMutate((ids: ID[]) => api.bulkImages({ ids, action: { type: 'assign', characterId } }));
  *   assign.mutate(selectedIds);
@@ -582,7 +592,7 @@ export function useMutate<TVars, TResult extends MutationResult = MutationResult
         ...(opts.entry && { entry: opts.entry(result, vars) }),
       });
       opts.onSuccess?.(result, vars);
-      await invalidateAll(client);
+      await settleRefresh(client, metaOf(result));
     },
     onError: (err, _vars, pending) => {
       if (pending) settlePending(pending, null, true);

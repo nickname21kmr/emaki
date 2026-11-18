@@ -2,8 +2,9 @@
  * HTTP API 契约。
  *
  * 所有接口都在 `/api` 前缀下，JSON 进 JSON 出。
- * 前端只通过 `apps/web/src/lib/api.ts` 调用；后端路由在 `apps/server/src/routes/`。
- * 改接口时三处一起改：这里 → 后端路由 → 前端 api.ts。
+ * 前端只通过 `apps/web/src/lib/api.ts` 调用；后端的路由从命令 / 查询注册表生成（`apps/server/src/commands/`，
+ * 输入的 zod schema 在 `schemas.ts`），旧地址的兼容层在 `apps/server/src/http/compat.ts`。
+ * 改接口时：schemas.ts（输入）→ 这里（响应类型）→ 注册表里的定义 → 前端 api.ts。
  */
 import type { ChangedEvent, CommandEvent, HelloEvent, ResyncEvent } from './events.ts';
 import type {

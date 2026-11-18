@@ -289,7 +289,8 @@ export const systemCommands = [
     name: 'unrecognized.retag',
     summary: '未识别里识别过、没认出角色、没放下的插画全部标记为重新识别，并启动识别任务',
     input: EmptyInput,
-    scope: 'jobs',
+    // 整库按规则批量标记重新识别（不只是启动任务）：和补采纳一样算规则，不给助手
+    scope: 'rules',
     undoable: false,
     idempotent: true,
     http: [{ method: 'POST', path: '/api/unrecognized/retag' }],

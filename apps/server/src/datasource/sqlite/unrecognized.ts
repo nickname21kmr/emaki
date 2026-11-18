@@ -8,22 +8,15 @@ import {
   UNRECOGNIZED_ANNEX_KINDS,
   UNRECOGNIZED_ART_KINDS,
   UNRECOGNIZED_THEMES,
-  type ID,
   type ListUnrecognizedQuery,
   type ListUnrecognizedResponse,
-  type MutationResult,
   type UnrecognizedAnnexKind,
   type UnrecognizedArtCounts,
   type UnrecognizedArtKind,
   type UnrecognizedSummary,
   type UnrecognizedTheme,
 } from '@emaki/shared';
-import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
 import { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
-import { acceptMessage } from '../acceptMessage.ts';
-import { insertDanbooruCharacter } from '../../domain/catalog/characterCatalog.ts';
-import { linkEach, type LinkItem } from '../../domain/curation/links.ts';
-import { manual } from '../../domain/curation/provenance.ts';
 import { markRetag } from '../../domain/evidence/retag.ts';
 import type { SqliteContext } from './context.ts';
 import { loadImageItems } from './hydrate.ts';
@@ -37,7 +30,7 @@ import {
   THEME_EXPR,
   UNRECOGNIZED,
 } from '../../readmodel/terms.ts';
-import { decodeCursor, encodeCursor, iso, parseId } from './sql.ts';
+import { decodeCursor, encodeCursor } from './sql.ts';
 import { loadSuggestions } from './suggestions.ts';
 
 /**
@@ -276,48 +269,4 @@ export class UnrecognizedQueries {
       annexCount: sum.annex.total,
     };
   }
-
-  accept(imageIdStr: ID, rawTag: string): MutationResult {
-    return this.acceptMany(imageIdStr, [rawTag]);
-  }
-
-  /** 同一张图采纳多条建议：一个事务、一条撤销 */
-  acceptMany(imageIdStr: ID, rawTags: string[]): MutationResult {
-    const imageId = parseId(imageIdStr);
-    if (imageId === null || !this.ctx.stmt('SELECT 1 FROM v_images WHERE id = ?').get(imageId)) throw new NotFoundError('图片');
-    const tags = [...new Set(rawTags.map((t) => t.trim()))];
-    if (!tags.length || tags.some((t) => !t)) throw new BadRequestError('标签不能为空');
-    const rows = tags.map((tag) => {
-      const row = this.ctx
-        .stmt('SELECT score, character_id, provider AS source FROM character_evidence WHERE image_id = ? AND tag = ? ORDER BY score DESC LIMIT 1')
-        .get(imageId, tag) as { score: number; character_id: number | null; source: 'tagger' | 'pixiv' } | undefined;
-      // 自建角色的建议只认 character_id：角色合并 / 删除后这行已级联删掉，不能按编号再找（编号可能给了别的角色）
-      if (CharacterCatalog.isCustomTag(tag) && row?.character_id == null) throw new ConflictError('这条建议已失效，请刷新');
-      return { tag, score: row?.score ?? null, characterId: row?.character_id ?? null, source: row?.source ?? ('tagger' as const) };
-    });
-    const catalog = this.catalog();
-    const db = this.ctx.db;
-    const now = iso(this.ctx.clock());
-    return this.ctx.mutate((u) => {
-      const names: string[] = [];
-      let created = 0;
-      const items: LinkItem[] = [];
-      for (const r of rows) {
-        let characterId = r.characterId ?? catalog.resolveCharacterId(r.tag);
-        if (characterId === null) {
-          // 新建角色（封面由 derived 自动选）；和自动采纳一样按作品挂好（必要时新建作品），撤销时一并删除
-          const c = insertDanbooruCharacter(u, catalog, r.tag, { now });
-          characterId = c.id;
-          if (c.created) created++;
-        }
-        // 用户点的：手动，带着这条建议的证据（附录 #5）
-        items.push({ imageId, characterId, provenance: manual(now, { provider: r.source, tag: r.tag, score: r.source === 'pixiv' ? null : r.score }) });
-        names.push(db.prepare('SELECT name FROM characters WHERE id = ?').pluck().get(characterId) as string);
-      }
-      // 归类模块写关联、清掉否决、声明变化（新角色命中「角色」排除规则由反应处理）；关联上了的候选自然不再是建议
-      linkEach(this.ctx, u, items);
-      return { message: acceptMessage(names, created) };
-    });
-  }
 }
-

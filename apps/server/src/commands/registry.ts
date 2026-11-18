@@ -214,8 +214,8 @@ export class Registry {
     run: (actor: Actor, auditId: number | null) => Promise<unknown>,
   ): Promise<unknown> {
     const actor = opts.actor ?? currentActor();
-    if (!opts.operationId) return run(actor, null);
-    if (!idempotent) throw new BadRequestError(`${name} 不支持 operationId`);
+    // 不支持幂等的命令（标记看过、撤销……）收到 operationId 也照常执行：网页的每个写请求都带 Idempotency-Key
+    if (!opts.operationId || !idempotent) return run(actor, null);
     const key = `${opts.namespace ?? actor}:${opts.operationId}`;
     const signature = signatureOf(name, input);
     const running = this.inflight.get(key);

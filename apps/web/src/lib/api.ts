@@ -4,6 +4,8 @@
  */
 import type {
   AcceptSuggestionBody,
+  DomainChange,
+  UndoKind,
   UndoStatusResponse,
   AddLibraryRootBody,
   ApiError,
@@ -76,6 +78,49 @@ import type {
   Work,
 } from '@emaki/shared';
 
+/**
+ * 写命令的结果附带的说明（命令层放在响应头里，docs/core-architecture.md 第 4.1、9 节）：
+ * command 命令名；undo 撤销栈里怎么记（token 可撤销、barrier 不可撤销的命令＝撤销屏障、none 不占位置，由注册表决定，前端不再自己判断）；
+ * eventId 这次推出去的最后一条 changed 事件（前端等它到了就不用自己刷新，lib/events.ts 的 settleRefresh）；changes 变了哪些事实
+ */
+export interface CommandMeta {
+  command: string;
+  undo: UndoKind;
+  eventId: number | null;
+  changes: DomainChange[];
+}
+
+const META = Symbol('emaki.command');
+
+/** 写命令的说明（不是命令的接口、旧后端没有） */
+export const metaOf = (value: unknown): CommandMeta | undefined =>
+  value && typeof value === 'object' ? ((value as Record<symbol, CommandMeta | undefined>)[META] ?? undefined) : undefined;
+
+/** 把说明挂到结果上（不可枚举：不进 JSON、不影响比较） */
+export function attachMeta<T extends object>(target: T, meta: CommandMeta): T {
+  Object.defineProperty(target, META, { value: meta, enumerable: false, configurable: true });
+  return target;
+}
+
+/** 把 from 上的说明搬到 target（包一层 MutationResult 时用） */
+export function withMeta<T extends object>(target: T, from: unknown): T {
+  const meta = metaOf(from);
+  return meta ? attachMeta(target, meta) : target;
+}
+
+function readMeta(res: Response): CommandMeta | undefined {
+  const command = res.headers.get('x-emaki-command');
+  if (!command) return undefined;
+  const event = res.headers.get('x-emaki-event');
+  const changes = res.headers.get('x-emaki-changes');
+  return {
+    command,
+    undo: (res.headers.get('x-emaki-undo') as UndoKind | null) ?? 'none',
+    eventId: event ? Number(event) : null,
+    changes: changes ? (changes.split(',') as DomainChange[]) : [],
+  };
+}
+
 export class ApiRequestError extends Error {
   constructor(
     readonly status: number,
@@ -105,10 +150,14 @@ function toQueryString(params?: object): string {
 
 export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   let res: Response;
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  // 写请求带 operationId（Idempotency-Key）：同一个键重试，服务端返回第一次的结果，不会做两遍
+  if (method !== 'GET') headers['Idempotency-Key'] = crypto.randomUUID();
   try {
     res = await fetch(`/api${path}`, {
       method,
-      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
@@ -124,13 +173,14 @@ export async function request<T>(method: string, path: string, body?: unknown): 
     const err = data as Partial<ApiError> | undefined;
     throw new ApiRequestError(res.status, err?.code ?? 'internal', err?.error ?? `请求失败（${res.status}）`);
   }
+  const meta = readMeta(res);
+  if (meta && data && typeof data === 'object') attachMeta(data, meta);
   return data as T;
 }
 
 const get = <T>(path: string, params?: object) => request<T>('GET', `${path}${toQueryString(params)}`);
 const post = <T>(path: string, body: unknown = {}) => request<T>('POST', path, body);
 const patch = <T>(path: string, body: unknown) => request<T>('PATCH', path, body);
-const put = <T>(path: string, body: unknown) => request<T>('PUT', path, body);
 const del = <T>(path: string) => request<T>('DELETE', path);
 
 /** 图片 URL（不走 fetch，直接给 <img src>） */
@@ -205,7 +255,8 @@ export const api = {
   promotableSuggestions: (kind?: ContentKind) => get<PromotableSuggestions>('/tagger/promotable', { kind }),
   /** 把达标的建议归到角色（可撤销） */
   promoteSuggestions: (kind?: ContentKind) => post<MutationResult>('/tagger/promote', { kind }),
-  updateSettings: (body: UpdateSettingsBody) => put<Settings>('/settings', body),
+  /** 设置用 PATCH（PUT 是兼容的旧写法） */
+  updateSettings: (body: UpdateSettingsBody) => patch<Settings>('/settings', body),
   addLibraryRoot: (body: AddLibraryRootBody) => post<MutationResult>('/library-roots', body),
   updateArtistLinks: (body: UpdateArtistLinksBody) => post<MutationResult>('/artists/links', body),
   updateLibraryRoot: (id: ID, body: UpdateLibraryRootBody) => patch<MutationResult>(`/library-roots/${encodeURIComponent(id)}`, body),
@@ -216,7 +267,9 @@ export const api = {
   cancelJob: (id: ID) => del<{ ok: true }>(`/jobs/${encodeURIComponent(id)}`),
 
   undo: (token: string) => post<MutationResult>(`/undo/${encodeURIComponent(token)}`),
-  undoStatus: (tokens: string[]) => post<UndoStatusResponse>('/undo/status', { tokens }),
+  /** 只读的查询用 GET；令牌多了地址太长时用 POST */
+  undoStatus: (tokens: string[]) =>
+    tokens.length <= 50 ? get<UndoStatusResponse>('/undo/status', { tokens }) : post<UndoStatusResponse>('/undo/status', { tokens }),
 
   health: () => get<HealthResponse>('/health'),
   /** 由后端弹出系统「选择文件夹」对话框；用户取消时 path 为 null */
@@ -224,7 +277,8 @@ export const api = {
   /** 移到图库里的某个文件夹（磁盘上真的移动），可撤销 */
   moveImages: (body: MoveImagesBody) => post<MutationResult>('/images/move', body),
   /** 移动前先数：服务端会移哪些图（按角色移动时拿这里的 ids 再提交） */
-  previewMove: (body: MoveImagesBody) => post<MovePreview>('/images/move/preview', body),
+  previewMove: (body: MoveImagesBody) =>
+    !body.ids || body.ids.length <= 200 ? get<MovePreview>('/images/move/preview', body) : post<MovePreview>('/images/move/preview', body),
   /** 切换 Pixiv 投稿号识别方式：先数影响，再切换（可撤销） */
   previewSourceMode: (mode: 'strict' | 'broad') => get<SourceModePreview>(`/settings/source-mode?mode=${mode}`),
   setSourceMode: (mode: 'strict' | 'broad') => post<MutationResult>('/settings/source-mode', { mode }),
@@ -232,5 +286,5 @@ export const api = {
   changes: (group: ChangeGroup) => get<ChangeEntry[]>(`/changes?group=${group}`),
   revertChange: (id: ID) => post<MutationResult>(`/changes/${encodeURIComponent(id)}/revert`),
   /** 连一下 Danbooru、Hugging Face 和国内镜像，排查同步失败 */
-  checkNetwork: () => post<NetworkCheckResponse>('/system/network-check'),
+  checkNetwork: () => get<NetworkCheckResponse>('/system/network-check'),
 };

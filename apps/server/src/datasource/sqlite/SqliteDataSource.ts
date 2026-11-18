@@ -1,73 +1,9 @@
-import { editedSource } from '../../services/source/editSource.ts';
 import type {
-  AddLibraryRootBody,
-  BulkCollectionsBody,
-  Artist,
-  BulkImagesBody,
-  CollectionSummary,
-  CreateCollectionBody,
-  GetCollectionResponse,
-  ListCollectionsQuery,
-  UpdateCollectionBody,
-  Character,
-  ContentKind,
-  ContentKindSummary,
-  CoverCandidatesResponse,
-  CreateCharacterBody,
-  CustomCharacterMatch,
-  CreateExclusionBody,
-  DuplicateGroup,
-  Exclusion,
-  GetCharacterResponse,
   ID,
-  ImageDetail,
-  ImageItem,
-  ImportImagesBody,
-  ImportImagesResult,
-  ReplaceImageBody,
-  ReplaceImageResult,
-  Job,
-  JobKind,
-  StartJobBody,
-  LibraryStats,
-  LibrarySummary,
-  ListCharactersQuery,
-  ListCharactersResponse,
-  ListDuplicatesQuery,
-  ListImagesQuery,
-  ListUnrecognizedQuery,
-  ListUnrecognizedResponse,
-  ListWorksQuery,
-  MoveImagesBody,
-  MutationResult,
-  UndoTokenStatus,
-  Page,
-  RetagResult,
-  SearchHit,
-  SearchQuery,
-  TagSuggestion,
-  TagSuggestionsQuery,
   Settings,
-  ThumbWidth,
-  TopCharactersQuery,
-  UnrecognizedItem,
-  UnrecognizedSummary,
-  UnrecognizedSummaryQuery,
-  UpdateCharacterBody,
-  UpdateImageBody,
-  UpdateSettingsBody,
-  UpdateLibraryRootBody,
-  UpdateArtistLinksBody,
-  Rating,
-  Work,
-  PromotableSuggestions,
-  ChangeEntry,
-  ChangeGroup,
-  MovePreview,
-  SourceModePreview,
 } from '@emaki/shared';
 import { REMOVED_ROOT_KEEP_DAYS } from '@emaki/shared';
-import { access, mkdir, rm, stat } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { EventBus } from '../../core/events.ts';
 import { JobQueue, type JobContext } from '../../core/jobs.ts';
@@ -78,23 +14,17 @@ import { migrate } from '../../db/migrate.ts';
 import { refreshPlannerStats } from '../../db/plannerStats.ts';
 import { SoftCache } from './softCache.ts';
 import { consolidateCatalog } from '../../domain/catalog/consolidate.ts';
-import { BadRequestError, ConflictError, NeedsConfirmError, NotFoundError, NotImplementedError } from '../../http/errors.ts';
-import { parentRel, toAbs } from '../../services/fs/paths.ts';
-import { revealInFileManager } from '../../services/fs/reveal.ts';
+import { BadRequestError, NotFoundError } from '../../http/errors.ts';
 import { ThumbnailService } from '../../services/image/ThumbnailService.ts';
-import { thumbPath } from '../../services/image/pixels.ts';
 import { Pipeline } from '../../services/pipeline.ts';
 import { Scanner } from '../../services/scan/Scanner.ts';
 import { ScanRequests } from '../../services/scan/ScanRequests.ts';
-import { applySourceChanges, backfillSources, diffSources, markSourcesCurrent, sourceVersion } from '../../services/source/backfill.ts';
+import { backfillSources, sourceVersion } from '../../services/source/backfill.ts';
 import { ChangeLog } from './changeLog.ts';
-import { htmlAnimationCache, readHtmlAnimation } from '../../services/image/htmlAnimation.ts';
-import { sha256Buffer } from '../../services/fs/hash.ts';
-import { classifyStale, restoreKinds, type KindSnapshot } from '../../domain/analysis/analyze.ts';
-import { recordRootModeUndo, syncRootModes } from '../../domain/analysis/rootMode.ts';
-import { CLASSIFIER_VERSION, describeAnimation } from '../../services/classify/rules.ts';
-import type { UndoRecorder } from './undo.ts';
-import { ComicAreas, IN_COMIC } from '../../services/classify/comicAreas.ts';
+import { classifyStale } from '../../domain/analysis/analyze.ts';
+import { syncRootModes } from '../../domain/analysis/rootMode.ts';
+import { CLASSIFIER_VERSION } from '../../services/classify/rules.ts';
+import { IN_COMIC } from '../../services/classify/comicAreas.ts';
 import { CollectionService } from '../../domain/collections/CollectionService.ts';
 import { collectionReactions } from '../../domain/collections/reactions.ts';
 import { reanchorSelections } from '../../domain/collections/roots.ts';
@@ -105,15 +35,13 @@ import { jobActor, runAs, type Actor } from '../../propagation/actor.ts';
 import type { Change } from '../../propagation/changes.ts';
 import { ChangeEvents, engineReactions, type EngineHooks } from '../../propagation/engine.ts';
 import { clearWork, hasWork, isPaused, markWork, peekWork, setPaused } from '../../propagation/work.ts';
-import { refreshDerived, snapshotVersion, type DerivedSet } from '../../propagation/versions.ts';
+import { refreshDerived, type DerivedSet } from '../../propagation/versions.ts';
 import { shutdownTagger } from '../../services/tagger/client.ts';
 import { ARTIST_MODEL, artistPendingCount, createArtistJobRunner } from '../../services/tagger/artists.ts';
 import { isModelReady } from '../../services/tagger/download.ts';
 import { findModel } from '../../services/tagger/models.ts';
 import { createTagStage } from '../../services/tagger/tagJob.ts';
-import { resetIoBackoff } from '../../services/tagger/readBackoff.ts';
 import { CharacterCatalog, createCatalog } from '../../domain/catalog/characterCatalog.ts';
-import type { CharacterVerification } from '../../services/catalog/characterVerification.ts';
 import { CopyrightResolver } from '../../services/catalog/copyrights.ts';
 import { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
 import { createDanbooruSyncRunner, hasUncachedArtists, hasUncachedCharacterTags } from '../../services/danbooru/sync.ts';
@@ -122,30 +50,18 @@ import { SqliteLocalizer, type Localizer } from '../../services/i18n/localizer.t
 import { relocalizeAll } from '../../domain/catalog/relocalize.ts';
 import { LibraryWatcher, type WatchedRoot } from '../../services/watch/LibraryWatcher.ts';
 import { config } from '../../config.ts';
-import { hydrateImages, IMAGE_COLS, type ImageRow } from './hydrate.ts';
-import { listImages } from './queries/listImages.ts';
-import { loadSuggestions } from './suggestions.ts';
-import { replaceCharacters } from '../../domain/curation/links.ts';
-import { restoreAutoRatings, setFavorite, setRating } from '../../domain/curation/marks.ts';
-import { setManualSource } from '../../domain/curation/source.ts';
-import { snapshotSources } from '../../domain/evidence/source.ts';
-import { manual } from '../../domain/curation/provenance.ts';
-import { clearPendingPixivCache, pendingPixivCount, queuePixivImages, queueUnseenPixivAnimations, resetPixivBackoff, syncPixivCharacters } from '../../services/pixiv/sync.ts';
+import { pendingPixivCount, queueUnseenPixivAnimations, syncPixivCharacters } from '../../services/pixiv/sync.ts';
 import { refreshPixivAliases } from '../../services/pixiv/aliases.ts';
 import { createPixivDiscovery } from '../../services/pixiv/discovery.ts';
 import { DanbooruClient } from '../../services/danbooru/client.ts';
-import { BulkOps, RATING_LABEL } from './bulk.ts';
 import { CollectionQueries } from './collections.ts';
-import { assertKindValue, KIND_LABEL, setKindInTx, type KindDeps } from './kinds.ts';
-import { countLinks, evaluateAuto, promotionScope, reevaluateAutoReaction } from '../../domain/curation/reevaluate.ts';
-import { describeKindReason } from './hydrate.ts';
+import { reevaluateAutoReaction } from '../../domain/curation/reevaluate.ts';
 import { DuplicateQueries } from './duplicates.ts';
 import { SearchQueries } from './search.ts';
 import { DedupeService } from '../../services/dedupe/DedupeService.ts';
 import { PendingTrash } from '../../domain/library/pendingTrash.ts';
-import { resolvePorts, type EnginePorts, type ImageFileRow } from '../../infra/ports.ts';
+import { resolvePorts, type EnginePorts } from '../../infra/ports.ts';
 import { CharacterMutations } from '../../domain/catalog/characters.ts';
-import { setArtistLinks } from '../../domain/catalog/artists.ts';
 import { UnrecognizedQueries } from './unrecognized.ts';
 import { createContext } from './context.ts';
 import { createRegistry } from '../../commands/index.ts';
@@ -154,29 +70,14 @@ import { readSettingsView } from '../../readmodel/settings.ts';
 import { Derived } from './derived.ts';
 import { dropOrphanImageRules, ExclusionQueries, reevaluateExclusionsReaction } from '../../domain/visibility/exclusions.ts';
 import { LibraryQueries, type LibraryCounts } from './library.ts';
-import { declareMoved, moveImages, normalizeSubdir, type MoveRow } from '../../domain/library/move.ts';
-import { importImages } from '../../domain/library/import.ts';
-import { collectReplacementBackups, replaceImage } from '../../domain/library/replace.ts';
+import { collectReplacementBackups } from '../../domain/library/replace.ts';
 import { collectCaches } from '../../domain/analysis/cacheGc.ts';
-import { artistNames, imageArtists, linkGroups, listArtists as listArtistsQuery, tagNames } from './artists.ts';
-import { artistLinksMessage, linkTags, planArtistLinks } from '../artistEdits.ts';
 import {
-  adoptFromRemovedParents,
   deleteRemovedRoots,
-  diskCaseRel,
-  insertRoot,
-  mergeChildRoots,
-  relUnder,
-  reviveRoot,
-  setComicFolderRow,
-  setRootRemoved,
-  updateRoot,
-  type ChildRoot,
 } from '../../domain/library/roots.ts';
-import { applySettingsPatch, getDanbooruApiKey, isInside, normalizeRootPath, patchSettingsInternal, readSettings, rootPathKey, samePath } from './settings.ts';
-import { iso, MIME, parseId, toId } from './sql.ts';
-import { ACTIVE_ROOT_IDS, FILE_LIVE, HAS_CHARACTER, NOT_EXCLUDED, ROOT_ACTIVE, VISIBLE } from '../../readmodel/terms.ts';
-import { summarize } from '../../readmodel/summary.ts';
+import { getDanbooruApiKey, patchSettingsInternal, readSettings } from './settings.ts';
+import { iso, parseId } from './sql.ts';
+import { ACTIVE_ROOT_IDS, FILE_LIVE, HAS_CHARACTER, NOT_EXCLUDED, ROOT_ACTIVE } from '../../readmodel/terms.ts';
 
 /** 启动修补的 actor */
 const STARTUP: Actor = 'system:startup';
@@ -556,7 +457,7 @@ export class SqliteDataSource {
       if (e.type !== 'job') return;
       if (e.job.status === 'done' && (e.job.kind === 'scan' || e.job.kind === 'tag')) refreshPlannerStats(db);
       // 审计记录：后台任务每跑完一轮记一行（actor job:<任务>），在「谁改的」里查得到
-      if (e.job.status === 'done' || e.job.status === 'failed' || e.job.status === 'cancelled') {
+      if ((e.job.status === 'done' || e.job.status === 'failed' || e.job.status === 'cancelled') && db.open) {
         const who = jobActor(e.job.kind);
         this.registry.audit.record({ command: who, actor: who }, { status: e.job.status === 'failed' ? 'failed' : 'done', message: e.job.message });
       }

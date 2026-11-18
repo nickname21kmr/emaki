@@ -317,6 +317,8 @@ export interface UndoEntry {
   at?: number;
   /** 撤销后要带用户去看的东西：图片 / 重复组 */
   focus?: UndoFocus;
+  /** 谁做的：不写是这个页面的用户；assistant 是 AI 助手（服务端的 command 事件放进来的） */
+  by?: string;
 }
 
 export interface UndoFocus {

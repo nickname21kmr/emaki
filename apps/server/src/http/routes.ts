@@ -5,7 +5,7 @@
  * - 输入 = 路径参数 + 查询串（GET / DELETE）或请求体；
  * - 写命令：actor 取请求的上下文（网页是 user，助手经 MCP 是 assistant），请求头 Idempotency-Key 就是 operationId；
  *   响应头带上命令层的说明：x-emaki-command（命令名）、x-emaki-undo（token / barrier / none，前端的撤销屏障由它生成）、
- *   x-emaki-event（这次推出去的最后一个 changed 事件 id，前端等到它就不用自己再刷新）；
+ *   x-emaki-event（这次推出去的最后一个 changed 事件 id，前端等到它就不用自己再刷新）、x-emaki-changes（变了哪些事实）；
  * - 通用入口：POST /api/commands/:name、GET /api/queries/:name（新代码只用命令和查询）；GET /api/commands 是清单；
  * - 旧的地址（PATCH /api/images/:id、POST /api/images/bulk 这类一个地址对多个命令的）在 compat.ts，只把参数转成命令。
  */
@@ -43,6 +43,7 @@ export function sendCommand(reply: FastifyReply, meta: CommandMeta | undefined, 
     reply.header('x-emaki-command', meta.command);
     reply.header('x-emaki-undo', meta.undo);
     if (meta.eventId !== null) reply.header('x-emaki-event', String(meta.eventId));
+    if (meta.changes.length) reply.header('x-emaki-changes', meta.changes.join(','));
     if (meta.replayed) reply.header('x-emaki-replayed', '1');
   }
   return result;
