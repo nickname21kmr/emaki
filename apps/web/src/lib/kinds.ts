@@ -55,7 +55,6 @@ export const SOURCE_LABEL: Record<ContentKindSource, string> = {
 
 /** 动图（D5）：不是类型，是跨类型的筛选 */
 export const ANIMATED_LABEL = '动图';
-export const ANIMATED_HINT = 'GIF、动画 WebP / PNG、HTML 逐帧动画，按帧数自动认出';
 
 /** 当前看的这几类一共多少张；'all' 就是全库 */
 export const kindTotal = (counts: Record<ContentKind, number>, total: number, kind: ContentKind[] | 'all') =>

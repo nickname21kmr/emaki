@@ -3,6 +3,7 @@ import { Thumb } from '@/components/media/Thumb';
 import type { ImageItem, UnrecognizedItem } from '@emaki/shared';
 import { Ban, CheckCheck, ChevronLeft, ChevronRight, ExternalLink, Feather, Shapes } from 'lucide-react';
 import { KindMenu } from '@/components/media/KindMenu';
+import { ANIMATED_LABEL } from '@/lib/kinds';
 import type { ReactNode, RefObject } from 'react';
 import { Badge, Button, Kbd } from '@/components/ui';
 import {
@@ -177,6 +178,8 @@ function ImageMeta({ image, position, total }: { image: ImageItem; position: num
       </div>
       <div className="mt-1 text-[12.5px] text-fg-muted tabular">
         {formatDimensions(image.width, image.height)} · {image.format.toUpperCase()} · {formatBytes(image.bytes)}
+        {/* 动图（D5）：预览是首帧，按空格看大图才会动 */}
+        {image.animated && <span className="text-fg"> · {ANIMATED_LABEL}</span>}
       </div>
       <div className="mt-0.5 flex min-w-0 items-center gap-1 text-[12.5px] text-fg-subtle">
         {source ? (

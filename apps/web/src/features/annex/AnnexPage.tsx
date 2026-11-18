@@ -9,7 +9,7 @@ import { KindBadge } from '@/components/media/KindBadge';
 import { EmptyState, ErrorState, Segmented, Skeleton } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
-import { ANIMATED_HINT, ANIMATED_LABEL, KIND_HINT, KIND_LABEL } from '@/lib/kinds';
+import { ANIMATED_LABEL, KIND_HINT, KIND_LABEL } from '@/lib/kinds';
 import { useCollections, useImagesInfinite, useStats } from '@/lib/queries';
 import { CollectionShelf } from '@/features/collections/components/Shelf';
 import { useSelection } from '@/lib/stores';
@@ -166,7 +166,7 @@ function AnnexView({ scope, count }: { scope: AnnexScope | null; count: number |
                 ? `${formatCount(count)} 页 · 其中 ${formatCount(stats.collectionCounts.doujin)} 本成册`
                 : kind
                   ? `${formatCount(count)} 张 · ${KIND_HINT[kind]}`
-                  : `${formatCount(count)} 张 · 不是类型：插画、表情等各类里会动的图都在这里 · ${ANIMATED_HINT}`}
+                  : `${formatCount(count)} 张 · 不是类型：各类里会动的图都在这里，按帧数自动认出`}
             </span>
           ) : (
             <Skeleton className="mt-1.5 h-3 w-48 rounded-full" />
