@@ -7,40 +7,41 @@
  * 放在右上角（页头全局操作的下面），和底部的 toast、多选栏、助手胶囊都不抢位置。
  *
  * 数据只认 GET /api/access 的 requests（SSE 的 access 事件让它重新取，requested 时先放进缓存）：请求过期、在设置页里处理掉、
- * 别的标签页处理掉（重新取的 requests 里没有它了）时，提示自动收起。局域网入口上这个查询是 null（403），什么也不显示。
+ * 别的标签页处理掉（重新取的 requests 里没有它了）时，提示自动收起。设置页里「等你批准的请求」那一段在屏幕上时不弹
+ * （请求就列在那里，浮在上面只会重复、还会盖住开关）。局域网入口上这个查询是 null（403），什么也不显示。
  */
 import type { PairRequestInfo } from '@emaki/shared';
 import { Check, Smartphone, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useState } from 'react';
-import { useLocation, useNavigate } from 'react-router';
+import { useNavigate } from 'react-router';
 import { Button } from '@/components/ui';
 import { useNow } from '@/features/settings/hooks';
 import { DURATION, EASE_OUT } from '@/lib/motion';
 import { useAccessStatus } from '@/lib/queries';
 import { formatCountdown } from './format';
 import { useApproveRequest, useRejectRequest } from './hooks';
+import { useRequestListOnScreen } from './listOnScreen';
 import { PairCode, requestMeta } from './RequestCard';
 
 /**
- * 要弹出的请求：没过期、没在这里处理掉的；点过「设置…」的在设置页上不再弹（设置页里已经列着）。
- * handled：这一页批准、拒绝成功了、还没等到重新取的
+ * 要弹出的请求：没过期、没在这里处理掉的（handled：这一页批准、拒绝成功了、还没等到重新取的）；
+ * 设置页里的请求列表在屏幕上时一条也不弹
  */
 export function visiblePrompts(
   requests: readonly PairRequestInfo[],
-  o: { now: number; handled: ReadonlySet<string>; handedOff: ReadonlySet<string>; onSettings: boolean },
+  o: { now: number; handled: ReadonlySet<string>; listOnScreen: boolean },
 ): PairRequestInfo[] {
-  return requests.filter((r) => Date.parse(r.expiresAt) > o.now && !o.handled.has(r.id) && !(o.onSettings && o.handedOff.has(r.id)));
+  if (o.listOnScreen) return [];
+  return requests.filter((r) => Date.parse(r.expiresAt) > o.now && !o.handled.has(r.id));
 }
 
 export function AccessPrompts() {
   const requests = useAccessStatus().data?.requests;
   const now = useNow(!!requests?.length);
-  const { pathname } = useLocation();
+  const listOnScreen = useRequestListOnScreen((s) => s.onScreen);
   const [handled, setHandled] = useState<ReadonlySet<string>>(new Set());
-  const [handedOff, setHandedOff] = useState<ReadonlySet<string>>(new Set());
-  const shown = visiblePrompts(requests ?? [], { now, handled, handedOff, onSettings: pathname === '/settings' });
-  const add = (set: ReadonlySet<string>, id: string) => new Set([...set, id]);
+  const shown = visiblePrompts(requests ?? [], { now, handled, listOnScreen });
 
   return (
     <div
@@ -59,12 +60,7 @@ export function AccessPrompts() {
             exit={{ opacity: 0, x: 24 }}
             transition={{ duration: DURATION.base, ease: EASE_OUT }}
           >
-            <PromptCard
-              request={r}
-              now={now}
-              onDone={() => setHandled((s) => add(s, r.id))}
-              onHandOff={() => setHandedOff((s) => add(s, r.id))}
-            />
+            <PromptCard request={r} now={now} onDone={() => setHandled((s) => new Set([...s, r.id]))} />
           </motion.div>
         ))}
       </AnimatePresence>
@@ -72,16 +68,7 @@ export function AccessPrompts() {
   );
 }
 
-interface PromptCardProps {
-  request: PairRequestInfo;
-  now: number;
-  /** 批准、拒绝成功了 */
-  onDone: () => void;
-  /** 点了「设置…」 */
-  onHandOff: () => void;
-}
-
-function PromptCard({ request, now, onDone, onHandOff }: PromptCardProps) {
+function PromptCard({ request, now, onDone }: { request: PairRequestInfo; now: number; /** 批准、拒绝成功了 */ onDone: () => void }) {
   const navigate = useNavigate();
   const { approve, isPending: approving } = useApproveRequest();
   const { reject, isPending: rejecting } = useRejectRequest();
@@ -127,10 +114,8 @@ function PromptCard({ request, now, onDone, onHandOff }: PromptCardProps) {
           size="sm"
           variant="ghost"
           className="ml-auto"
-          onClick={() => {
-            onHandOff();
-            void navigate('/settings#phone', { state: { section: 'phone', request: request.id } });
-          }}
+          // 跳到设置那一节、展开这条的权限；那份列表一出现在屏幕上，这些浮着的提示就收起
+          onClick={() => void navigate('/settings#phone', { state: { section: 'phone', request: request.id } })}
         >
           设置…
         </Button>

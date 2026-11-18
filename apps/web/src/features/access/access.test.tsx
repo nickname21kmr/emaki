@@ -2,7 +2,7 @@
  * 设置 →「手机访问」和批准提示（docs/mobile.md 2.3–2.5）：
  * - access 事件 → 缓存：requested 先放进 GET /api/access 的缓存（提示马上弹出），任何 access 事件都重新取；SSE 连上（hello）也取，
  *   局域网入口上取到过 null（403）的不再取；
- * - 哪些请求弹提示：过期的、在这里批准 / 拒绝掉的不弹，点过「设置…」的在设置页上不弹；
+ * - 哪些请求弹提示：过期的、在这里批准 / 拒绝掉的不弹，设置页里的请求列表在屏幕上时都不弹；
  * - 剩余时间、权限的说法；
  * - 静态渲染：关着、开着没有设备、出错、有等待的请求（大号 3 + 3 校验码）、有设备，二维码。
  */
@@ -107,7 +107,7 @@ describe('access 事件 → GET /api/access 的缓存', () => {
 });
 
 describe('哪些请求弹出批准提示', () => {
-  const base = { now: NOW, handled: new Set<string>(), handedOff: new Set<string>(), onSettings: false };
+  const base = { now: NOW, handled: new Set<string>(), listOnScreen: false };
   const ids = (rs: PairRequestInfo[]) => rs.map((r) => r.id);
 
   it('每条请求一个提示；过期的收起', () => {
@@ -120,10 +120,9 @@ describe('哪些请求弹出批准提示', () => {
     expect(ids(visiblePrompts([req('b')], base))).toEqual(['b']);
   });
 
-  it('点过「设置…」的：在设置页上不弹（那里列着），离开设置页又弹出来', () => {
-    const o = { ...base, handedOff: new Set(['a']) };
-    expect(ids(visiblePrompts([req('a'), req('b')], { ...o, onSettings: true }))).toEqual(['b']);
-    expect(ids(visiblePrompts([req('a'), req('b')], o))).toEqual(['a', 'b']);
+  it('设置页里「等你批准的请求」在屏幕上时都不弹（那里列着，浮着的还会盖住开关），滚走了又弹出来', () => {
+    expect(ids(visiblePrompts([req('a'), req('b')], { ...base, listOnScreen: true }))).toEqual([]);
+    expect(ids(visiblePrompts([req('a'), req('b')], base))).toEqual(['a', 'b']);
   });
 });
 

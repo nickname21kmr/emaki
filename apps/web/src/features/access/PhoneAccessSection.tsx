@@ -4,7 +4,7 @@
  */
 import type { AccessStatus } from '@emaki/shared';
 import { CircleAlert, Copy, QrCode } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useState, type ReactNode, type Ref } from 'react';
 import { useLocation } from 'react-router';
 import { toast } from 'sonner';
 import { Badge, Button, Field, IconButton, Input, Skeleton, Spinner, Switch } from '@/components/ui';
@@ -15,6 +15,7 @@ import { copyText } from '@/lib/clipboard';
 import { errorMessage, useAccessStatus } from '@/lib/queries';
 import { DeviceList } from './DeviceList';
 import { useConfigureAccess } from './hooks';
+import { useRequestListRef } from './listOnScreen';
 import { QrDialog } from './QrDialog';
 import { RequestCard } from './RequestCard';
 
@@ -53,6 +54,8 @@ export function AccessBody({ status }: { status: AccessStatus }) {
   const now = useNow(status.requests.length > 0);
   const requests = status.requests.filter((r) => Date.parse(r.expiresAt) > now);
   const on = status.enabled;
+  // 这一段在屏幕上时，浮着的批准提示不再另外弹
+  const listRef = useRequestListRef();
 
   return (
     <div className="space-y-6">
@@ -102,7 +105,7 @@ export function AccessBody({ status }: { status: AccessStatus }) {
       </SettingsCard>
 
       {on && (
-        <Group title="等你批准的请求" count={requests.length}>
+        <Group ref={listRef} title="等你批准的请求" count={requests.length}>
           {requests.length ? (
             <SettingsCard>
               <ul className="divide-y divide-line">
@@ -256,9 +259,9 @@ function CommitInput({
   );
 }
 
-function Group({ title, count, children }: { title: string; count: number; children: ReactNode }) {
+function Group({ ref, title, count, children }: { ref?: Ref<HTMLDivElement>; title: string; count: number; children: ReactNode }) {
   return (
-    <div>
+    <div ref={ref}>
       <h3 className="mb-2 flex items-baseline gap-2 pl-1 text-[13px] font-medium text-fg-muted">
         {title}
         {count > 0 && <span className="text-fg-subtle tabular">{count}</span>}
