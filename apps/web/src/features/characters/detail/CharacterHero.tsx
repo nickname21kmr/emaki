@@ -194,7 +194,8 @@ export function CharacterHero({
 
         {/* 右上角操作（各自需要的能力见 HERO_NEEDS，这台设备没有的不画） */}
         {(allow.edit || allow.move || allow.exclude) && <motion.div
-          className="absolute top-0 right-0 flex items-center gap-0.5"
+          // 手机竖屏（A1）：扉页上下排时这一排放在图版上面靠右，不压在图版上
+          className="absolute top-0 right-0 flex items-center gap-0.5 compact:static compact:order-first compact:-mb-6 compact:justify-end"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.5, delay: 0.3 }}
