@@ -75,6 +75,7 @@ interface Frame {
 export class Propagation {
   private readonly reactions: Reaction[] = [];
   private readonly deferredHandlers = new Map<string, (actor: Actor) => void>();
+  private readonly deferredMarkers = new Map<string, () => void>();
   private readonly deferred = new Set<string>();
   private readonly pending = new Set<Promise<unknown>>();
   private frame: Frame | null = null;
@@ -84,6 +85,11 @@ export class Propagation {
 
   private get ctx(): SqliteContext {
     return this.getCtx();
+  }
+
+  /** 库（延后处理的持久化标记用） */
+  get db(): SqliteContext['db'] {
+    return this.getCtx().db;
   }
 
   /** 注册反应；同一阶段按注册顺序执行 */
@@ -99,9 +105,13 @@ export class Propagation {
     return this.reactions;
   }
 
-  /** 延后的全量重算：key → 怎么做（在 run 里执行，可以声明变化） */
-  onDeferred(key: string, handler: (actor: Actor) => void): void {
+  /**
+   * 延后的全量重算：key → 怎么做（在 run 里执行，可以声明变化）。
+   * persist：延后时在当前事务里记一笔（例如 pending_work），进程没等到做就退出了，下次启动看得到、补做（handler 做完自己清掉）
+   */
+  onDeferred(key: string, handler: (actor: Actor) => void, persist?: () => void): void {
     this.deferredHandlers.set(key, handler);
+    if (persist) this.deferredMarkers.set(key, persist);
   }
 
   /** 后台任务结束时（不论完成、让出、取消、失败）通知：core/jobs.ts 调 jobFinished */
@@ -181,6 +191,7 @@ export class Propagation {
       defer: (key) => {
         if (!this.deferredHandlers.has(key)) throw new Error(`没有登记延后处理 ${key}`);
         this.deferred.add(key);
+        this.deferredMarkers.get(key)?.();
       },
     };
   }

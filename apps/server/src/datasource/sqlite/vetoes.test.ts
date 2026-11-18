@@ -64,7 +64,9 @@ it('合并角色：被合并角色的记录搬到目标上，撤销后还原', a
 
 it('调低阈值后的采纳按钮：跳过去掉过的角色，那条建议删掉；可撤销', async () => {
   await ds.updateImage('2', { characterIds: [] });
+  // 模型证据是识别这份文件得到的（识别时间有值；文件变了、还没重新识别的证据是过期的，不拿来自动关联，D1）
   ds.ctx.db.exec(`
+    UPDATE images SET tagged_at = '${T}' WHERE id = 2;
     INSERT INTO character_evidence (image_id, tag, score, provider) VALUES (2, 'mika_(blue_archive)', 0.7, 'tagger'), (2, 'hina_(blue_archive)', 0.7, 'tagger');
   `);
   await ds.updateSettings({ tagger: { autoAcceptThreshold: 0.65 } });
@@ -86,6 +88,7 @@ it('旧建议补采纳支持动图建档和别册复用，合并标签只计一�
   await ds.updateImage('2', { characterIds: [] });
   const db = ds.ctx.db;
   db.exec(`
+    UPDATE images SET tagged_at = '${T}';
     UPDATE images SET content_kind = 'animated' WHERE id = 1;
     UPDATE images SET content_kind = 'screenshot' WHERE id = 2;
     INSERT INTO danbooru_tag_redirects (tag, character_id) VALUES ('merged_mika', 1);

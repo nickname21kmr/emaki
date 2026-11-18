@@ -4,9 +4,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../../core/events.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
 import { sharp } from '../../services/image/sharpConfig.ts';
-import { relUnder } from './roots.ts';
+import { relUnder } from '../../domain/library/roots.ts';
 import { SqliteDataSource } from './SqliteDataSource.ts';
-import { syncRootModes } from '../../services/classify/rootMode.ts';
+import { syncRootModes } from '../../domain/analysis/rootMode.ts';
 
 it('relUnder', () => {
   expect(relUnder('D:/', 'D:/a/b')).toBe('a/b');

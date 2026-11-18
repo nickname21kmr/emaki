@@ -58,11 +58,18 @@ export interface PipelineDeps {
    * 不给时只在内存里（单元测试）。查重开始时 peek() 记下标记，跑完 done(那个值) 只清掉那之前的标记
    */
   dedupeWork?: { pending(): boolean; mark(): void; peek(): string | null; done(seen: string | null): void };
+  /**
+   * 用户的暂停（取消了识别、画师补跑、Pixiv 补充之后不再自动续跑，直到手动开始）。P4a 起持久化在 pending_work 里，重启不丢；
+   * 不给时只在内存里（单元测试）
+   */
+  pauses?: { get(kind: PausableKind): boolean; set(kind: PausableKind, paused: boolean): void };
   /** T20：refreshTagCounts */
   afterTag?: () => void;
   /** 扫描完成（没被取消）后的钩子，例如 T08 重新同步监听 */
   afterScan?: (s: ScanSummary) => void;
 }
+
+export type PausableKind = Extract<JobKind, 'tag' | 'artists' | 'pixiv-tags'>;
 
 /** 延后的文件（2 秒内刚写入）过多久再扫 */
 const DEFERRED_RETRY_MS = 3000;
@@ -83,13 +90,37 @@ export class Pipeline {
     if (this.d.dedupeWork) this.d.dedupeWork.done(seen);
     else this.memoryDedupe = false;
   }
-  /** 用户取消了识别：之后不再自动续跑，直到用户手动开始（进程内状态，重启后恢复自动） */
-  private tagPaused = false;
+  private readonly memoryPauses = new Set<PausableKind>();
+  private paused(kind: PausableKind): boolean {
+    return this.d.pauses ? this.d.pauses.get(kind) : this.memoryPauses.has(kind);
+  }
+  private setPaused(kind: PausableKind, v: boolean): void {
+    if (this.d.pauses) this.d.pauses.set(kind, v);
+    else if (v) this.memoryPauses.add(kind);
+    else this.memoryPauses.delete(kind);
+  }
+  /** 用户取消了识别：之后不再自动续跑，直到用户手动开始（持久化，重启不丢） */
+  private get tagPaused(): boolean {
+    return this.paused('tag');
+  }
+  private set tagPaused(v: boolean) {
+    this.setPaused('tag', v);
+  }
   /** 用户取消了画师补跑：之后不自动续跑，直到手动点「补跑」或重新打开开关 */
-  private artistsPaused = false;
+  private get artistsPaused(): boolean {
+    return this.paused('artists');
+  }
+  private set artistsPaused(v: boolean) {
+    this.setPaused('artists', v);
+  }
   /** 用户点了「运行识别」：下一次识别可以下载旧图模型（自动排上的不下） */
   private tagManual = false;
-  private pixivPaused = false;
+  private get pixivPaused(): boolean {
+    return this.paused('pixiv-tags');
+  }
+  private set pixivPaused(v: boolean) {
+    this.setPaused('pixiv-tags', v);
+  }
   private pixivFailed = false;
   /** 这一轮 Pixiv 补充是用户点按钮开始的（让出后续跑的也算）：关掉设置时不取消它 */
   private pixivManual = false;

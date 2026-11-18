@@ -10,13 +10,13 @@
  */
 import type { Db } from '../../db/connection.ts';
 import type { UndoRecorder } from '../../datasource/sqlite/undo.ts';
-import { snapshotAutoLinks, unlinkEach } from '../../domain/curation/links.ts';
-import { rateComicPages } from '../../domain/curation/marks.ts';
-import { markComicRetag, snapshotRetag } from '../../domain/evidence/retag.ts';
+import { snapshotAutoLinks, unlinkEach } from '../curation/links.ts';
+import { rateComicPages } from '../curation/marks.ts';
+import { markComicRetag, snapshotRetag } from '../evidence/retag.ts';
 import type { Change } from '../../propagation/changes.ts';
-import { backfillClassification } from './backfill.ts';
-import { IN_COMIC } from './comicAreas.ts';
-import { COMIC_ROOT_EVIDENCE } from './rules.ts';
+import { backfillClassification } from './classify.ts';
+import { IN_COMIC } from '../../services/classify/comicAreas.ts';
+import { COMIC_ROOT_EVIDENCE } from '../../services/classify/rules.ts';
 
 /**
  * ids 不传 = 全库检查（一次全表扫描，扫描结束后用）；返回改了的行数。

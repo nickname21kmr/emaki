@@ -5,7 +5,7 @@ import { EventBus } from '../../core/events.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
 import { sharp } from '../../services/image/sharpConfig.ts';
 import { animationHtml } from '../../../test/helpers/htmlAnimation.ts';
-import { SqliteDataSource } from './SqliteDataSource.ts';
+import { SqliteDataSource } from '../../datasource/sqlite/SqliteDataSource.ts';
 import Fastify from 'fastify';
 import { imageRoutes } from '../../routes/images.ts';
 
@@ -145,11 +145,11 @@ it('replaces the original identity and preserves associations, metadata and late
   expect(await readFile(original.absPath)).toEqual(hd);expect(await readFile(file)).toEqual(hd);
   expect(await ds.getImage(id)).toMatchObject({id,width:36,height:42,favorite:true,rating:'sensitive',characterIds:[String(char)],source:before!.source,original:true});
   expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM images').pluck().get()).toBe(1);
-  expect(ds.ctx.db.prepare('SELECT tagged_at FROM images WHERE id=?').pluck().get(id)).toBe('2026-01-01');
+  // D1（P4a）：替换和扫描发现的内容变化一样，这份文件版本的识别过期、等重新识别（以前替换保留识别结果）；手动的决定都还在（见上）
+  expect(ds.ctx.db.prepare('SELECT tagged_at FROM images WHERE id=?').pluck().get(id)).toBeNull();
   ds.requests.requestFull();
   const summary=await ds.scanner.scan({signal:new AbortController().signal,setTotal(){},advance(){},setMessage(){},shouldYield:()=>false,requeue(){},yielded:false});
   expect(summary).toMatchObject({added:0,updated:0,missing:0});
-  expect(ds.ctx.db.prepare('SELECT tagged_at FROM images WHERE id=?').pluck().get(id)).toBe('2026-01-01');
   // Undo restores media only, retaining subsequent metadata edits.
   await ds.updateImage(id,{favorite:false});
   await ds.undo(result.undoToken!);

@@ -8,7 +8,8 @@
  * 表名的写法见 sqlWrites.ts：images 按列组记成 images#<列组>，看不出列的是 images#?，表名拼出来的是 <dynamic>。
  * 各阶段要清掉的（docs/core-architecture.md 第 12 节）：P3a 已清零 image_characters、character_vetoes（只有 domain/curation/ 写）；
  * P3b 清零归类、证据、编目的表（建议改成派生视图，image_copyrights、image_artists、images 的归类和证据列都只由主人写）；
- * P2、P4、P6 把其余的搬进主人目录。
+ * P4a 清零图库与文件、分析的表和列（library_roots、comic_folders、scan_errors、pending_trash*、images 的观测列和派生列只由
+ * domain/library/、domain/analysis/ 写；来源解析的版本改记在 derived_versions）；P6 把其余的搬进主人目录。
  */
 export interface AllowedWrite {
   file: string;
@@ -18,15 +19,8 @@ export interface AllowedWrite {
 
 export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   // datasource/sqlite/SqliteDataSource.ts
-  { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'collections' },
-  { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'comic_folders' },
-  { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'exclusions' },
-  { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'images#?', note: '列名是拼出来的或整行快照' },
   { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'images#collections' },
-  { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'library_roots' },
   { file: 'datasource/sqlite/SqliteDataSource.ts', table: 'settings' },
-  // datasource/sqlite/bulk.ts
-  { file: 'datasource/sqlite/bulk.ts', table: 'images#library' },
   // datasource/sqlite/changeLog.ts
   { file: 'datasource/sqlite/changeLog.ts', table: 'change_log' },
   // datasource/sqlite/collections.ts
@@ -35,30 +29,10 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'datasource/sqlite/collections.ts', table: 'images#collections' },
   // datasource/sqlite/duplicates.ts
   { file: 'datasource/sqlite/duplicates.ts', table: 'duplicate_groups' },
-  { file: 'datasource/sqlite/duplicates.ts', table: 'images#library' },
-  // datasource/sqlite/importImages.ts
-  { file: 'datasource/sqlite/importImages.ts', table: 'images#library' },
-  // datasource/sqlite/kinds.ts
-  { file: 'datasource/sqlite/kinds.ts', table: 'images#analysis' },
-  // datasource/sqlite/move.ts
-  { file: 'datasource/sqlite/move.ts', table: 'images#library' },
-  // datasource/sqlite/organizeCollection.ts
-  { file: 'datasource/sqlite/organizeCollection.ts', table: 'change_log' },
-  // datasource/sqlite/pendingTrash.ts
-  { file: 'datasource/sqlite/pendingTrash.ts', table: 'pending_trash' },
-  { file: 'datasource/sqlite/pendingTrash.ts', table: 'pending_trash_items' },
-  // datasource/sqlite/replaceImage.ts
-  { file: 'datasource/sqlite/replaceImage.ts', table: 'images#?', note: '列名是拼出来的或整行快照' },
-  // datasource/sqlite/roots.ts
-  { file: 'datasource/sqlite/roots.ts', table: '<dynamic>', note: '合并 / 接管图库文件夹：images、collections 等带 root_id 的表' },
-  { file: 'datasource/sqlite/roots.ts', table: 'comic_folders' },
-  { file: 'datasource/sqlite/roots.ts', table: 'library_roots' },
   // datasource/sqlite/settings.ts
   { file: 'datasource/sqlite/settings.ts', table: 'settings' },
   // datasource/sqlite/undo.ts
   { file: 'datasource/sqlite/undo.ts', table: '<dynamic>', note: '撤销回放：按记录的表名还原（UndoTable 里的表）' },
-  // services/classify/backfill.ts
-  { file: 'services/classify/backfill.ts', table: 'images#analysis' },
   // services/dedupe/DedupeService.ts
   { file: 'services/dedupe/DedupeService.ts', table: 'duplicate_comparisons' },
   { file: 'services/dedupe/DedupeService.ts', table: 'duplicate_groups' },
@@ -66,18 +40,4 @@ export const ALLOWED_WRITES: readonly AllowedWrite[] = [
   { file: 'services/dedupe/DedupeService.ts', table: 'settings' },
   // services/i18n/dict.ts
   { file: 'services/i18n/dict.ts', table: 'settings' },
-  // services/image/ThumbnailService.ts
-  { file: 'services/image/ThumbnailService.ts', table: 'images#analysis' },
-  // services/scan/Scanner.ts
-  { file: 'services/scan/Scanner.ts', table: 'comic_folders' },
-  { file: 'services/scan/Scanner.ts', table: 'images#analysis' },
-  { file: 'services/scan/Scanner.ts', table: 'images#library' },
-  { file: 'services/scan/Scanner.ts', table: 'library_roots' },
-  { file: 'services/scan/Scanner.ts', table: 'scan_errors' },
-  // services/scan/imageRow.ts
-  { file: 'services/scan/imageRow.ts', table: 'images#library' },
-  // services/source/backfill.ts
-  { file: 'services/source/backfill.ts', table: 'settings' },
-  // services/tagger/tagJob.ts
-  { file: 'services/tagger/tagJob.ts', table: 'images#analysis' },
 ];

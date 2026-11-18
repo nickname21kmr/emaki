@@ -47,8 +47,7 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   pending_trash: 'library',
   pending_trash_items: 'library',
   'images#library': 'library',
-  // 分析：派生数据
-  image_fingerprints: 'analysis',
+  // 分析：派生数据（P4a 删掉了没人读写的 image_fingerprints，迁移 037）
   'images#analysis': 'analysis',
   // 证据：模型标签、按「图片 × 来源」的角色 / 作品候选和原创信号（建议是它派生的视图，P3b）、Pixiv 和 Danbooru 的缓存与待查记录、
   // 识别进度、文件名解析的来源
@@ -99,8 +98,9 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   // 命令层
   change_log: 'commands',
   [DYNAMIC_TABLE]: 'commands',
-  // 变更传播：交给后台任务、还没做完的工作（迁移 033）
+  // 变更传播：交给后台任务、还没做完的工作和用户的暂停（迁移 033）；派生数据的版本（迁移 037）
   pending_work: 'propagation',
+  derived_versions: 'propagation',
 };
 
 /**

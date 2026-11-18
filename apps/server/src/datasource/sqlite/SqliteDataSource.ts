@@ -86,23 +86,26 @@ import { thumbPath } from '../../services/image/pixels.ts';
 import { Pipeline } from '../../services/pipeline.ts';
 import { Scanner } from '../../services/scan/Scanner.ts';
 import { ScanRequests } from '../../services/scan/ScanRequests.ts';
-import { applySourceChanges, backfillSources, diffSources, markSourcesCurrent } from '../../services/source/backfill.ts';
-import { ChangeLog, recordChange, type MovePayload } from './changeLog.ts';
+import { applySourceChanges, backfillSources, diffSources, markSourcesCurrent, sourceVersion } from '../../services/source/backfill.ts';
+import { ChangeLog } from './changeLog.ts';
 import { htmlAnimationCache, readHtmlAnimation } from '../../services/image/htmlAnimation.ts';
 import { sha256Buffer } from '../../services/fs/hash.ts';
-import { backfillClassification } from '../../services/classify/backfill.ts';
-import { recordRootModeUndo, syncRootModes } from '../../services/classify/rootMode.ts';
+import { classifyStale, restoreKinds, type KindSnapshot } from '../../domain/analysis/analyze.ts';
+import { recordRootModeUndo, syncRootModes } from '../../domain/analysis/rootMode.ts';
+import { CLASSIFIER_VERSION } from '../../services/classify/rules.ts';
 import type { UndoRecorder } from './undo.ts';
 import { ComicAreas, IN_COMIC } from '../../services/classify/comicAreas.ts';
 import { CollectionService } from '../../domain/collections/CollectionService.ts';
 import { collectionReactions } from '../../domain/collections/reactions.ts';
-import { reclassifyByPathReaction } from '../../domain/analysis/reactions.ts';
+import { reanchorSelections } from '../../domain/collections/roots.ts';
+import { analyzeReaction } from '../../domain/analysis/reactions.ts';
 import { catalogReactions } from '../../domain/catalog/reactions.ts';
-import { declareTagged, dropStalePixivEvidenceReaction, queuePixivCheckReaction, reparseSourceReaction } from '../../domain/evidence/reactions.ts';
+import { declareTagged, dropStalePixivEvidenceReaction, queuePixivCheckReaction, reparseSourceReaction, staleFileEvidenceReaction } from '../../domain/evidence/reactions.ts';
 import { runAs, type Actor } from '../../propagation/actor.ts';
 import type { Change } from '../../propagation/changes.ts';
 import { ChangeEvents, engineReactions, type EngineHooks } from '../../propagation/engine.ts';
-import { clearWork, hasWork, markWork, peekWork } from '../../propagation/work.ts';
+import { clearWork, hasWork, isPaused, markWork, peekWork, setPaused } from '../../propagation/work.ts';
+import { refreshDerived, snapshotVersion, type DerivedSet } from '../../propagation/versions.ts';
 import { shutdownTagger } from '../../services/tagger/client.ts';
 import { ARTIST_MODEL, artistPendingCount, createArtistJobRunner } from '../../services/tagger/artists.ts';
 import { isModelReady } from '../../services/tagger/download.ts';
@@ -139,26 +142,41 @@ import { describeKindReason } from './hydrate.ts';
 import { DuplicateQueries } from './duplicates.ts';
 import { SearchQueries } from './search.ts';
 import { DedupeService } from '../../services/dedupe/DedupeService.ts';
-import { PendingTrash } from './pendingTrash.ts';
+import { PendingTrash } from '../../domain/library/pendingTrash.ts';
 import { resolvePorts, type EnginePorts, type ImageFileRow } from '../../infra/ports.ts';
 import { CharacterMutations } from '../../domain/catalog/characters.ts';
 import { setArtistLinks } from '../../domain/catalog/artists.ts';
 import { UnrecognizedQueries } from './unrecognized.ts';
 import { createContext } from './context.ts';
 import { Derived } from './derived.ts';
-import { ExclusionQueries, reevaluateExclusionsReaction } from '../../domain/visibility/exclusions.ts';
+import { dropOrphanImageRules, ExclusionQueries, reevaluateExclusionsReaction } from '../../domain/visibility/exclusions.ts';
 import { LibraryQueries } from './library.ts';
-import { moveImageFiles, normalizeSubdir, type MoveRow } from './move.ts';
-import { importImages } from './importImages.ts';
-import { replaceImage } from './replaceImage.ts';
+import { declareMoved, moveImages, normalizeSubdir, type MoveRow } from '../../domain/library/move.ts';
+import { importImages } from '../../domain/library/import.ts';
+import { collectReplacementBackups, replaceImage } from '../../domain/library/replace.ts';
+import { collectCaches } from '../../domain/analysis/cacheGc.ts';
 import { artistNames, imageArtists, linkGroups, listArtists as listArtistsQuery, tagNames } from './artists.ts';
 import { artistLinksMessage, linkTags, planArtistLinks } from '../artistEdits.ts';
-import { adoptFromRemovedParents, diskCaseRel, mergeChildRoots, relUnder, type ChildRoot } from './roots.ts';
+import {
+  adoptFromRemovedParents,
+  deleteRemovedRoots,
+  diskCaseRel,
+  insertRoot,
+  mergeChildRoots,
+  relUnder,
+  reviveRoot,
+  setComicFolderRow,
+  setRootRemoved,
+  updateRoot,
+  type ChildRoot,
+} from '../../domain/library/roots.ts';
 import { applySettingsPatch, getDanbooruApiKey, isInside, normalizeRootPath, patchSettingsInternal, readSettings, rootPathKey, samePath } from './settings.ts';
 import { iso, MIME, parseId, toId, VISIBLE } from './sql.ts';
 
 /** 启动修补的 actor */
 const STARTUP: Actor = 'system:startup';
+/** 启动后过多久做缓存回收（低优先级，别和启动扫描、缩略图抢） */
+const CACHE_GC_DELAY_MS = 10 * 60_000;
 
 /** 改图库文件夹的导入方式会改这些列（撤销用） */
 const ROOT_MODE_COLS = ['content_kind', 'content_kind_source', 'content_kind_evidence', 'content_kind_version', 'theme', 'art_score', 'rating'];
@@ -227,14 +245,30 @@ export class SqliteDataSource implements DataSource {
     const { db, bus } = ds.ctx;
     const dataDir = ds.ctx.dataDir;
     ds.purgeRemovedRoots();
-    // 来源解析规则升级后重算；来源变了的由反应清掉过期的 Pixiv 建议、重新登记补充
-    ds.ctx.apply(() => ds.ctx.changed({ type: 'image.sourceChanged', ids: backfillSources(db).map((c) => c.id) }));
-    // 内容类型 / 主题 / 质量分（T27）：规则版本过期的行在 HTTP 监听前同步重算；EMAKI_CLASSIFY=0 跳过（全部按插画统计，保持旧值）
-    if (process.env.EMAKI_CLASSIFY !== '0') {
-      const r = backfillClassification(db);
-      if (r.rows) console.log(`[classify] 重算图片类型 ${r.rows} 张，用时 ${r.ms} ms`);
-    }
-    // 分类回填之后、HTTP 监听之前：派生数据整体对一遍（全量重算合集 T38b、按规则重新判定排除结果）
+    // 派生数据的版本（propagation/versions.ts，附录 #23）：版本对不上的整体重算一次再记下。
+    // 来源解析：来源变了的由反应清掉过期的 Pixiv 建议、重新登记补充；
+    // 内容类型 / 主题 / 质量分（T27）：版本过期的行在 HTTP 监听前同步重算；EMAKI_CLASSIFY=0 跳过（全部按插画统计，保持旧值）
+    const derived: DerivedSet[] = [
+      {
+        name: 'source',
+        version: (d) => sourceVersion(readSettings(d).tagger.pixivFilenameMode),
+        rebuild: () => ds.ctx.apply(() => ds.ctx.changed({ type: 'image.sourceChanged', ids: backfillSources(db).map((c) => c.id) })),
+      },
+    ];
+    if (process.env.EMAKI_CLASSIFY !== '0')
+      derived.push({
+        name: 'classification',
+        version: () => String(CLASSIFIER_VERSION),
+        rebuild: () => {
+          const r = classifyStale(db);
+          if (!r.rows) return;
+          console.log(`[classify] 重算图片类型 ${r.rows} 张，用时 ${r.ms} ms`);
+          // 类型变了合集判定可能跟着变（截图、动图页太多的不成册）：启动时全量重判一次
+          markWork(db, 'collections', iso(ds.ctx.clock()));
+        },
+      });
+    refreshDerived(db, derived, iso(ds.ctx.clock()));
+    // 分类回填之后、HTTP 监听之前：派生数据整体对一遍（按规则重新判定排除结果；合集判定的版本变了、或者上次延后的全量重算没做完时全量重判合集）
     ds.ctx.apply(() => ds.ctx.changed({ type: 'library.opened', ids: [] }));
     if (ds.ports.autoJobs) ds.startWatching();
     ds.autoTag = ds.ports.autoJobs;
@@ -272,6 +306,8 @@ export class SqliteDataSource implements DataSource {
         makeCatalog,
         // 每批写完（在 writer 的事务里）：声明证据、角色、类型变了，套排除规则、登记 Pixiv 补充等由反应做
         afterBatchInTx: (ids, changes) => declareTagged(ds.ctx, ids, changes),
+        // 识别任务读到的相机：分析模块写，类型变了经变更传播
+        applyAnalysis: (fn) => ds.ctx.apply(() => fn((c) => ds.ctx.changed(c))),
         log: (m) => console.info(`[tag] ${m}`),
       }),
       pixiv: {
@@ -357,7 +393,37 @@ export class SqliteDataSource implements DataSource {
     }
     // 上次没正常退出时留下的待移文件：现在移进系统回收站（撤销栈已经随重启清空了）
     void ds.pendingTrash.flushAll();
+    // 启动修补里延后的全量重算（合集）这时做掉，不等第一个后台任务结束
+    ds.ctx.propagation.flushDeferred(STARTUP);
+    // 缓存回收（附录 #23）：低优先级，启动一会儿之后在后台做一次（只删数据目录里没人引用的缓存文件）
+    if (ds.ports.autoJobs) {
+      const t = setTimeout(() => void ds.collectCacheGarbage().catch((e) => console.warn(`[缓存回收] 失败：${(e as Error).message}`)), CACHE_GC_DELAY_MS);
+      t.unref();
+    }
     return ds;
+  }
+
+  /** 进程（引擎）开始的时间：之后才建、还没来得及记撤销令牌的替换备份不删 */
+  private readonly startedAt = Date.now();
+
+  /**
+   * 缓存回收（附录 #23）：缩略图、动图缓存里不再被任何图片引用的文件，撤销令牌已经过期的替换备份，都删掉。
+   * 只碰数据目录（dataDir）下这三个缓存目录里、名字是 sha / uuid 的文件，绝不碰用户图库里的文件（domain/analysis/cacheGc.ts）。
+   * 扫描正在跑、或者图库还从没扫完过时不做（库刚重建、缩略图缓存还在的情况，扫完会接着用这些缓存）
+   */
+  async collectCacheGarbage(): Promise<{ thumbs: number; animations: number; backups: number } | null> {
+    if (this.ctx.jobs.list().some((j) => j.kind === 'scan' && (j.status === 'running' || j.status === 'queued'))) return null;
+    const backups = collectReplacementBackups(this.ctx.dataDir, this.ctx.undo, this.startedAt);
+    const caches = await collectCaches(this.ctx.db, this.ctx.dataDir, { keep: backups.keptShas, roots: this.rootPaths() });
+    if (!caches) return { thumbs: 0, animations: 0, backups: backups.removed };
+    const out = { ...caches, backups: backups.removed };
+    if (out.thumbs || out.animations || out.backups) console.log(`[缓存回收] 删掉缩略图 ${out.thumbs} 个、动图缓存 ${out.animations} 个、替换备份 ${out.backups} 份`);
+    return out;
+  }
+
+  /** 所有图库文件夹（包括停用、移除了的）的路径：缓存回收确认缓存目录和它们不重叠 */
+  private rootPaths(): string[] {
+    return this.ctx.db.prepare('SELECT path FROM library_roots').pluck().all() as string[];
   }
 
   /** 测试和脚本通过 ds.ctx.db 访问数据库 */
@@ -448,6 +514,11 @@ export class SqliteDataSource implements DataSource {
         peek: () => peekWork(db, 'dedupe'),
         done: (seen) => clearWork(db, 'dedupe', seen),
       },
+      // 用户的暂停也持久化在 pending_work（第 7 节）
+      pauses: {
+        get: (kind) => isPaused(db, kind),
+        set: (kind, paused) => setPaused(db, kind, paused, iso(this.ctx.clock())),
+      },
     });
     // 后台任务写库后，统计类结果最多晚 10 秒更新（T22）；测试（内存库）里不延迟
     const softMs = opts.memory ? 0 : 10_000;
@@ -493,7 +564,8 @@ export class SqliteDataSource implements DataSource {
 
   /**
    * 反应注册表（docs/core-architecture.md 第 5.2 节，docs/ARCHITECTURE.md「变更传播」）。同一阶段按这里的顺序执行：
-   * 事务内：重新解析来源 → 路径相关的分类 → 过期的 Pixiv 建议 → 排除结果 → Pixiv 补充登记 → 同投稿组 → 文件夹合集 → 合集页序；
+   * 事务内：重新解析来源 → 文件内容变了时识别过期 → 分析（入库、内容变化、移动、漫画区） → 过期的 Pixiv 建议 → 自动决定 → 排除结果 → Pixiv 补充登记
+   *   → 同投稿组 → 文件夹合集 → 合集页序；
    * 排队：查重标记、识别、缩略图、画师、Pixiv、本地重新匹配、重新扫描；提交后：全量合集、自建角色匹配、设置和文件夹监听、缓存和事件
    */
   private registerReactions(): void {
@@ -537,13 +609,15 @@ export class SqliteDataSource implements DataSource {
     const engine = engineReactions(hooks, this.events);
     p.register(
       reparseSourceReaction,
-      reclassifyByPathReaction,
+      // 文件内容变了（D1）：先把这份文件版本的识别标成过期，分析再按「还没识别」重算主题、画质分
+      staleFileEvidenceReaction,
+      analyzeReaction,
       dropStalePixivEvidenceReaction,
       // 唯一的自动决定规则（decideAuto）：证据、类型、放下、原创、否决、合集、漫画区、编目变了都重新评估（第 4.2 节）
       reevaluateAutoReaction({ catalog: () => this.autoCatalog() }),
       reevaluateExclusionsReaction,
       queuePixivCheckReaction,
-      ...collectionReactions(this.collections, p),
+      ...collectionReactions(this.collections, p, this.ctx.clock),
       ...engine.queue,
       ...catalogReactions(() => this.danbooru),
       ...engine.after,
@@ -940,39 +1014,26 @@ export class SqliteDataSource implements DataSource {
     const { root, dir, rows } = this.moveRows(body);
     this.requireLibraryFiles('移动文件');
     if (!rows.length) throw new BadRequestError('没有可以移动的图');
-
-    // 扫描、识别正在读这些文件时不能移（扫描会把移走的图当成丢失）
-    const running = (await this.ctx.jobs.list()).filter((j) => j.status === 'running').map((j) => j.kind);
-    if (running.includes('scan')) throw new ConflictError('正在扫描图库，等扫描结束再移动');
-    if (running.includes('tag') && rows.some((r) => !r.in_comic && (r.tagged_at === null || r.retag))) {
-      throw new ConflictError('正在识别，选中的图里有还没识别完的，等识别结束再移动');
-    }
-
-    const dest = { rootId: root.id, rootPath: root.path, dir };
-    const out = moveImageFiles(this.ctx.db, rows, dest);
-    const ids = out.moved.map((m) => m.id);
-    // 移进漫画文件夹会清掉识别器认的角色、移出会标重新识别：撤销时放回去
-    const json = JSON.stringify(ids);
-    // 漫画区同步只去掉自动关联（附录 #6）：快照也只记自动的，移回时按原来的来历放回
-    const charSnap = this.ctx.db.prepare("SELECT * FROM image_characters WHERE decision = 'auto' AND image_id IN (SELECT value FROM json_each(?))").all(json);
-    const retagSnap = this.ctx.db.prepare('SELECT id, retag FROM images WHERE id IN (SELECT value FROM json_each(?))').all(json);
-    // 和扫描发现的移动、整理到子文件夹一样：来源、路径相关的分类（漫画文件夹）、排除规则、合集都由反应按新位置重算（附录 #11、#17）
-    if (ids.length) this.ctx.apply(() => this.ctx.changed({ type: 'image.moved', ids, reason: 'move' }));
-
     const where = dir ? toAbs(root.path, dir).replace(/\\/g, '/') : root.path;
+    // 移动只有一条路径（domain/library/move.ts）：扫描、识别正在读这些文件时不能移；改文件、改路径、声明 image.moved、记 change_log。
+    // 来源、路径相关的分类（漫画文件夹）、排除规则、合集都由反应按新位置重算，和扫描发现的移动、整理到子文件夹一样（附录 #11、#17）
+    const out = moveImages(this.ctx, [{ rows, dest: { rootId: root.id, rootPath: root.path, dir } }], {
+      reason: 'move',
+      where,
+      summary: (n) => `${n} 张移到 ${where}`,
+    });
     const notes = [
       out.alreadyThere && `${out.alreadyThere} 张本来就在这里`,
       out.inCollection && `合集里的 ${out.inCollection} 张没动`,
       out.failed.length && `${out.failed.length} 张移动失败：${out.failed.slice(0, 3).join('、')}${out.failed.length > 3 ? ' 等' : ''}`,
     ].filter(Boolean);
     const message = `已移动 ${out.moved.length} 张到 ${where}${notes.length ? `（${notes.join('；')}）` : ''}`;
-    if (!out.moved.length) {
+    if (out.logId === null) {
       if (out.failed.length) throw new ConflictError(message);
       return done(message);
     }
-    // 记进库里：重启后也能在「最近的移动」里移回原处
-    const payload: MovePayload = { where, items: out.moved, charSnap: charSnap as MovePayload['charSnap'], retagSnap: retagSnap as MovePayload['retagSnap'] };
-    const logId = recordChange(this.ctx, 'move', `${out.moved.length} 张移到 ${where}`, payload);
+    // 记进库里了：重启后也能在「最近的移动」里移回原处
+    const logId = out.logId;
     const result = this.ctx.undo.result(message, async () => {
       await this.changes.revertMove(logId, true);
     });
@@ -1066,15 +1127,11 @@ export class SqliteDataSource implements DataSource {
     const db = this.ctx.db;
     const cutoff = iso(this.ctx.clock() - REMOVED_ROOT_KEEP_DAYS * 86_400_000);
     db.transaction(() => {
-      // A cross-folder selection outlives removal of its original anchor root.
-      db.prepare(`UPDATE collections SET root_id = (SELECT i.root_id FROM images i JOIN library_roots r ON r.id = i.root_id
-          WHERE i.collection_id = collections.id AND r.removed_at IS NULL ORDER BY i.id LIMIT 1)
-        WHERE membership <> 'folder' AND root_id IN (SELECT id FROM library_roots WHERE removed_at IS NOT NULL AND removed_at < ?)
-          AND EXISTS (SELECT 1 FROM images i JOIN library_roots r ON r.id = i.root_id WHERE i.collection_id = collections.id AND r.removed_at IS NULL)`).run(cutoff);
-      const roots = db.prepare('DELETE FROM library_roots WHERE removed_at IS NOT NULL AND removed_at < ?').run(cutoff).changes;
-      const ex = db
-        .prepare("DELETE FROM exclusions WHERE kind = 'image' AND CAST(target AS INTEGER) NOT IN (SELECT id FROM images)")
-        .run().changes;
+      // 跨文件夹选的合集活得比它原来挂靠的文件夹久：先换个挂靠（合集模块）
+      reanchorSelections(db, cutoff);
+      const roots = deleteRemovedRoots(db, cutoff);
+      // 指向已经删掉的图的单张排除规则（可见性模块）
+      const ex = dropOrphanImageRules(db);
       if (roots || ex) console.log(`已清理移除的文件夹 ${roots} 个、失效的单张排除 ${ex} 条`);
     })();
   }
@@ -1199,13 +1256,14 @@ export class SqliteDataSource implements DataSource {
       snapshotSources(u, changes.map((c) => c.id));
       // 设置只改回这一项，期间改的其他设置不动
       u.sql("UPDATE settings SET value = json_set(value, '$.pixivFilenameMode', ?) WHERE key = 'tagger'", [before]);
-      u.sql("INSERT INTO settings (key, value) VALUES ('sourceParserMode', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(before)]);
+      // 来源解析的版本记录（派生数据的版本，含识别方式）一起放回
+      snapshotVersion(u, 'source');
       dropped = db.prepare("SELECT COUNT(DISTINCT image_id) FROM v_character_suggestions WHERE source = 'pixiv' AND image_id IN (SELECT value FROM json_each(?))").pluck().get(
         JSON.stringify(changes.filter((c) => c.before.site === 'pixiv' && c.pixivPostChanged).map((c) => c.id)),
       ) as number;
       applySettingsPatch(db, { tagger: { pixivFilenameMode: mode } });
       applySourceChanges(db, changes);
-      markSourcesCurrent(db, mode);
+      markSourcesCurrent(db, mode, iso(this.ctx.clock()));
       requeued = changes.filter((c) => c.newPixivPost !== null).map((c) => c.id);
       // 清过期的 Pixiv 建议、重新登记补充、刷新同投稿组、有缓存的马上在本地重新匹配，都由反应做；撤销时重放，同样重跑（附录 #13、#22）
       this.ctx.changed({ type: 'image.sourceChanged', ids: changes.map((c) => c.id) });
@@ -1374,25 +1432,18 @@ export class SqliteDataSource implements DataSource {
     this.ctx.apply(() => {
       if (removed) {
         // 复活：旧图和识别结果全部回来
-        db.prepare('UPDATE library_roots SET removed_at = NULL, enabled = 1, path = ?, content_mode = ?, comic_rating = ? WHERE id = ?').run(
-          p,
-          mode,
-          comicRating,
-          removed.id,
-        );
+        reviveRoot(db, removed.id, { path: p, mode, rating: comicRating });
         rootId = removed.id;
         revived = db.prepare('SELECT COUNT(*) FROM images WHERE root_id = ?').pluck().get(rootId) as number;
       } else {
-        rootId = Number(
-          db.prepare('INSERT INTO library_roots (path, enabled, content_mode, comic_rating) VALUES (?, 1, ?, ?)').run(p, mode, comicRating).lastInsertRowid,
-        );
+        rootId = insertRoot(db, { path: p, mode, rating: comicRating });
       }
       // 子文件夹在新文件夹下的相对路径按真实位置算（两边可能是不同写法）
       if (children.length) merged = mergeChildRoots(db, rootId, pk, children.map((c) => ({ ...c, path: c.key }))).images;
       if (removedParents.length) adopted = adoptFromRemovedParents(db, rootId, removedParents).images;
       // 合并、接管进来的旧图换了文件夹（路径变了）；复活、合并、接管进来的旧图按这次的设置重判类型（按漫画导入：归漫画、用选的分级）
       const ids = removed || children.length || adopted ? this.imagesUnder(rootId) : [];
-      if (children.length || adopted) this.ctx.changed({ type: 'image.moved', ids, reason: 'root' });
+      if (children.length || adopted) declareMoved(this.ctx, ids, 'root');
       this.ctx.changed({ type: 'root.visibilityChanged', rootIds: [rootId], ids });
       this.ctx.changed({ type: 'root.modeChanged', rootIds: [rootId], ids });
     });
@@ -1455,12 +1506,7 @@ export class SqliteDataSource implements DataSource {
     const where = `${root.path.replace(/\/+$/, '')}/${relDir}`;
     return this.ctx.mutate((u) => {
       this.restoreRootImagesOnUndo(u, root.id, snap, relDir);
-      u.set('comic_folders', 'root_id = ? AND rel_dir = ?', [root.id, relDir]);
-      if (rating === null) db.prepare('DELETE FROM comic_folders WHERE root_id = ? AND rel_dir = ?').run(root.id, relDir);
-      else
-        db.prepare(
-          'INSERT INTO comic_folders (root_id, rel_dir, comic_rating, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(root_id, rel_dir) DO UPDATE SET comic_rating = excluded.comic_rating',
-        ).run(root.id, relDir, rating, iso(this.ctx.clock()));
+      setComicFolderRow(db, u, root.id, relDir, rating, iso(this.ctx.clock()));
       this.rootModeChanged(root.id, relDir, u);
       const message =
         rating === null
@@ -1503,8 +1549,7 @@ export class SqliteDataSource implements DataSource {
     // 合集全量重算（提交后）、文件监听、重新启用后的整根扫描和查重、改回插画后的识别，都由反应做；撤销时重放同样的变化
     return this.ctx.mutate((u) => {
       this.restoreRootImagesOnUndo(u, root.id, snap);
-      u.columns('library_roots', cols, [root.id]);
-      db.prepare('UPDATE library_roots SET enabled = ?, content_mode = ?, comic_rating = ? WHERE id = ?').run(enabled, mode, rating, root.id);
+      updateRoot(db, u, root.id, cols, { enabled, mode, rating });
       if (enabled !== cur.enabled) this.ctx.changed({ type: 'root.visibilityChanged', rootIds: [root.id], ids: [] });
       if (touchesImages) this.rootModeChanged(root.id, undefined, u);
       const message =
@@ -1538,8 +1583,7 @@ export class SqliteDataSource implements DataSource {
         }[]
       ).map((r) => [r.id, r]),
     );
-    const kindCols = ROOT_MODE_COLS.filter((c) => c !== 'rating');
-    const setKind = db.prepare(`UPDATE images SET ${kindCols.map((c) => `${c} = @${c}`).join(', ')} WHERE id = @id`);
+    const kinds: KindSnapshot[] = [];
     const ratings: { id: number; rating: Rating }[] = [];
     const recompute: number[] = [];
     for (const s of snap) {
@@ -1550,9 +1594,11 @@ export class SqliteDataSource implements DataSource {
         recompute.push(s.id);
         continue;
       }
-      if (!n.content_kind_manual) setKind.run(s);
+      if (!n.content_kind_manual) kinds.push(s as unknown as KindSnapshot);
       if (!n.rating_manual) ratings.push({ id: s.id, rating: s.rating as Rating });
     }
+    // 类型由分析模块写回（手动改过的不动）
+    restoreKinds(db, kinds);
     // 漫画区给的分级是自动分级（归类模块），手动改过的不动
     restoreAutoRatings(db, ratings);
     recompute.push(...now.keys());
@@ -1571,7 +1617,7 @@ export class SqliteDataSource implements DataSource {
 
   async removeLibraryRoot(id: ID): Promise<MutationResult> {
     const root = this.requireRoot(id);
-    const set = this.ctx.db.prepare('UPDATE library_roots SET removed_at = ? WHERE id = ?');
+    const set = { run: (when: string | null, rootId: number) => setRootRemoved(this.ctx.db, rootId, when) };
     const at = iso(this.ctx.clock());
     // 合集全量重算、文件监听、撤销移除后的整根扫描和查重都由反应做
     const removed = () => this.ctx.changed({ type: 'root.visibilityChanged', rootIds: [root.id], ids: [] });

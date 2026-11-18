@@ -91,7 +91,9 @@ describe('反应注册表', () => {
     const tx = ds.ctx.propagation.list().filter((r) => r.phase === 'tx');
     expect(tx.map((r) => r.name)).toEqual([
       'reparseSource',
-      'reclassifyByPath',
+      // P4a：文件内容变了（D1）先把识别标成过期，分析（唯一入口 analyze）再按新文件重算
+      'staleFileEvidence',
+      'analyze',
       'dropStalePixivEvidence',
       // P3b：唯一的自动决定规则（decideAuto）只由这个反应调用
       'reevaluateAuto',

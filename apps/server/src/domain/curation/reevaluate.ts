@@ -75,9 +75,10 @@ interface FactRow {
   in_book: number;
   in_comic: number;
   excluded: number;
+  untagged: number;
 }
 
-const FACTS = `SELECT i.id, i.content_kind AS kind, i.shelved_at IS NOT NULL AS shelved, i.original_at IS NOT NULL AS marked,
+const FACTS = `SELECT i.id, i.content_kind AS kind, i.shelved_at IS NOT NULL AS shelved, i.original_at IS NOT NULL AS marked, i.tagged_at IS NULL AS untagged,
     i.original_decision, i.original_rule, i.original_evidence_provider,
     (NOT ${NOT_IN_BOOK}) AS in_book, ${IN_COMIC('i')} AS in_comic,
     (i.excluded_by IS NOT NULL OR i.trashed_at IS NOT NULL OR i.missing = 1
@@ -139,7 +140,14 @@ export function evaluateAuto(db: Db, ids: number[], fresh: ReadonlyMap<number, R
       excluded: !!f.excluded,
     };
     const stale = fresh.get(f.id) ?? new Set<string>();
-    const ev: Evidence[] = (evidence.get(f.id) ?? []).map((e) => ({ provider: e.provider, fresh: stale.has(e.provider), original: e.original, candidates: e.candidates }));
+    // 模型证据是按文件识别的：文件内容变了（识别时间被清空）、还没重新识别时它就过期了（D1）
+    const ev: Evidence[] = (evidence.get(f.id) ?? []).map((e) => ({
+      provider: e.provider,
+      fresh: stale.has(e.provider),
+      stale: e.provider === 'tagger' && !!f.untagged,
+      original: e.original,
+      candidates: e.candidates,
+    }));
     // 证据刚被整份去掉的来源（来源失效）：当作一份空的新证据
     for (const p of stale) if (!ev.some((e) => e.provider === p)) ev.push({ provider: p as CharacterEvidenceProvider, fresh: true, original: false, candidates: [] });
     return { image, ev, current: { links: links.get(f.id) ?? [], vetoed: vetoes.get(f.id) ?? new Set<number>() } };

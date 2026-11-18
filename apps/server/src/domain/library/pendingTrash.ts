@@ -3,14 +3,16 @@
  * 最近 TRASH_UNDO_WINDOW 批（「全部处理」算一批）之外的才真的移进系统回收站，撤销 token 跟着作废。
  * 正常退出和启动时把剩下的都移走（启动时那些是上次被强杀留下的）。
  * 移不动的文件（被占用）只记日志：图在库里仍是移到回收站的状态，下次扫描发现文件还在会自己回来。
+ * 移成功的（或者文件本来就不在了）标成丢失：从这时起是「丢弃的行」，不再参与移动匹配，原位置再出现文件也不复活它（images.ts）。
  */
 import type { MutationResult } from '@emaki/shared';
 import { TRASH_COMMITTED, TRASH_UNDO_WINDOW } from '../../core/undo.ts';
 import { assertRecyclable } from '../../services/trash/driveType.ts';
 import { moveToRecycleBin, type TrashImpl } from '../../services/trash/recycleBin.ts';
-import type { SqliteContext } from './context.ts';
-import { iso } from './sql.ts';
-import type { UndoRecorder } from './undo.ts';
+import type { SqliteContext } from '../../datasource/sqlite/context.ts';
+import { iso } from '../../datasource/sqlite/sql.ts';
+import type { UndoRecorder } from '../../datasource/sqlite/undo.ts';
+import { markRecycled } from './images.ts';
 
 export interface PendingTrashOptions {
   /** 替换系统回收站（测试用） */
@@ -95,15 +97,17 @@ export class PendingTrash {
     const db = this.ctx.db;
     const json = JSON.stringify(ids);
     // 图后来又回来了（还没 trashed_at）的不移；图的行已经没了（文件夹被移除）照样移，用户确实点了删除
-    const paths = db
+    const items = db
       .prepare(
-        `SELECT p.abs_path FROM pending_trash_items p LEFT JOIN images i ON i.id = p.image_id
+        `SELECT p.abs_path, p.image_id FROM pending_trash_items p LEFT JOIN images i ON i.id = p.image_id
          WHERE p.batch_id IN (SELECT value FROM json_each(?)) AND (i.id IS NULL OR i.trashed_at IS NOT NULL)`,
       )
-      .pluck()
-      .all(json) as string[];
+      .all(json) as { abs_path: string; image_id: number }[];
+    const paths = items.map((x) => x.abs_path);
     if (paths.length) {
       const res = await moveToRecycleBin(paths, this.opts.trashImpl);
+      const left = new Set([...res.trashed, ...res.alreadyGone]);
+      markRecycled(db, items.filter((x) => left.has(x.abs_path)).map((x) => x.image_id));
       if (res.failed.length) {
         const names = res.failed.slice(0, 3).map((f) => f.path).join('、');
         this.log(`${res.failed.length} 个文件没能移到系统回收站（文件可能被其他程序占用）：${names}${res.failed.length > 3 ? ' 等' : ''}`);

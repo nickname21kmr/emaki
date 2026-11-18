@@ -10,15 +10,37 @@
 export type MoveReason = 'scan' | 'move' | 'organize' | 'revertMove' | 'root';
 /** 证据的来源：识别模型、Pixiv 投稿标签、识别画师；以后的插件来源记成 plugin:<id> */
 export type EvidenceProvider = 'tagger' | 'pixiv' | 'artists' | `plugin:${string}`;
+/** 文件内容变化的来由（D1）：扫描发现 / 用户替换。只记录在案，处理完全相同 */
+export type FileChangeReason = 'scan' | 'replace';
+/**
+ * 读文件头时顺便知道的事实（帧数、相机）：图库与文件模块读文件时拿到，交给分析模块写（帧数、相机是分析的列）。
+ * 某一项是 undefined 表示这次没读到，分析模块不动它
+ */
+export interface ProbeFacts {
+  id: number;
+  frames?: number | null;
+  camera?: string | null;
+}
+/** 一张图的文件内容变化：新旧 sha256 */
+export interface FileVersion {
+  id: number;
+  before: string;
+  after: string;
+}
 
 type ImageChange<T extends string, X = unknown> = { type: T; ids: number[] } & X;
 
 export type Change =
   // 图库与文件
-  | ImageChange<'image.added'>
+  /** 新入库；probes：读文件头时拿到的帧数、相机（分析模块按它判类型） */
+  | ImageChange<'image.added', { probes?: ProbeFacts[] }>
   | ImageChange<'image.gone'>
   | ImageChange<'image.returned'>
-  | ImageChange<'image.fileChanged', { reason: 'scan' | 'replace' }>
+  /**
+   * 同一 id 的文件内容变了（D1）：扫描发现外部改了文件、用户替换文件都发这一条，处理完全相同（reason 只记录在案）。
+   * files 是每张图的新旧 sha；probes 同 image.added
+   */
+  | ImageChange<'image.fileChanged', { reason: FileChangeReason; files: FileVersion[]; probes?: ProbeFacts[] }>
   | ImageChange<'image.moved', { reason: MoveReason }>
   | ImageChange<'image.trashed'>
   | ImageChange<'image.restored'>

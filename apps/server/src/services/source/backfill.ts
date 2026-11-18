@@ -2,6 +2,7 @@ import type { ImageSource, Settings } from '@emaki/shared';
 import type { Db } from '../../db/connection.ts';
 import { readSettings } from '../../datasource/sqlite/settings.ts';
 import { writeParsedSources } from '../../domain/evidence/source.ts';
+import { markVersion, recordedVersion } from '../../propagation/versions.ts';
 import { parseSource, SOURCE_PARSER_VERSION } from './parseSource.ts';
 
 type Mode = Settings['tagger']['pixivFilenameMode'];
@@ -49,13 +50,15 @@ export function applySourceChanges(db: Db, changes: SourceChange[]): void {
   writeParsedSources(db, changes.map((c) => ({ id: c.id, source: c.after })));
 }
 
+/**
+ * 来源解析这种派生数据的版本（propagation/versions.ts，P4a 起和类型判定、合集判定统一记在 derived_versions 里）：
+ * 规则版本 + 投稿号的识别方式，两样都会改变解析结果
+ */
+export const sourceVersion = (mode: Mode): string => `${SOURCE_PARSER_VERSION}:${mode}`;
+
 /** 记下这次是按哪个规则版本、哪种模式算的 */
-export function markSourcesCurrent(db: Db, mode: Mode): void {
-  db.prepare(
-    "INSERT INTO settings (key, value) VALUES ('sourceParserVersion', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-  ).run(JSON.stringify(SOURCE_PARSER_VERSION));
-  db.prepare("INSERT INTO settings (key, value) VALUES ('sourceParserMode', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-    .run(JSON.stringify(mode));
+export function markSourcesCurrent(db: Db, mode: Mode, at = new Date().toISOString()): void {
+  markVersion(db, 'source', sourceVersion(mode), at);
 }
 
 /**
@@ -64,9 +67,7 @@ export function markSourcesCurrent(db: Db, mode: Mode): void {
  */
 export function backfillSources(db: Db): SourceChange[] {
   const mode = readSettings(db).tagger.pixivFilenameMode;
-  const cur = db.prepare("SELECT value FROM settings WHERE key = 'sourceParserVersion'").pluck().get() as string | undefined;
-  const previousMode = db.prepare("SELECT value FROM settings WHERE key = 'sourceParserMode'").pluck().get();
-  if (cur !== undefined && Number(JSON.parse(cur)) === SOURCE_PARSER_VERSION && previousMode === JSON.stringify(mode)) return [];
+  if (recordedVersion(db, 'source') === sourceVersion(mode)) return [];
   let changes: SourceChange[] = [];
   // 纯字符串处理，10 万行也不到 1 秒，放在一个事务里
   db.transaction(() => {

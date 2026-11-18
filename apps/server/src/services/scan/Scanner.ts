@@ -1,32 +1,35 @@
 /**
- * 扫描器：把启用的图库文件夹同步进 images 表。只读文件头并算 sha256，不解码像素（那是 T04）。
+ * 扫描器：把启用的图库文件夹同步进 images 表。只读文件头并算 sha256，不解码像素（那是缩略图任务）。
+ * 扫描器只看、只读；看到的东西都经图库与文件模块（domain/library/）写进库、声明变化，后续处理由反应完成（P4a）：
  *
- * - 新文件 → 插入
- * - 内容变化 → 原地更新（保留 id，角色 / 收藏 / 排除都还在），清空像素和打标签结果
- * - 移动 / 改名（跨目录、跨根都算）→ 只改路径，保留 id
+ * - 新文件 → 入库（image.added，带读文件头拿到的帧数、相机；类型由分析模块判）
+ * - 内容变化 → 原地更新观测（保留 id，角色 / 收藏 / 排除都还在），image.fileChanged（reason scan）：
+ *   和用户替换文件完全一样（D1）——派生数据重算、识别过期并重新排队、画师重认、查重标记，都由反应做
+ * - 移动 / 改名（跨目录、跨根都算）→ 只改路径，保留 id，image.moved（reason scan），和应用内移动的后续处理一样
  * - 文件消失 → missing = 1（不删行）；根目录不可访问、子目录读失败、扫描被取消时绝不做丢失判定
  * - 读不了的文件写进 scan_errors，文件没变之前不再重试
+ * - 回收站规则（附录 #23）：用户移进回收站的行不当移动的来源；已经送进系统回收站的（丢弃的行）原位置再出现文件时，
+ *   文件当新图入库（新 id），旧行让出路径，不复活旧 id 和旧关联
  */
 import { readFile, stat } from 'node:fs/promises';
 import type { EventBus } from '../../core/events.ts';
 import type { JobContext } from '../../core/jobs.ts';
 import type { Db } from '../../db/connection.ts';
-import { diskCaseRel } from '../../datasource/sqlite/roots.ts';
+import { diskCaseRel } from '../../domain/library/roots.ts';
 import { normalizeRootPath, readSettings } from '../../datasource/sqlite/settings.ts';
 import { sha256Buffer, sha256File } from '../fs/hash.ts';
 import { baseName, isoFromMs, parentRel, pathKey, toAbs } from '../fs/paths.ts';
 import { walkImages, type WalkEntry } from '../fs/walk.ts';
 import { probeImage } from '../image/probe.ts';
-import { backfillClassification } from '../classify/backfill.ts';
 import { ComicAreas } from '../classify/comicAreas.ts';
-import { INSERT_IMAGE_SQL, imageClassification } from './imageRow.ts';
 import { backfillSources } from '../source/backfill.ts';
 import { parseSource } from '../source/parseSource.ts';
 import { htmlAnimationCache, readHtmlAnimation } from '../image/htmlAnimation.ts';
 import type { ScanRequests, ScanScope } from './ScanRequests.ts';
-import type { Change } from '../../propagation/changes.ts';
-import { resetRecognitionStatement } from '../../domain/evidence/retag.ts';
-import { movedSourceStatement } from '../../domain/evidence/source.ts';
+import type { Change, ProbeFacts } from '../../propagation/changes.ts';
+import { declareAdded, insertImage, markGone, markReturned, recordFileChanged, recordMeta, releasePath, type NewImageRow, type ObservedContent } from '../../domain/library/images.ts';
+import { recordMoved, type PathUpdate } from '../../domain/library/move.ts';
+import { clearScanError, followComicFolders, markRootsImported, markRootsScanned, recordScanError, type ScanErrorRow } from '../../domain/library/scan.ts';
 
 export interface ScanSummary {
   added: number;
@@ -121,12 +124,14 @@ interface RootRow {
   last_scan_at: string | null;
 }
 
+type Probed = Omit<ProbeFacts, 'id'>;
 type Op =
-  | { t: 'insert'; p: Record<string, unknown> }
-  | { t: 'content'; p: Record<string, unknown> }
-  | { t: 'meta'; p: Record<string, unknown> }
-  | { t: 'move'; p: Record<string, unknown> }
-  | { t: 'error'; p: Record<string, unknown> };
+  | { t: 'insert'; row: NewImageRow; probe: Probed }
+  | { t: 'content'; observed: ObservedContent; probe: Probed }
+  /** 内容没变，只是大小或时间不同 */
+  | { t: 'meta'; p: { id: number; bytes: number; modifiedAt: string } }
+  | { t: 'move'; p: PathUpdate }
+  | { t: 'error'; p: ScanErrorRow };
 
 export class Scanner {
   private readonly settleMs: number;
@@ -202,8 +207,7 @@ export class Scanner {
     // 按漫画导入的范围（整个图库文件夹或里面的子文件夹）：入库就归漫画、用选的分级
     let comics = ComicAreas.load(db);
     // 第一次扫描的文件夹：记下首次导入时间（开始时就写，首页能在扫描过程中进入「刚导入」状态）
-    const markImported = db.prepare('UPDATE library_roots SET imported_at = ? WHERE id = ? AND imported_at IS NULL');
-    for (const r of roots) if (r.last_scan_at === null) markImported.run(isoFromMs(this.now()), r.id);
+    markRootsImported(db, roots.filter((r) => r.last_scan_at === null).map((r) => r.id), isoFromMs(this.now()));
     let scopes: ScanScope[] = req.full
       ? roots.map((r) => ({ rootId: r.id, relDir: '', recursive: true }))
       : req.scopes.filter((s) => rootById.has(s.rootId));
@@ -311,10 +315,37 @@ export class Scanner {
       c.gone = c.gone.filter((r) => !pending.has(r.id));
     }
 
-    // 移动候选 = 本次消失的 ∪ 全库早就丢失的
+    // 回收站规则（附录 #23）：丢弃的行（用户移进回收站、文件也已经离开原位）不再参与任何匹配。
+    // 同一个位置又出现了文件（重新下载了同名文件）：文件当新图入库，旧行让出路径（先让，后面的移动、入库才不会撞上唯一约束）
+    const discarded = (r: DbRow) => !!r.trashed_at && !!r.missing;
+    const byId = new Map(dbRows.map((r) => [r.id, r]));
+    const released: number[] = [];
+    const reborn: DiskEntry[] = [];
+    c.restored = c.restored.filter((id) => {
+      const r = byId.get(id);
+      if (!r || !discarded(r)) return true;
+      released.push(id);
+      reborn.push(disk.get(fileKey(r.root_id, r.rel_path))!);
+      return false;
+    });
+    c.changed = c.changed.filter((x) => {
+      if (!discarded(x.row)) return true;
+      released.push(x.row.id);
+      reborn.push(x.entry);
+      return false;
+    });
+    if (released.length) {
+      db.transaction(() => {
+        for (const id of released) releasePath(db, id);
+      })();
+      c.fresh.push(...reborn);
+    }
+
+    // 移动候选 = 本次消失的 ∪ 全库早就丢失的；用户移进回收站的（还能撤销的、已经送进系统回收站的）不算
     const candidates = new Map<number, DbRow>();
-    for (const r of [...c.gone, ...missingRows]) if (!pending.has(r.id)) candidates.set(r.id, r);
-    const goneIds = new Set(c.gone.map((r) => r.id));
+    for (const r of [...c.gone, ...missingRows]) if (!pending.has(r.id) && !r.trashed_at) candidates.set(r.id, r);
+    // 已经标了丢失的不用再确认一遍
+    const goneIds = new Set(c.gone.filter((r) => !r.missing).map((r) => r.id));
     const ops: Op[] = [];
     const takeCandidate = (row: DbRow) => {
       candidates.delete(row.id);
@@ -333,7 +364,7 @@ export class Scanner {
       const hits = quick.get(`${baseName(e.relPath)}\n${e.bytes}\n${isoFromMs(e.mtimeMs)}`)?.filter((r) => candidates.has(r.id));
       if (hits?.length === 1) {
         takeCandidate(hits[0]!);
-        ops.push({ t: 'move', p: this.moveParams(hits[0]!.id, e) });
+        ops.push({ t: 'move', p: moveParams(hits[0]!.id, e) });
         quickMoves.push({ row: hits[0]!, entry: e });
         summary.moved++;
       } else {
@@ -341,7 +372,7 @@ export class Scanner {
       }
     }
     // 按漫画导入的子文件夹整个改名、挪走了：设置跟过去，不然整本掉出漫画、被送去识别
-    if (followComicFolders(db, quickMoves, disk)) comics = ComicAreas.load(db);
+    if (followComicFolders(db, quickMoves, disk.values())) comics = ComicAreas.load(db);
 
     // ---- 阶段 6：读文件（sha256 + 文件头）
     const work: ({ kind: 'changed'; row: DbRow; entry: DiskEntry } | { kind: 'fresh'; entry: DiskEntry })[] = [
@@ -351,64 +382,39 @@ export class Scanner {
     ctx.setTotal(work.length);
     const nowIso = isoFromMs(this.now());
 
-    const stmts = {
-      insert: db.prepare(INSERT_IMAGE_SQL),
-      // 内容变了要重新识别：标签、主题、质量分都清空；手动改过的类型保留（BI-14 ②：按没有标签重判）
-      content: db.prepare(`UPDATE images SET width=@width, height=@height, bytes=@bytes, format=@format, sha256=@sha256, modified_at=@modifiedAt, frame_count=@frameCount,
-          dhash=NULL, dominant_color=NULL, thumb_at=NULL, decode_error=NULL,
-          missing=0, trashed_at=NULL, camera=@camera, theme=NULL, art_score=NULL, content_kind_version=@kindVersion,
-          content_kind=CASE WHEN content_kind_manual=1 THEN content_kind ELSE @kind END,
-          content_kind_source=CASE WHEN content_kind_manual=1 THEN content_kind_source ELSE @kindSource END,
-          content_kind_evidence=CASE WHEN content_kind_manual=1 THEN content_kind_evidence ELSE @kindEvidence END
-        WHERE id=@id`),
-      meta: db.prepare('UPDATE images SET bytes=@bytes, modified_at=@modifiedAt, missing=0, trashed_at=NULL WHERE id=@id'),
-      // 来源按新路径重新解析，和应用内移动、整理到子文件夹、撤回移动一样（附录 #13：以前用 COALESCE 留着旧来源）；手动确认的不动
-      move: db.prepare(`UPDATE images SET root_id=@rootId, rel_path=@relPath, file_name=@fileName, modified_at=@modifiedAt, missing=0, trashed_at=NULL
-        WHERE id=@id`),
-      error: db.prepare(`INSERT INTO scan_errors (root_id, rel_path, bytes, modified_at, error, at) VALUES (@rootId, @relPath, @bytes, @modifiedAt, @error, @at)
-        ON CONFLICT(root_id, rel_path) DO UPDATE SET bytes=excluded.bytes, modified_at=excluded.modified_at, error=excluded.error, at=excluded.at`),
-    };
-    // 证据模块的列：内容变了识别作废（等重新识别）；移动了来源按新路径重新解析（附录 #13：以前用 COALESCE 留着旧来源），手动确认的不动
-    const resetRecognition = resetRecognitionStatement(db);
-    const movedSource = movedSourceStatement(db);
-    // 以前读失败、这次成功入库的文件：清掉失败记录
-    const clearError = db.prepare('DELETE FROM scan_errors WHERE root_id = @rootId AND rel_path = @relPath');
-
     let lastFlush = Date.now();
-    const sourceOf = db.prepare(
-      `SELECT id, COALESCE(source_site, '') || '|' || COALESCE(source_post_id, '') || '|' || COALESCE(source_artist, '') || '|' || COALESCE(source_url, '') AS k
-       FROM images WHERE id IN (SELECT value FROM json_each(?))`,
-    );
-    const sourceKeys = (ids: number[]) => new Map((sourceOf.all(JSON.stringify(ids)) as { id: number; k: string }[]).map((r) => [r.id, r.k]));
+    // 写库都经图库与文件模块；缓存、事件由变更传播按 actor（job:scan）弱刷新、节流推送
     const flush = async () => {
       if (!ops.length) return;
       const batch = ops.splice(0, ops.length);
-      // 缓存、事件由变更传播按 actor（job:scan）弱刷新、节流推送
       this.apply((emit) => {
-        const newIds: number[] = [];
-        const movedIds = batch.filter((op) => op.t === 'move').map((op) => op.p.id as number);
-        const contentIds: number[] = [];
-        const sourceBefore = movedIds.length ? sourceKeys(movedIds) : null;
+        const tx = { db, changed: emit };
+        const added: number[] = [];
+        const addedProbes: ProbeFacts[] = [];
+        const contents: ObservedContent[] = [];
+        const contentProbes: ProbeFacts[] = [];
+        const moves: PathUpdate[] = [];
+        const metas: { id: number; bytes: number; modifiedAt: string }[] = [];
         for (const op of batch) {
-          const info = stmts[op.t].run(op.p);
           if (op.t === 'insert') {
-            newIds.push(Number(info.lastInsertRowid));
-            clearError.run({ rootId: op.p.rootId, relPath: op.p.relPath });
+            const id = insertImage(db, op.row);
+            clearScanError(db, op.row.rootId, op.row.relPath);
+            added.push(id);
+            addedProbes.push({ id, ...op.probe });
           } else if (op.t === 'content') {
-            resetRecognition.run({ id: op.p.id });
-            contentIds.push(op.p.id as number);
-          } else if (op.t === 'move') movedSource.run(op.p);
+            contents.push(op.observed);
+            contentProbes.push({ id: op.observed.id, ...op.probe });
+          } else if (op.t === 'meta') metas.push(op.p);
+          else if (op.t === 'move') moves.push(op.p);
+          else recordScanError(db, op.p);
         }
-        // 移动后路径变了：用已有的标签按新路径重判类型（BI-14 ①）
-        if (movedIds.length) backfillClassification(db, { ids: movedIds });
-        if (newIds.length) summary.newIds.push(...newIds);
-        emit({ type: 'image.added', ids: newIds });
-        emit({ type: 'image.moved', ids: movedIds, reason: 'scan' });
-        emit({ type: 'image.fileChanged', ids: contentIds, reason: 'scan' });
-        if (sourceBefore) {
-          const after = sourceKeys(movedIds);
-          emit({ type: 'image.sourceChanged', ids: movedIds.filter((id) => after.get(id) !== sourceBefore.get(id)) });
-        }
+        // 来源按新路径重新解析、路径相关的分类、排除规则、合集都由反应做（和应用内移动一样，附录 #11、#13）
+        recordMoved(tx, moves, 'scan');
+        // D1：和用户替换文件同一条路
+        recordFileChanged(tx, contents, 'scan', contentProbes);
+        recordMeta(tx, metas);
+        declareAdded(tx, added, addedProbes);
+        if (added.length) summary.newIds.push(...added);
       });
       lastFlush = Date.now();
       await new Promise((r) => setImmediate(r)); // 让出事件循环，HTTP / SSE 别卡住
@@ -448,7 +454,7 @@ export class Scanner {
           sha = await sha256File(abs);
         }
       } catch (err) {
-        ops.push({ t: 'error', p: this.errorParams(e, `读取失败：${(err as Error).message}`, nowIso) });
+        ops.push({ t: 'error', p: errorParams(e, `读取失败：${(err as Error).message}`, nowIso) });
         summary.errors++;
         return;
       }
@@ -461,22 +467,27 @@ export class Scanner {
           await htmlAnimationCache(buf ?? await readHtmlAnimation(abs), this.d.dataDir, sha);
         }
       } catch (err) {
-        ops.push({ t: 'error', p: this.errorParams(e, (err as Error).message, nowIso) });
+        ops.push({ t: 'error', p: errorParams(e, (err as Error).message, nowIso) });
         summary.errors++;
         return;
       }
-      const common = { width: probe.width, height: probe.height, frameCount: probe.pages, bytes: e.bytes, format: probe.format, sha256: sha, modifiedAt: isoFromMs(e.mtimeMs) };
-      // 入库 / 内容变化时按文件名、路径、尺寸、格式、相机判一次类型；打标签后 writer 会再按标签重判
-      const kindCols = imageClassification(probe, e.relPath, !!comics.of(e.rootId, e.relPath));
+      const modifiedAt = isoFromMs(e.mtimeMs);
+      // 读文件头拿到的帧数、相机：交给分析模块（它按这些判类型）
+      const probeFacts = { frames: probe.pages, camera: probe.camera };
       if (item.kind === 'changed') {
-        if (sha === item.row.sha256) ops.push({ t: 'meta', p: { id: item.row.id, bytes: e.bytes, modifiedAt: common.modifiedAt } });
-        else ops.push({ t: 'content', p: { id: item.row.id, ...common, ...kindCols } });
+        if (sha === item.row.sha256) ops.push({ t: 'meta', p: { id: item.row.id, bytes: e.bytes, modifiedAt } });
+        else
+          ops.push({
+            t: 'content',
+            observed: { id: item.row.id, width: probe.width, height: probe.height, bytes: e.bytes, format: probe.format, sha256: sha, modifiedAt },
+            probe: probeFacts,
+          });
         summary.updated++;
       } else {
         const cand = bySha(sha, e.bytes);
         if (cand) {
           takeCandidate(cand);
-          ops.push({ t: 'move', p: this.moveParams(cand.id, e) });
+          ops.push({ t: 'move', p: moveParams(cand.id, e) });
           summary.moved++;
         } else {
           const src = this.parseSource(e.relPath);
@@ -484,12 +495,16 @@ export class Scanner {
             root.last_scan_at === null ? isoFromMs(Math.min(e.birthtimeMs || e.mtimeMs, e.mtimeMs)) : nowIso;
           ops.push({
             t: 'insert',
-            p: {
+            row: {
               rootId: e.rootId,
               relPath: e.relPath,
               fileName: baseName(e.relPath),
-              ...common,
-              ...kindCols,
+              width: probe.width,
+              height: probe.height,
+              bytes: e.bytes,
+              format: probe.format,
+              sha256: sha,
+              modifiedAt,
               site: src?.site ?? null,
               postId: src?.postId ?? null,
               artist: src?.artist ?? null,
@@ -498,6 +513,7 @@ export class Scanner {
               // 按漫画导入的不识别，分级用导入时选的
               rating: comics.of(e.rootId, e.relPath)?.rating ?? 'general',
             },
+            probe: probeFacts,
           });
           summary.added++;
         }
@@ -528,30 +544,19 @@ export class Scanner {
     }
     const aborted = ctx.signal.aborted;
     this.apply((emit) => {
-      if (!aborted && goneIds.size) {
-        const gone = db
-          .prepare('SELECT id FROM images WHERE id IN (SELECT value FROM json_each(?)) AND missing=0')
-          .pluck()
-          .all(JSON.stringify([...goneIds])) as number[];
-        summary.missing = db.prepare('UPDATE images SET missing=1 WHERE id IN (SELECT value FROM json_each(?))').run(JSON.stringify(gone)).changes;
-        emit({ type: 'image.gone', ids: gone });
-      }
+      const tx = { db, changed: emit };
+      if (!aborted && goneIds.size) summary.missing = markGone(tx, [...goneIds]).length;
       if (c.restored.length) {
-        db.prepare('UPDATE images SET missing=0, trashed_at=NULL WHERE id IN (SELECT value FROM json_each(?))').run(
-          JSON.stringify(c.restored),
-        );
+        markReturned(tx, c.restored);
         summary.restored = c.restored.length;
-        emit({ type: 'image.returned', ids: c.restored });
       }
     });
 
     // ---- 阶段 9：收尾
     if (!aborted) {
-      const setScan = db.prepare('UPDATE library_roots SET last_scan_at = ? WHERE id = ?');
       // 整个根都扫过（全量扫描，或新添加文件夹时的整根扫描）才更新「上次扫描」
-      for (const s of scopes) if (s.relDir === '' && s.recursive) setScan.run(nowIso, s.rootId);
+      markRootsScanned(db, scopes.filter((s) => s.relDir === '' && s.recursive).map((s) => s.rootId), nowIso);
       // 已遍历范围里、文件已不在的 scan_errors 行删掉
-      const delErr = db.prepare('DELETE FROM scan_errors WHERE root_id = ? AND rel_path = ?');
       for (const [k] of scanErrors) {
         if (disk.has(k)) continue;
         const [rootIdStr, relPath] = k.split('\n') as [string, string];
@@ -562,7 +567,7 @@ export class Scanner {
             (s.relDir === '' || relPath.startsWith(s.relDir + '/')) &&
             (s.recursive || !relPath.slice(s.relDir ? s.relDir.length + 1 : 0).includes('/')),
         );
-        if (covered) delErr.run(rootId, relPath);
+        if (covered) clearScanError(db, rootId, relPath);
       }
     }
     // 规则版本或识别方式变了：重算来源（来源变了的由反应清掉过期的 Pixiv 建议、重新登记补充）
@@ -570,61 +575,15 @@ export class Scanner {
     return summary;
   }
 
-  private moveParams(id: number, e: DiskEntry) {
-    const src = this.parseSource(e.relPath);
-    return {
-      id,
-      rootId: e.rootId,
-      relPath: e.relPath,
-      fileName: baseName(e.relPath),
-      modifiedAt: isoFromMs(e.mtimeMs),
-      site: src?.site ?? null,
-      postId: src?.postId ?? null,
-      artist: src?.artist ?? null,
-      url: src?.url ?? null,
-    };
-  }
-
-  private errorParams(e: DiskEntry, error: string, at: string) {
-    return { rootId: e.rootId, relPath: e.relPath, bytes: e.bytes, modifiedAt: isoFromMs(e.mtimeMs), error, at };
-  }
-
   private parseSource(relPath: string) {
     return parseSource(relPath, readSettings(this.d.db).tagger.pixivFilenameMode);
   }
 }
 
-/**
- * 按漫画导入的子文件夹（comic_folders）在磁盘上改名、挪位置时跟过去：按快速移动匹配到的页投票，
- * 一半以上的页去了同一个文件夹、原来的文件夹这次一张都没有了才跟。返回改了几个
- */
-export function followComicFolders(db: Db, moves: { row: DbRow; entry: DiskEntry }[], disk: Map<string, DiskEntry>): number {
-  if (!moves.length) return 0;
-  const folders = db.prepare('SELECT root_id, rel_dir FROM comic_folders').all() as { root_id: number; rel_dir: string }[];
-  if (!folders.length) return 0;
-  const live = db
-    .prepare("SELECT COUNT(*) FROM images WHERE root_id = ? AND missing = 0 AND trashed_at IS NULL AND substr(rel_path, 1, length(?) + 1) = ? || '/'")
-    .pluck();
-  const upd = db.prepare('UPDATE OR IGNORE comic_folders SET root_id = ?, rel_dir = ? WHERE root_id = ? AND rel_dir = ?');
-  let n = 0;
-  for (const f of folders) {
-    const prefix = `${f.rel_dir}/`;
-    const votes = new Map<string, { rootId: number; dir: string; n: number }>();
-    for (const { row, entry } of moves) {
-      if (row.root_id !== f.root_id || !row.rel_path.startsWith(prefix)) continue;
-      // 文件夹里面的相对位置不变，前面换了：'旧名/v1/1.png' → '新名/v1/1.png'
-      const rest = row.rel_path.slice(f.rel_dir.length);
-      if (!entry.relPath.endsWith(rest)) continue;
-      const dir = entry.relPath.slice(0, -rest.length);
-      const k = `${entry.rootId}\n${dir}`;
-      const v = votes.get(k) ?? { rootId: entry.rootId, dir, n: 0 };
-      v.n++;
-      votes.set(k, v);
-    }
-    const best = [...votes.values()].sort((a, b) => b.n - a.n)[0];
-    if (!best || best.n * 2 < (live.get(f.root_id, f.rel_dir, f.rel_dir) as number)) continue;
-    if ([...disk.values()].some((e) => e.rootId === f.root_id && e.relPath.startsWith(prefix))) continue;
-    n += upd.run(best.rootId, best.dir, f.root_id, f.rel_dir).changes;
-  }
-  return n;
+function moveParams(id: number, e: DiskEntry): PathUpdate {
+  return { id, rootId: e.rootId, relPath: e.relPath, fileName: baseName(e.relPath), modifiedAt: isoFromMs(e.mtimeMs) };
+}
+
+function errorParams(e: DiskEntry, error: string, at: string) {
+  return { rootId: e.rootId, relPath: e.relPath, bytes: e.bytes, modifiedAt: isoFromMs(e.mtimeMs), error, at };
 }

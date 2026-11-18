@@ -13,7 +13,8 @@ it.each([
   db.exec("INSERT INTO library_roots (path) VALUES ('D:/Pics')");
   db.prepare("INSERT INTO settings(key,value) VALUES ('tagger',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
     .run(JSON.stringify({pixivFilenameMode:'broad'}));
-  db.prepare("INSERT INTO settings(key,value) VALUES ('sourceParserVersion',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(version));
+  // 上次按旧规则版本、宽泛模式算过（派生数据的版本，propagation/versions.ts）
+  db.prepare("INSERT INTO derived_versions(name,version,updated_at) VALUES ('source',?,'x')").run(`${version}:broad`);
   const insert = db.prepare(`INSERT INTO images (root_id,rel_path,file_name,width,height,bytes,format,sha256,added_at,modified_at,source_site,source_manual)
     VALUES (1,?,?,1,1,1,'jpg',?,'x','x',?,?)`);
   insert.run(name,name,'a',null,0);
@@ -41,7 +42,7 @@ it.each([
 it('upgrades hashed Pixiv names and incorrect hash-tail IDs while keeping manual sources', () => {
   const db = openDatabase(':memory:');
   migrate(db);
-  db.exec("INSERT INTO library_roots (path) VALUES ('D:/Pics'); INSERT INTO settings(key,value) VALUES ('sourceParserVersion','1') ON CONFLICT(key) DO UPDATE SET value='1'");
+  db.exec("INSERT INTO library_roots (path) VALUES ('D:/Pics'); INSERT INTO derived_versions(name,version,updated_at) VALUES ('source','1:strict','x')");
   const name = '147194731-a43ba74e1434ae6ed317cb7671cc2574_p45.jpg';
   const insert = db.prepare(`INSERT INTO images (root_id,rel_path,file_name,width,height,bytes,format,sha256,added_at,modified_at,source_site,source_post_id,source_manual)
     VALUES (1,?,?,1,1,1,'jpg',?,'x','x',?,?,?)`);
@@ -76,7 +77,7 @@ it('只在规则版本变化时重算', () => {
   expect(sites).toEqual(['pixiv', null, 'twitter']);
   db.prepare("UPDATE images SET source_manual=1, source_site='other', source_post_id=NULL, source_url='https://example.com/original' WHERE id=1").run();
   db.prepare('UPDATE images SET source_manual=1, source_site=NULL, source_post_id=NULL, source_url=NULL WHERE id=3').run();
-  db.prepare("DELETE FROM settings WHERE key='sourceParserVersion'").run();
+  db.prepare("DELETE FROM derived_versions WHERE name='source'").run();
   // 剩下没确认的只有 IMG_0001，来源没变
   expect(backfillSources(db)).toHaveLength(0);
   expect(db.prepare('SELECT source_site, source_url FROM images WHERE id=1').get()).toEqual({ source_site: 'other', source_url: 'https://example.com/original' });

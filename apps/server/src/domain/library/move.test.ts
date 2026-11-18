@@ -5,7 +5,7 @@ import { EventBus } from '../../core/events.ts';
 import { BadRequestError } from '../../http/errors.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
 import { normalizeSubdir } from './move.ts';
-import { SqliteDataSource } from './SqliteDataSource.ts';
+import { SqliteDataSource } from '../../datasource/sqlite/SqliteDataSource.ts';
 
 describe('normalizeSubdir', () => {
   it.each([

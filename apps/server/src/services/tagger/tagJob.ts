@@ -9,7 +9,8 @@ import type { Db } from '../../db/connection.ts';
 import { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import { CopyrightResolver, type CopyrightSource } from '../catalog/copyrights.ts';
 import { toAbs } from '../fs/paths.ts';
-import { backfillClassification } from '../classify/backfill.ts';
+import { analyze, recordProbes } from '../../domain/analysis/analyze.ts';
+import { collectingTx } from '../../domain/tx.ts';
 import { readCameraFromExif, readJpegExifHead } from '../image/exif.ts';
 import type { TagStage } from '../pipeline.ts';
 import { acquireTagger, releaseTagger, shutdownTagger, type TaggerLike, type TaggerStartOptions } from './client.ts';
@@ -33,6 +34,11 @@ export interface TagJobDeps {
   makeCatalog?: () => { catalog: CharacterCatalog; copyrights: CopyrightSource };
   /** 每批写完、同一事务里：声明变化（见 TagResultWriter 的 afterBatchInTx） */
   afterBatchInTx?: (imageIds: number[], changes: Change[]) => void;
+  /**
+   * 读到的相机交给分析模块写，读到相机的重判类型；fn 在一个事务里执行，声明的变化（image.kindChanged）交给变更传播。
+   * 引擎里是 ctx.apply；不给时只开事务、不传播（单元测试）
+   */
+  applyAnalysis?: (fn: (emit: (c: Change) => void) => void) => void;
   log?: (msg: string) => void;
   now?: () => number;
   // 测试注入
@@ -283,8 +289,9 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
         });
       };
 
-      // 缩略图任务最后才读相机信息；和它并行时，这里先把本批 JPEG 的相机读出来，相机照片当场跳过（不送进模型）
-      const setCamera = db.prepare('UPDATE images SET camera = ? WHERE id = ?');
+      // 缩略图任务最后才读相机信息；和它并行时，这里先把本批 JPEG 的相机读出来，相机照片当场跳过（不送进模型）。
+      // 相机由分析模块写，类型变了由它声明（以前这里改了类型不声明，附录 #3）
+      const applyAnalysis = deps.applyAnalysis ?? ((fn: (emit: (c: Change) => void) => void) => db.transaction(() => fn(collectingTx(db).changed))());
       const next = async (): Promise<Row[]> => {
         for (;;) {
           const rows = selBatch.all({ ...params, beforeId, limit: B }) as Row[];
@@ -296,10 +303,10 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
             unknown.map(async (r) => [r, await readJpegExifHead(toAbs(r.rootPath, r.relPath)).then(readCameraFromExif, () => '')] as const),
           );
           const hits = cams.filter(([, c]) => c).map(([r]) => r.id);
-          db.transaction(() => {
-            for (const [r, c] of cams) setCamera.run(c, r.id);
-            if (hits.length) backfillClassification(db, { ids: hits });
-          })();
+          applyAnalysis((emit) => {
+            recordProbes(db, cams.map(([r, camera]) => ({ id: r.id, camera })));
+            analyze({ db, changed: emit }, hits);
+          });
           if (!hits.length || !params.skipCamera) return rows;
           advance(hits.length);
           skipped += hits.length;

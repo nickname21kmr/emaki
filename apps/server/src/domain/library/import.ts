@@ -1,3 +1,8 @@
+/**
+ * 显式导入（AI 助手把下载好的图放进图库）：复制进图库文件夹、马上入库、可撤销（撤销把新复制的那几份送进系统回收站）。
+ * 入库和扫描一样只写观测（images.ts 的 insertImage），声明 image.added 带上读文件头拿到的帧数、相机；
+ * 类型由分析模块的反应判，排除规则、合集、缩略图和识别排队、查重标记都由反应处理。
+ */
 import type { ImportImagesBody, ImportImagesResult } from '@emaki/shared';
 import { randomUUID } from 'node:crypto';
 import { constants, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -10,13 +15,14 @@ import { probeImage } from '../../services/image/probe.ts';
 import { htmlAnimationCache } from '../../services/image/htmlAnimation.ts';
 import { ComicAreas } from '../../services/classify/comicAreas.ts';
 import { parseSource } from '../../services/source/parseSource.ts';
-import { INSERT_IMAGE_SQL, imageClassification } from '../../services/scan/imageRow.ts';
 import { assertRecyclable } from '../../services/trash/driveType.ts';
 import { moveToRecycleBin, type TrashImpl } from '../../services/trash/recycleBin.ts';
-import type { SqliteContext } from './context.ts';
+import type { SqliteContext } from '../../datasource/sqlite/context.ts';
+import { readSettings } from '../../datasource/sqlite/settings.ts';
+import { parseId } from '../../datasource/sqlite/sql.ts';
+import { assertFilesIdle } from './guard.ts';
+import { declareAdded, insertImage, markRecycled, markTrashed } from './images.ts';
 import { normalizeSubdir } from './move.ts';
-import { readSettings } from './settings.ts';
-import { parseId } from './sql.ts';
 
 const MAX_BYTES = 128 * 1024 * 1024;
 const inside = (child: string, parent: string) => {
@@ -141,12 +147,11 @@ export async function importImages(ctx: SqliteContext, body: ImportImagesBody, o
         const comic = ComicAreas.load(ctx.db).of(root.id,rel);
         // 入库即声明 image.added：排除规则、合集、缩略图和识别排队、查重标记由反应处理
         const id = ctx.apply(() => {
-          const result = ctx.db.prepare(INSERT_IMAGE_SQL).run({ rootId:root.id,relPath:rel,fileName:path.basename(target),
-            width:probe.width,height:probe.height,frameCount:probe.pages,format:probe.format,bytes:bytes.length,sha256:sha,
+          const id = insertImage(ctx.db, { rootId:root.id,relPath:rel,fileName:path.basename(target),
+            width:probe.width,height:probe.height,format:probe.format,bytes:bytes.length,sha256:sha,
             modifiedAt:statSync(target).mtime.toISOString(),addedAt:now,rating:comic?.rating ?? 'general',
-            ...imageClassification(probe,rel,!!comic),site:source?.site ?? null,postId:source?.postId ?? null,artist:source?.artist ?? null,url:source?.url ?? null });
-          const id=Number(result.lastInsertRowid);
-          ctx.changed({type:'image.added',ids:[id]});
+            site:source?.site ?? null,postId:source?.postId ?? null,artist:source?.artist ?? null,url:source?.url ?? null });
+          declareAdded(ctx, [id], [{id,frames:probe.pages,camera:probe.camera}]);
           return id;
         });
         created.push({id,rootId:root.id,rel,abs:target,sha,bytes:bytes.length});
@@ -164,7 +169,7 @@ export async function importImages(ctx: SqliteContext, body: ImportImagesBody, o
   if (!created.length) return {ok:true,message,undoToken:null,items};
   return {...ctx.undo.result(message,async()=>{
     for (const root of new Set(created.map(r=>path.parse(r.abs).root))) await assertRecyclable(root);
-    if (ctx.jobs.list().some(j=>j.kind==='scan' && j.status==='running')) throw new ConflictError('正在扫描图库，请扫描结束后再撤销导入');
+    assertFilesIdle(ctx, created.map(r=>r.id), '撤销导入');
     // Refuse to remove anything that was moved, replaced or given a new identity.
     for (const r of created) {
       const current=ctx.db.prepare('SELECT root_id,rel_path,sha256 FROM images WHERE id=?').get(r.id) as {root_id:number;rel_path:string;sha256:string}|undefined;
@@ -176,8 +181,9 @@ export async function importImages(ctx: SqliteContext, body: ImportImagesBody, o
     const done=new Set([...result.trashed,...result.alreadyGone]);
     ctx.apply(()=>{
       const gone=created.filter(r=>done.has(r.abs)).map(r=>r.id);
-      for(const id of gone) ctx.db.prepare('UPDATE images SET trashed_at=? WHERE id=?').run(new Date(ctx.clock()).toISOString(),id);
-      ctx.changed({type:'image.trashed',ids:gone});
+      markTrashed(ctx, null, gone, new Date(ctx.clock()).toISOString());
+      // 已经在系统回收站里了：丢弃的行，之后不再参与匹配（images.ts）
+      markRecycled(ctx.db, gone);
     });
     if(result.failed.length) throw new ConflictError(`${result.failed.length} 张图片未能移到系统回收站`);
   }),items};

@@ -8,7 +8,8 @@ import type { BulkImagesBody, MutationResult, Rating } from '@emaki/shared';
 import { NotFoundError } from '../../http/errors.ts';
 import { toAbs } from '../../services/fs/paths.ts';
 import type { SqliteContext } from './context.ts';
-import type { PendingTrash } from './pendingTrash.ts';
+import type { PendingTrash } from '../../domain/library/pendingTrash.ts';
+import { markTrashed } from '../../domain/library/images.ts';
 import { artistAutoMessage, artistEditMessage, normArtists } from '../artistEdits.ts';
 import { artistGroupMap, artistNames } from './artists.ts';
 import { createExclusionInTx, restoreImagesInTx } from '../../domain/visibility/exclusions.ts';
@@ -145,9 +146,7 @@ export class BulkOps {
     for (const root of new Set(rows.map((r) => r.root))) await this.pending.checkRoot(root);
     let batch = 0;
     const res = this.ctx.mutate((u) => {
-      u.columns('images', ['trashed_at'], ids);
-      this.ctx.db.prepare('UPDATE images SET trashed_at = ? WHERE id IN (SELECT value FROM json_each(?))').run(now, JSON.stringify(ids));
-      this.ctx.changed({ type: 'image.trashed', ids });
+      markTrashed(this.ctx, u, ids, now);
       batch = this.pending.record(u, rows.map((r) => ({ id: r.id, abs: toAbs(r.root, r.rel_path) })));
       return { message: `已把 ${ids.length} 张图移到回收站` };
     });

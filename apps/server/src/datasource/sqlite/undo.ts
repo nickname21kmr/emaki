@@ -37,7 +37,8 @@ export type UndoTable =
   | 'collections'
   | 'collection_characters'
   | 'collection_works'
-  | 'change_log';
+  | 'change_log'
+  | 'derived_versions';
 
 type Row = Record<string, unknown>;
 type Op =

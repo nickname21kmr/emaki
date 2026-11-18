@@ -311,3 +311,8 @@ export class ExclusionQueries {
     });
   }
 }
+
+/** 指向已经删掉的图的单张排除规则（启动时清理移除的文件夹之后）；返回删了几条 */
+export function dropOrphanImageRules(db: SqliteContext['db']): number {
+  return db.prepare("DELETE FROM exclusions WHERE kind = 'image' AND CAST(target AS INTEGER) NOT IN (SELECT id FROM images)").run().changes;
+}

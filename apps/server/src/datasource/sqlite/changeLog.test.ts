@@ -161,7 +161,7 @@ describe('切换 Pixiv 投稿号识别方式', () => {
     // i27：下载器命名，只有宽泛模式认；i28：标准命名，两种模式都认
     db().prepare('UPDATE images SET rel_path = ?, file_name = ? WHERE id = ?').run(TITLED, '144506494_キス魔な山賊.jpg', img('i27'));
     db().prepare("UPDATE images SET rel_path = '未整理/777777_p0.png', file_name = '777777_p0.png' WHERE id = ?").run(img('i28'));
-    db().prepare("DELETE FROM settings WHERE key = 'sourceParserMode'").run();
+    db().prepare("DELETE FROM derived_versions WHERE name = 'source'").run();
   });
 
   it('先数影响，再切换：只去掉投稿号变了的 Pixiv 建议，切回来从缓存找回；可撤销', async () => {

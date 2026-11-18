@@ -16,6 +16,8 @@
  *    自动标的原创在依据的来源证据刚换过、信号不在了时撤回。手动标原创、手动取消原创都是决定，自动永远不改。
  * 4. 所在合集是否整本处理（inBook）现在不影响决定：本子的页照样按证据关联角色（角色在本子里出现的页数按页上的关联算），
  *    它只影响要不要去查 Pixiv（证据的获取，services/pixiv/sync.ts）。合集类型变了照样重新评估，规则以后要区分时不用再接线。
+ * 5. 过期的证据（D1：文件内容变了、这份文件版本还没重新识别，stale）不拿来新加关联，也不算「别的来源仍然支持」；
+ *    依据它的自动关联先留着，新证据到了按第 2 条处理。
  */
 import type { ContentKind } from '@emaki/shared';
 import type { CharacterEvidenceProvider } from '../evidence/store.ts';
@@ -55,6 +57,8 @@ export interface Evidence {
   provider: CharacterEvidenceProvider;
   /** 这个来源的证据刚换过（或刚被去掉）：只有这时才撤回依据它的自动决定（D2） */
   fresh: boolean;
+  /** 证据过期了（D1：文件内容变了，还没按新文件重新识别）：不拿来新加关联 */
+  stale?: boolean;
   /** 原创信号 */
   original: boolean;
   candidates: readonly { tag: string; characterId: number | null; score: number }[];
@@ -135,7 +139,7 @@ export function decideAuto(image: ImageFacts, evidence: readonly Evidence[], cur
       const characterId = catalog.resolve(c);
       // 自建角色已经不在了（合并、删除）：这个候选作废
       if (characterId === null && c.characterId !== null) continue;
-      cands.push({ tag: c.tag, characterId, provider: e.provider, score: c.score, accepted: c.score >= threshold });
+      cands.push({ tag: c.tag, characterId, provider: e.provider, score: c.score, accepted: !e.stale && c.score >= threshold });
     }
   }
   cands.sort(byScore);

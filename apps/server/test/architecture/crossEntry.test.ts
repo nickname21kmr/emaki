@@ -12,21 +12,27 @@
  */
 import type { JobContext } from '../../src/core/jobs.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { searchKey } from '@emaki/shared';
 import { EventBus } from '../../src/core/events.ts';
 import { declareTagged } from '../../src/domain/evidence/reactions.ts';
 import { SqliteDataSource } from '../../src/datasource/sqlite/SqliteDataSource.ts';
 import { patchSettingsInternal, readSettings } from '../../src/datasource/sqlite/settings.ts';
-import { backfillClassification } from '../../src/services/classify/backfill.ts';
+import { backfillClassification } from '../../src/domain/analysis/classify.ts';
 import { CharacterCatalog } from '../../src/domain/catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../../src/services/catalog/copyrights.ts';
 import type { PixivArtwork } from '../../src/services/pixiv/client.ts';
 import { pendingPixivCount, queuePixivImages, resetPixivBackoff, syncPixivCharacters } from '../../src/services/pixiv/sync.ts';
 import { TagResultWriter } from '../../src/domain/evidence/tagger.ts';
 import { makeTmpDir } from '../helpers/tmp.ts';
+import { animationHtml } from '../helpers/htmlAnimation.ts';
 import { scanTree } from './sqlWrites.ts';
+import { runAs } from '../../src/propagation/actor.ts';
+import type { ChangeOf } from '../../src/propagation/changes.ts';
+import { hasWork } from '../../src/propagation/work.ts';
+import { htmlAnimationCache } from '../../src/services/image/htmlAnimation.ts';
+import { sharp } from '../../src/services/image/sharpConfig.ts';
 
 const NOW = Date.parse('2026-11-17T12:00:00.000Z');
 /** 图库里已有的角色（有作品） */
@@ -577,5 +583,107 @@ describe('否决（附录 #39，D3，P3a 已关闭）', () => {
     expect([vetoedTags(ds, 1), vetoedTags(ds, 2)]).toEqual([[KNOWN], [KNOWN]]);
     await ds.undo(r.undoToken!);
     expect([linkedTags(ds, 1), linkedTags(ds, 2)]).toEqual([['alice_alt_(game_a)'], ['alice_alt_(game_a)']]);
+  });
+});
+
+describe('文件内容变了：用户替换和扫描发现外部修改走同一条路（D1，附录 #10，P4a）', () => {
+  // 以前扫描发现内容变了会清掉识别结果、主题、画质分并重判类型，用户替换文件则这些都保留，尺寸、格式、帧数变了也不重新分类、不重新识别；
+  // 两条路都不重置画师识别。现在两条路都只改观测、声明 image.fileChanged（reason 只记录在案），后续全由反应做，结果一样
+  it('派生数据重算、识别过期并重新排队、画师重认、查重标记；手动的决定保留；自动关联等新证据到了按 D2 处理', async () => {
+    const ds = await engine();
+    const dir = opened.at(-1)!.dir;
+    const lib = path.join(dir, 'lib');
+    mkdirSync(lib);
+    ds.ctx.db.prepare('UPDATE library_roots SET path = ?, last_scan_at = NULL WHERE id = 1').run(lib.replace(/\\/g, '/'));
+    const put = (name: string, bytes: Buffer, at: Date) => {
+      const file = path.join(name.startsWith('/') ? '' : lib, name);
+      writeFileSync(file, bytes);
+      utimesSync(file, at, at);
+      return file;
+    };
+    const png = (seed: number) => sharp({ create: { width: 40, height: 60, channels: 3, background: { r: seed * 60, g: 90, b: 150 } } }).png().toBuffer();
+    put('a.png', await png(1), new Date('2025-01-01'));
+    put('b.png', await png(2), new Date('2025-01-01'));
+    const job: JobContext = { signal: new AbortController().signal, setTotal() {}, advance() {}, setMessage() {}, shouldYield: () => false, requeue() {}, yielded: false };
+    const scan = async () => {
+      ds.requests.requestFull();
+      await runAs('job:scan', () => ds.scanner.scan(job));
+      ds.ctx.propagation.jobFinished('scan');
+    };
+    await scan();
+    const id = (name: string) => ds.ctx.db.prepare('SELECT id FROM images WHERE file_name = ?').pluck().get(name) as number;
+    const [a, b] = [id('a.png'), id('b.png')];
+    // 两张图一样的处境：识别过（爱丽丝 0.9 自动关联，新角色 0.8 只是建议），手动归了 Bob、收藏、手动分级，画师认过，缩略图算过
+    recognize(ds, [a, b].map((x) => ({ id: x, character: [[KNOWN, 0.9], [NEW_TAG, 0.8]] as Scores })));
+    const bob = ds.ctx.db.prepare("INSERT INTO characters (name, source, created_at) VALUES ('Bob', 'custom', '2000-01-01')").run().lastInsertRowid;
+    await ds.bulkImages({ ids: [String(a), String(b)], action: { type: 'assign', characterId: String(bob) } });
+    for (const x of [a, b]) await ds.updateImage(String(x), { favorite: true, rating: 'sensitive' });
+    ds.ctx.db.exec("UPDATE images SET artist_checked_at = '2026-01-01', dhash = '0123456789abcdef', dominant_color = '#112233', thumb_at = '2026-01-01'");
+    ds.ctx.db.prepare("DELETE FROM pending_work WHERE kind = 'dedupe'").run();
+    // 后台任务不跑（缩略图任务会按新文件把像素派生补回来，这里看的是变化那一刻）
+    vi.spyOn(ds.pipeline, 'afterImport').mockImplementation(() => {});
+    const seen: ChangeOf<'image.fileChanged'>[] = [];
+    ds.ctx.propagation.register({ name: 'spyFileChanged', on: ['image.fileChanged'], phase: 'after', run: ({ changes }) => void seen.push(...changes.of('image.fileChanged')) });
+
+    // 新版本：一张两帧的动图 WebP（格式、尺寸、帧数、类型都变）
+    const animated = readFileSync(await htmlAnimationCache(await animationHtml(), path.join(dir, 'data')));
+    const download = path.join(dir, 'download.webp');
+    writeFileSync(download, animated);
+    // 一条路：用户替换（格式变了扩展名跟着变）；另一条路：外部程序把 b.png 改成同样的内容，扫描发现
+    await ds.replaceImage(String(a), { path: download });
+    put('b.png', animated, new Date('2025-06-01'));
+    await scan();
+
+    expect(seen.map((c) => [c.reason, c.ids])).toEqual([
+      ['replace', [a]],
+      ['scan', [b]],
+    ]);
+    expect(seen.every((c) => c.files.every((f) => f.before !== f.after && f.after === seen[0]!.files[0]!.after))).toBe(true);
+    const facts = (x: number) =>
+      ds.ctx.db
+        .prepare(
+          `SELECT width, height, format, sha256, frame_count, content_kind, theme, art_score, tagged_at, tagger_model, artist_checked_at,
+             dhash, dominant_color, thumb_at, decode_error, favorite, rating, rating_manual, missing, trashed_at FROM images WHERE id = ?`,
+        )
+        .get(x);
+    expect(facts(a)).toEqual(facts(b));
+    expect(facts(a)).toMatchObject({
+      format: 'webp',
+      frame_count: 2,
+      content_kind: 'animated',
+      // 这份文件版本还没有识别结果：识别时间、主题、画质分为空，排队重新识别；画师也重认
+      tagged_at: null,
+      theme: null,
+      art_score: null,
+      artist_checked_at: null,
+      // 旧文件算出来的像素派生清掉，缩略图任务按新文件（新 sha）重新生成
+      dhash: null,
+      dominant_color: null,
+      thumb_at: null,
+      favorite: 1,
+      rating: 'sensitive',
+      rating_manual: 1,
+    });
+    expect(hasWork(ds.ctx.db, 'dedupe')).toBe(true);
+    // 手动的决定、依据旧证据的自动关联都还在（旧证据留着，标成过期）
+    expect(provenance(ds, a)).toEqual(provenance(ds, b));
+    expect(provenance(ds, a)).toEqual([
+      ['Bob', 'manual', false],
+      [KNOWN, 'auto', true],
+    ]);
+
+    // 过期的模型证据不拿来新加关联：调低阈值再补采纳，新角色（0.8）也不会关联上
+    await ds.updateSettings({ tagger: { autoAcceptThreshold: 0.75 } });
+    await ds.promoteSuggestions();
+    expect(linkedTags(ds, a)).toEqual(['Bob', KNOWN]);
+    expect(linkedTags(ds, b)).toEqual(['Bob', KNOWN]);
+
+    // 新证据到了（按新文件重新识别：只认出新角色）：依据旧证据的自动关联按 D2 撤回，手动的不动
+    recognize(ds, [a, b].map((x) => ({ id: x, character: [[NEW_TAG, 0.9]] as Scores })));
+    expect(provenance(ds, a)).toEqual(provenance(ds, b));
+    expect(provenance(ds, a)).toEqual([
+      ['Bob', 'manual', false],
+      [NEW_TAG, 'auto', true],
+    ]);
   });
 });

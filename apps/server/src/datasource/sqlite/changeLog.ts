@@ -9,14 +9,13 @@ import type { Db } from '../../db/connection.ts';
 import { ConflictError, NotFoundError } from '../../http/errors.ts';
 import { dismissPixivCharacterChecks } from '../../domain/evidence/pixivChecks.ts';
 import type { SqliteContext } from './context.ts';
-import { moveBack, type MoveBackFailure, type Moved } from './move.ts';
+import { revertMoveLog, type Moved } from '../../domain/library/move.ts';
 import { iso, parseId } from './sql.ts';
 import { revertAutoBinding, type AutoBinding } from '../../domain/catalog/bindings.ts';
 import { linkEach, unlink, unlinkEach } from '../../domain/curation/links.ts';
 import { restoreOriginals, setOriginal, type OriginalRow } from '../../domain/curation/marks.ts';
 import { fromLegacySnapshot, fromRow, LEGACY_RULE_PREFIX, manual, type LinkRow } from '../../domain/curation/provenance.ts';
 import type { UndoRecorder } from './undo.ts';
-import { setRetag } from '../../domain/evidence/retag.ts';
 
 /** 每类最多留这么多条，更早的删掉 */
 const KEEP = 100;
@@ -107,8 +106,11 @@ export function recordChange(
   return id;
 }
 
-const fileList = (failed: MoveBackFailure[]) =>
-  `${failed.slice(0, 5).map((f) => `${f.name}（${f.reason}）`).join('、')}${failed.length > 5 ? ` 等 ${failed.length} 张` : ''}`;
+/** 一批移动移回了一部分或全部（domain/library/move.ts 的 revertMoves）：记下还没移回的、没能移回的原因；全部移回时记撤回时间 */
+export function settleMoveLog(db: Db, id: number, payload: MovePayload, note: string | null, revertedAt: string | null): void {
+  if (revertedAt) db.prepare('UPDATE change_log SET reverted_at = ?, note = ?, payload = ? WHERE id = ?').run(revertedAt, note, JSON.stringify(payload), id);
+  else db.prepare('UPDATE change_log SET note = ?, payload = ? WHERE id = ?').run(note, JSON.stringify(payload), id);
+}
 
 export class ChangeLog {
   /** 移动批次 → 进程内的撤销 token：在列表里移回后让 toast 里的撤销失效 */
@@ -315,54 +317,18 @@ export class ChangeLog {
   }
 
   /**
-   * 把一批移回原处。strict（toast 里的撤销）：有没移回的就报错；否则只在一张都没移回时报错，其余列在提示里。
-   * 移回的从 payload 里去掉，全部移回才算撤回完
+   * 把一批移回原处（实现在 domain/library/move.ts，和应用内移动是同一条路径）。strict（toast 里的撤销）：有没移回的就报错；
+   * 否则只在一张都没移回时报错，其余列在提示里。在列表里移回后，toast 里的撤销跟着失效
    */
   async revertMove(id: number, strict: boolean): Promise<MutationResult> {
-    const r = this.row(String(id));
-    if (r.reverted_at) throw new ConflictError('这批已经移回去了');
-    if (this.ctx.jobs.list().some((j) => j.status === 'running' && j.kind === 'scan')) {
-      throw new ConflictError('正在扫描图库，等扫描结束再移回');
-    }
-    const m = JSON.parse(r.payload) as MovePayload;
-    const back = moveBack(this.db, m.items);
-    const restored = new Set(back.restoredIds);
-    const now = iso(this.ctx.clock());
-    // 移回原位也是一次移动：来源、路径相关的分类、排除规则、合集都由反应按原位置重算（附录 #17）
-    this.ctx.apply(() => {
-      if (restored.size) {
-        const ids = [...restored];
-        this.ctx.changed({ type: 'image.moved', ids, reason: 'revertMove' });
-        // 按原来的来历放回（归类模块；用户这期间否决过的不放回），角色这期间被删掉、合并掉的放不回，这几页留着重新识别
-        const res = linkEach(
-          this.ctx,
-          null,
-          m.charSnap
-            .filter((c) => restored.has(c.image_id))
-            .map((c) => ({ imageId: c.image_id, characterId: c.character_id, provenance: 'decision' in c ? fromRow(c) : fromLegacySnapshot(c) })),
-          { vetoes: 'respect' },
-        );
-        const lost = new Set([...res.missing, ...res.vetoed].map((x) => x.imageId));
-        // 重新识别的标记按移动前写回（移回原位后漫画文件夹的同步不会再标：它只标漫画文件夹里还挂着识别器角色的页）
-        setRetag(this.db, m.retagSnap.filter((s) => restored.has(s.id)).map((s) => ({ id: s.id, retag: lost.has(s.id) ? 1 : s.retag })));
-      }
-      const left = m.items.filter((it) => !restored.has(it.id));
-      const note = back.failed.length ? `没能移回：${fileList(back.failed)}` : null;
-      if (!left.length) {
-        this.db.prepare('UPDATE change_log SET reverted_at = ?, note = ?, payload = ? WHERE id = ?').run(now, note, JSON.stringify({ ...m, items: [] }), id);
-      } else {
-        this.db.prepare('UPDATE change_log SET note = ?, payload = ? WHERE id = ?').run(note, JSON.stringify({ ...m, items: left }), id);
-      }
-    });
+    const out = revertMoveLog(this.ctx, id, strict);
     const token = this.moveTokens.get(id);
     if (token && !strict) {
       this.ctx.undo.expire(token, '这批已经在「最近的移动」里移回原处了');
       this.moveTokens.delete(id);
     }
-    if (back.failed.length && (strict || !restored.size)) {
-      throw new ConflictError(`移回了 ${back.restored} 张，${back.failed.length} 张没能移回：${fileList(back.failed)}`);
-    }
-    return done(back.failed.length ? `移回了 ${back.restored} 张；${back.failed.length} 张没能移回：${fileList(back.failed)}` : `已把 ${back.restored} 张移回原处`);
+    if (out.conflict) throw new ConflictError(out.conflict);
+    return done(out.message);
   }
 
   // ------------------------------------------------------------ 公共

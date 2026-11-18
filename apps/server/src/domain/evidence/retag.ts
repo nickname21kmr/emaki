@@ -34,7 +34,15 @@ export function markComicRetag(db: Db, ids?: number[]): number {
   ).run({ ids: JSON.stringify(ids ?? []) }).changes;
 }
 
-/** 文件内容变了（扫描发现）：这张图的识别作废，等重新识别。给扫描器的热循环用的预编译语句（参数 @id） */
-export function resetRecognitionStatement(db: Db) {
-  return stmt(db, 'UPDATE images SET tagged_at = NULL, tagger_model = NULL WHERE id = @id');
+/**
+ * 文件内容变了（D1，扫描发现和用户替换一样）：这份文件版本还没有识别结果——识别时间、模型清空，识别任务会重新挑它；
+ * 画师识别也重来（artist_checked_at 清空）。标签、角色候选这些旧证据先留着（标成过期：识别时间为空），新证据到了整体替换，
+ * 依据旧证据的自动关联那时由 reevaluateAuto 按 D2 处理。u 不为空时记撤销
+ */
+export function markFileEvidenceStale(db: Db, u: UndoRecorder | null, ids: number[]): void {
+  if (!ids.length) return;
+  u?.columns('images', ['tagged_at', 'tagger_model', 'artist_checked_at'], ids);
+  stmt(db, 'UPDATE images SET tagged_at = NULL, tagger_model = NULL, artist_checked_at = NULL WHERE id IN (SELECT value FROM json_each(?))').run(
+    JSON.stringify(ids),
+  );
 }

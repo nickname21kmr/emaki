@@ -1,16 +1,14 @@
 /**
- * 内容类型 + 主题 + art_score 的计算与回填（T27、T27 补充）。全项目只有这一个入口：
- * - 启动时在 migrate 之后、HTTP 监听之前同步跑（BI-4：全库约 1 秒），选 content_kind_version 过期的行；
- * - 用户把类型改回「自动」时按 ids 当场重算；
- * - tagger writer 写完标签后用 computeClassification + writeClassification 在同一事务里写。
+ * 分析模块的分类：内容类型（自动）、主题、画质分（T27、T27 补充）。全项目只有分析模块写这几列（单一写入者），
+ * 什么时候算由唯一的入口 analyze（analyze.ts）决定，别处不直接调这里。
  *
  * content_kind_manual=1 的行只写 theme、art_score（manual 只保护类型）；任何重算都不动 shelved_at。
  */
 import type { ContentKind, ContentKindSource, ImageFormat } from '@emaki/shared';
 import { transact, type Db, type Statement } from '../../db/connection.ts';
-import { IN_COMIC } from './comicAreas.ts';
-import { classifyContent, CLASSIFIER_VERSION, SIGNAL_TAGS } from './rules.ts';
-import { artScore, classifyTheme, THEME_TAG_NAMES, type StoredTheme } from './theme.ts';
+import { IN_COMIC } from '../../services/classify/comicAreas.ts';
+import { classifyContent, CLASSIFIER_VERSION, SIGNAL_TAGS } from '../../services/classify/rules.ts';
+import { artScore, classifyTheme, THEME_TAG_NAMES, type StoredTheme } from '../../services/classify/theme.ts';
 
 export interface ClassRow {
   id: number;
@@ -109,8 +107,8 @@ export function loadClassifyTags(db: Db, ids: number[] | 'all'): Map<number, [st
 const BATCH = 2000;
 
 /**
- * 回填：不传 ids 时选版本过期的行（content_kind_version IS NULL 或 < CLASSIFIER_VERSION）；传 ids 时重算这些行。
- * 同步执行，每批一个事务。返回重算的行数和耗时。
+ * 重算：不传 ids 时选版本过期的行（content_kind_version IS NULL 或 < CLASSIFIER_VERSION）；传 ids 时重算这些行。
+ * 同步执行，每批一个事务（在外层事务里就是保存点）。返回重算的行数和耗时。
  */
 export function backfillClassification(db: Db, opts: { ids?: number[] } = {}): { rows: number; ms: number } {
   const t0 = performance.now();

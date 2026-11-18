@@ -15,6 +15,12 @@ import { animationHtml } from '../../../test/helpers/htmlAnimation.ts';
 import { htmlAnimationCache } from '../image/htmlAnimation.ts';
 import { readFile, readdir } from 'node:fs/promises';
 import { sha256Buffer } from '../fs/hash.ts';
+import { UndoStack } from '../../core/undo.ts';
+import type { JobQueue } from '../../core/jobs.ts';
+import { createContext } from '../../datasource/sqlite/context.ts';
+import { analyzeReaction } from '../../domain/analysis/reactions.ts';
+import { reparseSourceReaction, staleFileEvidenceReaction } from '../../domain/evidence/reactions.ts';
+import type { Change } from '../../propagation/changes.ts';
 
 const ctx = (): JobContext => ({
   signal: new AbortController().signal,
@@ -36,7 +42,16 @@ describe('Scanner', () => {
   let data: string;
   let db: Db;
   let requests: ScanRequests;
-  const scanner = (settleMs = 0) => new Scanner({ db, bus: new EventBus(), dataDir: data, requests, settleMs });
+  /**
+   * 扫描器只看、只读，写库经图库与文件模块并声明变化（P4a）；类型、来源这些由反应算。这里接上和引擎一样的几条事务内反应
+   * （来源重新解析、文件内容变了时识别过期、分析），不接合集、排除这些
+   */
+  const changes = () => {
+    const c = createContext({ db, bus: new EventBus(), dataDir: data, clock: Date.now, undo: new UndoStack(), jobs: { list: () => [] } as unknown as JobQueue });
+    c.propagation.register(reparseSourceReaction, staleFileEvidenceReaction, analyzeReaction);
+    return { apply: <T,>(fn: (emit: (c: Change) => void) => T): T => c.apply(() => fn((x) => c.changed(x))) };
+  };
+  const scanner = (settleMs = 0) => new Scanner({ db, bus: new EventBus(), dataDir: data, requests, settleMs, changes: changes() });
   const scan = (settleMs = 0): Promise<ScanSummary> => scanner(settleMs).scan(ctx());
   const put = async (rel: string, seed: number) => {
     await mkdir(path.join(root, path.dirname(rel)), { recursive: true });

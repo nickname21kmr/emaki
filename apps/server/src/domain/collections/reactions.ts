@@ -6,18 +6,48 @@
  * - 用户和助手的操作：事务内按 id 重算涉及的目录（refreshDirs）；
  * - 后台任务、启动修补：先记下「要全量重算」，任务结束（不论完成、让出还是取消）或启动完成时做一次 refreshAll；
  * - 图库文件夹启停、漫画设置变化：影响面不定，提交后全量重算（放在事务里会和撤销记录一起变慢）。
+ * - 启动（library.opened）：合集判定的版本（DETECTOR_VERSION，记在 derived_versions 里）变了、或者上次延后的全量重算没做完
+ *   （pending_work 里的 'collections'，进程中途退出时留下的）才全量重判（P4a，附录 #23：以前版本号存了从不检查，每次启动都无条件全量重算）。
+ *   全量重判只按规则重判自动的合集；手动的合集（origin manual）、用户说「不成册」的（dismissed）不按判定增删，手动改过的字段保留。
+ * 延后的全量重算持久化在 pending_work 里（defer 时记、做完清），重启不丢（第 7 节）。
  * EMAKI_COLLECTIONS=0 时都不做。
  */
+import type { Db } from '../../db/connection.ts';
 import { isInteractive } from '../../propagation/actor.ts';
 import type { Propagation, Reaction } from '../../propagation/registry.ts';
+import { isStale, markVersion } from '../../propagation/versions.ts';
+import { clearWork, hasWork, markWork, peekWork } from '../../propagation/work.ts';
 import type { CollectionService } from './CollectionService.ts';
+import { DETECTOR_VERSION } from './detect.ts';
 
 const enabled = () => process.env.EMAKI_COLLECTIONS !== '0';
 
-export function collectionReactions(service: CollectionService, propagation: Propagation): Reaction[] {
-  propagation.onDeferred('collections', () => {
-    if (enabled()) service.refreshAll();
-  });
+/** 合集判定这种派生数据的版本（propagation/versions.ts） */
+export const COLLECTIONS_DERIVED = { name: 'collections' as const, version: () => String(DETECTOR_VERSION) };
+
+/** 启动时要不要全量重判：判定的版本变了，或者有没做完的延后重算 */
+export function collectionsStale(db: Db): boolean {
+  return isStale(db, COLLECTIONS_DERIVED) || hasWork(db, 'collections');
+}
+
+export function collectionReactions(service: CollectionService, propagation: Propagation, clock: () => number = Date.now): Reaction[] {
+  const db = () => propagation.db;
+  const now = () => new Date(clock()).toISOString();
+  /** 全量重判，记下判定的版本，清掉开始之前的延后标记 */
+  const refreshAll = () => {
+    const seen = peekWork(db(), 'collections');
+    const r = service.refreshAll();
+    markVersion(db(), 'collections', COLLECTIONS_DERIVED.version(), now());
+    clearWork(db(), 'collections', seen);
+    return r;
+  };
+  propagation.onDeferred(
+    'collections',
+    () => {
+      if (enabled()) refreshAll();
+    },
+    () => markWork(db(), 'collections', now()),
+  );
   return [
     {
       name: 'refreshPostGroups',
@@ -85,10 +115,12 @@ export function collectionReactions(service: CollectionService, propagation: Pro
       name: 'refreshAllCollections',
       on: ['root.visibilityChanged', 'root.modeChanged', 'library.opened'],
       phase: 'after',
-      run({ actor, defer }) {
+      run({ actor, defer, changes }) {
         if (!enabled()) return;
         if (actor.startsWith('job:')) return defer('collections');
-        const r = service.refreshAll();
+        // 只是启动：版本没变、也没有没做完的延后重算时不全量重判（启动修补里延后的，启动完成时 flushDeferred 再做）
+        if (!changes.has('root.visibilityChanged', 'root.modeChanged') && !collectionsStale(db())) return;
+        const r = refreshAll();
         propagation.cancelDeferred('collections');
         if (actor === 'system:startup') console.log(`合集：${r.active} 本（新建 ${r.created} · 删除 ${r.removed} · 更新 ${r.updated}）· ${Math.round(r.ms)} ms`);
       },

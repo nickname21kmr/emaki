@@ -6,6 +6,8 @@
  * - dropStalePixivEvidence：来源变了的图，Pixiv 证据和检查记录是按旧投稿号查的就去掉（换了投稿就不再是这张图的证据，来源失效）。
  *   所有改来源的路径（改识别方式、手动改来源、扫描、查重合并、启动修补）都走这里，不再各做各的。
  *   去掉证据声明 evidence.changed（pixiv），依据它的自动决定由 reevaluateAuto 撤回（D2）。
+ * - staleFileEvidence：文件内容变了（D1，扫描发现和用户替换一样）：这份文件版本的模型证据过期、排队重新识别，画师识别也重来；
+ *   手动的决定都不动，自动决定等新证据到了由 reevaluateAuto 按 D2 处理。要排在分析的 analyze 之前（主题、画质分看识别时间）。
  * - queuePixivCheck：影响 Pixiv 补充资格的变化（来源、类型、放下、原创、角色、排除、识别结果、漫画设置）之后重新登记待查。
  *   登记（pixiv_character_checks）就是持久化的队列；要不要马上开一轮补充，由提交后的排队反应决定（propagation/engine.ts）。
  */
@@ -15,6 +17,7 @@ import type { Change } from '../../propagation/changes.ts';
 import type { Reaction } from '../../propagation/registry.ts';
 import { parseSource } from '../../services/source/parseSource.ts';
 import { queuePixivImages } from './pixiv.ts';
+import { markFileEvidenceStale } from './retag.ts';
 import { dropEvidence } from './store.ts';
 
 export const reparseSourceReaction: Reaction = {
@@ -48,6 +51,15 @@ export const reparseSourceReaction: Reaction = {
       changed.push(r.id);
     }
     emit({ type: 'image.sourceChanged', ids: changed });
+  },
+};
+
+export const staleFileEvidenceReaction: Reaction = {
+  name: 'staleFileEvidence',
+  on: ['image.fileChanged'],
+  phase: 'tx',
+  run({ ctx, changes, undo }) {
+    markFileEvidenceStale(ctx.db, undo, changes.ids());
   },
 };
 
@@ -110,13 +122,12 @@ export const queuePixivCheckReaction: Reaction = {
 };
 
 /**
- * 识别任务写完一批（在 writer 的事务里调用）：evidenceChanges 是证据模块替换模型证据时声明的变化（只有识别成功的图），原样转交；
- * 按标签重判的类型也可能变了（识别失败的图也按空标签重判过）。
+ * 识别任务写完一批（在 writer 的事务里调用）：changes 是这批声明的变化——证据模块替换模型证据（只有识别成功的图），
+ * 分析模块按新标签重判类型时真变了的（image.kindChanged），原样转交。
  * 自动关联（reevaluateAuto）、套排除规则、登记 Pixiv 补充、合集（任务结束时全量）都由反应做
  */
-export function declareTagged(ctx: SqliteContext, ids: number[], evidenceChanges: readonly Change[] = []): void {
+export function declareTagged(ctx: SqliteContext, _ids: number[], changes: readonly Change[] = []): void {
   ctx.apply(() => {
-    for (const c of evidenceChanges) ctx.changed(c);
-    ctx.changed({ type: 'image.kindChanged', ids });
+    for (const c of changes) ctx.changed(c);
   });
 }

@@ -10,7 +10,8 @@ import { parseDHash, popcount32 } from '../../services/dedupe/hamming.ts';
 import { pickKeep } from '../../services/dedupe/pickKeep.ts';
 import { toAbs } from '../../services/fs/paths.ts';
 import type { SqliteContext } from './context.ts';
-import type { PendingTrash } from './pendingTrash.ts';
+import type { PendingTrash } from '../../domain/library/pendingTrash.ts';
+import { markTrashed } from '../../domain/library/images.ts';
 import type { UndoRecorder } from './undo.ts';
 import { carryArtists } from '../../domain/curation/artists.ts';
 import { carryLinks } from '../../domain/curation/links.ts';
@@ -223,15 +224,13 @@ export class DuplicateQueries {
     let batchId = 0;
     const res = this.ctx.mutate((u) => {
       const db = this.ctx.db;
-      u.columns('images', ['trashed_at'], gone);
       u.columns('duplicate_groups', ['resolved_at'], [g.id]);
       const sourceBefore = sourceKeys(db, kept);
       // 角色、收藏、原创、分级、放下、来源、画师由归类模块并过去并声明变化（套排除规则、重新登记 Pixiv 等由反应做）
       const carried = carryOver(this.ctx, u, kept, gone, now);
-      db.prepare('UPDATE images SET trashed_at = ? WHERE id IN (SELECT value FROM json_each(?))').run(now, JSON.stringify(gone));
+      markTrashed(this.ctx, u, gone, now);
       // 来源变了：刷新同投稿组、清过期的 Pixiv 建议、重新登记都由反应做（image.sourceChanged）
       const sourceAfter = sourceKeys(db, kept);
-      this.ctx.changed({ type: 'image.trashed', ids: gone });
       this.ctx.changed({ type: 'curation.artistsChanged', ids: carried.artists });
       this.ctx.changed({ type: 'image.sourceChanged', ids: kept.filter((id) => sourceAfter.get(id) !== sourceBefore.get(id)) });
       db.prepare('UPDATE duplicate_groups SET resolved_at = ? WHERE id = ?').run(now, g.id);

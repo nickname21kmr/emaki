@@ -1,6 +1,9 @@
 /**
  * 缩略图服务：HTTP 按需生成（高优先级）+ 后台任务补齐（低优先级）。
- * 缓存按 sha256 存：<dataDir>/thumbs/v1/ab/<sha256>_<w>.webp，完全重复的图共用一份。
+ * 缓存按 sha256 存：<dataDir>/thumbs/v1/ab/<sha256>_<w>.webp，完全重复的图共用一份；文件内容换了 sha 就变了，自然是新的缩略图，
+ * 旧 sha 的缓存没人引用后由缓存回收删掉（domain/analysis/cacheGc.ts）。
+ * 这里只生成文件；算出来的主色、dHash、生成时间、解码错误、帧数、相机都交给分析模块写（domain/analysis/analyze.ts，P4a），
+ * 帧数、相机让类型变了时由分析模块声明 image.kindChanged。
  */
 import type { ImageFormat, ThumbWidth } from '@emaki/shared';
 import { existsSync } from 'node:fs';
@@ -11,7 +14,8 @@ import type { JobContext } from '../../core/jobs.ts';
 import type { Db } from '../../db/connection.ts';
 import { writeFileAtomic } from '../fs/atomicWrite.ts';
 import { toAbs } from '../fs/paths.ts';
-import { backfillClassification } from '../classify/backfill.ts';
+import { analyze, markNonJpegCameras, recordDecodeError, recordPixels, recordProbes } from '../../domain/analysis/analyze.ts';
+import { collectingTx } from '../../domain/tx.ts';
 import type { Change } from '../../propagation/changes.ts';
 import { computeDHash } from './dhash.ts';
 import { readCameraFromExif, readJpegExifHead } from './exif.ts';
@@ -59,18 +63,8 @@ export class ThumbnailService {
     return this.d.changes ? this.d.changes.apply(fn) : this.d.db.transaction(() => fn(() => {}))();
   }
 
-  /** 重判类型，返回最终类型真的变了的图 */
-  private reclassify(ids: number[]): number[] {
-    const kinds = () =>
-      new Map(
-        (this.d.db.prepare('SELECT id, content_kind FROM images WHERE id IN (SELECT value FROM json_each(?))').all(JSON.stringify(ids)) as { id: number; content_kind: string }[]).map(
-          (r) => [r.id, r.content_kind],
-        ),
-      );
-    const before = kinds();
-    backfillClassification(this.d.db, { ids });
-    const after = kinds();
-    return ids.filter((id) => before.get(id) !== after.get(id));
+  private nowIso(): string {
+    return new Date(this.d.now?.() ?? Date.now()).toISOString();
   }
 
   /** 按需生成：HTTP 用 priority 10，后台任务用 0。返回缓存文件路径；原图解不了时返回 null */
@@ -127,16 +121,12 @@ export class ThumbnailService {
         await writeFileAtomic(file, await openSharp(input, row.format).resize(fitBox(960)).webp({ ...WEBP, quality: 82 }).toBuffer());
       } else {
         const px = await processPixels(input, row.format, row.sha256, this.d.thumbsRoot);
-        // 多行可能共享同一 sha（完全重复）：按 sha 更新
-        this.d.db
-          .prepare('UPDATE images SET dominant_color=@c, dhash=@h, thumb_at=@now, decode_error=NULL WHERE sha256=@sha')
-          .run({ c: px.dominantColor, h: px.dhash, now: new Date(this.d.now?.() ?? Date.now()).toISOString(), sha: row.sha256 });
+        // 多行可能共享同一 sha（完全重复）：分析模块按 sha 写
+        recordPixels(this.d.db, row.sha256, { dominantColor: px.dominantColor, dhash: px.dhash, at: this.nowIso() });
       }
       return file;
     } catch (err) {
-      this.d.db
-        .prepare('UPDATE images SET decode_error=@err WHERE sha256=@sha')
-        .run({ err: `解码失败：${(err as Error).message}`, sha: row.sha256 });
+      recordDecodeError(this.d.db, row.sha256, `解码失败：${(err as Error).message}`);
       return null;
     }
   }
@@ -152,17 +142,14 @@ export class ThumbnailService {
     if (row.frame_count == null && ['webp','png','avif','gif','html'].includes(row.format)) {
       try { await this.frameMetadata(row,toAbs(row.root_path,row.rel_path)); }
       catch (error) {
-        this.d.db.prepare('UPDATE images SET decode_error=? WHERE sha256=?')
-          .run(`读取动画帧信息失败：${(error as Error).message}`,row.sha256);
+        recordDecodeError(this.d.db, row.sha256, `读取动画帧信息失败：${(error as Error).message}`);
         return null;
       }
     }
     // 只有 480 没有 240（写完 480 进程就被打断）：generate(480) 会直接返回，得先从 480 缩出 240
     if (!existsSync(f240)) await this.generate(row, 240);
     const [c, h] = await Promise.all([computeDominantColor(await readFile(f240)), computeDHash(await readFile(f480))]);
-    this.d.db
-      .prepare('UPDATE images SET dominant_color=@c, dhash=@h, thumb_at=@now, decode_error=NULL WHERE sha256=@sha')
-      .run({ c, h, now: new Date(this.d.now?.() ?? Date.now()).toISOString(), sha: row.sha256 });
+    recordPixels(this.d.db, row.sha256, { dominantColor: c, dhash: h, at: this.nowIso() });
     return f480;
   }
 
@@ -170,15 +157,16 @@ export class ThumbnailService {
     const known = this.d.db.prepare('SELECT frame_count FROM images WHERE id=?').pluck().get(row.id);
     if (known != null) return;
     const probe = await probeImage(input);
-    // 看图时（HTTP 生成缩略图）也会走到这里：类型真的变了才声明变化，免得每张新图都让前端整页重新拉取
-    const changed = this.d.db.transaction(() => {
-      this.d.db.prepare('UPDATE images SET frame_count=? WHERE sha256=?').run(probe.pages,row.sha256);
-      if ((probe.pages > 1 && probe.format !== 'gif') || probe.format === 'html') {
-        return this.reclassify(this.d.db.prepare('SELECT id FROM images WHERE sha256=?').pluck().all(row.sha256) as number[]);
-      }
-      return [];
+    // 看图时（HTTP 生成缩略图）也会走到这里：分析模块写帧数并重判类型，类型真的变了才声明变化，免得每张新图都让前端整页重新拉取
+    const ids = this.d.db.prepare('SELECT id FROM images WHERE sha256=?').pluck().all(row.sha256) as number[];
+    const tx = collectingTx(this.d.db);
+    this.d.db.transaction(() => {
+      const probes = ids.map((id) => ({ id, frames: probe.pages }));
+      // 只有多帧的才可能改类型：单帧的只记帧数，不重判
+      if ((probe.pages > 1 && probe.format !== 'gif') || probe.format === 'html') analyze(tx, ids, { probes });
+      else recordProbes(this.d.db, probes);
     })();
-    if (changed.length) this.apply((emit) => emit({ type: 'image.kindChanged', ids: changed }));
+    if (tx.changes.length) this.apply((emit) => tx.changes.forEach(emit));
   }
 
   /** 还没做过像素处理的图数量（Pipeline 用来决定要不要排缩略图任务） */
@@ -196,10 +184,9 @@ export class ThumbnailService {
    */
   private async backfillCameras(ctx: JobContext): Promise<number> {
     const db = this.d.db;
-    db.prepare("UPDATE images SET camera = '' WHERE camera IS NULL AND format <> 'jpeg'").run();
+    markNonJpegCameras(db);
     const batchStmt = db.prepare(`SELECT i.id, i.rel_path, r.path AS root_path FROM images i ${ROOT_JOIN}
       WHERE ${CAMERA_WHERE} AND i.id > @last ORDER BY i.id LIMIT ${BATCH}`);
-    const upd = db.prepare('UPDATE images SET camera = ? WHERE id = ?');
     let last = 0;
     let found = 0;
     for (;;) {
@@ -218,9 +205,10 @@ export class ThumbnailService {
         cams.push([r.id, cam]);
       }
       const hits = cams.filter(([, c]) => c).map(([id]) => id);
+      // 分析模块写相机；读到相机的当场重判类型（类型变了由它声明 image.kindChanged）
       this.apply((emit) => {
-        for (const [id, cam] of cams) upd.run(cam, id);
-        if (hits.length) emit({ type: 'image.kindChanged', ids: this.reclassify(hits) });
+        recordProbes(db, cams.map(([id, camera]) => ({ id, camera })));
+        analyze({ db, changed: emit }, hits);
       });
       found += hits.length;
       ctx.advance(rows.length);

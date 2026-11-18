@@ -7,7 +7,7 @@
  */
 import { CONTENT_KINDS, type ContentKind } from '@emaki/shared';
 import { BadRequestError } from '../../http/errors.ts';
-import { backfillClassification } from '../../services/classify/backfill.ts';
+import { setManualKind } from '../../domain/analysis/analyze.ts';
 import type { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import { setKindManual } from '../../domain/curation/kinds.ts';
 import type { SqliteContext } from './context.ts';
@@ -32,25 +32,13 @@ export interface KindDeps {
   catalog: () => CharacterCatalog;
 }
 
-/** 在 ctx.mutate 里调用；返回 toast 文案 */
+/**
+ * 在 ctx.mutate 里调用；返回 toast 文案。手动标记（content_kind_manual）是归类的决定（curation/kinds.ts），
+ * 最终类型由分析模块写（设成某一类就是它，改回自动当场按规则重算），变了由它声明 image.kindChanged
+ */
 export function setKindInTx(ctx: SqliteContext, u: UndoRecorder, ids: number[], value: ContentKind | 'auto'): string {
-  const db = ctx.db;
-  const json = JSON.stringify(ids);
-  const kinds = () => new Map((db.prepare('SELECT id, content_kind FROM images WHERE id IN (SELECT value FROM json_each(?))').all(json) as { id: number; content_kind: string }[]).map((r) => [r.id, r.content_kind]));
-  const before = kinds();
-  u.columns('images', ['content_kind', 'content_kind_source', 'content_kind_evidence', 'content_kind_version', 'theme', 'art_score'], ids);
   setKindManual(ctx, u, ids, value !== 'auto');
-  if (value === 'auto') {
-    backfillClassification(db, { ids });
-  } else {
-    db.prepare(
-      `UPDATE images SET content_kind = ?, content_kind_source = 'manual', content_kind_evidence = NULL
-       WHERE id IN (SELECT value FROM json_each(?))`,
-    ).run(value, json);
-  }
-  // 最终类型变了就声明（自动关联的重新评估、合集、Pixiv 资格由反应处理）
-  const after = kinds();
-  ctx.changed({ type: 'image.kindChanged', ids: ids.filter((id) => before.get(id) !== after.get(id)) });
+  setManualKind(ctx, u, ids, value);
   const n = ids.length;
   return value === 'auto' ? `已恢复自动判断（${n} 张）` : `已把 ${n} 张图标为「${KIND_LABEL[value]}」`;
 }
