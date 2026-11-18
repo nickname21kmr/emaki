@@ -118,6 +118,8 @@ describe('没有凭证：所有 /api/ 都拒绝（hello、配对除外）', () =
       port: 5175,
       addresses: expect.any(Array),
       pairing: true,
+      // 浏览器配对算校验码用（网页拿不到 TLS 证书）
+      fingerprint: f.tls.fingerprintHex,
     });
     for (const a of hello.json().addresses as string[]) expect(a).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
   });

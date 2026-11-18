@@ -140,6 +140,17 @@ describe('真的起 https（随机端口）', () => {
       socket.destroy();
       expect(fp).toBe(f.ds.access.status().fingerprint);
       expect(fp).toBe(f.tls.fingerprintHex);
+      // hello 里给的指纹（浏览器配对用）就是握手时的这张证书
+      const hello = await new Promise<string>((resolve, reject) => {
+        https
+          .get({ host: '127.0.0.1', port, path: '/api/v1/hello', rejectUnauthorized: false }, (res) => {
+            let text = '';
+            res.setEncoding('utf8');
+            res.on('data', (c: string) => (text += c)).on('end', () => resolve(text));
+          })
+          .on('error', reject);
+      });
+      expect(JSON.parse(hello)).toMatchObject({ app: 'emaki', fingerprint: fp });
 
       const { device, auth } = makeDevice(f.ds);
       const other = makeDevice(f.ds, undefined, '另一台');

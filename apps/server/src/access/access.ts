@@ -169,6 +169,8 @@ export class Access {
       port: c.port,
       addresses: lanAddresses(),
       pairing: true,
+      // 只在局域网入口开着时有人问，证书已经有了
+      fingerprint: this.tls().fingerprintHex,
     };
   }
 

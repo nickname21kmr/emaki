@@ -28,6 +28,12 @@ export interface LanHello {
   addresses: string[];
   /** 接受新的连接请求 */
   pairing: boolean;
+  /**
+   * 证书指纹（证书 DER 的 sha256，hex）。浏览器配对用：网页拿不到 TLS 证书，只能从这里取来算校验码。
+   * 中间人可以同时换掉证书和这一项，所以浏览器这条路防不了中间人（只防同一 Wi-Fi 下的人冒充手机）；
+   * App 要用自己在 TLS 握手里看到的那张证书算，不能信这一项
+   */
+  fingerprint: string;
 }
 
 /** POST /api/v1/pair 的请求体：commit 是 sha256(nonceA) 的 hex；带 ticket（扫码的一次性口令）时不用 commit，直接批准 */

@@ -4,7 +4,9 @@
  * 协议（局域网入口，https；App 和假手机脚本 scripts/lan-client.ts 都照这个实现）：
  *
  * 0. 手机先连上电脑的 https，记下证书 DER 的 sha256（fp，32 字节）。以后的每个请求都只认这张证书。
- *    `GET /api/v1/hello` → `{ app: 'emaki', protocol, serverId, name, … }`（LanHello）：确认是 Emaki、是哪台电脑。
+ *    `GET /api/v1/hello` → `{ app: 'emaki', protocol, serverId, name, fingerprint, … }`（LanHello）：确认是 Emaki、是哪台电脑。
+ *    浏览器拿不到 TLS 证书，fp 只能用 hello 里的 fingerprint（网页 features/access/pairing.ts）：中间人能同时换掉证书和 hello，
+ *    所以浏览器这条路防不了中间人，只防同一 Wi-Fi 下的人冒充你的手机；App 和假手机脚本用自己握手时看到的证书。
  * 1. 手机生成 32 字节随机数 nonceA，`POST /api/v1/pair`，体 `{ name, model?, commit }`，commit = hex(sha256(nonceA))。
  *    返回 `{ id, nonce, expiresAt }`：id 是 16 字节随机数（base64url），既是这次请求的编号也是它的凭据，只有手机知道；
  *    nonce 是电脑的 32 字节随机数 nonceB（hex）。
