@@ -31,11 +31,16 @@ function literalRoutes(): { method: string; path: string; file: string }[] {
   const out: { method: string; path: string; file: string }[] = [];
   const walk = (dir: string): string[] =>
     readdirSync(dir, { withFileTypes: true }).flatMap((d) =>
-      d.isDirectory() ? walk(path.join(dir, d.name)) : d.name.endsWith('.ts') && !d.name.endsWith('.test.ts') ? [path.join(dir, d.name)] : [],
+      d.isDirectory()
+        ? walk(path.join(dir, d.name))
+        : d.name.endsWith('.ts') && !d.name.endsWith('.test.ts')
+          ? [path.join(dir, d.name)]
+          : [],
     );
   for (const f of walk(SRC)) {
     const text = stripComments(readFileSync(f, 'utf8'), f);
-    for (const m of text.matchAll(/\bapp\.(get|post|put|patch|delete)\(\s*'([^']+)'/g)) out.push({ method: m[1]!.toUpperCase(), path: m[2]!, file: path.relative(SRC, f) });
+    for (const m of text.matchAll(/\bapp\.(get|post|put|patch|delete)\(\s*'([^']+)'/g))
+      out.push({ method: m[1]!.toUpperCase(), path: m[2]!, file: path.relative(SRC, f) });
   }
   return out;
 }
@@ -74,18 +79,27 @@ describe('每个 HTTP 写路由都对应一个命令（附录 #33、#35）', () 
         if (h.method === 'GET') continue;
         if (d.kind === 'command') continue;
         // 只读查询的 POST：一定也有 GET
-        expect((d.http ?? []).some((x) => x.method === 'GET'), `${h.method} ${h.path} → ${d.name}`).toBe(true);
+        expect(
+          (d.http ?? []).some((x) => x.method === 'GET'),
+          `${h.method} ${h.path} → ${d.name}`,
+        ).toBe(true);
       }
   });
 
   it('源码里手写的写路由：通用入口、兼容层（转成注册表里的命令），或者 AI 助手的会话管理（不是图库操作）', () => {
     const compat = new Set(COMPAT_ROUTES.map((r) => `${r.method} ${r.path}`));
     const writes = literalRoutes().filter((r) => r.method !== 'GET');
-    const stray = writes.filter((r) => !(compat.has(`${r.method} ${r.path}`) || r.path === '/api/commands/:name' || r.path.startsWith('/api/assistant/')));
+    const stray = writes.filter(
+      (r) => !(compat.has(`${r.method} ${r.path}`) || r.path === '/api/commands/:name' || r.path.startsWith('/api/assistant/')),
+    );
     expect(stray).toEqual([]);
     for (const r of COMPAT_ROUTES) for (const c of r.commands) expect(byName.get(c)?.kind, `${r.path} → ${c}`).toBe('command');
     // 兼容层确实都挂上了
-    for (const key of compat) expect(writes.map((r) => `${r.method} ${r.path}`), key).toContain(key);
+    for (const key of compat)
+      expect(
+        writes.map((r) => `${r.method} ${r.path}`),
+        key,
+      ).toContain(key);
   });
 });
 
@@ -93,10 +107,22 @@ describe('MCP 工具从注册表生成（附录 #35）', () => {
   let demo: DemoEngine;
   let client: Client;
   let tools: { name: string; description?: string; inputSchema: unknown; annotations?: unknown }[];
-  const host: ToolHost = { assertEnabled() {}, context: () => null, present() {}, askUser: () => ({ questionId: 'q' }), recordMutation() {} };
+  const host: ToolHost = {
+    assertEnabled() {},
+    context: () => null,
+    present() {},
+    askUser: () => ({ questionId: 'q' }),
+    recordMutation() {},
+  };
 
   beforeAll(async () => {
-    demo = await openDemoEngine(new EventBus(), { dir: makeTmpDir('mcp-registry'), memory: true, data: buildContractDb(NOW), now: NOW, clock: () => NOW });
+    demo = await openDemoEngine(new EventBus(), {
+      dir: makeTmpDir('mcp-registry'),
+      memory: true,
+      data: buildContractDb(NOW),
+      now: NOW,
+      clock: () => NOW,
+    });
     // 有数据库文件（SQL 工具）、绑定了网页会话（ask_user）：工具最全的情况
     const server = createLibraryMcp(demo.ds.registry, '/tmp/emaki-registry-test.sqlite', host, 'session-1', 'session-1');
     const [a, b] = InMemoryTransport.createLinkedPair();
@@ -118,17 +144,48 @@ describe('MCP 工具从注册表生成（附录 #35）', () => {
 
   it('权限边界：助手不能动用户已有的文件、设置、规则，不能撤销；能读、能归类、编目、合集、导入替换、启动 / 取消任务', () => {
     const names = new Set(tools.map((t) => t.name));
-    for (const c of ['library.trash', 'library.move', 'duplicates.resolve', 'duplicates.ignore', 'settings.update', 'settings.setSourceMode', 'library.addRoot', 'library.removeRoot', 'visibility.createRule', 'curation.promote', 'history.undo', 'history.revertChange', 'library.reveal', 'system.pickFolder', 'catalog.markSeen'])
+    for (const c of [
+      'library.trash',
+      'library.move',
+      'duplicates.resolve',
+      'duplicates.ignore',
+      'settings.update',
+      'settings.setSourceMode',
+      'library.addRoot',
+      'library.removeRoot',
+      'visibility.createRule',
+      'curation.promote',
+      'history.undo',
+      'history.revertChange',
+      'library.reveal',
+      'system.pickFolder',
+      'catalog.markSeen',
+    ])
       expect(names.has(toolName(c)), c).toBe(false);
-    for (const c of ['curation.link', 'curation.unlink', 'curation.setKind', 'curation.setSource', 'catalog.createCharacter', 'catalog.mergeCharacter', 'collections.create', 'library.import', 'library.replace', 'jobs.start', 'jobs.cancel'])
+    for (const c of [
+      'curation.link',
+      'curation.unlink',
+      'curation.setKind',
+      'curation.setSource',
+      'catalog.createCharacter',
+      'catalog.mergeCharacter',
+      'collections.create',
+      'library.import',
+      'library.replace',
+      'jobs.start',
+      'jobs.cancel',
+    ])
       expect(names.has(toolName(c)), c).toBe(true);
     // 被授权的 scope 里没有一个命令落在外面，外面的也没有混进来
     const allowed = commands.filter((c) => ASSISTANT_SCOPES.includes(c.scope)).map((c) => toolName(c.name));
-    expect([...names].filter((n) => !(SESSION_TOOLS as readonly string[]).includes(n) && !(READ_TOOLS as readonly string[]).includes(n)).sort()).toEqual(allowed.sort());
+    expect(
+      [...names].filter((n) => !(SESSION_TOOLS as readonly string[]).includes(n) && !(READ_TOOLS as readonly string[]).includes(n)).sort(),
+    ).toEqual(allowed.sort());
   });
 
   it('枚举和 schema 自动一致：类型取自 CONTENT_KINDS、任务取自任务种类的注册表，批量动作不再手抄', () => {
-    const schema = (name: string) => tools.find((t) => t.name === name)!.inputSchema as { properties: Record<string, { enum?: string[] }>; required?: string[] };
+    const schema = (name: string) =>
+      tools.find((t) => t.name === name)!.inputSchema as { properties: Record<string, { enum?: string[] }>; required?: string[] };
     expect(schema('curation_set_kind').properties.value!.enum).toEqual([...CONTENT_KINDS, 'auto']);
     expect(schema('jobs_start').properties.kind!.enum).toEqual(STARTABLE_JOB_KINDS);
     // 以前 update_images 少了的：按标签归类（assignTag）、画师改回自动（artist-auto）现在是同一范围里的命令
@@ -151,7 +208,12 @@ describe('MCP 工具从注册表生成（附录 #35）', () => {
     const snapshot = tools
       .map((t) => {
         const command = assistantCommands(demo.ds.registry).find((c) => toolName(c.name) === t.name);
-        return { name: t.name, ...(command ? { command: command.name, scope: command.scope, undoable: command.undoable } : {}), annotations: t.annotations, inputSchema: t.inputSchema };
+        return {
+          name: t.name,
+          ...(command ? { command: command.name, scope: command.scope, undoable: command.undoable } : {}),
+          annotations: t.annotations,
+          inputSchema: t.inputSchema,
+        };
       })
       .sort((a, b) => a.name.localeCompare(b.name));
     await expect(JSON.stringify(snapshot, null, 2) + '\n').toMatchFileSnapshot('./__snapshots__/mcp-tools.json');

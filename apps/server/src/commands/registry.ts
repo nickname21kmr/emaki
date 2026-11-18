@@ -70,11 +70,15 @@ export interface CommandDef<I = any, O = any> extends Base<I> {
 
 export type Def = QueryDef | CommandDef;
 
-export function defineQuery<S extends z.ZodType, O>(def: Omit<QueryDef<z.output<S>, O>, 'kind' | 'input'> & { input: S }): QueryDef<z.output<S>, O> {
+export function defineQuery<S extends z.ZodType, O>(
+  def: Omit<QueryDef<z.output<S>, O>, 'kind' | 'input'> & { input: S },
+): QueryDef<z.output<S>, O> {
   return { ...def, kind: 'query' } as QueryDef<z.output<S>, O>;
 }
 
-export function defineCommand<S extends z.ZodType, O>(def: Omit<CommandDef<z.output<S>, O>, 'kind' | 'input'> & { input: S }): CommandDef<z.output<S>, O> {
+export function defineCommand<S extends z.ZodType, O>(
+  def: Omit<CommandDef<z.output<S>, O>, 'kind' | 'input'> & { input: S },
+): CommandDef<z.output<S>, O> {
   if (!def.tx === !def.run) throw new Error(`命令 ${def.name}：tx 和 run 只能给一个`);
   return { ...def, kind: 'command' } as CommandDef<z.output<S>, O>;
 }
@@ -180,7 +184,9 @@ export class Registry {
   async execute<T = unknown>(name: string, raw: unknown = {}, opts: CallOptions = {}): Promise<T> {
     const def = this.require(name, 'command');
     const input = parse(def.input, raw);
-    return this.withKey(def.name, def.idempotent, input, opts, (actor, auditId) => this.perform([{ def, input }], actor, auditId)) as Promise<T>;
+    return this.withKey(def.name, def.idempotent, input, opts, (actor, auditId) =>
+      this.perform([{ def, input }], actor, auditId),
+    ) as Promise<T>;
   }
 
   /**
@@ -197,7 +203,13 @@ export class Registry {
     });
     const name = steps.map((s) => s.def.name).join('+');
     const idempotent = steps.every((s) => s.def.idempotent);
-    return this.withKey(name, idempotent, steps.map((s) => s.input), opts, (actor, auditId) => this.perform(steps, actor, auditId)) as Promise<T>;
+    return this.withKey(
+      name,
+      idempotent,
+      steps.map((s) => s.input),
+      opts,
+      (actor, auditId) => this.perform(steps, actor, auditId),
+    ) as Promise<T>;
   }
 
   /** 写命令结果附带的说明（不是写命令的结果返回 undefined） */
@@ -233,7 +245,8 @@ export class Registry {
   }
 
   private replay(row: AuditRow): unknown {
-    const result = row.result === null ? { ok: true, message: row.message ?? '', undoToken: row.undo_token } : (JSON.parse(row.result) as unknown);
+    const result =
+      row.result === null ? { ok: true, message: row.message ?? '', undoToken: row.undo_token } : (JSON.parse(row.result) as unknown);
     if (result && typeof result === 'object') {
       this.metas.set(result, {
         command: row.command,
@@ -276,7 +289,13 @@ export class Registry {
     }
     const r = (result ?? {}) as { message?: string; undoToken?: string | null; irreversible?: true };
     const last = steps[steps.length - 1]!.def;
-    const undo: UndoKind = r.undoToken ? 'token' : r.irreversible ? 'barrier' : steps.some((s) => !s.def.undoable) && last.barrier !== false ? 'barrier' : 'none';
+    const undo: UndoKind = r.undoToken
+      ? 'token'
+      : r.irreversible
+        ? 'barrier'
+        : steps.some((s) => !s.def.undoable) && last.barrier !== false
+          ? 'barrier'
+          : 'none';
     const changes = [...running.changes];
     const meta: CommandMeta = { command: name, undo, eventId: running.events.at(-1) ?? null, changes };
     if (result && typeof result === 'object') this.metas.set(result, meta);

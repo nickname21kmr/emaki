@@ -116,7 +116,8 @@ export const catalogCommands = [
   }),
   defineCommand({
     name: 'collections.update',
-    summary: '改合集：增删成员、改名（null 恢复自动名）、类型（auto 恢复自动）、封面、页序、系列、已整理、出场角色和作品；organizeFiles 整理到子文件夹',
+    summary:
+      '改合集：增删成员、改名（null 恢复自动名）、类型（auto 恢复自动）、封面、页序、系列、已整理、出场角色和作品；organizeFiles 整理到子文件夹',
     input: UpdateCollectionInput,
     scope: 'collections',
     undoable: true,

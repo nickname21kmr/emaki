@@ -6,7 +6,17 @@
  * 图库文件夹（以前在 SqliteDataSource 里）：添加时按真实位置认出同一个文件夹、合并子文件夹、接管移除过的父文件夹；
  * 漫画区设置变了声明 root.modeChanged，类型、分级、识别器的角色由反应按新设置重算，撤销时按快照写回。
  */
-import { REMOVED_ROOT_KEEP_DAYS, RATING_LABEL, type AddLibraryRootBody, type ID, type MoveImagesBody, type MovePreview, type MutationResult, type Rating, type UpdateLibraryRootBody } from '@emaki/shared';
+import {
+  REMOVED_ROOT_KEEP_DAYS,
+  RATING_LABEL,
+  type AddLibraryRootBody,
+  type ID,
+  type MoveImagesBody,
+  type MovePreview,
+  type MutationResult,
+  type Rating,
+  type UpdateLibraryRootBody,
+} from '@emaki/shared';
 import {
   AddRootInput,
   IdInput,
@@ -49,7 +59,15 @@ import { revealInFileManager } from '../services/fs/reveal.ts';
 import { byId, byIds, defineCommand, defineQuery, type Engine } from './registry.ts';
 
 /** 改图库文件夹的导入方式会改这些列（撤销用） */
-const ROOT_MODE_COLS = ['content_kind', 'content_kind_source', 'content_kind_evidence', 'content_kind_version', 'theme', 'art_score', 'rating'];
+const ROOT_MODE_COLS = [
+  'content_kind',
+  'content_kind_source',
+  'content_kind_evidence',
+  'content_kind_version',
+  'theme',
+  'art_score',
+  'rating',
+];
 type RootImageSnap = { id: number; tagged_at: string | null } & Record<string, unknown>;
 
 export async function addLibraryRoot(e: Engine, body: AddLibraryRootBody): Promise<MutationResult> {
@@ -129,7 +147,13 @@ export async function addLibraryRoot(e: Engine, body: AddLibraryRootBody): Promi
       rootId = insertRoot(db, { path: p, mode, rating: comicRating });
     }
     // 子文件夹在新文件夹下的相对路径按真实位置算（两边可能是不同写法）
-    if (children.length) merged = mergeChildRoots(db, rootId, pk, children.map((c) => ({ ...c, path: c.key }))).images;
+    if (children.length)
+      merged = mergeChildRoots(
+        db,
+        rootId,
+        pk,
+        children.map((c) => ({ ...c, path: c.key })),
+      ).images;
     if (removedParents.length) adopted = adoptFromRemovedParents(db, rootId, removedParents).images;
     // 合并、接管进来的旧图换了文件夹（路径变了）；复活、合并、接管进来的旧图按这次的设置重判类型（按漫画导入：归漫画、用选的分级）
     const ids = removed || children.length || adopted ? imagesUnder(e, rootId) : [];
@@ -172,7 +196,10 @@ function restoreRootImagesOnUndo(e: Engine, u: UndoRecorder, rootId: number, sna
 /** 图库文件夹里（relDir 给了就是这个子文件夹里）的全部图 */
 function imagesUnder(e: Engine, rootId: number, relDir?: string): number[] {
   const under = relDir ? "AND substr(rel_path, 1, length(@dir) + 1) = @dir || '/'" : '';
-  return e.ctx.db.prepare(`SELECT id FROM images WHERE root_id = @root ${under}`).pluck().all({ root: rootId, dir: relDir ?? '' }) as number[];
+  return e.ctx.db
+    .prepare(`SELECT id FROM images WHERE root_id = @root ${under}`)
+    .pluck()
+    .all({ root: rootId, dir: relDir ?? '' }) as number[];
 }
 
 /**
@@ -183,7 +210,8 @@ function setComicFolder(e: Engine, root: { id: number; path: string }, rawDir: s
   const db = e.ctx.db;
   const relDir = rawDir.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
   if (!relDir) throw new BadRequestError('要选图库文件夹里面的子文件夹');
-  const cur = db.prepare('SELECT comic_rating FROM comic_folders WHERE root_id = ? AND rel_dir = ?').get(root.id, relDir) as { comic_rating: Rating } | undefined;
+  const cur = db.prepare('SELECT comic_rating FROM comic_folders WHERE root_id = ? AND rel_dir = ?').get(root.id, relDir) as
+    { comic_rating: Rating } | undefined;
   if (rating === null && !cur) throw new NotFoundError('按漫画导入的子文件夹');
   if (rating !== null) {
     const area = ComicAreas.load(db).of(root.id, relDir);
@@ -191,7 +219,9 @@ function setComicFolder(e: Engine, root: { id: number; path: string }, rawDir: s
     if (cur?.comic_rating === rating) return done('没有变化');
   }
   const snap = db
-    .prepare(`SELECT id, tagged_at, ${ROOT_MODE_COLS.join(', ')} FROM images WHERE root_id = @root AND substr(rel_path, 1, length(@dir) + 1) = @dir || '/'`)
+    .prepare(
+      `SELECT id, tagged_at, ${ROOT_MODE_COLS.join(', ')} FROM images WHERE root_id = @root AND substr(rel_path, 1, length(@dir) + 1) = @dir || '/'`,
+    )
     .all({ root: root.id, dir: relDir }) as RootImageSnap[];
   const where = `${root.path.replace(/\/+$/, '')}/${relDir}`;
   return e.ctx.mutate((u) => {
@@ -213,7 +243,10 @@ export async function updateLibraryRoot(e: Engine, id: ID, body: UpdateLibraryRo
   const db = e.ctx.db;
   // 里面的漫画子文件夹：单独一步（各自可以撤销）
   if (body.comicFolder) {
-    const cur = db.prepare('SELECT comic_rating FROM comic_folders WHERE root_id = ? AND rel_dir = ?').pluck().get(root.id, body.comicFolder.relDir) as Rating | undefined;
+    const cur = db
+      .prepare('SELECT comic_rating FROM comic_folders WHERE root_id = ? AND rel_dir = ?')
+      .pluck()
+      .get(root.id, body.comicFolder.relDir) as Rating | undefined;
     return setComicFolder(e, root, body.comicFolder.relDir, body.comicFolder.comicRating ?? cur ?? 'general');
   }
   if (body.removeComicFolder !== undefined) return setComicFolder(e, root, body.removeComicFolder, null);
@@ -265,7 +298,9 @@ function restoreRootImages(e: Engine, rootId: number, snap: RootImageSnap[], rel
   const under = relDir ? "AND substr(rel_path, 1, length(@dir) + 1) = @dir || '/'" : '';
   const now = new Map(
     (
-      db.prepare(`SELECT id, tagged_at, content_kind_manual, rating_manual FROM images WHERE root_id = @root ${under}`).all({ root: rootId, dir: relDir ?? '' }) as {
+      db
+        .prepare(`SELECT id, tagged_at, content_kind_manual, rating_manual FROM images WHERE root_id = @root ${under}`)
+        .all({ root: rootId, dir: relDir ?? '' }) as {
         id: number;
         tagged_at: string | null;
         content_kind_manual: number;
@@ -332,7 +367,9 @@ function moveRows(e: Engine, body: MoveImagesBody) {
   } else {
     const ids = e.requireVisibleImages(body.ids ?? []);
     rows = e.ctx
-      .stmt(`SELECT ${cols} FROM images i JOIN library_roots r ON r.id = i.root_id WHERE i.id IN (SELECT value FROM json_each(?)) ORDER BY i.id`)
+      .stmt(
+        `SELECT ${cols} FROM images i JOIN library_roots r ON r.id = i.root_id WHERE i.id IN (SELECT value FROM json_each(?)) ORDER BY i.id`,
+      )
       .all(JSON.stringify(ids)) as typeof rows;
   }
   return { root, dir, rows };
@@ -353,8 +390,18 @@ export async function previewMove(e: Engine, body: MoveImagesBody): Promise<Move
   const json = JSON.stringify(ids);
   const otherCharacters = (
     cid === null
-      ? e.ctx.db.prepare('SELECT COUNT(*) FROM (SELECT image_id FROM image_characters WHERE image_id IN (SELECT value FROM json_each(?)) GROUP BY image_id HAVING COUNT(*) > 1)').pluck().get(json)
-      : e.ctx.db.prepare('SELECT COUNT(DISTINCT image_id) FROM image_characters WHERE image_id IN (SELECT value FROM json_each(?)) AND character_id <> ?').pluck().get(json, cid)
+      ? e.ctx.db
+          .prepare(
+            'SELECT COUNT(*) FROM (SELECT image_id FROM image_characters WHERE image_id IN (SELECT value FROM json_each(?)) GROUP BY image_id HAVING COUNT(*) > 1)',
+          )
+          .pluck()
+          .get(json)
+      : e.ctx.db
+          .prepare(
+            'SELECT COUNT(DISTINCT image_id) FROM image_characters WHERE image_id IN (SELECT value FROM json_each(?)) AND character_id <> ?',
+          )
+          .pluck()
+          .get(json, cid)
   ) as number;
   return { ids: ids.map(toId), alreadyThere, inCollection, otherCharacters };
 }
@@ -419,7 +466,10 @@ async function trashImages(e: Engine, ids: number[]): Promise<MutationResult> {
   let batch = 0;
   const res = e.ctx.mutate((u) => {
     markTrashed(e.ctx, u, ids, now);
-    batch = e.pendingTrash.record(u, rows.map((r) => ({ id: r.id, abs: toAbs(r.root, r.rel_path) })));
+    batch = e.pendingTrash.record(
+      u,
+      rows.map((r) => ({ id: r.id, abs: toAbs(r.root, r.rel_path) })),
+    );
     return { message: `已把 ${ids.length} 张图移到回收站` };
   });
   return e.pendingTrash.added(batch, res);
@@ -428,7 +478,8 @@ async function trashImages(e: Engine, ids: number[]): Promise<MutationResult> {
 export const libraryCommands = [
   defineCommand({
     name: 'library.import',
-    summary: '把下载好的本地图片新增入库（每次 1–20 张，每张最多 128 MiB）：完全相同的复用已有 id；重名默认返回 needs_confirm，keepBoth 保留两个版本。撤销把新增的副本移到回收站，下载的文件保留',
+    summary:
+      '把下载好的本地图片新增入库（每次 1–20 张，每张最多 128 MiB）：完全相同的复用已有 id；重名默认返回 needs_confirm，keepBoth 保留两个版本。撤销把新增的副本移到回收站，下载的文件保留',
     input: ImportImagesInput,
     scope: 'import',
     undoable: true,

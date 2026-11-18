@@ -80,7 +80,12 @@ export function getImage(e: Engine, id: ID): ImageDetail | null {
           `SELECT character_id, decision, evidence_provider, evidence_score FROM image_characters
            WHERE image_id = ? ORDER BY added_at, character_id`,
         )
-        .all(n) as { character_id: number; decision: 'manual' | 'auto'; evidence_provider: 'tagger' | 'pixiv' | null; evidence_score: number | null }[]
+        .all(n) as {
+        character_id: number;
+        decision: 'manual' | 'auto';
+        evidence_provider: 'tagger' | 'pixiv' | null;
+        evidence_score: number | null;
+      }[]
     ).map((r) => ({ characterId: toId(r.character_id), decision: r.decision, source: r.evidence_provider, score: r.evidence_score })),
     kindSource: row.content_kind_manual ? 'manual' : row.content_kind_source,
     kindReason: row.content_kind_manual ? null : describeKindReason(row.content_kind_source, row.content_kind_evidence),
@@ -102,7 +107,15 @@ function imageCollection(e: Engine, imageId: number): ImageDetail['collection'] 
        FROM images i JOIN collections c ON c.id = i.collection_id WHERE i.id = ? AND c.state = 'active'`,
     )
     .get(imageId) as
-    | { id: number; kind: 'doujin' | 'artbook' | 'group'; title: string | null; volume_no: number | null; rel_dir: string; ord: number; n: number }
+    | {
+        id: number;
+        kind: 'doujin' | 'artbook' | 'group';
+        title: string | null;
+        volume_no: number | null;
+        rel_dir: string;
+        ord: number;
+        n: number;
+      }
     | undefined;
   if (!r) return null;
   return {
@@ -159,24 +172,33 @@ export async function getOriginal(e: Engine, id: ID): Promise<FileResponse | nul
   }
   const html = row.format === 'html' ? await readHtmlAnimation(abs) : null;
   const sha = html ? sha256Buffer(html) : row.sha256;
-  const filePath = html ? await htmlAnimationCache(html,e.ctx.dataDir,sha) : abs;
+  const filePath = html ? await htmlAnimationCache(html, e.ctx.dataDir, sha) : abs;
   return { kind: 'path', contentType: MIME[row.format], filePath, etag: `"${sha.slice(0, 20)}"`, cacheControl: 'private, no-cache' };
 }
 
 export async function listCustomCharacterMatches(e: Engine): Promise<CustomCharacterMatch[]> {
-  const rows = e.ctx.db.prepare(`SELECT c.id, c.name, m.danbooru_tag AS tag
+  const rows = e.ctx.db
+    .prepare(
+      `SELECT c.id, c.name, m.danbooru_tag AS tag
     FROM custom_character_matches m JOIN characters c ON c.id = m.character_id
-    WHERE c.source = 'custom' AND c.danbooru_tag IS NULL AND m.dismissed = 0 ORDER BY c.name, c.id`).all() as { id: number; name: string; tag: string }[];
+    WHERE c.source = 'custom' AND c.danbooru_tag IS NULL AND m.dismissed = 0 ORDER BY c.name, c.id`,
+    )
+    .all() as { id: number; name: string; tag: string }[];
   const catalog = e.makeCatalog().catalog;
   return rows.map((r) => {
     const tag = e.danbooru.normalizeTag(r.tag);
     const described = catalog.describeTag(tag);
-    return { characterId: String(r.id), characterName: r.name, danbooruTag: tag, matchName: described.name,
-      workName: described.workName, existingCharacterId: described.characterId === null ? null : String(described.characterId),
-      existingCharacterName: described.characterId === null ? null : described.name };
+    return {
+      characterId: String(r.id),
+      characterName: r.name,
+      danbooruTag: tag,
+      matchName: described.name,
+      workName: described.workName,
+      existingCharacterId: described.characterId === null ? null : String(described.characterId),
+      existingCharacterName: described.characterId === null ? null : described.name,
+    };
   });
 }
-
 
 export const queries = [
   // ---------------------------------------------------------------- 统计

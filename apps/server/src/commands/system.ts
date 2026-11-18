@@ -5,7 +5,19 @@
  * - 设置（以前在 SqliteDataSource 里）：换 Pixiv 投稿号识别方式走可撤销的 settings.setSourceMode（报告影响了多少张）；
  *   其余设置照常保存，设置监听者和缓存由反应通知（settings.changed）。
  */
-import type { ContentKind, ID, Job, JobKind, MutationResult, PromotableSuggestions, RetagResult, Settings, SourceModePreview, StartJobBody, UpdateSettingsBody } from '@emaki/shared';
+import type {
+  ContentKind,
+  ID,
+  Job,
+  JobKind,
+  MutationResult,
+  PromotableSuggestions,
+  RetagResult,
+  Settings,
+  SourceModePreview,
+  StartJobBody,
+  UpdateSettingsBody,
+} from '@emaki/shared';
 import {
   CreateExclusionInput,
   EmptyInput,
@@ -38,7 +50,9 @@ export async function previewSourceMode(e: Engine, mode: 'strict' | 'broad'): Pr
   const changes = diffSources(e.ctx.db, mode);
   const requeue = changes.filter((c) => c.newPixivPost !== null);
   const cached = new Set(
-    e.ctx.db.prepare('SELECT post_id FROM pixiv_artwork_cache WHERE post_id IN (SELECT value FROM json_each(?))').pluck()
+    e.ctx.db
+      .prepare('SELECT post_id FROM pixiv_artwork_cache WHERE post_id IN (SELECT value FROM json_each(?))')
+      .pluck()
       .all(JSON.stringify([...new Set(requeue.map((c) => c.newPixivPost))])) as string[],
   );
   const hasPixivSug = e.ctx.db.prepare("SELECT 1 FROM v_character_suggestions WHERE image_id = ? AND source = 'pixiv' LIMIT 1");
@@ -67,14 +81,20 @@ export async function setSourceMode(e: Engine, mode: 'strict' | 'broad'): Promis
     const changes = diffSources(db, mode);
     changed = changes.length;
     // 来源的撤销快照；过期的 Pixiv 证据、检查记录、依据它们的自动决定由反应去掉并记撤销
-    snapshotSources(u, changes.map((c) => c.id));
+    snapshotSources(
+      u,
+      changes.map((c) => c.id),
+    );
     // 设置只改回这一项，期间改的其他设置不动
     u.sql("UPDATE settings SET value = json_set(value, '$.pixivFilenameMode', ?) WHERE key = 'tagger'", [before]);
     // 来源解析的版本记录（派生数据的版本，含识别方式）一起放回
     snapshotVersion(u, 'source');
-    dropped = db.prepare("SELECT COUNT(DISTINCT image_id) FROM v_character_suggestions WHERE source = 'pixiv' AND image_id IN (SELECT value FROM json_each(?))").pluck().get(
-      JSON.stringify(changes.filter((c) => c.before.site === 'pixiv' && c.pixivPostChanged).map((c) => c.id)),
-    ) as number;
+    dropped = db
+      .prepare(
+        "SELECT COUNT(DISTINCT image_id) FROM v_character_suggestions WHERE source = 'pixiv' AND image_id IN (SELECT value FROM json_each(?))",
+      )
+      .pluck()
+      .get(JSON.stringify(changes.filter((c) => c.before.site === 'pixiv' && c.pixivPostChanged).map((c) => c.id))) as number;
     applySettingsPatch(db, { tagger: { pixivFilenameMode: mode } });
     applySourceChanges(db, changes);
     markSourcesCurrent(db, mode, iso(e.ctx.clock()));
@@ -132,13 +152,15 @@ export async function updateSettings(e: Engine, body: UpdateSettingsBody): Promi
   }
   // 关掉：正在跑和排队中的补跑一起停（关了开关，设置页的进度和取消按钮也没了）
   if (body.tagger?.artists === false && beforeArtists) {
-    for (const j of e.ctx.jobs.list()) if (j.kind === 'artists' && (j.status === 'queued' || j.status === 'running')) e.ctx.jobs.cancel(j.id);
+    for (const j of e.ctx.jobs.list())
+      if (j.kind === 'artists' && (j.status === 'queued' || j.status === 'running')) e.ctx.jobs.cancel(j.id);
   }
   // 刚打开自动查 Pixiv：把关着时登记下来的图补上
   if (body.tagger?.pixiv === true && !beforePixiv) e.pipeline.requestPixiv();
   // 关掉：停掉自动排上的（排队中和正在跑的）；用户在「未识别」页手动点的照常跑完
   if (body.tagger?.pixiv === false && beforePixiv && !e.pipeline.isPixivManual()) {
-    for (const j of e.ctx.jobs.list()) if (j.kind === 'pixiv-tags' && (j.status === 'queued' || j.status === 'running')) e.ctx.jobs.cancel(j.id);
+    for (const j of e.ctx.jobs.list())
+      if (j.kind === 'pixiv-tags' && (j.status === 'queued' || j.status === 'running')) e.ctx.jobs.cancel(j.id);
   }
   return settings;
 }
@@ -161,7 +183,7 @@ export async function startJob(e: Engine, kind: JobKind, options: Pick<StartJobB
   if (options.refreshPixiv && kind !== 'pixiv-tags') throw new BadRequestError('刷新 Pixiv 标签只用于补充 Pixiv 角色');
   if (kind === 'pixiv-tags') {
     // Repeated starts must not reset checks or invalidate cache during an active run.
-    const active = e.ctx.jobs.list().find(j => j.kind === kind && (j.status === 'running' || j.status === 'queued'));
+    const active = e.ctx.jobs.list().find((j) => j.kind === kind && (j.status === 'running' || j.status === 'queued'));
     if (active) return active;
     queuePixivImages(e.ctx);
     if (options.refreshPixiv) clearPendingPixivCache(e.ctx);
@@ -181,7 +203,8 @@ export async function cancelJob(e: Engine, id: ID): Promise<void> {
   if (job && (job.status === 'queued' || job.status === 'running')) e.pipeline.notePaused(job.kind);
   e.ctx.jobs.cancel(id);
   // 识别完追加排上的那一轮 Pixiv 也一起取消，不然取消后马上又开始请求 pixiv.net
-  if (job?.kind === 'pixiv-tags') for (const j of e.ctx.jobs.list()) if (j.kind === 'pixiv-tags' && j.status === 'queued') e.ctx.jobs.cancel(j.id);
+  if (job?.kind === 'pixiv-tags')
+    for (const j of e.ctx.jobs.list()) if (j.kind === 'pixiv-tags' && j.status === 'queued') e.ctx.jobs.cancel(j.id);
 }
 
 export const systemCommands = [
@@ -264,7 +287,8 @@ export const systemCommands = [
   // ---------------------------------------------------------------- 后台任务
   defineCommand({
     name: 'jobs.start',
-    summary: '启动一个后台任务（扫描、缩略图、识别、查重、同步 Danbooru、识别画师、补充 Pixiv 角色）；可能覆盖全库，只在用户要求这个范围时用',
+    summary:
+      '启动一个后台任务（扫描、缩略图、识别、查重、同步 Danbooru、识别画师、补充 Pixiv 角色）；可能覆盖全库，只在用户要求这个范围时用',
     input: StartJobInput,
     scope: 'jobs',
     undoable: false,
@@ -319,7 +343,8 @@ export const systemCommands = [
     http: [{ method: 'POST', path: '/api/changes/:id/revert' }],
     run(e, input) {
       // 移回原处要动文件
-      if (e.ctx.stmt('SELECT kind FROM change_log WHERE id = ?').pluck().get(parseId(input.id)) === 'move') e.requireLibraryFiles('移回文件');
+      if (e.ctx.stmt('SELECT kind FROM change_log WHERE id = ?').pluck().get(parseId(input.id)) === 'move')
+        e.requireLibraryFiles('移回文件');
       return e.changes.revert(input.id);
     },
   }),

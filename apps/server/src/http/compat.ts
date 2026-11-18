@@ -99,11 +99,17 @@ export function updateImageCalls(id: string, body: UpdateImageBody): Call[] {
   return calls;
 }
 
-export const AcceptSchema = z.union([z.object({ danbooruTag: z.string().min(1) }), z.object({ danbooruTags: z.array(z.string().min(1)).min(1).max(20) })]);
+export const AcceptSchema = z.union([
+  z.object({ danbooruTag: z.string().min(1) }),
+  z.object({ danbooruTags: z.array(z.string().min(1)).min(1).max(20) }),
+]);
 
 /** POST /api/unrecognized/:id/accept → curation.link（采纳建议） */
 export function acceptCall(id: string, body: z.infer<typeof AcceptSchema>): Call {
-  return { name: 'curation.link', input: { ids: [id], tags: 'danbooruTags' in body ? body.danbooruTags : [body.danbooruTag], accept: true } };
+  return {
+    name: 'curation.link',
+    input: { ids: [id], tags: 'danbooruTags' in body ? body.danbooruTags : [body.danbooruTag], accept: true },
+  };
 }
 
 export const BulkCollectionsSchema = z.object({
@@ -136,7 +142,11 @@ export function bulkCollectionsCall(body: BulkCollectionsBody): Call {
 
 /** 兼容层的地址（GET /api/commands 不列它们；以后可以删，见报告和 ARCHITECTURE.md） */
 export const COMPAT_ROUTES: { method: string; path: string; commands: string[] }[] = [
-  { method: 'PATCH', path: '/api/images/:id', commands: ['curation.setSource', 'curation.setKind', 'curation.replace', 'curation.setRating', 'curation.setFavorite'] },
+  {
+    method: 'PATCH',
+    path: '/api/images/:id',
+    commands: ['curation.setSource', 'curation.setKind', 'curation.replace', 'curation.setRating', 'curation.setFavorite'],
+  },
   { method: 'POST', path: '/api/images/bulk', commands: [...new Set(Object.values(BULK_IMAGE_ACTIONS).map((a) => a.command))] },
   { method: 'POST', path: '/api/unrecognized/:id/accept', commands: ['curation.link'] },
   { method: 'POST', path: '/api/collections/bulk', commands: ['collections.review', 'collections.setKind', 'collections.link'] },
@@ -151,10 +161,14 @@ export function compatRoutes(app: FastifyInstance, registry: Registry): void {
     const { id } = req.params as { id: string };
     return run(reply, updateImageCalls(id, parse(UpdateImageSchema, req.body) as UpdateImageBody), callOf(req));
   });
-  app.post('/api/images/bulk', (req, reply) => run(reply, [bulkImagesCall(parse(BulkImagesSchema, req.body) as BulkImagesBody)], callOf(req)));
+  app.post('/api/images/bulk', (req, reply) =>
+    run(reply, [bulkImagesCall(parse(BulkImagesSchema, req.body) as BulkImagesBody)], callOf(req)),
+  );
   app.post('/api/unrecognized/:id/accept', (req, reply) => {
     const { id } = req.params as { id: string };
     return run(reply, [acceptCall(id, parse(AcceptSchema, req.body))], callOf(req));
   });
-  app.post('/api/collections/bulk', (req, reply) => run(reply, [bulkCollectionsCall(parse(BulkCollectionsSchema, req.body) as BulkCollectionsBody)], callOf(req)));
+  app.post('/api/collections/bulk', (req, reply) =>
+    run(reply, [bulkCollectionsCall(parse(BulkCollectionsSchema, req.body) as BulkCollectionsBody)], callOf(req)),
+  );
 }

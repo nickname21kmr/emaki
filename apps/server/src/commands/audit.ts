@@ -40,7 +40,9 @@ export interface AuditOutcome {
 
 /** 输入的签名：同一个 operationId 换了参数就是冲突 */
 export function signatureOf(command: string, input: unknown): string {
-  return createHash('sha256').update(JSON.stringify([command, input])).digest('hex');
+  return createHash('sha256')
+    .update(JSON.stringify([command, input]))
+    .digest('hex');
 }
 
 export class Audit {
@@ -70,16 +72,31 @@ export class Audit {
   finish(id: number, o: AuditOutcome): void {
     this.ctx
       .stmt('UPDATE command_log SET status = ?, message = ?, undo_token = ?, changes = ?, result = ?, error = ? WHERE id = ?')
-      .run(o.status, o.message ?? null, o.undoToken ?? null, o.changes?.length ? JSON.stringify(o.changes) : null, o.result === undefined ? null : JSON.stringify(o.result), o.error ?? null, id);
+      .run(
+        o.status,
+        o.message ?? null,
+        o.undoToken ?? null,
+        o.changes?.length ? JSON.stringify(o.changes) : null,
+        o.result === undefined ? null : JSON.stringify(o.result),
+        o.error ?? null,
+        id,
+      );
   }
 
   /** 没带 operationId 的命令、后台任务：做完一次写一行 */
   record(e: { command: string; actor: string }, o: AuditOutcome): void {
     this.ctx
-      .stmt(
-        `INSERT INTO command_log (at, command, actor, status, message, undo_token, changes, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(this.now(), e.command, e.actor, o.status, o.message ?? null, o.undoToken ?? null, o.changes?.length ? JSON.stringify(o.changes) : null, o.error ?? null);
+      .stmt(`INSERT INTO command_log (at, command, actor, status, message, undo_token, changes, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(
+        this.now(),
+        e.command,
+        e.actor,
+        o.status,
+        o.message ?? null,
+        o.undoToken ?? null,
+        o.changes?.length ? JSON.stringify(o.changes) : null,
+        o.error ?? null,
+      );
   }
 
   byKey(key: string): AuditRow | undefined {

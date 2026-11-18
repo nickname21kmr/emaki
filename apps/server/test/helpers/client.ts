@@ -165,7 +165,8 @@ export function client(e: Engine) {
     listChanges: (group: ChangeGroup) => ask<ChangeEntry[]>('changes.list', { group }),
     revertChange: (id: ID) => run('history.revertChange', { id }),
     undo: (token: string) => run('history.undo', { token }),
-    undoStatus: async (tokens: string[]) => (await ask<{ status: Record<string, UndoTokenStatus> }>('history.undoStatus', { tokens })).status,
+    undoStatus: async (tokens: string[]) =>
+      (await ask<{ status: Record<string, UndoTokenStatus> }>('history.undoStatus', { tokens })).status,
   };
 }
 

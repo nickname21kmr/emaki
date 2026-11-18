@@ -23,11 +23,18 @@ function fakeClient() {
       return Promise.resolve();
     },
   } as unknown as QueryClient;
-  const refetched = (key: unknown[]) => calls.filter((c) => c.refetchType !== 'none' && (!c.predicate || c.predicate({ queryKey: key }))).length;
+  const refetched = (key: unknown[]) =>
+    calls.filter((c) => c.refetchType !== 'none' && (!c.predicate || c.predicate({ queryKey: key }))).length;
   return { client, calls, refetched };
 }
 
-const meta = (m: Partial<CommandMeta>): CommandMeta => ({ command: 'curation.setFavorite', undo: 'token', eventId: null, changes: [], ...m });
+const meta = (m: Partial<CommandMeta>): CommandMeta => ({
+  command: 'curation.setFavorite',
+  undo: 'token',
+  eventId: null,
+  changes: [],
+  ...m,
+});
 
 describe('写操作只刷新一遍（附录 #36）', () => {
   beforeEach(() => {
@@ -39,7 +46,14 @@ describe('写操作只刷新一遍（附录 #36）', () => {
   it('SSE 先到：按事件刷新一次，写操作等它，不再自己刷新', async () => {
     const { client, refetched } = fakeClient();
     const { invalidate } = createInvalidator(client);
-    const changed: ServerEvent = { type: 'changed', id: 7, changes: ['curation.favoriteChanged'], reason: 'mutation', actor: 'user', command: 'curation.setFavorite' };
+    const changed: ServerEvent = {
+      type: 'changed',
+      id: 7,
+      changes: ['curation.favoriteChanged'],
+      reason: 'mutation',
+      actor: 'user',
+      command: 'curation.setFavorite',
+    };
     handleServerEvent(client, invalidate, changed);
     vi.advanceTimersByTime(0);
     const settled = settleRefresh(client, meta({ eventId: 7, changes: ['curation.favoriteChanged'] }));
@@ -58,7 +72,14 @@ describe('写操作只刷新一遍（附录 #36）', () => {
     const { client, refetched } = fakeClient();
     const { invalidate } = createInvalidator(client);
     const settled = settleRefresh(client, meta({ eventId: 8, changes: ['curation.ratingChanged'] }));
-    handleServerEvent(client, invalidate, { type: 'changed', id: 8, changes: ['curation.ratingChanged'], reason: 'mutation', actor: 'user', command: 'curation.setRating' });
+    handleServerEvent(client, invalidate, {
+      type: 'changed',
+      id: 8,
+      changes: ['curation.ratingChanged'],
+      reason: 'mutation',
+      actor: 'user',
+      command: 'curation.setRating',
+    });
     await vi.runAllTimersAsync();
     await settled;
     expect(refetched(['images', {}])).toBe(1);
@@ -115,7 +136,13 @@ describe('AI 助手的修改进网页的撤销栈（附录 #35）', () => {
     handleServerEvent(client, invalidate, command());
     const entries = useUndoStore.getState().entries;
     expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({ token: 'assistant-tok', label: '助手：已将 2 张图归到「圣园未花」', by: 'assistant', boot: 'boot-1', focus: { images: ['i1', 'i2'] } });
+    expect(entries[0]).toMatchObject({
+      token: 'assistant-tok',
+      label: '助手：已将 2 张图归到「圣园未花」',
+      by: 'assistant',
+      boot: 'boot-1',
+      focus: { images: ['i1', 'i2'] },
+    });
   });
 
   it('按 boot 认领：别的启动（后端重启前）的不要；用户自己的、撤销不了的也不要', () => {
@@ -130,9 +157,15 @@ describe('AI 助手的修改进网页的撤销栈（附录 #35）', () => {
 
 describe('撤销屏障来自命令注册表（附录 #33）', () => {
   it('不可撤销的命令（改设置、启动任务）占一格；可撤销但这次没改什么的不占', () => {
-    const settings = attachMeta({ ok: true as const, message: '已保存', undoToken: null }, meta({ command: 'settings.update', undo: 'barrier' }));
+    const settings = attachMeta(
+      { ok: true as const, message: '已保存', undoToken: null },
+      meta({ command: 'settings.update', undo: 'barrier' }),
+    );
     expect(entryOf(settings, '改了设置')).toMatchObject({ label: '改了设置', barrier: true });
-    const noop = attachMeta({ ok: true as const, message: '没有变化', undoToken: null }, meta({ command: 'curation.setFavorite', undo: 'none' }));
+    const noop = attachMeta(
+      { ok: true as const, message: '没有变化', undoToken: null },
+      meta({ command: 'curation.setFavorite', undo: 'none' }),
+    );
     expect(entryOf(noop, '收藏')).toBeNull();
     // 有令牌就是令牌
     expect(entryOf({ ok: true, message: '已收藏', undoToken: 't' }, '收藏')).toEqual({ token: 't', label: '已收藏' });

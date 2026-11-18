@@ -87,7 +87,8 @@ async function handle(registry: Registry, def: Def, req: FastifyRequest, reply: 
 /** 注册表里所有带 http 地址的命令和查询，加上通用入口和旧地址的兼容层 */
 export function registryRoutes(app: FastifyInstance, registry: Registry): void {
   for (const def of registry.list()) {
-    for (const h of def.http ?? []) app.route({ method: h.method, url: h.path, handler: (req, reply) => handle(registry, def, req, reply) });
+    for (const h of def.http ?? [])
+      app.route({ method: h.method, url: h.path, handler: (req, reply) => handle(registry, def, req, reply) });
   }
   // 通用入口：名字就是注册表里的名字，输入就是 schema 的形状
   app.post('/api/commands/:name', async (req, reply) => {

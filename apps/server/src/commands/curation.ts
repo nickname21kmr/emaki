@@ -58,7 +58,9 @@ function acceptSuggestions(e: Engine, u: UndoRecorder, imageId: number, rawTags:
   const tags = [...new Set(rawTags.map((t) => t.trim()))];
   const rows = tags.map((tag) => {
     const row = e.ctx
-      .stmt('SELECT score, character_id, provider AS source FROM character_evidence WHERE image_id = ? AND tag = ? ORDER BY score DESC LIMIT 1')
+      .stmt(
+        'SELECT score, character_id, provider AS source FROM character_evidence WHERE image_id = ? AND tag = ? ORDER BY score DESC LIMIT 1',
+      )
       .get(imageId, tag) as { score: number; character_id: number | null; source: 'tagger' | 'pixiv' } | undefined;
     // 自建角色的建议只认 character_id：角色合并 / 删除后这行已级联删掉，不能按编号再找（编号可能给了别的角色）
     if (CharacterCatalog.isCustomTag(tag) && row?.character_id == null) throw new ConflictError('这条建议已失效，请刷新');
@@ -76,7 +78,11 @@ function acceptSuggestions(e: Engine, u: UndoRecorder, imageId: number, rawTags:
       characterId = c.id;
       if (c.created) created++;
     }
-    items.push({ imageId, characterId, provenance: manual(at, { provider: r.source, tag: r.tag, score: r.source === 'pixiv' ? null : r.score }) });
+    items.push({
+      imageId,
+      characterId,
+      provenance: manual(at, { provider: r.source, tag: r.tag, score: r.source === 'pixiv' ? null : r.score }),
+    });
     names.push(e.ctx.db.prepare('SELECT name FROM characters WHERE id = ?').pluck().get(characterId) as string);
   }
   // 归类模块写关联、清掉否决、声明变化（新角色命中「角色」排除规则由反应处理）；关联上了的候选自然不再是建议
@@ -89,7 +95,8 @@ const count = (n: number, one: string, many: string) => (n === 1 ? one : many);
 export const curationCommands = [
   defineCommand({
     name: 'curation.link',
-    summary: '把角色关联到这些图（手动）：characterId 是已有角色；tags 按标签找角色、找不到时按建议建档；accept 是采纳这张图的建议（按证据记来历）',
+    summary:
+      '把角色关联到这些图（手动）：characterId 是已有角色；tags 按标签找角色、找不到时按建议建档；accept 是采纳这张图的建议（按证据记来历）',
     input: LinkInput,
     scope: 'curate',
     undoable: true,
@@ -266,11 +273,24 @@ export const curationCommands = [
     tx(e, input, u) {
       const id = e.requireVisibleImages([input.id])[0]!;
       const db = e.ctx.db;
-      const edit = editedSource(input.source, e.ctx.stmt('SELECT rel_path FROM images WHERE id = ?').pluck().get(id) as string, readSettings(db).tagger.pixivFilenameMode);
+      const edit = editedSource(
+        input.source,
+        e.ctx.stmt('SELECT rel_path FROM images WHERE id = ?').pluck().get(id) as string,
+        readSettings(db).tagger.pixivFilenameMode,
+      );
       // 同投稿组的成员和页码要在改来源之前记下（撤销时放回原来的组）
       const oldKey = db.prepare("SELECT source_site || ':' || source_post_id FROM images WHERE id = ?").pluck().get(id) as string | null;
-      if (oldKey) u.columns('images', ['collection_id', 'page_no', 'collection_detached'], db.prepare("SELECT id FROM images WHERE source_site || ':' || source_post_id = ?").pluck().all(oldKey) as number[]);
-      const before = db.prepare("SELECT COALESCE(source_site, '') || '|' || COALESCE(source_post_id, '') || '|' || COALESCE(source_artist, '') || '|' || COALESCE(source_url, '') FROM images WHERE id = ?").pluck();
+      if (oldKey)
+        u.columns(
+          'images',
+          ['collection_id', 'page_no', 'collection_detached'],
+          db.prepare("SELECT id FROM images WHERE source_site || ':' || source_post_id = ?").pluck().all(oldKey) as number[],
+        );
+      const before = db
+        .prepare(
+          "SELECT COALESCE(source_site, '') || '|' || COALESCE(source_post_id, '') || '|' || COALESCE(source_artist, '') || '|' || COALESCE(source_url, '') FROM images WHERE id = ?",
+        )
+        .pluck();
       const was = before.get(id);
       // 手动确认 / 清除 / 恢复自动：归类模块记决定（source_manual），来源的值由证据模块写
       setManualSource(e.ctx, u, id, edit.source, edit.manual);
@@ -289,7 +309,10 @@ export const curationCommands = [
     images: byIds,
     tx(e, input, u) {
       const ids = e.requireVisibleImages(unique(input.ids));
-      const todo = e.ctx.db.prepare('SELECT id FROM images WHERE id IN (SELECT value FROM json_each(?)) AND excluded_by IS NULL').pluck().all(JSON.stringify(ids)) as number[];
+      const todo = e.ctx.db
+        .prepare('SELECT id FROM images WHERE id IN (SELECT value FROM json_each(?)) AND excluded_by IS NULL')
+        .pluck()
+        .all(JSON.stringify(ids)) as number[];
       for (const id of todo) createExclusionInTx(e.ctx, u, 'image', String(id));
       return { message: `已排除 ${ids.length} 张图` };
     },

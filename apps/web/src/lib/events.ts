@@ -66,7 +66,23 @@ const isDuplicates = (key: readonly unknown[]) => key[0] === 'duplicates';
  * 不再每个修改都全部重新获取。图片上的决定会改各处的图、计数、封面，所以 IMAGE_VIEWS 一大组；
  * 查重（一次 6 MB）、排除规则、设置、模型列表这些只在相关的变化时刷新。撤销状态（undo-status）每次都刷新
  */
-const IMAGE_VIEWS = ['images', 'image', 'image-count', 'collections', 'collection', 'characters', 'character', 'works', 'work', 'search', 'unrecognized', 'stats', 'summary', 'content-kinds', 'undo-status'] as const;
+const IMAGE_VIEWS = [
+  'images',
+  'image',
+  'image-count',
+  'collections',
+  'collection',
+  'characters',
+  'character',
+  'works',
+  'work',
+  'search',
+  'unrecognized',
+  'stats',
+  'summary',
+  'content-kinds',
+  'undo-status',
+] as const;
 const WITH_FILES = [...IMAGE_VIEWS, 'duplicates', 'changes', 'settings', 'artists'] as const;
 export const REFRESH: Record<DomainChange, readonly string[]> = {
   'image.added': WITH_FILES,
@@ -155,7 +171,8 @@ export function createInvalidator(client: QueryClient) {
       // 一分钟到了再补拉一次；至少隔 11 秒，等后端 10 秒的软缓存过期，不然拉回来的还是旧的
       else rankTimer = setTimeout(refreshRanks, Math.max(lastRankRefresh + 60_000 - Date.now(), 11_000));
     }
-    const quiet = (key: readonly unknown[]) => (throttleRanks && isRankQuery(key)) || (reason === 'tag' && (isUnrecognizedList(key) || isDuplicates(key)));
+    const quiet = (key: readonly unknown[]) =>
+      (throttleRanks && isRankQuery(key)) || (reason === 'tag' && (isUnrecognizedList(key) || isDuplicates(key)));
     void Promise.all([
       client.invalidateQueries({ predicate: (q) => hit(q.queryKey) && !quiet(q.queryKey) }),
       client.invalidateQueries({ predicate: (q) => hit(q.queryKey) && quiet(q.queryKey), refetchType: 'none' }),
@@ -252,7 +269,8 @@ export function adoptCommand(event: CommandEvent) {
 }
 
 /** 重新建连接时带上收到的最后一条的 id（浏览器自己重连时会带 Last-Event-ID，这里补上手动重建的情况） */
-const eventsUrl = () => (position.boot && position.last ? `/api/events?lastEventId=${encodeURIComponent(`${position.boot}.${position.last}`)}` : '/api/events');
+const eventsUrl = () =>
+  position.boot && position.last ? `/api/events?lastEventId=${encodeURIComponent(`${position.boot}.${position.last}`)}` : '/api/events';
 
 /** EventSource.CLOSED（node 跑测试时没有 EventSource） */
 const CLOSED = 2;

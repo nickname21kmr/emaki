@@ -7,7 +7,15 @@
  */
 import { z } from 'zod';
 import { STARTABLE_JOB_KINDS } from './jobs.ts';
-import { BROWSE_THEMES, CUSTOM_THEME_LIMITS, UNRECOGNIZED_ANNEX_KINDS, UNRECOGNIZED_AREAS, UNRECOGNIZED_ART_KINDS, UNRECOGNIZED_BUCKETS, UNRECOGNIZED_THEMES } from './api.ts';
+import {
+  BROWSE_THEMES,
+  CUSTOM_THEME_LIMITS,
+  UNRECOGNIZED_ANNEX_KINDS,
+  UNRECOGNIZED_AREAS,
+  UNRECOGNIZED_ART_KINDS,
+  UNRECOGNIZED_BUCKETS,
+  UNRECOGNIZED_THEMES,
+} from './api.ts';
 import { CONTENT_KINDS, type ContentKind } from './domain.ts';
 
 /** shared 不带 DOM / node 的类型：这里只用到 URL 的这几个字段（运行时是全局的 URL） */
@@ -37,7 +45,9 @@ const animatedIsNotKind = (issue: { input?: unknown }) =>
 /** 内容类型（D5 起没有 animated：动图是另一个维度，筛选用 animated=true） */
 export const KindSchema = z.enum(CONTENT_KINDS as readonly [ContentKind, ...ContentKind[]], { error: animatedIsNotKind });
 /** 改类型：'auto' = 清掉手动设置，按规则重判 */
-export const KindValue = z.enum([...CONTENT_KINDS, 'auto'] as unknown as [ContentKind | 'auto', ...(ContentKind | 'auto')[]], { error: animatedIsNotKind });
+export const KindValue = z.enum([...CONTENT_KINDS, 'auto'] as unknown as [ContentKind | 'auto', ...(ContentKind | 'auto')[]], {
+  error: animatedIsNotKind,
+});
 /** 查询串里的类型：kind=all 或 kind=comic,screenshot；有未知值返回 400 */
 export const qKinds = z.union([z.literal('all'), qList(KindSchema)]);
 export const CollectionKindSchema = z.enum(['doujin', 'artbook', 'group']);
@@ -68,7 +78,10 @@ export const UnlinkInput = z.object({ ids: ImageIds, characterId: z.string() });
 export const ReplaceCharactersInput = z.object({ id: Id, characterIds: z.array(z.string()).max(200) });
 export const SetFavoriteInput = z.object({ ids: ImageIds, value: z.boolean() });
 export const SetRatingInput = z.object({ ids: ImageIds, value: RatingSchema });
-export const SetKindInput = z.object({ ids: ImageIds, value: KindValue.describe('内容类型；是否动图不是类型（按帧数自动判断，图片的 animated 字段），不能改') });
+export const SetKindInput = z.object({
+  ids: ImageIds,
+  value: KindValue.describe('内容类型；是否动图不是类型（按帧数自动判断，图片的 animated 字段），不能改'),
+});
 /** 放下：不找角色了，不再出现在未识别；false = 放回 */
 export const SetShelvedInput = z.object({ ids: ImageIds, value: z.boolean() });
 /** 归为原创（true）/ 移出原创（false） */
@@ -123,16 +136,27 @@ export const UpdateCharacterFields = z.object({
   danbooruTag: z.string().nullable().optional(),
   workIds: z.array(z.string()).optional(),
   coverImageId: z.string().nullable().optional(),
-  coverFocus: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) }).nullable().optional(),
+  coverFocus: z
+    .object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) })
+    .nullable()
+    .optional(),
   pinned: z.boolean().optional(),
 });
 export const UpdateCharacterInput = UpdateCharacterFields.extend({ id: Id });
 export const MergeCharacterInput = z.object({ id: Id, targetId: z.string().min(1) });
 
-const verifiedTag = z.string().trim().min(1).max(200).regex(/^[^\s:]+$/);
+const verifiedTag = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .regex(/^[^\s:]+$/);
 const verificationEvidence = {
   aliases: z.array(z.string().trim().min(1).max(100)).max(30).default([]),
-  sources: z.array(z.url({ protocol: /^https?$/ }).max(2000)).min(1).max(8),
+  sources: z
+    .array(z.url({ protocol: /^https?$/ }).max(2000))
+    .min(1)
+    .max(8),
   evidence: z.string().trim().min(1).max(2000),
 };
 /** 查证过的角色身份关系或常用名 */
@@ -214,22 +238,37 @@ const moveFields = {
   rootId: z.string().min(1),
   dir: z.string().max(400),
 };
-export const MoveImagesInput = z.object(moveFields).refine((b) => (b.ids === undefined) !== (b.characterId === undefined), '要么给 ids，要么给 characterId');
+export const MoveImagesInput = z
+  .object(moveFields)
+  .refine((b) => (b.ids === undefined) !== (b.characterId === undefined), '要么给 ids，要么给 characterId');
 export const MovePreviewInput = z
   // GET 的查询串里空的 dir 不出现：不给就是图库文件夹本身
-  .object({ ...moveFields, ids: qList(z.string()).pipe(z.array(z.string()).min(1).max(50000)).optional(), dir: z.string().max(400).default('') })
-  .refine((b) => b.ids !== undefined || b.characterId !== undefined, '要么给 ids，要么给 characterId');
-export const AddRootInput = z.object({ path: z.string().min(1), merge: z.boolean().optional(), mode: RootModeSchema.optional(), comicRating: RatingSchema.optional() });
-export const UpdateRootFields = z
   .object({
-    enabled: z.boolean().optional(),
-    mode: RootModeSchema.optional(),
-    comicRating: RatingSchema.optional(),
-    comicFolder: z.object({ relDir: z.string().min(1).max(1000), comicRating: RatingSchema.optional() }).optional(),
-    removeComicFolder: z.string().min(1).max(1000).optional(),
-  });
+    ...moveFields,
+    ids: qList(z.string()).pipe(z.array(z.string()).min(1).max(50000)).optional(),
+    dir: z.string().max(400).default(''),
+  })
+  .refine((b) => b.ids !== undefined || b.characterId !== undefined, '要么给 ids，要么给 characterId');
+export const AddRootInput = z.object({
+  path: z.string().min(1),
+  merge: z.boolean().optional(),
+  mode: RootModeSchema.optional(),
+  comicRating: RatingSchema.optional(),
+});
+export const UpdateRootFields = z.object({
+  enabled: z.boolean().optional(),
+  mode: RootModeSchema.optional(),
+  comicRating: RatingSchema.optional(),
+  comicFolder: z.object({ relDir: z.string().min(1).max(1000), comicRating: RatingSchema.optional() }).optional(),
+  removeComicFolder: z.string().min(1).max(1000).optional(),
+});
 export const UpdateRootInput = UpdateRootFields.extend({ id: Id }).refine(
-  (b) => b.enabled !== undefined || b.mode !== undefined || b.comicRating !== undefined || b.comicFolder !== undefined || b.removeComicFolder !== undefined,
+  (b) =>
+    b.enabled !== undefined ||
+    b.mode !== undefined ||
+    b.comicRating !== undefined ||
+    b.comicFolder !== undefined ||
+    b.removeComicFolder !== undefined,
   '没有要改的',
 );
 
@@ -253,7 +292,10 @@ export const UpdateSettingsInput = z.object({
       autoAcceptBySource: z.record(z.string().regex(/^(tagger|pixiv|plugin:[\w.-]+)$/), z.number().min(0).max(1)),
       batchSize: z.number().int().min(1).max(64),
       legacyModel: z.string().nullable(),
-      legacyBefore: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+      legacyBefore: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .nullable(),
       skipCameraPhotos: z.boolean(),
       retryOld: z.boolean(),
       keepAwake: z.boolean(),
@@ -265,9 +307,15 @@ export const UpdateSettingsInput = z.object({
     .partial()
     .optional(),
   danbooru: z.object({ enabled: z.boolean(), username: z.string() }).partial().optional(),
-  dedupe: z.object({ hammingThreshold: z.number().int().min(0).max(64) }).partial().optional(),
+  dedupe: z
+    .object({ hammingThreshold: z.number().int().min(0).max(64) })
+    .partial()
+    .optional(),
   // blurSensitive、density 是本机偏好（P5，附录 #32），收到也丢掉
-  ui: z.object({ theme: z.enum(['system', 'light', 'dark']) }).partial().optional(),
+  ui: z
+    .object({ theme: z.enum(['system', 'light', 'dark']) })
+    .partial()
+    .optional(),
   browse: z
     .object({
       customThemes: z
@@ -348,7 +396,11 @@ export const ListCharactersInput = z.object({
 });
 export const TopCharactersInput = z.object({ limit: qNumber.min(1).max(50).optional(), workId: workFilter });
 export const CoverCandidatesInput = z.object({ id: Id, limit: qNumber.min(1).max(48).optional() });
-export const SearchInput = z.object({ q: z.string().default(''), limit: qNumber.min(1).max(50).optional(), forAssignment: qBool.optional() });
+export const SearchInput = z.object({
+  q: z.string().default(''),
+  limit: qNumber.min(1).max(50).optional(),
+  forAssignment: qBool.optional(),
+});
 export const TagSuggestionsInput = z.object({ q: z.string().max(100).default(''), limit: qNumber.min(1).max(50).optional() });
 export const ListCollectionsInput = z.object({
   kind: CollectionKindSchema.optional(),
