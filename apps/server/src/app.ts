@@ -1,12 +1,12 @@
 import type { HealthResponse } from '@emaki/shared';
 import fastifyStatic from '@fastify/static';
-import Fastify from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import { existsSync } from 'node:fs';
 import { config } from './config.ts';
 import type { EventBus } from './core/events.ts';
 import type { SqliteDataSource } from './datasource/sqlite/SqliteDataSource.ts';
 import { toApiError } from './http/errors.ts';
-import { eventRoutes } from './http/events.ts';
+import { eventRoutes, type EventRouteOptions } from './http/events.ts';
 import { registryRoutes } from './http/routes.ts';
 import { keepAwakeStatus } from './services/system/keepAwake.ts';
 import { assistantRoutes } from './assistant/routes.ts';
@@ -15,13 +15,62 @@ import { actorFromHeaders, runAs } from './propagation/actor.ts';
 /**
  * HTTP 入口。路由从命令 / 查询注册表生成（http/routes.ts，docs/core-architecture.md 第 9 节）；
  * 另外只有 SSE（http/events.ts）、健康检查、AI 助手的会话管理（assistant/routes.ts）和生产模式托管前端。
+ *
+ * 两个入口（docs/mobile.md 2.1、2.6）共用 createFastify、mountShared、serveWeb：
+ * - 本机入口 buildApp（这里，127.0.0.1:5174）：Host / Origin / 同源检查，免登录，挂 AI 助手的路由；
+ * - 局域网入口 buildLanApp（access/lan.ts）：https，所有 /api/ 都要设备凭证，不挂助手的路由。
  */
-export async function buildApp(engine: SqliteDataSource, bus: EventBus) {
-  const app = Fastify({
+
+/** 两个入口一样的 fastify 设置；extra 是局域网入口的 https 这类 */
+export function createFastify(extra: Partial<FastifyServerOptions> & { https?: { key: string; cert: string } } = {}): FastifyInstance {
+  // 局域网入口传了 https 时 fastify 的类型参数变成 https.Server；路由、钩子只用到和 http 一样的部分
+  return Fastify({
     logger: { level: process.env.EMAKI_LOG_LEVEL ?? 'info', transport: undefined },
     // 批量操作可能带几千个 id
     bodyLimit: 5 * 1024 * 1024,
+    ...extra,
+  }) as unknown as FastifyInstance;
+}
+
+/** 两个入口共用的：错误处理、注册表生成的路由、SSE、健康检查 */
+export function mountShared(app: FastifyInstance, engine: SqliteDataSource, bus: EventBus, events: EventRouteOptions = {}): void {
+  app.setErrorHandler((err, req, reply) => {
+    const { statusCode, body } = toApiError(err);
+    if (statusCode >= 500 && statusCode !== 501) req.log.error(err);
+    void reply.status(statusCode).send(body);
   });
+
+  registryRoutes(app, engine.registry);
+  eventRoutes(app, bus, events);
+
+  app.get(
+    '/api/health',
+    (): HealthResponse => ({
+      ok: true,
+      dataSource: config.dataSource,
+      version: config.appVersion,
+      dataDir: config.libraryDir,
+      bootId: bus.boot,
+      ...(config.dataSource === 'sqlite' ? { keepAwake: keepAwakeStatus() } : {}),
+    }),
+  );
+}
+
+/** 生产模式：托管前端构建产物（不要身份），前端路由全部回落到 index.html；不存在的 /api/ 地址 404 */
+export async function serveWeb(app: FastifyInstance, webDist: string): Promise<void> {
+  if (!existsSync(webDist)) return;
+  await app.register(fastifyStatic, { root: webDist, wildcard: false });
+  app.setNotFoundHandler((req, reply) => {
+    if (req.url.startsWith('/api/')) {
+      return reply.status(404).send({ ok: false, error: `没有这个接口：${req.method} ${req.url}`, code: 'not_found' });
+    }
+    return reply.sendFile('index.html');
+  });
+}
+
+/** 本机入口 */
+export async function buildApp(engine: SqliteDataSource, bus: EventBus) {
+  const app = createFastify();
 
   // 本机安全（T23），在所有路由之前。不开 CORS：开发时 vite 把 /api 代理成同源，生产由后端自己托管前端，
   // 本机其他端口的页面（ComfyUI、别的 vite 项目）不该能读图库或发写操作。
@@ -51,38 +100,9 @@ export async function buildApp(engine: SqliteDataSource, bus: EventBus) {
     }
   });
 
-  app.setErrorHandler((err, req, reply) => {
-    const { statusCode, body } = toApiError(err);
-    if (statusCode >= 500 && statusCode !== 501) req.log.error(err);
-    void reply.status(statusCode).send(body);
-  });
-
-  registryRoutes(app, engine.registry);
-  eventRoutes(app, bus);
+  mountShared(app, engine, bus);
   assistantRoutes(app, engine);
-
-  app.get(
-    '/api/health',
-    (): HealthResponse => ({
-      ok: true,
-      dataSource: config.dataSource,
-      version: config.appVersion,
-      dataDir: config.libraryDir,
-      bootId: bus.boot,
-      ...(config.dataSource === 'sqlite' ? { keepAwake: keepAwakeStatus() } : {}),
-    }),
-  );
-
-  // 生产模式：托管前端构建产物，前端路由全部回落到 index.html
-  if (existsSync(config.webDist)) {
-    await app.register(fastifyStatic, { root: config.webDist, wildcard: false });
-    app.setNotFoundHandler((req, reply) => {
-      if (req.url.startsWith('/api/')) {
-        return reply.status(404).send({ ok: false, error: `没有这个接口：${req.method} ${req.url}`, code: 'not_found' });
-      }
-      return reply.sendFile('index.html');
-    });
-  }
+  await serveWeb(app, config.webDist);
 
   return app;
 }

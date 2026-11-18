@@ -530,7 +530,7 @@ export const libraryCommands = [
     name: 'library.reveal',
     summary: '在资源管理器中显示这张图',
     input: IdInput,
-    scope: 'ui',
+    scope: 'desktop',
     undoable: false,
     barrier: false,
     idempotent: false,

@@ -349,12 +349,12 @@ export const systemCommands = [
     },
   }),
 
-  // ---------------------------------------------------------------- 界面
+  // ---------------------------------------------------------------- 在这台电脑的屏幕上弹东西（desktop：局域网上的设备拿不到）
   defineCommand({
     name: 'system.pickFolder',
     summary: '由后端弹出系统「选择文件夹」对话框（演示模式也会弹，但添加文件夹会被拒绝）；取消时 path 为 null',
     input: EmptyInput,
-    scope: 'ui',
+    scope: 'desktop',
     undoable: false,
     barrier: false,
     idempotent: false,

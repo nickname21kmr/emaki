@@ -6,6 +6,7 @@
  * 输入的 zod schema 在 `schemas.ts`），旧地址的兼容层在 `apps/server/src/http/compat.ts`。
  * 改接口时：schemas.ts（输入）→ 这里（响应类型）→ 注册表里的定义 → 前端 api.ts。
  */
+import type { AccessEvent } from './access.ts';
 import type { ChangedEvent, CommandEvent, HelloEvent, ResyncEvent } from './events.ts';
 import type {
   Character,
@@ -95,8 +96,19 @@ export interface ApiError {
   error: string;
   /** 机器可读的错误码 */
   /** needs_confirm：要用户确认，error 是要问的问题（例如添加父文件夹时合并已有文件夹） */
-  /** unauthorized：没带或带错了凭证（401，MCP 的访问凭证）；forbidden：不许这样调用（403，只许本机、只许 Emaki 自己的页面） */
-  code: 'not_found' | 'bad_request' | 'unauthorized' | 'forbidden' | 'conflict' | 'needs_confirm' | 'not_implemented' | 'internal';
+  /** unauthorized：没带或带错了凭证（401，MCP 的访问凭证、局域网入口的设备凭证）；forbidden：不许这样调用（403，只许本机、只许 Emaki 自己的页面、设备没有这个权限） */
+  /** device_revoked：这台设备已经被电脑移除（401，局域网入口）；too_many_requests：请求太频繁（429，局域网入口的配对） */
+  code:
+    | 'not_found'
+    | 'bad_request'
+    | 'unauthorized'
+    | 'device_revoked'
+    | 'forbidden'
+    | 'conflict'
+    | 'needs_confirm'
+    | 'too_many_requests'
+    | 'not_implemented'
+    | 'internal';
 }
 
 // ---------------------------------------------------------------- 统计
@@ -844,7 +856,15 @@ export type LibraryChangedReason = 'mutation' | 'system' | JobKind;
  * job、job-item 是进度，不补发；changed、command、auto-change 带 id，断线重连按 Last-Event-ID 补发，补不上推 resync。
  * 前端按 changed 的变化类型只刷新相关的查询（lib/events.ts）。
  */
-export type ServerEvent = { type: 'job'; job: Job } | JobItemEvent | ChangedEvent | CommandEvent | AutoChangeEvent | ResyncEvent | HelloEvent;
+export type ServerEvent =
+  | { type: 'job'; job: Job }
+  | JobItemEvent
+  | ChangedEvent
+  | CommandEvent
+  | AutoChangeEvent
+  | ResyncEvent
+  | HelloEvent
+  | AccessEvent;
 
 /**
  * 识别胶卷（SEL-19）：tag 任务刚识别完的一张图。每批最多推一条、每秒最多 4 条；

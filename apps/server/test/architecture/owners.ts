@@ -19,7 +19,8 @@ export type ModuleId =
   | 'duplicates'
   | 'settings'
   | 'commands'
-  | 'propagation';
+  | 'propagation'
+  | 'access';
 
 /** 模块的中文名和目录（相对 apps/server/src，以 / 结尾） */
 export const MODULES: Record<ModuleId, { name: string; dir: string }> = {
@@ -36,6 +37,8 @@ export const MODULES: Record<ModuleId, { name: string; dir: string }> = {
   commands: { name: '命令层', dir: 'commands/' },
   // 变更传播（P2）：变化集、反应注册表；排队状态（pending_work）
   propagation: { name: '变更传播', dir: 'propagation/' },
+  // 设备与访问（docs/mobile.md 第 2 节）：局域网入口、配对、设备凭证
+  access: { name: '设备与访问', dir: 'access/' },
 };
 
 /** 表（images 是 images#<列组>）→ 主人 */
@@ -102,6 +105,9 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   // 变更传播：交给后台任务、还没做完的工作和用户的暂停（迁移 033）；派生数据的版本（迁移 037）
   pending_work: 'propagation',
   derived_versions: 'propagation',
+  // 设备与访问：局域网入口的配置（迁移 041）、批准过的设备和凭证的哈希
+  lan_access: 'access',
+  devices: 'access',
 };
 
 /**

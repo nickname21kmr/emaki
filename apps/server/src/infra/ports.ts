@@ -2,12 +2,13 @@
  * 可替换部件（docs/core-architecture.md 第 3 节「基础设施」、第 8 节）。
  *
  * 引擎（SqliteDataSource）里所有会碰到「数据库之外的世界」的地方都在这里列出来：时钟、系统回收站、
- * 用户的图片文件、用户的图库文件夹、后台任务（扫描、识别模型、联网）。真实运行用默认实现；
+ * 用户的图片文件、用户的图库文件夹、后台任务（扫描、识别模型、联网）、局域网入口的监听和广播。真实运行用默认实现；
  * 测试和演示模式（demo/engine.ts）换成假的，跑的仍是同一套业务逻辑和 SQL。
  *
  * 用法：SqliteDataSource.open(bus, dir, { ...部分部件 })，没给的用 REAL_PORTS 里的默认值。
  */
 import type { ImageFormat, JobKind, ThumbWidth } from '@emaki/shared';
+import type { LanNetwork } from '../access/discovery.ts';
 import type { JobRunner } from '../core/jobs.ts';
 import type { TrashImpl } from '../services/trash/recycleBin.ts';
 
@@ -66,6 +67,13 @@ export interface EnginePorts {
 
   /** 启动时导入随仓库分发的中文词库（T12，约 0.7 秒；版本没变时不导入）。契约测试关掉 */
   importDict: boolean;
+
+  /**
+   * 局域网入口（access/lan.ts，docs/mobile.md 2.8）碰真网络的两件事：https 监听所有网卡、mDNS 广播。
+   * null = 真实网络（access/discovery.ts 的 REAL_LAN_NETWORK）；测试换成记录调用的假实现。
+   * 演示模式也用真实的：入口默认关着，手动打开后可以拿假手机脚本（scripts/lan-client.ts）对着演示数据走一遍
+   */
+  lan: LanNetwork | null;
 }
 
 /** 真实运行时的部件 */
@@ -78,6 +86,7 @@ export const REAL_PORTS: EnginePorts = {
   jobRunner: null,
   autoJobs: true,
   importDict: true,
+  lan: null,
 };
 
 /** 把部分部件和默认值合起来 */

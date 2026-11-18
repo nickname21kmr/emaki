@@ -2,6 +2,7 @@
  * 注册表里的全部命令和查询（docs/core-architecture.md 第 4.1 节）。加一个命令：在对应模块的文件里 defineCommand，再列到这里。
  */
 import type { SqliteDataSource } from '../datasource/sqlite/SqliteDataSource.ts';
+import { accessCommands, accessQueries } from './access.ts';
 import { catalogCommands } from './catalog.ts';
 import { curationCommands } from './curation.ts';
 import { libraryCommands, libraryQueries } from './library.ts';
@@ -17,6 +18,8 @@ export const DEFINITIONS: readonly Def[] = [
   ...queries,
   ...libraryQueries,
   ...systemQueries,
+  ...accessCommands,
+  ...accessQueries,
 ];
 
 export function createRegistry(engine: SqliteDataSource): Registry {

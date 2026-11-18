@@ -60,7 +60,7 @@ describe('注册表的定义', () => {
     }
   });
 
-  it('查询都是只读的 scope 或设置；HTTP 地址不重复', () => {
+  it('查询都是只读的 scope、设置或设备管理（手机访问的状态）；HTTP 地址不重复', () => {
     const seen = new Set<string>();
     for (const d of DEFINITIONS)
       for (const h of d.http ?? []) {
@@ -68,7 +68,7 @@ describe('注册表的定义', () => {
         expect(seen.has(key), key).toBe(false);
         seen.add(key);
       }
-    for (const d of DEFINITIONS.filter((x) => x.kind === 'query')) expect(['read', 'settings'], d.name).toContain(d.scope);
+    for (const d of DEFINITIONS.filter((x) => x.kind === 'query')) expect(['read', 'settings', 'devices'], d.name).toContain(d.scope);
   });
 });
 
@@ -86,11 +86,13 @@ describe('每个 HTTP 写路由都对应一个命令（附录 #33、#35）', () 
       }
   });
 
-  it('源码里手写的写路由：通用入口、兼容层（转成注册表里的命令），或者 AI 助手的会话管理（不是图库操作）', () => {
+  it('源码里手写的写路由：通用入口、兼容层（转成注册表里的命令），或者 AI 助手的会话管理、局域网入口的配对（不是图库操作）', () => {
     const compat = new Set(COMPAT_ROUTES.map((r) => `${r.method} ${r.path}`));
     const writes = literalRoutes().filter((r) => r.method !== 'GET');
+    // 配对（access/lan.ts，docs/mobile.md 2.3）：手机还没有凭证时用的协议，只建设备凭证，不碰图库
+    const pairing = (r: { path: string; file: string }) => r.file === 'access/lan.ts' && r.path.startsWith('/api/v1/pair');
     const stray = writes.filter(
-      (r) => !(compat.has(`${r.method} ${r.path}`) || r.path === '/api/commands/:name' || r.path.startsWith('/api/assistant/')),
+      (r) => !(compat.has(`${r.method} ${r.path}`) || r.path === '/api/commands/:name' || r.path.startsWith('/api/assistant/') || pairing(r)),
     );
     expect(stray).toEqual([]);
     for (const r of COMPAT_ROUTES) for (const c of r.commands) expect(byName.get(c)?.kind, `${r.path} → ${c}`).toBe('command');

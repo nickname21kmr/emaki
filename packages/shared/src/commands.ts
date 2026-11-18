@@ -16,7 +16,10 @@ export const SCOPES = {
   settings: '图库设置、图库文件夹、识别方式',
   jobs: '启动、取消后台任务（含重新识别）',
   history: '撤销、撤回最近的改动',
-  ui: '界面上的小动作：标记看过、在资源管理器中显示、选文件夹',
+  ui: '界面上的小动作：标记看过',
+  upload: '从手机上传图片（第二阶段 B 用，现在还没有命令）',
+  devices: '管理手机等设备：局域网入口的开关、批准、拒绝、撤销、改权限',
+  desktop: '在这台电脑的屏幕上弹东西：在资源管理器中显示、选文件夹',
 } as const;
 export type Scope = keyof typeof SCOPES;
 
@@ -26,6 +29,26 @@ export type Scope = keyof typeof SCOPES;
  * 改这里等于扩大助手的能力：test/architecture/registry.test.ts 的 MCP 快照会失败，要一起改并说明理由
  */
 export const ASSISTANT_SCOPES: readonly Scope[] = ['read', 'curate', 'catalog', 'collections', 'import', 'jobs'];
+
+/**
+ * 手机等设备批准时默认给的范围（docs/mobile.md 2.5）：看、整理单张图、编目、合集、撤销、标记看过，加上 B 阶段的上传。
+ */
+export const DEVICE_DEFAULT_SCOPES: readonly Scope[] = ['read', 'curate', 'catalog', 'collections', 'history', 'ui', 'upload'];
+
+/**
+ * 批准时最多能勾的范围：默认的，加上移动文件、设置、规则、查重、任务、导入。
+ * devices（管理设备）和 desktop（在电脑屏幕上弹窗）永远不在这里：设备凭证拿不到它们，怎么勾都不行
+ * （test/access/permissions.test.ts 断言）。
+ */
+export const DEVICE_GRANTABLE_SCOPES: readonly Scope[] = [
+  ...DEVICE_DEFAULT_SCOPES,
+  'organize-files',
+  'settings',
+  'rules',
+  'duplicates',
+  'jobs',
+  'import',
+];
 
 /** GET /api/commands：注册表里的一项 */
 export interface CommandInfo {

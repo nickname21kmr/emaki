@@ -5,6 +5,7 @@
  * HTTP 路由（http/routes.ts）和 MCP 工具（assistant/tools.ts）都从这里生成，网页、助手、测试都经这里调用。
  *
  * 命令层统一负责：
+ * - 权限范围：调用方带了 grant（局域网入口上的设备，docs/mobile.md 2.5）时，不在里面的 scope 一律 403，在校验输入之前；
  * - 校验输入（schema），记下 actor（AsyncLocalStorage，第 2.2 节）和正在执行的命令；
  * - 事务和撤销记录：同步的命令（tx）由这里开 ctx.mutate，一个命令一个撤销令牌；几个命令可以合成一次操作（batch，一个令牌）。
  *   动文件、跑任务这类异步的命令（run）自己管事务和撤销（它们本来就是「自带撤销逻辑」的）；
@@ -15,13 +16,13 @@
  *
  * 执行函数只调用领域模块和读模型（引擎 SqliteDataSource 是装配它们的地方）。
  */
-import type { CommandEvent, CommandInfo, DomainChange, ID, Scope, UndoKind } from '@emaki/shared';
+import { SCOPES, type CommandEvent, type CommandInfo, type DomainChange, type ID, type Scope, type UndoKind } from '@emaki/shared';
 import type { z } from 'zod';
 import type { SqliteDataSource } from '../datasource/sqlite/SqliteDataSource.ts';
 import type { UndoRecorder } from '../datasource/sqlite/undo.ts';
 import { BadRequestError, ConflictError, HttpError } from '../http/errors.ts';
 import { parse } from '../http/validate.ts';
-import { currentActor, isInteractive, runCall, type Actor } from '../propagation/actor.ts';
+import { currentActor, currentCall, isInteractive, runCall, type Actor } from '../propagation/actor.ts';
 import { Audit, signatureOf, type AuditRow } from './audit.ts';
 
 /** 引擎：装配领域模块、读模型、基础设施的地方（不是一个大接口） */
@@ -159,9 +160,12 @@ export class Registry {
     }));
   }
 
+  /** 找到定义并检查权限范围（在校验输入之前：没权限的调用方不该从 400 里看出参数长什么样） */
   private require<K extends Def['kind']>(name: string, kind: K): Extract<Def, { kind: K }> {
     const def = this.defs.get(name);
     if (!def || def.kind !== kind) throw new HttpError(404, 'not_found', `没有这个${kind === 'command' ? '命令' : '查询'}：${name}`);
+    const grant = currentCall()?.grant;
+    if (grant && !grant.has(def.scope)) throw new HttpError(403, 'forbidden', `这台设备没有「${SCOPES[def.scope]}」的权限`);
     return def as Extract<Def, { kind: K }>;
   }
 

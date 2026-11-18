@@ -16,6 +16,7 @@ import {
   UNRECOGNIZED_BUCKETS,
   UNRECOGNIZED_THEMES,
 } from './api.ts';
+import { DEVICE_GRANTABLE_SCOPES, type Scope } from './commands.ts';
 import { CONTENT_KINDS, type ContentKind } from './domain.ts';
 
 /** shared 不带 DOM / node 的类型：这里只用到 URL 的这几个字段（运行时是全局的 URL） */
@@ -351,6 +352,41 @@ export const UndoInput = z.object({ token: z.string().min(1) });
 /** 一次最多问 500 个，一个会话的勘误条够用了 */
 export const UndoStatusInput = z.object({ tokens: qList(z.string().min(1).max(100)).pipe(z.array(z.string()).max(500)) });
 export const EmptyInput = z.object({});
+
+// ------------------------------------------------------------------ 设备与访问（docs/mobile.md 第 2 节）
+
+/** 设备名称、电脑名称 */
+const deviceName = z.string().trim().min(1).max(60);
+/** 32 字节随机数的 hex（配对的 commit、nonce） */
+const hex32 = z.string().regex(/^[0-9a-f]{64}$/i, '要 64 位 hex').transform((s) => s.toLowerCase());
+/** 能授予设备的范围（devices、desktop 不在里面，传了就是 400）；去重 */
+export const DeviceScopes = z
+  .array(z.enum(DEVICE_GRANTABLE_SCOPES as readonly [Scope, ...Scope[]]))
+  .max(30)
+  .transform((a) => [...new Set(a)]);
+
+/** POST /api/v1/pair（局域网入口，不要凭证）：普通请求带 commit；扫码带 ticket，不用 commit */
+export const PairStartInput = z
+  .object({
+    name: deviceName,
+    model: z.string().trim().max(100).optional(),
+    commit: hex32.optional(),
+    ticket: z.string().min(1).max(100).optional(),
+  })
+  .refine((b) => !!b.commit || !!b.ticket, '要带 commit（sha256(nonceA) 的 hex）或 ticket');
+/** POST /api/v1/pair/:id/reveal：手机公开自己的随机数 nonceA（hex） */
+export const PairRevealInput = z.object({ nonce: hex32 });
+
+/** PATCH /api/access：打开 / 关闭局域网入口、改端口、改电脑名称（null 恢复成计算机名） */
+export const AccessConfigureInput = z.object({
+  enabled: z.boolean().optional(),
+  port: z.number().int().min(1024).max(65535).optional(),
+  name: deviceName.nullable().optional(),
+});
+/** 批准一个请求：scopes 不给就是默认的（DEVICE_DEFAULT_SCOPES），name 可以改掉手机报的名字 */
+export const DeviceApproveInput = z.object({ id: Id, scopes: DeviceScopes.optional(), name: deviceName.optional() });
+/** 改设备的名称、权限 */
+export const DeviceUpdateInput = z.object({ id: Id, name: deviceName.optional(), scopes: DeviceScopes.optional() });
 
 // ------------------------------------------------------------------ 查询
 

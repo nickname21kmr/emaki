@@ -29,8 +29,9 @@ export const config = {
   repoRoot,
   host: process.env.EMAKI_HOST ?? '127.0.0.1',
   /**
-   * 额外允许的 Host（逗号分隔），只影响 app.ts 的 Host 校验，不改变监听地址。
-   * 局域网/手机访问时填本机局域网 IP，例如 192.168.0.100；不填就只认本机。
+   * 额外允许的 Host（逗号分隔），只影响 app.ts 的 Host 校验，不改变监听地址。不填就只认本机。
+   * 以前手机访问要把 EMAKI_HOST 改成局域网地址、这里填局域网 IP，那样没有任何身份验证，局域网里谁都能改图库；
+   * 有了局域网入口（设置 →「手机访问」，https + 设备凭证，docs/mobile.md 第 2 节）以后不推荐这样用。
    */
   allowedHosts: (process.env.EMAKI_ALLOWED_HOSTS ?? '')
     .split(',')
