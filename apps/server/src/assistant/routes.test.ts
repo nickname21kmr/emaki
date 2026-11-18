@@ -257,7 +257,9 @@ describe('assistant HTTP and MCP', () => {
       expect(await client.callTool({ name: 'accept_suggestion', arguments: args })).toEqual(result);
       const after = (await app.inject({ url: imagePath, headers: { host: 'localhost' } })).json();
       expect(after.characterIds).toContain(suggestion.characterId);
-      expect(after.status).toBe('recognized');
+      // 图片不再有 status（P5）：有了角色就不在任何待处理队列
+      expect(after.characterCount).toBeGreaterThan(0);
+      expect(after.queue).toBeNull();
       const { undoToken } = JSON.parse(result.content[0].text);
       expect(undoToken).toBeTruthy();
       expect((await app.inject({ method: 'POST', url: `/api/undo/${undoToken}`, headers: { host: 'localhost', 'content-type': 'application/json' }, payload: {} })).statusCode).toBe(200);

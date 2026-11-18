@@ -23,11 +23,12 @@ import { COVER_CANDIDATE_COLS, loadCoverTags, scoreCoverCandidates, type Charact
 import { loadImageItems } from './hydrate.ts';
 import {
   ART_KINDS_SQL,
-  ART_QUEUE_SCOPE,
+  BOOK_OR_COMIC_IDS,
   COUNTED_LIVE,
   ILLUSTRATION,
   LIVE_IMAGES,
   QUEUE,
+  QUEUE_KINDS_SQL,
   SHELVED_QUEUE,
   TAG_PENDING,
   UNTAGGED_UNRECOGNIZED,
@@ -109,7 +110,9 @@ export class LibraryQueries {
   readCounts(): LibraryCounts {
     const db = this.ctx.db;
     const skipCamera = readSettings(db).tagger.skipCameraPhotos === false ? 0 : 1;
-    // 一遍扫完所有活着的图（窄覆盖索引 idx_images_live_stats，T22），类型张数也在这一遍里数
+    // 一遍扫完所有活着的图（窄覆盖索引 idx_images_live_stats，T22），类型张数也在这一遍里数。
+    // 带子查询的条件写成 CASE WHEN：表达式里的 AND 不一定短路，CASE WHEN 的条件一定短路（10 万张合成数据上队列这一列 138 → 117 ms）
+    const n = (cond: string) => `COALESCE(SUM(CASE WHEN i.excluded_by IS NULL AND ${cond} THEN 1 ELSE 0 END), 0)`;
     const kindSums = CONTENT_KINDS.map((k) => `COALESCE(SUM(i.excluded_by IS NULL AND i.content_kind = '${k}'), 0) AS "k_${k}"`).join(',\n          ');
     const row = db
       .prepare(
@@ -117,19 +120,18 @@ export class LibraryQueries {
         `SELECT
           COALESCE(SUM(i.excluded_by IS NULL), 0) AS image_count,
           COALESCE(SUM(i.excluded_by IS NOT NULL), 0) AS excluded_count,
-          COALESCE(SUM(i.excluded_by IS NULL AND ${QUEUE}), 0) AS unrecognized_count,
+          ${n(QUEUE)} AS unrecognized_count,
           COALESCE(SUM(CASE WHEN i.excluded_by IS NULL THEN i.bytes END), 0) AS total_bytes,
           (SELECT COUNT(*) FROM duplicate_groups g
              WHERE g.resolved_at IS NULL AND g.ignored = 0
                AND (SELECT COUNT(*) FROM duplicate_members m JOIN v_images vi ON vi.id = m.image_id
                      WHERE m.group_id = g.id) >= 2) AS duplicate_group_count,
           (SELECT MAX(last_scan_at) FROM library_roots WHERE removed_at IS NULL) AS last_scan_at,
-          COALESCE(SUM(i.excluded_by IS NULL AND ${UNTAGGED_UNRECOGNIZED}), 0) AS untagged_count,
+          ${n(UNTAGGED_UNRECOGNIZED)} AS untagged_count,
           MAX(CASE WHEN i.excluded_by IS NULL AND ${ILLUSTRATION} THEN i.added_at END) AS last_added_at,
           -- 和识别任务领图的条件一致（TAGGABLE）：设置里跳过的相机照片永远不会识别，不算待识别
-          COALESCE(SUM(i.excluded_by IS NULL AND ${TAG_PENDING}), 0) AS pending_tag_count,
-          COALESCE(SUM(i.excluded_by IS NULL AND ${SHELVED_QUEUE}), 0) AS shelved_count,
-          COALESCE(SUM(i.excluded_by IS NULL AND ${ART_QUEUE_SCOPE}), 0) AS art_scope_count,
+          ${n(TAG_PENDING)} AS pending_tag_count,
+          ${n(SHELVED_QUEUE)} AS shelved_count,
           COALESCE(SUM(i.excluded_by IS NULL AND i.original_at IS NOT NULL), 0) AS original_count,
           -- 动图（D5）：跨类型，animated 在覆盖索引里（迁移 038）
           COALESCE(SUM(i.excluded_by IS NULL AND i.animated = 1), 0) AS animated_count,
@@ -147,7 +149,6 @@ export class LibraryQueries {
       last_added_at: string | null;
       pending_tag_count: number;
       shelved_count: number;
-      art_scope_count: number;
       original_count: number;
       animated_count: number;
     };
@@ -219,7 +220,14 @@ export class LibraryQueries {
       originalWorkId: originalWork === undefined ? null : toId(originalWork),
       originalCount: row.original_count,
     };
-    return { stats, artScope: row.art_scope_count };
+    // 「插画 · 漫画」队列的范围（ART_QUEUE_SCOPE）= 队列类型的张数 − 其中成册、在漫画区的。后者按合集、漫画区的索引数，
+    // 不在上面那遍扫描里逐行判断（10 万张合成数据上逐行判断要多 130 ms）；等价性见 readmodel/summary.test.ts 的对账
+    const outside = db
+      .prepare(`SELECT COUNT(*) FROM v_counted_images i WHERE i.id IN (${BOOK_OR_COMIC_IDS}) AND ${QUEUE_KINDS_SQL}`)
+      .pluck()
+      .get() as number;
+    const comicInQueue = readSettings(db).tagger.comicInUnrecognized !== false;
+    return { stats, artScope: kindCounts.illustration + (comicInQueue ? kindCounts.comic : 0) - outside };
   }
 
   /** 别册首页（T27）：每一类的张数、30 天内张数、最多的顶层文件夹、最新 3 张预览；按 CONTENT_KINDS 顺序，6 项（动图不是类型，D5） */

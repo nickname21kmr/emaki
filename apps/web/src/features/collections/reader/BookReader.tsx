@@ -108,7 +108,8 @@ function Reader({ data }: { data: GetCollectionResponse }) {
   // 本子页分级不可信（没识别过）时打码：场合由 bookBlurContext 决定，判断只有共用的 blurReason 一套（附录 #30）
   const context = bookBlurContext(c.kind);
   const pageRevealed = (pg: CollectionPage) => revealBook || revealed.has(pg.imageId);
-  const blurred = (pg: CollectionPage) => !pageRevealed(pg) && shouldBlur({ rating: pg.rating, kind: pg.kind, rated: pg.tagged }, prefs, context);
+  const blurred = (pg: CollectionPage) =>
+    !pageRevealed(pg) && shouldBlur({ rating: pg.rating, kind: pg.kind, rated: pg.tagged }, prefs, context);
 
   // 预读前后一开的原图
   useEffect(() => {
@@ -234,7 +235,7 @@ function Reader({ data }: { data: GetCollectionResponse }) {
                     style={{ aspectRatio: `${pg.width} / ${pg.height}`, height: 'calc(100vh - 146px)', maxWidth }}
                   >
                     <Thumb
-                      image={{ id: pg.imageId, rating: pg.rating, kind: pg.kind, dominantColor: pg.dominantColor, modifiedAt: pg.modifiedAt }}
+                      image={pageThumb(pg)}
                       rated={pg.tagged}
                       blurContext={context}
                       width={960}
@@ -266,11 +267,27 @@ function Reader({ data }: { data: GetCollectionResponse }) {
         <div className="h-[2px] bg-white/10">
           <div className={cn('h-full bg-shu transition-[width] duration-300', rtl && 'ml-auto')} style={{ width: `${(p / n) * 100}%` }} />
         </div>
-        <Filmstrip pages={pages} current={group} rtl={rtl} blurred={blurred} context={context} onPick={(no) => goTo(spreadIndexOf(spreads, no))} />
+        <Filmstrip
+          pages={pages}
+          current={group}
+          rtl={rtl}
+          blurred={blurred}
+          context={context}
+          onPick={(no) => goTo(spreadIndexOf(spreads, no))}
+        />
       </footer>
     </div>
   );
 }
+
+/** 一页的缩略图（带类型：照片、文字也按共用的模糊判断） */
+const pageThumb = (pg: CollectionPage) => ({
+  id: pg.imageId,
+  rating: pg.rating,
+  kind: pg.kind,
+  dominantColor: pg.dominantColor,
+  modifiedAt: pg.modifiedAt,
+});
 
 /** 胶片条：鼠标移到底部时展开，当前页居中、朱色描边 */
 function Filmstrip({
@@ -316,7 +333,7 @@ function Filmstrip({
               aria-label={`第 ${pg.pageNo} 页`}
             >
               <Thumb
-                image={{ id: pg.imageId, rating: pg.rating, kind: pg.kind, dominantColor: pg.dominantColor, modifiedAt: pg.modifiedAt }}
+                image={pageThumb(pg)}
                 width={240}
                 blurBadge="none"
                 rated={pg.tagged}

@@ -136,7 +136,8 @@ export class CollectionQueries {
     );
     // 图的作品（imageWorkRows：和 v_image_works 同口径，直接连底表——连视图时 SQLite 会把整个 UNION 视图对每一行重扫一遍，副本上要 11 秒）
     const workHits = hits(
-      `SELECT c, work_id AS x, COUNT(*) AS n FROM (${imageWorkRows('v_counted_images i', 'i.collection_id IS NOT NULL', 'i.collection_id AS c')})
+      `SELECT c, work_id AS x, COUNT(*) AS n
+       FROM (${imageWorkRows('v_counted_images i', 'i.collection_id IS NOT NULL', 'i.collection_id AS c')})
        GROUP BY c, x`,
     );
     const manual = (table: string, col: string) => {
@@ -549,7 +550,8 @@ export class CollectionQueries {
       this.membersChanged(members);
       db.prepare('UPDATE images SET collection_id = NULL, page_no = NULL, collection_detached = 1 WHERE collection_id = ?').run(c.id);
       const title = collectionTitle({ title: c.title, folderName: leafOf(c.rel_dir) });
-      return { message: c.membership === 'folder' ? `已取消成册：${title}` : `已解散${KIND_LABEL[c.kind as CollectionKind] ?? '组图'}：${title}（图片都还在）` };
+      const kind = KIND_LABEL[c.kind as CollectionKind] ?? '组图';
+      return { message: c.membership === 'folder' ? `已取消成册：${title}` : `已解散${kind}：${title}（图片都还在）` };
     });
   }
 

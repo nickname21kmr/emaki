@@ -350,10 +350,8 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
         const later = counts.slice(passes.indexOf(pass) + 1).reduce((a, b) => a + b, 0);
         const left = (total - done) / rate;
         ctx.setEta?.(left);
-        advance(
-          rows.length,
-          `${tag}${done} / ${total} · ${deviceLabel} · ${rate.toFixed(1)} 张/秒 · 这一轮剩余约 ${formatEta(left) ?? '—'}${later ? ` · 之后还有 ${later} 张用新模型` : ''}`,
-        );
+        const rest = `这一轮剩余约 ${formatEta(left) ?? '—'}${later ? ` · 之后还有 ${later} 张用新模型` : ''}`;
+        advance(rows.length, `${tag}${done} / ${total} · ${deviceLabel} · ${rate.toFixed(1)} 张/秒 · ${rest}`);
       }
       if (yielded && !ctx.signal.aborted) return { message: null, yielded: true };
       const s = writer.stats;

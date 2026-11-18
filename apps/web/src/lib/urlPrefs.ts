@@ -39,7 +39,8 @@ export function useMirrorCollapseMode(): void {
   const pref = usePrefs((s) => s.collapseMode);
   const missing = parseCollapse(params.get(COLLAPSE_PARAM)) === null;
   useEffect(() => {
-    if (missing) setParams((prev) => (parseCollapse(prev.get(COLLAPSE_PARAM)) ? prev : withParam(prev, COLLAPSE_PARAM, pref)), { replace: true });
+    if (!missing) return;
+    setParams((prev) => (parseCollapse(prev.get(COLLAPSE_PARAM)) ? prev : withParam(prev, COLLAPSE_PARAM, pref)), { replace: true });
   }, [missing, pref, setParams]);
 }
 

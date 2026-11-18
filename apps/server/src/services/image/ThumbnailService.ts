@@ -37,8 +37,8 @@ export interface ThumbRow {
 const MAX_BUFFERED = 256 * 1024 * 1024;
 const BATCH = 200;
 
-const PENDING_WHERE = `(i.thumb_at IS NULL OR (i.frame_count IS NULL AND i.format IN ('webp','png','avif','gif','html'))) AND i.decode_error IS NULL
-  AND ${FILE_LIVE('i')}`;
+const PENDING_WHERE = `(i.thumb_at IS NULL OR (i.frame_count IS NULL AND i.format IN ('webp','png','avif','gif','html')))
+  AND i.decode_error IS NULL AND ${FILE_LIVE('i')}`;
 /** 还没读过 EXIF 相机的 JPEG（T27）：非 JPEG 直接写 ''，不读文件 */
 const CAMERA_WHERE = `i.format = 'jpeg' AND i.camera IS NULL AND ${FILE_LIVE('i')}`;
 const ROOT_JOIN = `JOIN library_roots r ON r.id = i.root_id AND ${ROOT_ACTIVE('r')}`;

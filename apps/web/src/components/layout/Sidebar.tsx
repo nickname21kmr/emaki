@@ -74,7 +74,13 @@ export function Sidebar() {
             .join(' · ')
         : undefined,
     },
-    { to: '/duplicates', label: '重复', icon: Copy, count: s?.duplicates, hint: s?.duplicates ? `${formatCount(s.duplicates)} 组重复等你处理` : undefined },
+    {
+      to: '/duplicates',
+      label: '重复',
+      icon: Copy,
+      count: s?.duplicates,
+      hint: s?.duplicates ? `${formatCount(s.duplicates)} 组重复等你处理` : undefined,
+    },
     { to: '/excluded', label: '已排除', icon: Ban },
   ];
 

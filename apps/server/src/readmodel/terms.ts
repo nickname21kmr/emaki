@@ -14,7 +14,7 @@
  *   两边的一致性由 readmodel/terms.test.ts 逐个组合比对。
  */
 import { UNRECOGNIZED_ANNEX_KINDS, UNRECOGNIZED_ART_KINDS, SENSITIVE_RATINGS } from '@emaki/shared';
-import { IN_COMIC } from '../services/classify/comicAreas.ts';
+import { COMIC_AREA_IMAGE_IDS, IN_COMIC } from '../services/classify/comicAreas.ts';
 
 const col = (a: string, c: string) => (a ? `${a}.${c}` : c);
 const list = (xs: readonly string[]) => xs.map((x) => `'${x}'`).join(',');
@@ -50,7 +50,8 @@ export const COUNTED = (a = 'i', r = 'r') => `${FILE_LIVE(a)} AND ${ROOT_ACTIVE(
 /** 同 COUNTED，但不用 JOIN library_roots r（写法同 LIVE_IMAGES） */
 export const COUNTED_LIVE = `${LIVE_IMAGES} AND ${NOT_EXCLUDED('i')}`;
 /** 不计入统计（COUNTED 的反面）：文件夹行不在的图（LEFT JOIN 出 NULL）也算不计入 */
-export const NOT_COUNTED = (a = 'i', r = 'r') => `NOT (${col(r, 'id')} IS NOT NULL AND ${ROOT_ACTIVE(r)} AND ${FILE_LIVE(a)} AND ${NOT_EXCLUDED(a)})`;
+export const NOT_COUNTED = (a = 'i', r = 'r') =>
+  `NOT (${col(r, 'id')} IS NOT NULL AND ${ROOT_ACTIVE(r)} AND ${FILE_LIVE(a)} AND ${NOT_EXCLUDED(a)})`;
 
 // ------------------------------------------------------------------ 类型
 
@@ -84,7 +85,8 @@ export const IN_COMIC_I = IN_COMIC('i');
 /**
  * 不在整本处理的合集里：本子、画集（active）里的页不逐张进队列（T38c），在「成册待整理」里整本处理。组图的页照常逐张处理
  */
-export const NOT_IN_BOOK = `NOT EXISTS (SELECT 1 FROM collections bc WHERE bc.id = i.collection_id AND bc.kind <> 'group' AND bc.state = 'active')`;
+export const NOT_IN_BOOK =
+  "NOT EXISTS (SELECT 1 FROM collections bc WHERE bc.id = i.collection_id AND bc.kind <> 'group' AND bc.state = 'active')";
 /**
  * 设置「未识别里也列出漫画页」（tagger.comicInUnrecognized，缺省 = 开）。直接在 SQL 里读设置表：
  * 不相关子查询每条语句只算一次，用到队列的地方不用各自传参数
@@ -103,6 +105,15 @@ export const ART_SCOPE = `${ART_KINDS_SQL} AND ${NOT_IN_BOOK} AND NOT ${IN_COMIC
  */
 export const ART_QUEUE_SCOPE = `${QUEUE_KINDS_SQL} AND ${NOT_IN_BOOK} AND NOT ${IN_COMIC_I}`;
 /**
+ * 不逐张找角色的图：在整本处理的合集里（NOT NOT_IN_BOOK），或者在漫画区（IN_COMIC）。和那两个片段是同一个口径，
+ * 只是写成按合集、漫画区的索引去找的 id 集合（统计用它从类型张数里减出「插画 · 漫画」队列的范围，不用对每一行判断；
+ * 等价性见 readmodel/terms.test.ts）。漫画子文件夹按 (root_id, rel_path) 唯一索引取范围：'/' 的下一个字符是 '0'
+ */
+export const BOOK_OR_COMIC_IDS = `SELECT bi.id FROM images bi
+      WHERE bi.collection_id IN (SELECT id FROM collections WHERE kind <> 'group' AND state = 'active')
+    UNION ${COMIC_AREA_IMAGE_IDS}`;
+
+/**
  * 「插画 · 漫画」队列（逐张的未识别队列）：队列范围里没有放下、没认出的。统计、分段、侧栏、汇总共用这一份（MG-9）。
  * i 是 v_counted_images 的别名（或者调用方自己加了 COUNTED）
  */
@@ -117,7 +128,8 @@ export const UNTAGGED_UNRECOGNIZED = `i.tagged_at IS NULL AND i.content_kind <> 
  * 识别任务会看的图（计入统计之外的条件）：不在漫画区；设置跳过相机照片时（@skipCamera = 1）不看带相机信息的照片。
  * 写成 CASE：camera 不在统计的覆盖索引里，只在照片这一支才回表读
  */
-export const TAGGABLE = `NOT ${IN_COMIC_I} AND (CASE WHEN @skipCamera = 1 AND i.content_kind = 'photo' THEN COALESCE(i.camera, '') = '' ELSE 1 END)`;
+export const TAGGABLE = `NOT ${IN_COMIC_I}
+  AND (CASE WHEN @skipCamera = 1 AND i.content_kind = 'photo' THEN COALESCE(i.camera, '') = '' ELSE 1 END)`;
 /** 还没识别：计入统计、识别任务会看、还没有识别结果（文件换过的也算，P4a）。首页识别进度、导入面板用它 */
 export const TAG_PENDING = `i.tagged_at IS NULL AND ${TAGGABLE}`;
 
@@ -160,7 +172,8 @@ export function imageWorkRows(source: string, where: string, extra = ''): string
  * 作品 w 有计入统计的插画（作品列表只列这样的作品，侧栏的作品数同口径，附录 #26）。三支 EXISTS 各走索引，
  * 和 v_image_works ⋈ v_illust_images 完全等价（readmodel/terms.test.ts 比对）
  */
-export const WORK_HAS_ILLUSTRATION = `(EXISTS (SELECT 1 FROM image_copyrights x JOIN v_illust_images i ON i.id = x.image_id WHERE x.work_id = w.id AND i.original_at IS NULL)
+export const WORK_HAS_ILLUSTRATION = `(EXISTS (SELECT 1 FROM image_copyrights x JOIN v_illust_images i ON i.id = x.image_id
+               WHERE x.work_id = w.id AND i.original_at IS NULL)
     OR EXISTS (SELECT 1 FROM character_works cw JOIN image_characters ic ON ic.character_id = cw.character_id
                JOIN v_illust_images i ON i.id = ic.image_id WHERE cw.work_id = w.id)
     OR (w.danbooru_tag = 'original' AND EXISTS (SELECT 1 FROM v_illust_images i WHERE i.original_at IS NOT NULL)))`;
@@ -168,4 +181,5 @@ export const WORK_HAS_ILLUSTRATION = `(EXISTS (SELECT 1 FROM image_copyrights x 
 // ------------------------------------------------------------------ 其他展示口径
 
 /** 「没认出」的画面主题：存的 theme 加上查询时判定的漫画、不像插画、敏感（与 services/classify/theme.ts 的 resolveTheme 一致） */
-export const THEME_EXPR = `CASE WHEN i.content_kind = 'comic' THEN 'comic' WHEN i.theme = 'odd' THEN 'odd' WHEN ${SENSITIVE_SQL} THEN 'nsfw' ELSE COALESCE(i.theme, 'other') END`;
+export const THEME_EXPR = `CASE WHEN i.content_kind = 'comic' THEN 'comic' WHEN i.theme = 'odd' THEN 'odd'
+    WHEN ${SENSITIVE_SQL} THEN 'nsfw' ELSE COALESCE(i.theme, 'other') END`;

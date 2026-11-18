@@ -102,7 +102,9 @@ function scan(): Hit[] {
     const file = path.relative(SRC, abs).split(path.sep).join('/');
     if (file === HOME) continue;
     for (const s of extractStrings(readFileSync(abs, 'utf8'), file)) {
-      for (const r of RULES) if (r.test(s.text)) hits.push({ file, line: s.line, rule: r.name, snippet: s.text.replace(/\s+/g, ' ').trim().slice(0, 140) });
+      for (const r of RULES) {
+        if (r.test(s.text)) hits.push({ file, line: s.line, rule: r.name, snippet: s.text.replace(/\s+/g, ' ').trim().slice(0, 140) });
+      }
     }
   }
   return hits;
@@ -146,6 +148,7 @@ describe('命名口径只有一份（readmodel/terms.ts）', () => {
     expect(terms.ART_KINDS_SQL).toBe(`i.content_kind IN ('illustration','comic')`);
     expect(terms.ANNEX_KINDS_SQL).toBe(`i.content_kind IN ('screenshot','text','photo','meme')`);
     // 片段里不能有绑定参数（TAGGABLE 的 @skipCamera 是语句级的开关，不是索引条件）
-    for (const s of [terms.VISIBLE, terms.LIVE_IMAGES, terms.QUEUE, terms.ART_QUEUE_SCOPE, terms.ART_SCOPE, terms.QUEUE_OF]) expect(s).not.toMatch(/[@?]/);
+    const fragments = [terms.VISIBLE, terms.LIVE_IMAGES, terms.QUEUE, terms.ART_QUEUE_SCOPE, terms.ART_SCOPE, terms.QUEUE_OF];
+    for (const s of fragments) expect(s).not.toMatch(/[@?]/);
   });
 });

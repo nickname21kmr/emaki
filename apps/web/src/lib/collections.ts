@@ -2,7 +2,15 @@
  * 合集（T38d）的文案、书架分组、阅读进度。
  * 合集是总称：本子、画集按文件夹成册；组图是收在一起的散图（手动挑的，或同一投稿自动收拢）。
  */
-import { bookBlurContext, COLLECTION_KIND_META, collectionTitle, volumeUnit, type CollectionKind, type CollectionSummary, type CoverRef } from '@emaki/shared';
+import {
+  bookBlurContext,
+  COLLECTION_KIND_META,
+  collectionTitle,
+  volumeUnit,
+  type CollectionKind,
+  type CollectionSummary,
+  type CoverRef,
+} from '@emaki/shared';
 import { BookImage, BookOpen, Layers, type LucideIcon } from 'lucide-react';
 import { blurReason, type BlurPrefs } from './blur';
 
@@ -55,7 +63,8 @@ export function toShelfUnits(list: CollectionSummary[], { keepOrder = false } = 
 }
 
 /** 连载按「话」，其余按「册」：和服务端解析卷号 / 话数用同一个判断（packages/shared 的 volumeUnit） */
-export const unitWord = (items: Pick<CollectionSummary, 'folderName'>[]) => (items.some((c) => volumeUnit(c.folderName) === '话') ? '话' : '册');
+export const unitWord = (items: Pick<CollectionSummary, 'folderName'>[]) =>
+  items.some((c) => volumeUnit(c.folderName) === '话') ? '话' : '册';
 
 const KEY = (id: string) => `emaki.read.v1.${id}`;
 /**

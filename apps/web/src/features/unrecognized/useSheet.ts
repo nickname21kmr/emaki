@@ -1,5 +1,13 @@
 import { selectionIds } from '@/components/media/CollectionControls';
-import { queueAfterKindChange, type BulkImageAction, type ContentKind, type ID, type ImageItem, type Rating, type TriageQueue } from '@emaki/shared';
+import {
+  queueAfterKindChange,
+  type BulkImageAction,
+  type ContentKind,
+  type ID,
+  type ImageItem,
+  type Rating,
+  type TriageQueue,
+} from '@emaki/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';

@@ -130,7 +130,8 @@ it('原来的 animated：手动标记清掉、类型交给分析模块重判，�
       )
       .all();
   const before = others();
-  expect(migrate(db, { backupDir: dir })).toEqual({ from: 37, to: 38 });
+  // 从 037 升到最新（038 之后还有别的迁移）
+  expect(migrate(db, { backupDir: dir })).toMatchObject({ from: 37 });
 
   const rows = () =>
     db.prepare('SELECT id, content_kind AS kind, content_kind_manual AS manual, content_kind_version AS v, animated FROM images ORDER BY id').all() as {

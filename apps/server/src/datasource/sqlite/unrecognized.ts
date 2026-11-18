@@ -27,7 +27,16 @@ import { manual } from '../../domain/curation/provenance.ts';
 import { markRetag } from '../../domain/evidence/retag.ts';
 import type { SqliteContext } from './context.ts';
 import { loadImageItems } from './hydrate.ts';
-import { ANNEX_KINDS_SQL, ANNEX_QUEUE, ART_KINDS_SQL, ART_QUEUE_SCOPE, ILLUSTRATION, QUEUE, THEME_EXPR, UNRECOGNIZED } from '../../readmodel/terms.ts';
+import {
+  ANNEX_KINDS_SQL,
+  ANNEX_QUEUE,
+  ART_KINDS_SQL,
+  ART_QUEUE_SCOPE,
+  ILLUSTRATION,
+  QUEUE,
+  THEME_EXPR,
+  UNRECOGNIZED,
+} from '../../readmodel/terms.ts';
 import { decodeCursor, encodeCursor, iso, parseId } from './sql.ts';
 import { loadSuggestions } from './suggestions.ts';
 

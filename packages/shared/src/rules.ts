@@ -113,7 +113,10 @@ export const bookBlurContext = (kind: CollectionKind): BlurContext => (kind === 
 export function blurReason(s: BlurSubject, p: BlurPrefs, context: BlurContext = 'browse'): BlurReason | null {
   if (!p.blurSensitive) return null;
   if (context !== 'browse' && s.rated === false) return 'unrated';
-  if (context === 'showcase' ? s.rating !== 'general' : p.blurLevel === 'explicit' ? s.rating === 'explicit' : isSensitive(s.rating)) return 'rating';
+  // showcase 只放全年龄；别的场合按模糊范围
+  const tooSensitive =
+    context === 'showcase' ? s.rating !== 'general' : p.blurLevel === 'explicit' ? s.rating === 'explicit' : isSensitive(s.rating);
+  if (tooSensitive) return 'rating';
   if (s.kind === 'photo' && p.blurPhoto) return 'photo';
   if (s.kind === 'text' && p.blurText) return 'text';
   return null;
@@ -174,7 +177,8 @@ export function triageQueue(f: TriageFacts): TriageQueue | null {
  * 以前未识别页假定「改成漫画一定还在队列里」，关掉漫画设置时就错了（附录 #27）
  */
 export function queueAfterKindChange(queue: TriageQueue, kind: ContentKind, comicInQueue: boolean): TriageQueue | null {
-  return triageQueue({ kind, counted: true, characterCount: 0, original: false, shelved: queue === 'shelved', inBook: false, inComicArea: false, comicInQueue });
+  const known = { counted: true, characterCount: 0, original: false, inBook: false, inComicArea: false };
+  return triageQueue({ ...known, kind, shelved: queue === 'shelved', comicInQueue });
 }
 
 // ------------------------------------------------------------------ 合集的显示

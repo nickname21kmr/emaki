@@ -3,4 +3,14 @@
  * 场合（browse / book / showcase）决定「分级还不可信」和「轻微」怎么处理，原因写在 shared 的 BlurContext 上。
  * 偏好（开关、范围、照片、文字）是本机偏好，见 lib/stores.ts 的 useBlurPrefs。
  */
-export { blurLabel, blurReason, shouldBlur, showcaseQuery, type BlurContext, type BlurLevel, type BlurPrefs, type BlurReason, type BlurSubject } from '@emaki/shared';
+export {
+  blurLabel,
+  blurReason,
+  shouldBlur,
+  showcaseQuery,
+  type BlurContext,
+  type BlurLevel,
+  type BlurPrefs,
+  type BlurReason,
+  type BlurSubject,
+} from '@emaki/shared';

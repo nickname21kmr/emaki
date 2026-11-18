@@ -130,7 +130,8 @@ export function useGalleryParams({ ownsKind = true }: { ownsKind?: boolean } = {
   // URL 里还没写类型（从侧栏点进来）：把偏好补进去，不多一条历史
   const kindMissing = ownsKind && params.get('kind') === null;
   useEffect(() => {
-    if (kindMissing) setParams((prev) => (prev.get('kind') !== null ? prev : withParam(prev, 'kind', kindParam(kindPref))), { replace: true });
+    if (!kindMissing) return;
+    setParams((prev) => (prev.get('kind') !== null ? prev : withParam(prev, 'kind', kindParam(kindPref))), { replace: true });
   }, [kindMissing, kindPref, setParams]);
 
   // 自定义画面换成它的标签；id 找不到（被删了、设置还没加载）就当没选

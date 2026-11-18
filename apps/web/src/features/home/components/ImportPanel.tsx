@@ -28,6 +28,7 @@ export function ImportPanel({ summary, phase }: { summary: LibrarySummary; phase
   const tagged = Math.max(0, imp.count - imp.pending);
   // 库里原来就有图：这次是新加的文件夹，不是首次导入
   const added = summary.images.total > imp.count;
+  const size = formatBytes(summary.images.bytes);
   const tagV = Math.min(1, tagged / Math.max(1, imp.count));
   const frac = (j: Job | null) => (j?.total ? j.progress / j.total : null);
 
@@ -45,7 +46,7 @@ export function ImportPanel({ summary, phase }: { summary: LibrarySummary; phase
   type Step = { title: string; note: string; v: number | null; now: boolean; done: boolean };
   const scanning = !!scanJob;
   const steps: Step[] = [
-    { title: '扫描文件', note: scanning ? `已发现 ${N} 张` : `${N} 张 · ${formatBytes(summary.images.bytes)}`, v: scanning ? frac(scanJob) : 1, now: scanning, done: !scanning },
+    { title: '扫描文件', note: scanning ? `已发现 ${N} 张` : `${N} 张 · ${size}`, v: scanning ? frac(scanJob) : 1, now: scanning, done: !scanning },
     {
       title: '生成缩略图',
       note: thumbJob?.total ? `${formatCount(thumbJob.progress)} / ${formatCount(thumbJob.total)}` : scanning ? '扫描后开始' : '完成',

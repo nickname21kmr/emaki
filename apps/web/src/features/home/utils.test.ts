@@ -3,8 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { importPhase, JOB_LABEL } from './utils';
 
 const idle = { scan: null, thumbnail: null, tag: null, dedupe: null };
-const summary = (waiting: number, recentImport: LibrarySummary['recentImport'] = null) =>
-  ({ recentImport, triage: { images: 0, books: 0, total: 0, waiting, shelved: 0 } }) satisfies Pick<LibrarySummary, 'recentImport' | 'triage'>;
+type Part = Pick<LibrarySummary, 'recentImport' | 'triage'>;
+const summary = (waiting: number, recentImport: LibrarySummary['recentImport'] = null): Part => ({
+  recentImport,
+  triage: { images: 0, books: 0, total: 0, waiting, shelved: 0 },
+});
 
 describe('importPhase', () => {
   it('没有近期导入就不是导入态', () => {
