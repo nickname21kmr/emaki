@@ -40,7 +40,7 @@ function literalRoutes(): { method: string; path: string; file: string }[] {
   for (const f of walk(SRC)) {
     const text = stripComments(readFileSync(f, 'utf8'), f);
     for (const m of text.matchAll(/\bapp\.(get|post|put|patch|delete)\(\s*'([^']+)'/g))
-      out.push({ method: m[1]!.toUpperCase(), path: m[2]!, file: path.relative(SRC, f) });
+      out.push({ method: m[1]!.toUpperCase(), path: m[2]!, file: path.relative(SRC, f).split(path.sep).join('/') });
   }
   return out;
 }
