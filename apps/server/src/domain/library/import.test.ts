@@ -188,6 +188,9 @@ it('collection pages expose the current file revision and dimensions after repla
   const replaced=(await ds.getCollection(collection.id))!.pages[0]!;
   expect(replaced).toMatchObject({imageId:id,width:36,height:42});
   expect(replaced.modifiedAt).not.toBe(oldVersion);
+  // 合集封面也带着新的文件版本：缩略图地址跟着变，不会看到旧的（P4a）
+  const cover=(await ds.listCollections({})).find(c=>c.id===collection.id)!.covers[0]!;
+  expect(cover).toMatchObject({imageId:id,modifiedAt:replaced.modifiedAt});
   await ds.undo(result.undoToken!);
   expect((await ds.getCollection(collection.id))!.pages[0]).toMatchObject({imageId:id,width:12,height:14,modifiedAt:oldVersion});
 });

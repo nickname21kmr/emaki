@@ -78,6 +78,8 @@ export interface CoverRef {
   rating: Rating;
   color: string | null;
   focus: FocusPoint | null;
+  /** 封面图文件的修改时间（版本）：替换了文件、外部改了文件，缩略图地址跟着变，不会看到旧的（合集封面带它） */
+  modifiedAt?: ISODate;
 }
 
 export type CharacterSource = 'danbooru' | 'custom';

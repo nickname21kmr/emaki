@@ -14,6 +14,8 @@ export interface SumPage<K> {
   tagged: boolean;
   addedAt: string;
   hasChar: boolean;
+  /** 文件的修改时间：封面带上它当版本，换了文件前端不会用旧的缩略图 */
+  modifiedAt?: string;
 }
 
 export interface SumInput<K> {
@@ -36,7 +38,7 @@ export interface SumResult<K> {
   works: { id: K; pageCount: number; manual: boolean }[];
   unrecognizedPageCount: number;
   pending: boolean;
-  covers: { imageId: K; rating: Rating; color: string | null }[];
+  covers: { imageId: K; rating: Rating; color: string | null; modifiedAt?: string }[];
   coverTagged: boolean;
   lastAddedAt: string | null;
 }
@@ -87,7 +89,7 @@ export function summarize<K>(x: SumInput<K>): SumResult<K> {
     works,
     unrecognizedPageCount,
     pending,
-    covers: covers.map((p) => ({ imageId: p.id, rating: p.rating, color: p.color })),
+    covers: covers.map((p) => ({ imageId: p.id, rating: p.rating, color: p.color, modifiedAt: p.modifiedAt })),
     coverTagged: !!first?.tagged,
     lastAddedAt: x.pages.reduce<string | null>((m, p) => (m === null || p.addedAt > m ? p.addedAt : m), null),
   };

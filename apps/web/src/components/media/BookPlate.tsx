@@ -29,7 +29,12 @@ export function BookPlate({ collection: c, size = 'md', className }: { collectio
       <div className="absolute inset-0 overflow-hidden rounded-[var(--radius-book)] bg-raised">
         {/* 底页只在布面之外、而且（没开模糊或者它是识别过的全年龄页）时显示 */}
         {!cloth && under && (!prefs.blurSensitive || (under.rating === 'general' && c.coverTagged)) && (
-          <Thumb image={{ id: under.imageId, rating: under.rating, dominantColor: under.color ?? '#d9d4cc' }} width={240} blurBadge="none" className="size-full" />
+          <Thumb
+            image={{ id: under.imageId, rating: under.rating, dominantColor: under.color ?? '#d9d4cc', modifiedAt: under.modifiedAt }}
+            width={240}
+            blurBadge="none"
+            className="size-full"
+          />
         )}
       </div>
       <BookFace collection={c} size={size} cloth={cloth} />
@@ -53,7 +58,7 @@ export function BookFace({ collection: c, size = 'md', cloth, className }: { col
         <ClothCover collection={c} small={size === 'sm'} />
       ) : (
         <Thumb
-          image={{ id: cover.imageId, rating: cover.rating, dominantColor: cover.color ?? '#d9d4cc' }}
+          image={{ id: cover.imageId, rating: cover.rating, dominantColor: cover.color ?? '#d9d4cc', modifiedAt: cover.modifiedAt }}
           width={size === 'lg' ? 960 : 480}
           blurBadge="none"
           className="size-full"
