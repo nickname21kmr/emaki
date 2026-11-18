@@ -357,15 +357,18 @@ export function openEventStream(
  */
 export function handleServerEvent(client: QueryClient, invalidate: ReturnType<typeof createInvalidator>['invalidate'], event: ServerEvent) {
   switch (event.type) {
-    case 'hello':
+    case 'hello': {
+      // 第一次连上（页面刚打开，/api/me 刚取过）还是断线重连
+      const reconnect = position.boot !== null;
       // 后端重启过：位置从头算（resync 已经让前端全部刷新）
       if (position.boot !== event.boot) resetEventPosition(event.boot, event.lastId);
       else noteEvent(event.lastId);
       // access 事件不补发：连上时重新取一次手机访问的状态（局域网入口上取过一次是 null（403），不再取）
       if (client.getQueryData(qk.access) !== null) void client.invalidateQueries({ queryKey: qk.access });
-      // me 事件也不补发：断线期间电脑上可能改了这台设备的权限（本机入口上不取）
-      refreshMe(client);
+      // me 事件也不补发：重连时断线期间电脑上可能改了这台设备的权限（本机入口上不取）
+      if (reconnect) refreshMe(client);
       break;
+    }
     case 'access':
       handleAccessEvent(client, event);
       break;

@@ -287,9 +287,12 @@ export const useMe = () =>
     queryFn: api.me,
     staleTime: Infinity,
     refetchOnWindowFocus: (q) => q.state.data?.kind === 'device',
-    retry: 2,
+    retry: meRetry,
     retryDelay: 500,
   });
+
+/** /api/me 只在连不上时重试两次（401 是没配对，交给配对页；别的错误重试也没用） */
+export const meRetry = (count: number, err: unknown) => err instanceof ApiRequestError && err.code === 'network' && count < 2;
 
 /** 后端版本、数据源（demo / sqlite）、数据目录；进程内不会变 */
 export const useHealth = () => useQuery({ queryKey: qk.health, queryFn: api.health, staleTime: Infinity });

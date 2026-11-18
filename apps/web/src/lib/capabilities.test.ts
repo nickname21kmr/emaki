@@ -19,7 +19,7 @@ import {
   type Capability,
 } from './capabilities';
 import { noteResponse } from './deviceAuth';
-import { createInvalidator, handleServerEvent } from './events';
+import { createInvalidator, handleServerEvent, resetEventPosition } from './events';
 import { qk } from './queries';
 
 const local: Me = { kind: 'local', scopes: Object.keys(SCOPES) as Scope[] };
@@ -116,11 +116,14 @@ describe('什么时候重新取 /api/me', () => {
   let stop: (() => void) | undefined;
   afterEach(() => stop?.());
 
-  it('me 事件（电脑上改了这台设备的权限）、SSE 重连（hello）：设备上重新取', () => {
+  it('me 事件（电脑上改了这台设备的权限）、SSE 重连（hello）：设备上重新取；页面刚打开第一次连上不重复取', () => {
     const a = setup(device(DEVICE_DEFAULT_SCOPES));
     a.send({ type: 'me' });
     expect(a.invalid()).toBe(true);
+    resetEventPosition();
     const b = setup(device(DEVICE_DEFAULT_SCOPES));
+    b.send({ type: 'hello', boot: 'b1', lastId: 0 });
+    expect(b.invalid()).toBe(false);
     b.send({ type: 'hello', boot: 'b1', lastId: 0 });
     expect(b.invalid()).toBe(true);
   });
@@ -128,6 +131,7 @@ describe('什么时候重新取 /api/me', () => {
   it('本机入口上权限不会变：hello、me 都不取', () => {
     const t = setup(local);
     t.send({ type: 'hello', boot: 'b1', lastId: 0 });
+    t.send({ type: 'hello', boot: 'b2', lastId: 0 });
     t.send({ type: 'me' });
     expect(t.invalid()).toBe(false);
     refreshMe(t.client);

@@ -9,7 +9,7 @@ import { TooltipProvider } from '@/components/ui';
 import { api, ApiRequestError } from './lib/api';
 import { watchForbidden } from './lib/capabilities';
 import { useDeviceAuth } from './lib/deviceAuth';
-import { qk } from './lib/queries';
+import { meRetry, qk } from './lib/queries';
 import { routes } from './router';
 import './styles/index.css';
 
@@ -27,7 +27,7 @@ const queryClient = new QueryClient({
 });
 
 // 谁在调用（lib/capabilities.ts）：一开始就去问，页面等它的时间最短；请求回 403 forbidden 时重新问（权限可能刚在电脑上改了）
-void queryClient.prefetchQuery({ queryKey: qk.me, queryFn: api.me, retry: 2, retryDelay: 500 });
+void queryClient.prefetchQuery({ queryKey: qk.me, queryFn: api.me, retry: meRetry, retryDelay: 500 });
 watchForbidden(queryClient);
 
 const router = createBrowserRouter(routes);
