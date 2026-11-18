@@ -30,6 +30,8 @@ const RATINGS = Object.keys(RATING_LABEL) as Rating[];
 /**
  * 看图器右侧的信息面板：一张「纸」浮在深色背景上，和应用主体的纸是同一种材质。
  * 详情没回来之前，头部先用列表里缓存的基本信息顶上。
+ * variant="sheet"（窄屏的底部面板，A1，InfoSheet.tsx）：操作那一排排在最前面（平时只露出它），展开后才是头部和其余信息；
+ * 外面的纸和滚动由 InfoSheet 管。
  */
 export function InfoPanel({
   base,
@@ -39,6 +41,8 @@ export function InfoPanel({
   actions,
   onNavigate,
   onTagClick,
+  variant = 'side',
+  expanded = true,
 }: {
   /** 详情或缓存里的基本信息 */
   base: ImageItem | undefined;
@@ -48,8 +52,71 @@ export function InfoPanel({
   actions: ImageActions;
   onNavigate: () => void;
   onTagClick: (tag: string) => void;
+  variant?: 'side' | 'sheet';
+  /** sheet：展开了（没展开时只有操作那一排） */
+  expanded?: boolean;
 }) {
   const artistsOn = useSettings().data?.tagger.artists ?? false;
+  const body = detail ? (
+    <>
+      <PanelCharacters
+        characterIds={actions.characterIds}
+        links={detail.characterLinks}
+        suggestions={detail.characterSuggestions}
+        actions={actions}
+        onNavigate={onNavigate}
+      />
+
+      {/* 没开画师识别、也没改过的图不占地方 */}
+      {(artistsOn || detail.artists.length > 0 || detail.artistsManual) && (
+        <PanelArtists artists={detail.artists} manual={detail.artistsManual} actions={actions} onNavigate={onNavigate} />
+      )}
+
+      <Section title="分级">
+        {actions.allow.rating ? (
+          <Segmented<Rating>
+            size="sm"
+            value={actions.rating ?? detail.rating}
+            onChange={actions.setRating}
+            options={RATINGS.map((r) => ({ value: r, label: RATING_LABEL[r] }))}
+          />
+        ) : (
+          <span className="text-[13px]">{RATING_LABEL[actions.rating ?? detail.rating]}</span>
+        )}
+      </Section>
+
+      <KindSection detail={detail} actions={actions} />
+
+      <Details detail={detail} actions={actions} onNavigate={onNavigate} />
+      <PanelTags tags={detail.tags} onTagClick={onTagClick} />
+    </>
+  ) : error ? (
+    <div className="border-t border-line px-5 py-10 text-center">
+      <div className="text-[13px] font-medium">读不到这张图的详情</div>
+      <p className="mt-1 text-xs leading-relaxed text-fg-subtle">
+        它可能刚被排除、移到了回收站，或者文件已经不在原来的位置。
+      </p>
+      <Button size="sm" variant="outline" className="mt-4" onClick={onRetry}>
+        重试
+      </Button>
+    </div>
+  ) : (
+    <PanelSkeleton />
+  );
+
+  if (variant === 'sheet')
+    return (
+      <>
+        <ActionTiles base={base} actions={actions} />
+        {expanded && (
+          <div key={base?.id} className="animate-fade-in">
+            <Header base={base} artists={detail?.artists} collection={detail?.collection} />
+            {body}
+          </div>
+        )}
+      </>
+    );
+
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-[20px] bg-sheet text-fg shadow-pop ring-1 ring-line">
       <div key={base?.id} className="min-h-0 flex-1 animate-fade-in overflow-y-auto overscroll-contain scrollbar-thin">
@@ -57,52 +124,7 @@ export function InfoPanel({
 
         <ActionTiles base={base} actions={actions} />
 
-        {detail ? (
-          <>
-            <PanelCharacters
-              characterIds={actions.characterIds}
-              links={detail.characterLinks}
-              suggestions={detail.characterSuggestions}
-              actions={actions}
-              onNavigate={onNavigate}
-            />
-
-            {/* 没开画师识别、也没改过的图不占地方 */}
-            {(artistsOn || detail.artists.length > 0 || detail.artistsManual) && (
-              <PanelArtists artists={detail.artists} manual={detail.artistsManual} actions={actions} onNavigate={onNavigate} />
-            )}
-
-            <Section title="分级">
-              {actions.allow.rating ? (
-                <Segmented<Rating>
-                  size="sm"
-                  value={actions.rating ?? detail.rating}
-                  onChange={actions.setRating}
-                  options={RATINGS.map((r) => ({ value: r, label: RATING_LABEL[r] }))}
-                />
-              ) : (
-                <span className="text-[13px]">{RATING_LABEL[actions.rating ?? detail.rating]}</span>
-              )}
-            </Section>
-
-            <KindSection detail={detail} actions={actions} />
-
-            <Details detail={detail} actions={actions} onNavigate={onNavigate} />
-            <PanelTags tags={detail.tags} onTagClick={onTagClick} />
-          </>
-        ) : error ? (
-          <div className="border-t border-line px-5 py-10 text-center">
-            <div className="text-[13px] font-medium">读不到这张图的详情</div>
-            <p className="mt-1 text-xs leading-relaxed text-fg-subtle">
-              它可能刚被排除、移到了回收站，或者文件已经不在原来的位置。
-            </p>
-            <Button size="sm" variant="outline" className="mt-4" onClick={onRetry}>
-              重试
-            </Button>
-          </div>
-        ) : (
-          <PanelSkeleton />
-        )}
+        {body}
       </div>
     </div>
   );

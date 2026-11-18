@@ -14,6 +14,7 @@ import { useCollection } from '@/lib/queries';
 import { useBlurPrefs, useLightbox, useOverlays, usePrefs } from '@/lib/stores';
 import { readerSpreadFits, useViewport } from '@/lib/viewport';
 import { previousPath } from './previousPath';
+import { useReaderSwipe } from './useReaderSwipe';
 import { buildSpreads, spreadIndexOf } from './spreads';
 
 /**
@@ -163,23 +164,60 @@ function Reader({ data }: { data: GetCollectionResponse }) {
     if (!e.defaultPrevented) back();
   }, { enabled: on, preventDefault: false });
 
+  // 触屏（A1）：左右滑翻页（跟手，过阈值翻、没过弹回），点两侧三分之一翻页（热区按钮），点中间切换顶栏和胶片条
+  const swipe = useReaderSwipe({
+    hasPrev: cur > 0 || ended,
+    rtl,
+    onForward: next,
+    onBack: prev,
+    onCenterTap: () => {
+      window.clearTimeout(idle.current);
+      setChrome((v) => !v);
+    },
+  });
+  // 刚触摸过：浏览器补发的 mousemove 不算「鼠标动了」（不然每点一下顶栏都亮 2.5 秒）
+  const onMouseMove = () => {
+    if (!swipe.fromTouch()) poke();
+  };
+
   const group = spreads[cur] ?? [];
   const nextVolume = data.series.find((s) => (s.volumeNo ?? 0) > (c.volumeNo ?? 0) && s.id !== c.id);
   const m = COLLECTION_META[c.kind];
 
   return (
-    <div data-assistant-yield style={YIELD} className="fixed inset-0 z-40 flex flex-col bg-stage text-white/85 select-none" onMouseMove={poke} onWheel={onWheel}>
-      <header className={cn('flex h-12 shrink-0 items-center gap-3 px-4 transition-opacity duration-300', !chrome && 'opacity-0 hover:opacity-100')}>
+    // --reader-page-h：一页最高多高。电脑上扣掉顶栏 48 和底部进度条 + 胶片条 98；触屏上顶栏、胶片条浮在页面上，页面用满整屏
+    <div
+      data-assistant-yield
+      style={YIELD}
+      className="fixed inset-0 z-40 flex flex-col bg-stage text-white/85 select-none [--reader-page-h:calc(100vh-146px)] touch:[--reader-page-h:calc(100dvh-16px)]"
+      onMouseMove={onMouseMove}
+      onWheel={onWheel}
+    >
+      <header
+        className={cn(
+          'flex h-12 shrink-0 items-center gap-3 px-4 transition-opacity duration-300',
+          'touch:absolute touch:inset-x-0 touch:top-0 touch:z-20 touch:box-content touch:bg-linear-to-b touch:from-black/60 touch:to-transparent touch:pt-[env(safe-area-inset-top)] compact:gap-1.5 compact:px-2',
+          !chrome && 'opacity-0 hover:opacity-100 touch:pointer-events-none',
+        )}
+      >
         <ReaderButton label="回到扉页" onClick={back}>
           <ArrowLeft className="size-4" />
         </ReaderButton>
-        <span className="text-[11px] tracking-[.14em] text-white/50">{m.label}</span>
-        <span className="max-w-[40vw] truncate text-[13px] font-semibold">{displayTitle(c)}</span>
+        <span className="text-[11px] tracking-[.14em] text-white/50 compact:hidden">{m.label}</span>
+        <span className="max-w-[40vw] truncate text-[13px] font-semibold compact:hidden">{displayTitle(c)}</span>
         <span className="mx-auto numeral text-[15px] text-white/70 tabular">
           {group[0]}
           {group[1] ? `–${group[1]}` : ''} / {n}
         </span>
-        <Toggle on={spreadOn} disabled={!wideEnough} onClick={() => setSpread(c.kind, !spreadPref)} label={spreadOn ? '双页' : '单页'} hint="D" />
+        {/* 竖屏一律单页：手机上不放这个点不动的开关 */}
+        <Toggle
+          on={spreadOn}
+          disabled={!wideEnough}
+          onClick={() => setSpread(c.kind, !spreadPref)}
+          label={spreadOn ? '双页' : '单页'}
+          hint="D"
+          className="compact:hidden"
+        />
         <Toggle on={rtl} onClick={() => setRtl(c.kind, !rtl)} label={rtl ? '右开' : '左开'} hint="R" />
         {prefs.blurSensitive && <Toggle on={revealBook} onClick={toggleReveal} label="本册不模糊" />}
         <ReaderButton label="在看图器里打开当前页（I）" onClick={openLightbox}>
@@ -190,7 +228,10 @@ function Reader({ data }: { data: GetCollectionResponse }) {
         </ReaderButton>
       </header>
 
-      <main className={cn('relative flex min-h-0 flex-1 items-center justify-center px-6', rtl && 'flex-row-reverse')}>
+      <main
+        {...swipe.handlers}
+        className={cn('relative flex min-h-0 flex-1 touch-none items-center justify-center px-6 compact:px-2', rtl && 'flex-row-reverse')}
+      >
         <AnimatePresence mode="wait" initial={false}>
           {ended ? (
             // 叠在两侧翻页热区上面：窗口窄时按钮会落进热区里，点不到
@@ -211,6 +252,7 @@ function Reader({ data }: { data: GetCollectionResponse }) {
           ) : (
             <motion.div
               key={cur}
+              ref={swipe.layerRef}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ duration: 0.18 }}
@@ -220,7 +262,7 @@ function Reader({ data }: { data: GetCollectionResponse }) {
                 const pg = pages[no - 1];
                 if (!pg) return null;
                 // 高度扣掉顶栏 48 和底部进度条 + 胶片条 98，不盖住它们；宽度扣掉助手附页让出的那块
-                const size = 'object-contain max-h-[calc(100vh-146px)]';
+                const size = 'object-contain max-h-[var(--reader-page-h)]';
                 const maxWidth = group.length > 1 ? 'calc(50vw - 24px - var(--assistant-right, 0px) / 2)' : 'calc(92vw - var(--assistant-right, 0px))';
                 return blurred(pg) ? (
                   <button
@@ -229,7 +271,7 @@ function Reader({ data }: { data: GetCollectionResponse }) {
                     aria-label="显示这一页"
                     onClick={() => setRevealed((s) => new Set(s).add(pg.imageId))}
                     className="overflow-hidden"
-                    style={{ aspectRatio: `${pg.width} / ${pg.height}`, height: 'calc(100vh - 146px)', maxWidth }}
+                    style={{ aspectRatio: `${pg.width} / ${pg.height}`, height: 'var(--reader-page-h)', maxWidth }}
                   >
                     <Thumb
                       image={pageThumb(pg)}
@@ -256,11 +298,18 @@ function Reader({ data }: { data: GetCollectionResponse }) {
           )}
         </AnimatePresence>
         {/* 点击区：两侧翻页，中间切换顶栏 */}
-        <button type="button" aria-label={rtl ? '下一页' : '上一页'} className="absolute inset-y-0 left-0 w-[30%] cursor-w-resize" onClick={() => (rtl ? next() : prev())} />
-        <button type="button" aria-label={rtl ? '上一页' : '下一页'} className="absolute inset-y-0 right-0 w-[30%] cursor-e-resize" onClick={() => (rtl ? prev() : next())} />
+        {/* 触屏上正好三分之一（中间那块点了切换顶栏） */}
+        <button type="button" aria-label={rtl ? '下一页' : '上一页'} className="absolute inset-y-0 left-0 w-[30%] cursor-w-resize touch:w-1/3" onClick={() => (rtl ? next() : prev())} />
+        <button type="button" aria-label={rtl ? '上一页' : '下一页'} className="absolute inset-y-0 right-0 w-[30%] cursor-e-resize touch:w-1/3" onClick={() => (rtl ? prev() : next())} />
       </main>
 
-      <footer className="group/film shrink-0">
+      {/* 触屏：浮在页面底边，顶栏亮着时胶片条一起展开（没有悬停） */}
+      <footer
+        className={cn(
+          'group/film shrink-0 touch:absolute touch:inset-x-0 touch:bottom-0 touch:z-20 touch:pb-[env(safe-area-inset-bottom)] touch:transition-opacity',
+          !chrome && 'touch:pointer-events-none touch:opacity-0',
+        )}
+      >
         <div className="h-[2px] bg-white/10">
           <div className={cn('h-full bg-shu transition-[width] duration-300', rtl && 'ml-auto')} style={{ width: `${(p / n) * 100}%` }} />
         </div>
@@ -268,6 +317,7 @@ function Reader({ data }: { data: GetCollectionResponse }) {
           pages={pages}
           current={group}
           rtl={rtl}
+          touchOpen={chrome}
           blurred={blurred}
           context={context}
           onPick={(no) => goTo(spreadIndexOf(spreads, no))}
@@ -294,22 +344,27 @@ function Filmstrip({
   blurred,
   context,
   onPick,
+  touchOpen,
 }: {
   pages: CollectionPage[];
   current: number[];
   rtl: boolean;
+  /** 触屏上没有悬停：顶栏亮着时就展开 */
+  touchOpen: boolean;
   /** 和主视图同一个判断：主视图里显示出来的页，胶片条里也不糊 */
   blurred: (pg: CollectionPage) => boolean;
   context: BlurContext;
   onPick: (pageNo: number) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [hovered, setOpen] = useState(false);
+  const touch = useViewport().touch;
+  const open = touch ? touchOpen : hovered;
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (open) ref.current?.querySelector('[data-current="true"]')?.scrollIntoView({ inline: 'center', block: 'nearest' });
   }, [open, current]);
   return (
-    <div onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)} className="h-[96px]">
+    <div onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)} className="h-[96px] touch:bg-linear-to-t touch:from-black/60 touch:to-transparent">
       <div
         ref={ref}
         className={cn(
@@ -352,14 +407,28 @@ function ReaderButton({ label, onClick, children }: { label: string; onClick: ()
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="flex size-8 items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+      className="flex size-8 shrink-0 items-center justify-center rounded-full text-white/70 transition-colors touch-hit hover:bg-white/10 hover:text-white"
     >
       {children}
     </button>
   );
 }
 
-function Toggle({ on, onClick, label, hint, disabled }: { on: boolean; onClick: () => void; label: string; hint?: string; disabled?: boolean }) {
+function Toggle({
+  on,
+  onClick,
+  label,
+  hint,
+  disabled,
+  className,
+}: {
+  on: boolean;
+  onClick: () => void;
+  label: string;
+  hint?: string;
+  disabled?: boolean;
+  className?: string;
+}) {
   return (
     <button
       type="button"
@@ -367,12 +436,13 @@ function Toggle({ on, onClick, label, hint, disabled }: { on: boolean; onClick: 
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'inline-flex h-7 items-center gap-1.5 rounded-full px-3 text-[12px] transition-colors disabled:opacity-40',
+        'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-3 text-[12px] whitespace-nowrap transition-colors touch-hit disabled:opacity-40',
         on ? 'bg-white/15 text-white' : 'text-white/60 hover:bg-white/10 hover:text-white',
+        className,
       )}
     >
       {label}
-      {hint && <span className="text-[10px] text-white/40">{hint}</span>}
+      {hint && <span className="text-[10px] text-white/40 touch:hidden">{hint}</span>}
     </button>
   );
 }

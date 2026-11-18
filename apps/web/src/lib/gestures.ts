@@ -9,8 +9,8 @@ export const GESTURE = {
   slop: 10,
   /** 按住不动这么久算长按（ms） */
   longPressMs: 500,
-  /** 按下到抬起不超过这么久才算点按（ms） */
-  tapMs: 300,
+  /** 按下到抬起不超过这么久才算点按（ms）：比长按短的都算 */
+  tapMs: 500,
   /** 两次点按的间隔（ms）和距离（px）在这以内算双击 */
   doubleTapMs: 300,
   doubleTapDist: 32,

@@ -10,12 +10,11 @@ import { isTypingTarget } from '@/lib/hotkeys';
 import { clampPan, zoomAround, type ZoomApi, type ZoomBounds } from './useZoomPan';
 import { EASE_OUT } from '@/lib/motion';
 import type { LightboxRect } from '@/lib/stores';
+import { stagePadding, useViewport } from '@/lib/viewport';
+import { useTouchGestures } from './useTouchGestures';
 
 export type StageMeta = Pick<ImageItem, 'width' | 'height' | 'rating' | 'dominantColor' | 'fileName'> & Partial<Pick<ImageItem,'modifiedAt'>>;
 
-/** 图片四周留白：左右给切换箭头，上下给顶栏和缩放提示 */
-const PAD_X = 84;
-const PAD_Y = 68;
 const EASE = EASE_OUT;
 /** 从格子里拿起到居中的时长（秒） */
 const LIFT_S = 0.46;
@@ -25,6 +24,8 @@ const plateTransform = ({ x, y, scale }: { x: number; y: number; scale: number }
 /**
  * 看图器的舞台：居中显示图片，先 960 缩略图再换原图；滚轮 / 双击缩放，放大后拖动平移。
  * 点击图片外的空白处关闭。
+ * 触屏（A1，useTouchGestures）：左右滑切换、下滑关闭、捏合 / 双击缩放、放大后拖动平移、单击切换界面；
+ * 图片四周的留白按窗口和输入方式定（lib/viewport.ts 的 stagePadding：电脑上左右给箭头留 84、上下 68，触屏窄屏铺满宽度）。
  */
 export function Stage({
   id,
@@ -43,6 +44,10 @@ export function Stage({
   onNext,
   onBackdropClick,
   slideshow,
+  onTap,
+  onDismiss,
+  onDismissDrag,
+  onSwipeUp,
 }: {
   id: ID;
   meta: StageMeta | undefined;
@@ -67,14 +72,25 @@ export function Stage({
   onBackdropClick: () => void;
   /** 放映中（SEL-16）：新旧图交叉淡化 crossfade 秒；idle = 鼠标停了，箭头和光标一起藏起来 */
   slideshow?: { crossfade: number; idle: boolean } | null;
+  /** 触屏单击：切换界面（顶栏、信息面板） */
+  onTap?: () => void;
+  /** 触屏下滑过了阈值：关闭 */
+  onDismiss?: () => void;
+  /** 触屏下滑过程中的进度（0–1），null = 复原 */
+  onDismissDrag?: (progress: number | null) => void;
+  /** 触屏 1 倍时上滑 */
+  onSwipeUp?: () => void;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
+  // 触屏手势里跟手移动的那一层（切图时左右、下滑关闭时往下缩小）
+  const layerRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(stageRef);
   const { zoom, setZoom, reset, zoomed } = zoomApi;
+  const pad = stagePadding(useViewport());
 
   // 「适应窗口」的尺寸：不放大小图（最多 1:1）
-  const availW = Math.max(0, size.w - PAD_X * 2);
-  const availH = Math.max(0, size.h - PAD_Y * 2);
+  const availW = Math.max(0, size.w - pad.x * 2);
+  const availH = Math.max(0, size.h - pad.y * 2);
   const fit = meta && availW > 0 && availH > 0 ? Math.min(availW / meta.width, availH / meta.height, 1) : 0;
   const boxW = meta ? Math.round(meta.width * fit) : 0;
   const boxH = meta ? Math.round(meta.height * fit) : 0;
@@ -150,13 +166,33 @@ export function Stage({
     setDragging(false);
   };
 
-  const onDoubleClick = (e: React.MouseEvent) => {
+  // 双击放到原始像素 100%（小图至少 2.5 倍），放大着就还原
+  const zoomToggle = (px: number, py: number) => {
     if (!fit) return;
     if (zoomed) return reset();
-    const { px, py } = toStage(e.clientX, e.clientY);
-    // 双击放到原始像素 100%（小图至少 2.5 倍）
     setZoom((z) => zoomAround(z, Math.max(2.5, 1 / fit), px, py, boundsRef.current, true));
   };
+  const onDoubleClick = (e: React.MouseEvent) => {
+    // 触屏的双击由手势处理，浏览器补发的 dblclick 不再算一次
+    if (touch.fromTouch()) return;
+    const { px, py } = toStage(e.clientX, e.clientY);
+    zoomToggle(px, py);
+  };
+
+  const touch = useTouchGestures(stageRef, layerRef, {
+    zoom,
+    bounds,
+    hasPrev,
+    hasNext,
+    setZoom,
+    onPrev,
+    onNext,
+    onDismiss: () => onDismiss?.(),
+    onDismissDrag: (p) => onDismissDrag?.(p),
+    onTap: () => onTap?.(),
+    onDoubleTap: zoomToggle,
+    onSwipeUp,
+  });
 
   const percent = Math.round(zoom.scale * fit * 100);
 
@@ -209,7 +245,7 @@ export function Stage({
         animate={{ opacity: holding ? initial.opacity : returnRect && !back ? 0 : 1, transform: plateTransform(holding ? initial : target) }}
         exit={{ opacity: 0 }}
         transition={{ duration: returnRect ? 0.3 : originRect ? LIFT_S : (slideshow?.crossfade ?? 0.42), ease: slideshow ? 'linear' : EASE }}
-        className="absolute"
+        className="pointer-events-auto absolute"
         style={{ left: (size.w - boxW) / 2, top: (size.h - boxH) / 2, width: boxW, height: boxH }}
       >
         <div
@@ -244,11 +280,13 @@ export function Stage({
         'group/stage relative min-h-0 min-w-0 flex-1 touch-none overflow-hidden select-none',
         zoomed ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : idle && 'cursor-none',
       )}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
+      onPointerDown={(e) => touch.onPointerDown(e) || onPointerDown(e)}
+      onPointerMove={(e) => touch.onPointerMove(e) || onPointerMove(e)}
+      onPointerUp={(e) => touch.onPointerUp(e) || endDrag()}
+      onPointerCancel={(e) => touch.onPointerCancel(e) || endDrag()}
       onClick={(e) => {
+        // 触屏的点按由手势处理（单击切换界面，不关闭）
+        if (touch.fromTouch()) return;
         if (suppressClick.current) {
           suppressClick.current = false;
           return;
@@ -256,8 +294,11 @@ export function Stage({
         if (e.target === e.currentTarget && !zoomed) onBackdropClick();
       }}
     >
-      {/* 放映时旧图留在原位淡出，新图同时淡入（交叉淡化）；平时直接换 */}
-      {slideshow ? <AnimatePresence>{plate}</AnimatePresence> : plate}
+      {/* 放映时旧图留在原位淡出，新图同时淡入（交叉淡化）；平时直接换。
+          外面一层是触屏手势的跟手层，自己不接点击（点空白处还是点在舞台上） */}
+      <div ref={layerRef} className="pointer-events-none absolute inset-0">
+        {slideshow ? <AnimatePresence>{plate}</AnimatePresence> : plate}
+      </div>
       {!plate && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <Spinner className="size-5 text-white/50" />
@@ -280,7 +321,8 @@ export function Stage({
             className="absolute bottom-5 left-1/2 z-10 flex h-8 -translate-x-1/2 items-center gap-2 rounded-full bg-black/45 px-3.5 text-xs text-white/85 ring-1 ring-white/10 backdrop-blur-md transition-colors hover:bg-black/60"
           >
             <span className="font-medium tabular">{percent}%</span>
-            <span className="text-white/45">点击或按 0 还原</span>
+            <span className="text-white/45 touch:hidden">点击或按 0 还原</span>
+            <span className="hidden text-white/45 touch:inline">点这里或双击还原</span>
           </motion.button>
         ) : (
           <motion.div
@@ -466,7 +508,8 @@ function NavArrow({
           onClick();
         }}
         className={cn(
-          'absolute top-1/2 z-10 flex size-11 -translate-y-1/2 items-center justify-center rounded-full',
+          // 触屏上左右滑切换，不放悬停才出现的箭头（透明的箭头也会挡住点按）
+          'absolute top-1/2 z-10 flex size-11 -translate-y-1/2 items-center justify-center rounded-full touch:hidden',
           'bg-white/8 text-white/80 ring-1 ring-white/10 backdrop-blur-md transition-[opacity,background-color,color,scale] duration-200',
           loading
             ? 'opacity-100'
