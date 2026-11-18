@@ -169,7 +169,7 @@ describe('附录 #34：任务种类登记在一处', () => {
       ([side, f]) =>
         // 手写的表格（Record<JobKind, …> = { … }）；从注册表推出来的（Object.fromEntries(JOB_KIND_LIST…)）不算
         /Record<\s*(JobKind|Job\['kind'\])\s*,[^>]*>\s*=\s*\{/.test(readFileSync(f, 'utf8'))
-          ? [`${side}:${path.relative(side === 'server' ? SRC : WEB, f)}`]
+          ? [`${side}:${path.relative(side === 'server' ? SRC : WEB, f).split(path.sep).join('/')}`] // Windows 上 relative 用 \，统一成 /
           : [],
     );
     expect(tables.sort()).toEqual(['server:demo/ports.ts', 'web:features/settings/jobMeta.ts']);
