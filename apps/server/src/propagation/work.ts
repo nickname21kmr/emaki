@@ -14,7 +14,8 @@ export type WorkKind = 'dedupe' | 'collections' | `pause:${PausableJob}`;
 /** 标记要做（已有标记时更新时间） */
 export function markWork(db: Db, kind: WorkKind, at: string): void {
   db.prepare(
-    'INSERT INTO pending_work (kind, requested_at) VALUES (?, ?) ON CONFLICT(kind) DO UPDATE SET requested_at = MAX(requested_at, excluded.requested_at)',
+    `INSERT INTO pending_work (kind, requested_at) VALUES (?, ?)
+     ON CONFLICT(kind) DO UPDATE SET requested_at = MAX(requested_at, excluded.requested_at)`,
   ).run(kind, at);
 }
 

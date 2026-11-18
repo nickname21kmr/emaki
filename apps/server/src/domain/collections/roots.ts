@@ -8,8 +8,10 @@ import type { Db } from '../../db/connection.ts';
 /** 子文件夹并进父文件夹：childWins 时同一个目录两边都有合集留子文件夹的，否则留父文件夹的 */
 export function mergeChildCollections(db: Db, p: { parent: number; child: number; prefix: string }, childWins: boolean): void {
   const expr = `CASE WHEN rel_dir = '' THEN @prefix ELSE @prefix || '/' || rel_dir END`;
-  if (childWins) db.prepare(`DELETE FROM collections WHERE root_id = @parent AND rel_dir IN (SELECT ${expr} FROM collections WHERE root_id = @child)`).run(p);
-  else db.prepare(`DELETE FROM collections WHERE root_id = @child AND ${expr} IN (SELECT rel_dir FROM collections WHERE root_id = @parent)`).run(p);
+  if (childWins)
+    db.prepare(`DELETE FROM collections WHERE root_id = @parent AND rel_dir IN (SELECT ${expr} FROM collections WHERE root_id = @child)`).run(p);
+  else
+    db.prepare(`DELETE FROM collections WHERE root_id = @child AND ${expr} IN (SELECT rel_dir FROM collections WHERE root_id = @parent)`).run(p);
   db.prepare(`UPDATE collections SET root_id = @parent, rel_dir = ${expr} WHERE root_id = @child`).run(p);
 }
 
@@ -31,8 +33,11 @@ export function adoptCollections(db: Db, p: { root: number; from: number; prefix
  * 换挂到还在的文件夹里的第一张成员所在的文件夹，免得跟着级联删掉
  */
 export function reanchorSelections(db: Db, cutoff: string): void {
-  db.prepare(`UPDATE collections SET root_id = (SELECT i.root_id FROM images i JOIN library_roots r ON r.id = i.root_id
-      WHERE i.collection_id = collections.id AND r.removed_at IS NULL ORDER BY i.id LIMIT 1)
-    WHERE membership <> 'folder' AND root_id IN (SELECT id FROM library_roots WHERE removed_at IS NOT NULL AND removed_at < ?)
-      AND EXISTS (SELECT 1 FROM images i JOIN library_roots r ON r.id = i.root_id WHERE i.collection_id = collections.id AND r.removed_at IS NULL)`).run(cutoff);
+  db.prepare(
+    `UPDATE collections SET root_id = (SELECT i.root_id FROM images i JOIN library_roots r ON r.id = i.root_id
+        WHERE i.collection_id = collections.id AND r.removed_at IS NULL ORDER BY i.id LIMIT 1)
+     WHERE membership <> 'folder' AND root_id IN (SELECT id FROM library_roots WHERE removed_at IS NOT NULL AND removed_at < ?)
+       AND EXISTS (SELECT 1 FROM images i JOIN library_roots r ON r.id = i.root_id
+                   WHERE i.collection_id = collections.id AND r.removed_at IS NULL)`,
+  ).run(cutoff);
 }

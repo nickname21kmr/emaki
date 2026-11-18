@@ -60,7 +60,8 @@ const BACKUP_DIR = 'image-replacements';
 
 function target(ctx: SqliteContext, id: ID) {
   const n = parseId(id);
-  const row = n === null ? undefined : (ctx.db.prepare(`SELECT id,root_id,missing,trashed_at,${COLUMNS.join(',')} FROM images WHERE id=?`).get(n) as Row | undefined);
+  const row =
+    n === null ? undefined : (ctx.db.prepare(`SELECT id,root_id,missing,trashed_at,${COLUMNS.join(',')} FROM images WHERE id=?`).get(n) as Row | undefined);
   if (!row || row.missing || row.trashed_at) throw new NotFoundError('可替换的图片');
   const rel = String(row.rel_path),
     dir = path.posix.dirname(rel);
@@ -82,7 +83,17 @@ function unchangedFile(file: string, bytes: number, sha: string) {
  * 发布新文件并在同一个事务里改行、声明变化，期间不让出事件循环（扫描、监听插不进来）。
  * 数据库或改名失败时把原文件放回去再报错。格式变了换扩展名，id 不变
  */
-function swap(ctx: SqliteContext, id: number, from: string, to: string, bytes: Buffer, previous: Buffer, previousMtime: Date, next: Version, mtime?: Date) {
+function swap(
+  ctx: SqliteContext,
+  id: number,
+  from: string,
+  to: string,
+  bytes: Buffer,
+  previous: Buffer,
+  previousMtime: Date,
+  next: Version,
+  mtime?: Date,
+) {
   const tmp = path.join(path.dirname(to), `.emaki-replace-${randomUUID()}.tmp`);
   let published = false,
     removed = false;
@@ -174,8 +185,8 @@ export async function replaceImage(ctx: SqliteContext, id: ID, body: ReplaceImag
     oldExt = path.extname(oldRel);
   const rel = probe.format === old.row.format ? oldRel : (oldExt ? oldRel.slice(0, -oldExt.length) : oldRel) + `.${ext}`;
   const abs = toAbs(old.root.path, rel);
-  if (abs !== old.abs && (existsSync(abs) || ctx.db.prepare('SELECT 1 FROM images WHERE root_id=? AND rel_path=? COLLATE NOCASE AND id<>?').get(old.row.root_id, rel, old.row.id)))
-    throw new ConflictError('新格式的同名文件已存在，请先选择要替换的图片');
+  const taken = () => ctx.db.prepare('SELECT 1 FROM images WHERE root_id=? AND rel_path=? COLLATE NOCASE AND id<>?').get(old.row.root_id, rel, old.row.id);
+  if (abs !== old.abs && (existsSync(abs) || taken())) throw new ConflictError('新格式的同名文件已存在，请先选择要替换的图片');
   // 可以恢复的副本放在图库文件夹外面（数据目录里），进程重启也还在；撤销令牌过期后由缓存回收删掉
   const backupDir = path.join(ctx.dataDir, BACKUP_DIR, randomUUID());
   mkdirSync(backupDir, { recursive: true });
@@ -197,8 +208,8 @@ export async function replaceImage(ctx: SqliteContext, id: ID, body: ReplaceImag
   const result = ctx.undo.result('已替换图片', () => {
     assertFilesIdle(ctx, [old.row.id], '撤销替换');
     const current = target(ctx, id);
-    if (current.row.root_id !== old.row.root_id || current.row.rel_path !== rel || current.row.sha256 !== sha || current.abs !== abs || !unchangedFile(abs, replacementSize, sha))
-      throw new ConflictError('图片位置或内容已变化，请查看当前图片后再处理');
+    const moved = current.row.root_id !== old.row.root_id || current.row.rel_path !== rel || current.abs !== abs;
+    if (moved || current.row.sha256 !== sha || !unchangedFile(abs, replacementSize, sha)) throw new ConflictError('图片位置或内容已变化，请查看当前图片后再处理');
     if (abs !== old.abs && existsSync(old.abs)) throw new ConflictError('原文件位置已有其他文件，请先处理重名文件');
     if (!unchangedFile(backup, previousSize, String(before.sha256))) throw new ConflictError('原版本备份无法读取');
     swap(ctx, old.row.id, abs, old.abs, readFileSync(backup), readFileSync(abs), statSync(abs).mtime, before, oldMtime);

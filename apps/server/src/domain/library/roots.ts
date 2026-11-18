@@ -46,11 +46,21 @@ export async function diskCaseRel(rootPath: string, rel: string, cache?: Map<str
 /** 子文件夹的记录并进父文件夹：相对路径补上前缀。childWins：同一个相对路径两边都有时留子文件夹的 */
 function mergeRows(db: Db, p: { parent: number; child: number; prefix: string }, childWins: boolean): number {
   if (childWins) {
-    db.prepare(`DELETE FROM images WHERE root_id = @parent AND rel_path IN (SELECT @prefix || '/' || rel_path FROM images WHERE root_id = @child)`).run(p);
-    db.prepare(`DELETE FROM scan_errors WHERE root_id = @parent AND rel_path IN (SELECT @prefix || '/' || rel_path FROM scan_errors WHERE root_id = @child)`).run(p);
+    db.prepare(
+      `DELETE FROM images WHERE root_id = @parent AND rel_path IN (SELECT @prefix || '/' || rel_path FROM images WHERE root_id = @child)`,
+    ).run(p);
+    db.prepare(
+      `DELETE FROM scan_errors WHERE root_id = @parent
+         AND rel_path IN (SELECT @prefix || '/' || rel_path FROM scan_errors WHERE root_id = @child)`,
+    ).run(p);
   } else {
-    db.prepare(`DELETE FROM images WHERE root_id = @child AND @prefix || '/' || rel_path IN (SELECT rel_path FROM images WHERE root_id = @parent)`).run(p);
-    db.prepare(`DELETE FROM scan_errors WHERE root_id = @child AND @prefix || '/' || rel_path IN (SELECT rel_path FROM scan_errors WHERE root_id = @parent)`).run(p);
+    db.prepare(
+      `DELETE FROM images WHERE root_id = @child AND @prefix || '/' || rel_path IN (SELECT rel_path FROM images WHERE root_id = @parent)`,
+    ).run(p);
+    db.prepare(
+      `DELETE FROM scan_errors WHERE root_id = @child
+         AND @prefix || '/' || rel_path IN (SELECT rel_path FROM scan_errors WHERE root_id = @parent)`,
+    ).run(p);
   }
   const n = db.prepare(`UPDATE images SET root_id = @parent, rel_path = @prefix || '/' || rel_path WHERE root_id = @child`).run(p).changes;
   db.prepare(`UPDATE scan_errors SET root_id = @parent, rel_path = @prefix || '/' || rel_path WHERE root_id = @child`).run(p);
@@ -70,11 +80,20 @@ export function mergeChildRoots(db: Db, parentId: number, parentPath: string, ch
     // 按漫画导入的设置跟着过来：整个按漫画导入的子文件夹变成父文件夹里的漫画子文件夹，里面的漫画子文件夹补上前缀
     // （删掉子文件夹记录时 comic_folders 会级联删除，所以先搬）
     if (childWins) {
-      const child = db.prepare('SELECT content_mode, comic_rating FROM library_roots WHERE id = ?').get(c.id) as { content_mode: string; comic_rating: string } | undefined;
+      const child = db.prepare('SELECT content_mode, comic_rating FROM library_roots WHERE id = ?').get(c.id) as
+        | { content_mode: string; comic_rating: string }
+        | undefined;
       const now = new Date().toISOString();
       if (child?.content_mode === 'comic')
-        db.prepare('INSERT OR REPLACE INTO comic_folders (root_id, rel_dir, comic_rating, created_at) VALUES (?, ?, ?, ?)').run(parentId, p.prefix, child.comic_rating, now);
-      db.prepare("UPDATE OR REPLACE comic_folders SET root_id = @parent, rel_dir = @prefix || '/' || rel_dir WHERE root_id = @child").run(p);
+        db.prepare('INSERT OR REPLACE INTO comic_folders (root_id, rel_dir, comic_rating, created_at) VALUES (?, ?, ?, ?)').run(
+          parentId,
+          p.prefix,
+          child.comic_rating,
+          now,
+        );
+      db.prepare("UPDATE OR REPLACE comic_folders SET root_id = @parent, rel_dir = @prefix || '/' || rel_dir WHERE root_id = @child").run(
+        p,
+      );
     }
     db.prepare('DELETE FROM library_roots WHERE id = ?').run(c.id);
   }
@@ -83,7 +102,7 @@ export function mergeChildRoots(db: Db, parentId: number, parentPath: string, ch
     .map((c) => c.imported_at)
     .filter((x): x is string => x !== null)
     .sort()[0];
-  if (first) db.prepare('UPDATE library_roots SET imported_at = MIN(COALESCE(imported_at, @first), @first) WHERE id = @id').run({ id: parentId, first });
+  if (first) keepImportedAt(db, parentId, first);
   return { images };
 }
 
@@ -92,7 +111,11 @@ export function mergeChildRoots(db: Db, parentId: number, parentPath: string, ch
  * 图片 id 不变，角色、收藏、合集、重复组都找回来；以后再加回父文件夹，合并回去也不会和新记录冲突。
  * parents 由内往外排，prefix 用磁盘上的大小写；同一个相对路径只接管第一份。必须在事务内调用。
  */
-export function adoptFromRemovedParents(db: Db, rootId: number, parents: (Pick<ChildRoot, 'id' | 'imported_at'> & { prefix: string })[]): { images: number } {
+export function adoptFromRemovedParents(
+  db: Db,
+  rootId: number,
+  parents: (Pick<ChildRoot, 'id' | 'imported_at'> & { prefix: string })[],
+): { images: number } {
   let images = 0;
   let first: string | null = null;
   for (const a of parents) {
@@ -122,8 +145,13 @@ export function adoptFromRemovedParents(db: Db, rootId: number, parents: (Pick<C
     if (a.imported_at && (!first || a.imported_at < first)) first = a.imported_at;
   }
   // 同 mergeChildRoots：接管回来的图不算新导入
-  if (first) db.prepare('UPDATE library_roots SET imported_at = MIN(COALESCE(imported_at, @first), @first) WHERE id = @id').run({ id: rootId, first });
+  if (first) keepImportedAt(db, rootId, first);
   return { images };
+}
+
+/** 合并、接管进来的旧图不算新导入：首次导入时间取更早的那个 */
+function keepImportedAt(db: Db, id: number, first: string): void {
+  db.prepare('UPDATE library_roots SET imported_at = MIN(COALESCE(imported_at, @first), @first) WHERE id = @id').run({ id, first });
 }
 
 // ---------------------------------------------------------------- 图库文件夹和漫画子文件夹的行（P4a 从 SqliteDataSource 搬来）
@@ -132,16 +160,28 @@ export type RootMode = 'auto' | 'comic';
 
 /** 新加一个图库文件夹，返回 id */
 export function insertRoot(db: Db, r: { path: string; mode: RootMode; rating: string }): number {
-  return Number(db.prepare('INSERT INTO library_roots (path, enabled, content_mode, comic_rating) VALUES (?, 1, ?, ?)').run(r.path, r.mode, r.rating).lastInsertRowid);
+  const ins = db.prepare('INSERT INTO library_roots (path, enabled, content_mode, comic_rating) VALUES (?, 1, ?, ?)');
+  return Number(ins.run(r.path, r.mode, r.rating).lastInsertRowid);
 }
 
 /** 移除过的文件夹重新加回来：旧图和识别结果全部回来，导入方式按这次选的 */
 export function reviveRoot(db: Db, id: number, r: { path: string; mode: RootMode; rating: string }): void {
-  db.prepare('UPDATE library_roots SET removed_at = NULL, enabled = 1, path = ?, content_mode = ?, comic_rating = ? WHERE id = ?').run(r.path, r.mode, r.rating, id);
+  db.prepare('UPDATE library_roots SET removed_at = NULL, enabled = 1, path = ?, content_mode = ?, comic_rating = ? WHERE id = ?').run(
+    r.path,
+    r.mode,
+    r.rating,
+    id,
+  );
 }
 
 /** 启用 / 停用、导入方式、漫画分级（cols 是真的变了的列，撤销用） */
-export function updateRoot(db: Db, u: UndoRecorder, id: number, cols: string[], r: { enabled: number; mode: string; rating: string }): void {
+export function updateRoot(
+  db: Db,
+  u: UndoRecorder,
+  id: number,
+  cols: string[],
+  r: { enabled: number; mode: string; rating: string },
+): void {
   u.columns('library_roots', cols, [id]);
   db.prepare('UPDATE library_roots SET enabled = ?, content_mode = ?, comic_rating = ? WHERE id = ?').run(r.enabled, r.mode, r.rating, id);
 }
@@ -157,7 +197,8 @@ export function setComicFolderRow(db: Db, u: UndoRecorder, rootId: number, relDi
   if (rating === null) db.prepare('DELETE FROM comic_folders WHERE root_id = ? AND rel_dir = ?').run(rootId, relDir);
   else
     db.prepare(
-      'INSERT INTO comic_folders (root_id, rel_dir, comic_rating, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(root_id, rel_dir) DO UPDATE SET comic_rating = excluded.comic_rating',
+      `INSERT INTO comic_folders (root_id, rel_dir, comic_rating, created_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(root_id, rel_dir) DO UPDATE SET comic_rating = excluded.comic_rating`,
     ).run(rootId, relDir, rating, at);
 }
 

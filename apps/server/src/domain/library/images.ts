@@ -68,7 +68,12 @@ export interface ObservedContent {
  * 同一 id 的文件内容变了（D1）：扫描发现、用户替换都走这里，处理完全相同——只改观测列（扫描发现的还把丢失、回收站清掉：文件就在这里），
  * 声明 image.fileChanged（reason 只记录在案）。files 带新旧 sha；probes 是读新文件头拿到的帧数、相机
  */
-export function recordFileChanged(tx: DomainTx, rows: readonly ObservedContent[], reason: FileChangeReason, probes: readonly ProbeFacts[] = []): void {
+export function recordFileChanged(
+  tx: DomainTx,
+  rows: readonly ObservedContent[],
+  reason: FileChangeReason,
+  probes: readonly ProbeFacts[] = [],
+): void {
   if (!rows.length) return;
   const db = tx.db;
   const before = new Map(
@@ -107,7 +112,9 @@ export function recordMeta(tx: DomainTx, rows: readonly { id: number; bytes: num
 /** 确认文件不在了（扫描）：标丢失，声明 image.gone；返回真的新标的 */
 export function markGone(tx: DomainTx, ids: readonly number[]): number[] {
   if (!ids.length) return [];
-  const gone = stmt(tx.db, 'SELECT id FROM images WHERE id IN (SELECT value FROM json_each(?)) AND missing = 0').pluck().all(JSON.stringify(ids)) as number[];
+  const gone = stmt(tx.db, 'SELECT id FROM images WHERE id IN (SELECT value FROM json_each(?)) AND missing = 0')
+    .pluck()
+    .all(JSON.stringify(ids)) as number[];
   stmt(tx.db, 'UPDATE images SET missing = 1 WHERE id IN (SELECT value FROM json_each(?))').run(JSON.stringify(gone));
   tx.changed({ type: 'image.gone', ids: gone });
   return gone;
@@ -134,7 +141,9 @@ export function markTrashed(tx: DomainTx, u: UndoRecorder | null, ids: readonly 
  */
 export function markRecycled(db: Db, ids: readonly number[]): void {
   if (!ids.length) return;
-  stmt(db, 'UPDATE images SET missing = 1 WHERE id IN (SELECT value FROM json_each(?)) AND trashed_at IS NOT NULL').run(JSON.stringify(ids));
+  stmt(db, 'UPDATE images SET missing = 1 WHERE id IN (SELECT value FROM json_each(?)) AND trashed_at IS NOT NULL').run(
+    JSON.stringify(ids),
+  );
 }
 
 /** 丢弃的行：用户移进了回收站、文件也已经不在原处（a 是 images 的别名） */

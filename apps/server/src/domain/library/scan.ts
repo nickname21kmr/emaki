@@ -32,7 +32,8 @@ export function recordScanError(db: Db, e: ScanErrorRow): void {
   stmt(
     db,
     `INSERT INTO scan_errors (root_id, rel_path, bytes, modified_at, error, at) VALUES (@rootId, @relPath, @bytes, @modifiedAt, @error, @at)
-     ON CONFLICT(root_id, rel_path) DO UPDATE SET bytes=excluded.bytes, modified_at=excluded.modified_at, error=excluded.error, at=excluded.at`,
+     ON CONFLICT(root_id, rel_path) DO UPDATE SET
+       bytes=excluded.bytes, modified_at=excluded.modified_at, error=excluded.error, at=excluded.at`,
   ).run(e);
 }
 
@@ -57,7 +58,10 @@ export function followComicFolders(db: Db, moves: readonly FolderMove[], onDisk:
   const folders = db.prepare('SELECT root_id, rel_dir FROM comic_folders').all() as { root_id: number; rel_dir: string }[];
   if (!folders.length) return 0;
   const live = db
-    .prepare("SELECT COUNT(*) FROM images WHERE root_id = ? AND missing = 0 AND trashed_at IS NULL AND substr(rel_path, 1, length(?) + 1) = ? || '/'")
+    .prepare(
+      `SELECT COUNT(*) FROM images WHERE root_id = ? AND missing = 0 AND trashed_at IS NULL
+         AND substr(rel_path, 1, length(?) + 1) = ? || '/'`,
+    )
     .pluck();
   const upd = db.prepare('UPDATE OR IGNORE comic_folders SET root_id = ?, rel_dir = ? WHERE root_id = ? AND rel_dir = ?');
   const disk = [...onDisk];

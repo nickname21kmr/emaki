@@ -14,12 +14,13 @@ import { analyze } from './analyze.ts';
 import { backfillClassification } from './classify.ts';
 import { syncRootModes } from './rootMode.ts';
 
-const kinds = (db: Db, ids: number[]) =>
-  new Map(
-    (db.prepare('SELECT id, content_kind AS kind FROM images WHERE id IN (SELECT value FROM json_each(?))').all(JSON.stringify(ids)) as { id: number; kind: string }[]).map(
-      (r) => [r.id, r.kind],
-    ),
-  );
+const kinds = (db: Db, ids: number[]) => {
+  const rows = db.prepare('SELECT id, content_kind AS kind FROM images WHERE id IN (SELECT value FROM json_each(?))').all(JSON.stringify(ids)) as {
+    id: number;
+    kind: string;
+  }[];
+  return new Map(rows.map((r) => [r.id, r.kind]));
+};
 
 export const analyzeReaction: Reaction = {
   name: 'analyze',

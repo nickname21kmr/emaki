@@ -6,6 +6,8 @@
  */
 import type { ContentKind, ContentKindSource, ImageFormat } from '@emaki/shared';
 import { transact, type Db, type Statement } from '../../db/connection.ts';
+import type { ProbeFacts } from '../../propagation/changes.ts';
+import { stmt } from '../tx.ts';
 import { IN_COMIC } from '../../services/classify/comicAreas.ts';
 import { classifyContent, CLASSIFIER_VERSION, SIGNAL_TAGS } from '../../services/classify/rules.ts';
 import { artScore, classifyTheme, THEME_TAG_NAMES, type StoredTheme } from '../../services/classify/theme.ts';
@@ -57,19 +59,41 @@ export function computeClassification(r: ClassRow, tags: [string, number][] | nu
   return { kind: c.kind, source: c.source, evidence: c.evidence, theme: tagged ? classifyTheme(tags, score) : null, artScore: score };
 }
 
-export function classificationStatements(db: Db): { auto: Statement; manual: Statement } {
+interface ClassStatements {
+  auto: Statement;
+  manual: Statement;
+  /** 同时写读文件头拿到的帧数、相机（入库、文件内容变了：一条 UPDATE 写完，不另外写这两列） */
+  autoProbed: Statement;
+  manualProbed: Statement;
+}
+
+function classificationStatements(db: Db): ClassStatements {
   return {
-    auto: db.prepare(`UPDATE images SET content_kind = @kind, content_kind_source = @source, content_kind_evidence = @evidence,
-      content_kind_version = @version, theme = @theme, art_score = @artScore WHERE id = @id AND content_kind_manual = 0`),
-    manual: db.prepare(`UPDATE images SET content_kind_version = @version, theme = @theme, art_score = @artScore
-      WHERE id = @id AND content_kind_manual = 1`),
+    auto: stmt(
+      db,
+      `UPDATE images SET content_kind = @kind, content_kind_source = @source, content_kind_evidence = @evidence,
+         content_kind_version = @version, theme = @theme, art_score = @artScore WHERE id = @id AND content_kind_manual = 0`,
+    ),
+    manual: stmt(db, 'UPDATE images SET content_kind_version = @version, theme = @theme, art_score = @artScore WHERE id = @id AND content_kind_manual = 1'),
+    autoProbed: stmt(
+      db,
+      `UPDATE images SET frame_count = @frames, camera = @camera, content_kind = @kind, content_kind_source = @source,
+         content_kind_evidence = @evidence, content_kind_version = @version, theme = @theme, art_score = @artScore
+       WHERE id = @id AND content_kind_manual = 0`,
+    ),
+    manualProbed: stmt(
+      db,
+      `UPDATE images SET frame_count = @frames, camera = @camera, content_kind_version = @version, theme = @theme, art_score = @artScore
+       WHERE id = @id AND content_kind_manual = 1`,
+    ),
   };
 }
 
-export function writeClassification(stmts: { auto: Statement; manual: Statement }, r: ClassRow, c: Classification): void {
+function writeClassification(stmts: ClassStatements, r: ClassRow, c: Classification, probed: boolean): void {
   const p = { id: r.id, version: CLASSIFIER_VERSION, theme: c.theme, artScore: c.artScore };
-  if (r.content_kind_manual) stmts.manual.run(p);
-  else stmts.auto.run({ ...p, kind: c.kind, source: c.source, evidence: c.evidence });
+  const q = probed ? { ...p, frames: r.frame_count ?? null, camera: r.camera } : p;
+  if (r.content_kind_manual) (probed ? stmts.manualProbed : stmts.manual).run(q);
+  else (probed ? stmts.autoProbed : stmts.auto).run({ ...q, kind: c.kind, source: c.source, evidence: c.evidence });
 }
 
 /**
@@ -79,21 +103,21 @@ export function writeClassification(stmts: { auto: Statement; manual: Statement 
 export function loadClassifyTags(db: Db, ids: number[] | 'all'): Map<number, [string, number][]> {
   const out = new Map<number, [string, number][]>();
   if (ids !== 'all' && !ids.length) return out;
-  const tagRows = db
-    .prepare('SELECT id, name FROM tags WHERE name IN (SELECT value FROM json_each(?))')
-    .all(JSON.stringify(CLASSIFY_TAG_NAMES)) as { id: number; name: string }[];
+  const tagRows = stmt(db, 'SELECT id, name FROM tags WHERE name IN (SELECT value FROM json_each(?))').all(JSON.stringify(CLASSIFY_TAG_NAMES)) as {
+    id: number;
+    name: string;
+  }[];
   if (!tagRows.length) return out;
   const nameOf = new Map(tagRows.map((t) => [t.id, t.name]));
   const tagIds = JSON.stringify(tagRows.map((t) => t.id));
   const rows = (
     ids === 'all'
       ? db.prepare('SELECT image_id AS iid, tag_id AS tid, score FROM image_tags WHERE tag_id IN (SELECT value FROM json_each(?))').all(tagIds)
-      : db
-          .prepare(
-            `SELECT image_id AS iid, tag_id AS tid, score FROM image_tags
-             WHERE image_id IN (SELECT value FROM json_each(@ids)) AND tag_id IN (SELECT value FROM json_each(@tags))`,
-          )
-          .all({ ids: JSON.stringify(ids), tags: tagIds })
+      : stmt(
+          db,
+          `SELECT image_id AS iid, tag_id AS tid, score FROM image_tags
+           WHERE image_id IN (SELECT value FROM json_each(@ids)) AND tag_id IN (SELECT value FROM json_each(@tags))`,
+        ).all({ ids: JSON.stringify(ids), tags: tagIds })
   ) as { iid: number; tid: number; score: number }[];
   for (const x of rows) {
     const r = { iid: x.iid, name: nameOf.get(x.tid)!, score: x.score };
@@ -108,31 +132,49 @@ const BATCH = 2000;
 
 /**
  * 重算：不传 ids 时选版本过期的行（content_kind_version IS NULL 或 < CLASSIFIER_VERSION）；传 ids 时重算这些行。
+ * probes：读文件头拿到的帧数、相机（只给了一项的另一项不动），先换进去再判，和类型一起写（同一条 UPDATE）。
+ * tags：调用方手上已经有的识别标签（识别写入刚写完的），这些图不再读库。
  * 同步执行，每批一个事务（在外层事务里就是保存点）。返回重算的行数和耗时。
  */
-export function backfillClassification(db: Db, opts: { ids?: number[] } = {}): { rows: number; ms: number } {
+export function backfillClassification(
+  db: Db,
+  opts: { ids?: number[]; probes?: ReadonlyMap<number, ProbeFacts>; tags?: ReadonlyMap<number, [string, number][]> } = {},
+): { rows: number; ms: number } {
   const t0 = performance.now();
   const rows = (
     opts.ids
-      ? db.prepare(`SELECT ${CLASS_COLS} FROM images WHERE id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(opts.ids))
+      ? stmt(db, `SELECT ${CLASS_COLS} FROM images WHERE id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(opts.ids))
       : db
           .prepare(`SELECT ${CLASS_COLS} FROM images WHERE content_kind_version IS NULL OR content_kind_version < ?`)
           .all(CLASSIFIER_VERSION)
   ) as ClassRow[];
   if (!rows.length) return { rows: 0, ms: 0 };
+  const probes = opts.probes;
+  if (probes)
+    for (const r of rows) {
+      const p = probes.get(r.id);
+      if (!p) continue;
+      if (p.frames !== undefined) r.frame_count = p.frames;
+      if (p.camera !== undefined) r.camera = p.camera;
+    }
   const stmts = classificationStatements(db);
   // 行多时一次读全库的分类标签，比按批查快得多
   const everything = rows.length > BATCH ? loadClassifyTags(db, 'all') : null;
   for (let i = 0; i < rows.length; i += BATCH) {
     const batch = rows.slice(i, i + BATCH);
+    // 调用方手上已经有的标签（刚识别完的）不再读库
+    const given = opts.tags;
     const tags =
       everything ??
       loadClassifyTags(
         db,
-        batch.filter((r) => r.tagged_at !== null).map((r) => r.id),
+        batch.filter((r) => r.tagged_at !== null && !given?.has(r.id)).map((r) => r.id),
       );
     transact(db, () => {
-      for (const r of batch) writeClassification(stmts, r, computeClassification(r, r.tagged_at !== null ? (tags.get(r.id) ?? []) : null));
+      for (const r of batch) {
+        const c = computeClassification(r, r.tagged_at !== null ? (given?.get(r.id) ?? tags.get(r.id) ?? []) : null);
+        writeClassification(stmts, r, c, !!probes?.has(r.id));
+      }
     });
   }
   return { rows: rows.length, ms: Math.round(performance.now() - t0) };

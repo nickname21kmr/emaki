@@ -104,10 +104,21 @@ export interface PathUpdate {
 }
 
 function writePath(db: Db, p: PathUpdate): void {
-  if (p.modifiedAt === undefined) stmt(db, 'UPDATE images SET root_id = @rootId, rel_path = @relPath, file_name = @fileName WHERE id = @id').run(p);
-  else
-    stmt(db, 'UPDATE images SET root_id = @rootId, rel_path = @relPath, file_name = @fileName, modified_at = @modifiedAt, missing = 0, trashed_at = NULL WHERE id = @id').run(p);
+  if (p.modifiedAt === undefined) {
+    stmt(db, 'UPDATE images SET root_id = @rootId, rel_path = @relPath, file_name = @fileName WHERE id = @id').run(p);
+    return;
+  }
+  stmt(
+    db,
+    `UPDATE images SET root_id = @rootId, rel_path = @relPath, file_name = @fileName, modified_at = @modifiedAt, missing = 0, trashed_at = NULL
+     WHERE id = @id`,
+  ).run(p);
 }
+
+/** 移一张就写一张的路径 */
+const pathWriter = (db: Db) => ({
+  run: (rootId: number, relPath: string, fileName: string, id: number) => writePath(db, { id, rootId, relPath, fileName }),
+});
 
 /**
  * 扫描观察到的移动：只改路径，声明 image.moved（reason scan）。应用内的移动在移完每个文件时已经写了路径（见 moveImageFiles），
@@ -124,13 +135,19 @@ export function declareMoved(tx: DomainTx, ids: readonly number[], reason: MoveR
 }
 
 /** 改文件 + 改路径：每张移完立刻写库（中途出错时，已经移走的图记录也是对的）。不声明变化，调用方（moveImages）统一声明 */
-export function moveImageFiles(db: Db, rows: MoveRow[], dest: { rootId: number; rootPath: string; dir: string }, allowCollection = false): MoveOutcome {
+export function moveImageFiles(
+  db: Db,
+  rows: MoveRow[],
+  dest: { rootId: number; rootPath: string; dir: string },
+  allowCollection = false,
+): MoveOutcome {
   const out: MoveOutcome = { moved: [], inCollection: 0, alreadyThere: 0, failed: [] };
   const destAbs = toAbs(dest.rootPath, dest.dir);
   const occupiedInDb = db.prepare('SELECT 1 FROM images WHERE root_id = ? AND rel_path = ?');
-  const update = { run: (rootId: number, relPath: string, fileName: string, id: number) => writePath(db, { id, rootId, relPath, fileName }) };
+  const update = pathWriter(db);
   const taken = new Set<string>();
-  const free = (rel: string) => !taken.has(rel.toLowerCase()) && !occupiedInDb.get(dest.rootId, rel) && !existsSync(toAbs(dest.rootPath, rel));
+  const free = (rel: string) =>
+    !taken.has(rel.toLowerCase()) && !occupiedInDb.get(dest.rootId, rel) && !existsSync(toAbs(dest.rootPath, rel));
 
   let made = false;
   for (const r of rows) {
@@ -183,7 +200,7 @@ export interface MoveBackFailure {
 export function moveBack(db: Db, moved: Moved[]): { restored: number; restoredIds: number[]; failed: MoveBackFailure[] } {
   const current = db.prepare('SELECT root_id, rel_path FROM images WHERE id = ?');
   const rootAlive = db.prepare('SELECT path FROM library_roots WHERE id = ? AND removed_at IS NULL').pluck();
-  const update = { run: (rootId: number, relPath: string, fileName: string, id: number) => writePath(db, { id, rootId, relPath, fileName }) };
+  const update = pathWriter(db);
   const restoredIds: number[] = [];
   const failed: MoveBackFailure[] = [];
   for (const m of [...moved].reverse()) {
@@ -244,9 +261,11 @@ export function moveImages(
   const ids = out.moved.map((m) => m.id);
   const json = JSON.stringify(ids);
   // 漫画区同步只去掉自动关联（附录 #6）：快照也只记自动的，移回时按原来的来历放回
-  const charSnap = ctx.db.prepare("SELECT * FROM image_characters WHERE decision = 'auto' AND image_id IN (SELECT value FROM json_each(?))").all(json);
-  const retagSnap = ctx.db.prepare('SELECT id, retag FROM images WHERE id IN (SELECT value FROM json_each(?))').all(json);
-  const payload: MovePayload = { where: opts.where, items: out.moved, charSnap: charSnap as MovePayload['charSnap'], retagSnap: retagSnap as MovePayload['retagSnap'] };
+  const charSnap = ctx.db
+    .prepare("SELECT * FROM image_characters WHERE decision = 'auto' AND image_id IN (SELECT value FROM json_each(?))")
+    .all(json) as MovePayload['charSnap'];
+  const retagSnap = ctx.db.prepare('SELECT id, retag FROM images WHERE id IN (SELECT value FROM json_each(?))').all(json) as MovePayload['retagSnap'];
+  const payload: MovePayload = { where: opts.where, items: out.moved, charSnap, retagSnap };
   out.logId = ctx.apply(() => {
     declareMoved(ctx, ids, opts.reason);
     return recordChange(ctx, 'move', opts.summary(out.moved.length), payload);
@@ -292,7 +311,11 @@ export function revertMoveLog(ctx: SqliteContext, logId: number, strict: boolean
         null,
         payload.charSnap
           .filter((c) => restored.has(c.image_id))
-          .map((c) => ({ imageId: c.image_id, characterId: c.character_id, provenance: 'decision' in c ? fromRow(c) : fromLegacySnapshot(c) })),
+          .map((c) => ({
+            imageId: c.image_id,
+            characterId: c.character_id,
+            provenance: 'decision' in c ? fromRow(c) : fromLegacySnapshot(c),
+          })),
         { vetoes: 'respect' },
       );
       const lost = new Set([...res.missing, ...res.vetoed].map((x) => x.imageId));
@@ -300,7 +323,8 @@ export function revertMoveLog(ctx: SqliteContext, logId: number, strict: boolean
       setRetag(ctx.db, payload.retagSnap.filter((s) => restored.has(s.id)).map((s) => ({ id: s.id, retag: lost.has(s.id) ? 1 : s.retag })));
     }
     const left = payload.items.filter((it) => !restored.has(it.id));
-    settleMoveLog(ctx.db, logId, { ...payload, items: left }, back.failed.length ? `没能移回：${fileList(back.failed)}` : null, left.length ? null : now);
+    const note = back.failed.length ? `没能移回：${fileList(back.failed)}` : null;
+    settleMoveLog(ctx.db, logId, { ...payload, items: left }, note, left.length ? null : now);
   });
   const failed = back.failed.length ? `${back.failed.length} 张没能移回：${fileList(back.failed)}` : '';
   return {

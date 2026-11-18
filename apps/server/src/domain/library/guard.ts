@@ -23,7 +23,8 @@ export function assertFilesIdle(ctx: { db: Db; jobs: JobQueue }, ids: readonly n
     ids.length &&
     ctx.db
       .prepare(
-        `SELECT 1 FROM images i WHERE i.id IN (SELECT value FROM json_each(?)) AND (i.tagged_at IS NULL OR i.retag = 1) AND NOT ${IN_COMIC('i')} LIMIT 1`,
+        `SELECT 1 FROM images i WHERE i.id IN (SELECT value FROM json_each(?))
+           AND (i.tagged_at IS NULL OR i.retag = 1) AND NOT ${IN_COMIC('i')} LIMIT 1`,
       )
       .get(JSON.stringify(ids))
   ) {

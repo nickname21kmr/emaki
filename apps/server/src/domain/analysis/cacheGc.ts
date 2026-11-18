@@ -63,7 +63,8 @@ export interface CacheGcOptions {
 export async function collectCaches(db: Db, dataDir: string, opts: CacheGcOptions): Promise<{ thumbs: number; animations: number } | null> {
   const startedAt = opts.startedAt ?? Date.now();
   if (!(db.prepare('SELECT 1 FROM images LIMIT 1').get())) return null;
-  if (db.prepare('SELECT 1 FROM library_roots WHERE enabled = 1 AND removed_at IS NULL AND last_scan_at IS NULL LIMIT 1').get()) return null;
+  const unscanned = db.prepare('SELECT 1 FROM library_roots WHERE enabled = 1 AND removed_at IS NULL AND last_scan_at IS NULL LIMIT 1').get();
+  if (unscanned) return null;
   const used = new Set(db.prepare('SELECT DISTINCT sha256 FROM images').pluck().all() as string[]);
   for (const sha of opts.keep ?? []) used.add(sha);
   const out = { thumbs: 0, animations: 0 };

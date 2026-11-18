@@ -27,12 +27,17 @@ export interface AnalyzeOptions {
   fileChanged?: boolean;
   /** 不声明 image.kindChanged：刚入库的图（后面的反应本来就按 image.added 处理） */
   quiet?: boolean;
+  /** 刚识别完、手上已经有的标签（识别写入）：不再读库；识别失败的给空的 */
+  tags?: ReadonlyMap<number, [string, number][]>;
 }
 
 const json = (ids: readonly number[]) => JSON.stringify(ids);
 
 function finalKinds(db: Db, ids: readonly number[]): Map<number, string> {
-  const rows = stmt(db, 'SELECT id, content_kind FROM images WHERE id IN (SELECT value FROM json_each(?))').all(json(ids)) as { id: number; content_kind: string }[];
+  const rows = stmt(db, 'SELECT id, content_kind FROM images WHERE id IN (SELECT value FROM json_each(?))').all(json(ids)) as {
+    id: number;
+    content_kind: string;
+  }[];
   return new Map(rows.map((r) => [r.id, r.content_kind]));
 }
 
@@ -52,12 +57,20 @@ export function analyze(tx: DomainTx, ids: readonly number[], opts: AnalyzeOptio
   const db = tx.db;
   const before = opts.quiet ? null : finalKinds(db, ids);
   if (opts.fileChanged) {
-    stmt(db, 'UPDATE images SET dhash = NULL, dominant_color = NULL, thumb_at = NULL, decode_error = NULL WHERE id IN (SELECT value FROM json_each(?))').run(
-      json(ids),
-    );
+    stmt(
+      db,
+      `UPDATE images SET dhash = NULL, dominant_color = NULL, thumb_at = NULL, decode_error = NULL
+       WHERE id IN (SELECT value FROM json_each(?))`,
+    ).run(json(ids));
   }
-  if (opts.probes?.length) recordProbes(db, opts.probes);
-  backfillClassification(db, { ids: [...ids] });
+  // 帧数、相机和类型一条 UPDATE 写完（入库、内容变化时每张都有）
+  const probes = opts.probes?.length ? new Map(opts.probes.map((p) => [p.id, p])) : undefined;
+  backfillClassification(db, { ids: [...ids], probes, tags: opts.tags });
+  // 给了 probes、但不在这次重算范围里的图（不应该有）：只写帧数、相机
+  if (probes) {
+    const covered = new Set(ids);
+    recordProbes(db, opts.probes!.filter((p) => !covered.has(p.id)));
+  }
   if (!before) return [];
   const after = finalKinds(db, ids);
   const changed = ids.filter((id) => before.has(id) && after.get(id) !== before.get(id));
@@ -78,13 +91,16 @@ export function setManualKind(tx: DomainTx, u: UndoRecorder, ids: readonly numbe
   if (!ids.length) return [];
   const db = tx.db;
   const before = finalKinds(db, ids);
-  u.columns('images', ['content_kind', 'content_kind_source', 'content_kind_evidence', 'content_kind_version', 'theme', 'art_score'], [...ids]);
+  u.columns('images', ['content_kind', 'content_kind_source', 'content_kind_evidence', 'content_kind_version', 'theme', 'art_score'], [
+    ...ids,
+  ]);
   if (value === 'auto') backfillClassification(db, { ids: [...ids] });
   else
-    stmt(db, "UPDATE images SET content_kind = ?, content_kind_source = 'manual', content_kind_evidence = NULL WHERE id IN (SELECT value FROM json_each(?))").run(
-      value,
-      json(ids),
-    );
+    stmt(
+      db,
+      `UPDATE images SET content_kind = ?, content_kind_source = 'manual', content_kind_evidence = NULL
+       WHERE id IN (SELECT value FROM json_each(?))`,
+    ).run(value, json(ids));
   const after = finalKinds(db, ids);
   const changed = ids.filter((id) => before.get(id) !== after.get(id));
   tx.changed({ type: 'image.kindChanged', ids: changed });
@@ -106,8 +122,9 @@ export interface KindSnapshot {
 export function restoreKinds(db: Db, rows: readonly KindSnapshot[]): void {
   const upd = stmt(
     db,
-    `UPDATE images SET content_kind = @content_kind, content_kind_source = @content_kind_source, content_kind_evidence = @content_kind_evidence,
-       content_kind_version = @content_kind_version, theme = @theme, art_score = @art_score WHERE id = @id AND content_kind_manual = 0`,
+    `UPDATE images SET content_kind = @content_kind, content_kind_source = @content_kind_source,
+       content_kind_evidence = @content_kind_evidence, content_kind_version = @content_kind_version, theme = @theme, art_score = @art_score
+     WHERE id = @id AND content_kind_manual = 0`,
   );
   for (const r of rows)
     upd.run({

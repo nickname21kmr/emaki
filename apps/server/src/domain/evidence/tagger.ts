@@ -93,15 +93,19 @@ export class TagResultWriter {
     return this.db.transaction(() => {
       const ids: number[] = [];
       const evidence: ImageEvidence[] = [];
+      const tags = new Map<number, [string, number][]>();
       for (const r of results) {
         const id = this.writeOne(r, now, evidence);
-        if (id !== null) ids.push(id);
+        if (id === null) continue;
+        ids.push(id);
+        // 识别失败也算「识别过」：按空标签判主题和质量分（保持 tagged_at 与 theme 同时为空 / 非空）
+        tags.set(id, r.ok ? r.general : []);
       }
       // 识别成功的图整体替换模型证据（失败的证据不动）；自动决定由 afterBatchInTx 交给的反应做
       const tx = collectingTx(this.db);
       replaceEvidence(tx, null, 'tagger', evidence);
-      // 按新标签重判类型、主题、质量分（识别失败的图也算识别过：按它现在的标签判，没有标签就是空的）
-      analyze(tx, ids);
+      // 按新标签重判类型、主题、质量分（分析模块；手上的标签直接给它，不再读库）
+      analyze(tx, ids, { tags });
       const json = JSON.stringify(ids);
       const before = { characters: this.s.characters!.get() as number, links: this.s.links!.get(json) as number };
       if (ids.length) this.o.afterBatchInTx?.(ids, tx.changes);
@@ -121,7 +125,6 @@ export class TagResultWriter {
       }
       s.markTagged!.run(now, o.repo, r.id);
       if (o.artists) writeArtists(this.db, r.id, [], now);
-      // 识别失败也算「识别过」：批后由分析模块写主题和质量分（保持 tagged_at 与 theme 同时为空 / 非空）
       stats.failed++;
       return r.id;
     }

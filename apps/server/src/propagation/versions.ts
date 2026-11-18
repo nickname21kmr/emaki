@@ -29,7 +29,8 @@ export function recordedVersion(db: Db, name: DerivedName): string | null {
 
 export function markVersion(db: Db, name: DerivedName, version: string, at: string): void {
   db.prepare(
-    'INSERT INTO derived_versions (name, version, updated_at) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET version = excluded.version, updated_at = excluded.updated_at',
+    `INSERT INTO derived_versions (name, version, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(name) DO UPDATE SET version = excluded.version, updated_at = excluded.updated_at`,
   ).run(name, version, at);
 }
 
