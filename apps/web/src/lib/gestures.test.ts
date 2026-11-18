@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readerSwipeDecision } from '@/features/collections/reader/useReaderSwipe';
+import { swipePagerDecision as readerSwipeDecision } from './useSwipePager';
 import {
   GESTURE,
   dismissVisual,
@@ -77,6 +77,8 @@ describe('左右滑切图', () => {
     expect(readerSwipeDecision({ dx: -100, vx: 0, width: 390, rtl: true, hasPrev: true })).toBe('back');
     expect(readerSwipeDecision({ dx: 100, vx: 0, width: 390, rtl: false, hasPrev: false })).toBeNull();
     expect(readerSwipeDecision({ dx: -30, vx: 0, width: 390, rtl: false, hasPrev: true })).toBeNull();
+    // 未识别的最后一张：没有下一张可跳
+    expect(readerSwipeDecision({ dx: -100, vx: 0, width: 390, rtl: false, hasPrev: true, hasNext: false })).toBeNull();
   });
 });
 

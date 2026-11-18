@@ -129,7 +129,7 @@ function SingleTile({
           'absolute top-2 left-2 flex size-6 items-center justify-center rounded-full transition-all duration-200',
           selected
             ? 'bg-shu text-white opacity-100'
-            : 'bg-black/20 text-transparent opacity-0 ring-2 ring-white/90 backdrop-blur-sm group-hover/tile:opacity-100 hover:bg-black/40 hover:text-white/80',
+            : 'bg-black/20 text-transparent opacity-0 ring-2 ring-white/90 backdrop-blur-sm group-hover/tile:opacity-100 hover:bg-black/40 hover:text-white/80 touch:opacity-100',
           selecting && !selected && 'opacity-100',
         )}
       >
@@ -146,7 +146,7 @@ function SingleTile({
               e.stopPropagation();
               onRestore();
             }}
-            className="absolute top-2 right-2 flex size-7 items-center justify-center rounded-full bg-black/40 text-white opacity-0 ring-1 ring-white/15 backdrop-blur-md transition-[opacity,background-color] duration-200 group-hover/tile:opacity-100 hover:bg-black/60 focus-visible:opacity-100"
+            className="absolute top-2 right-2 flex size-7 items-center justify-center rounded-full bg-black/40 text-white opacity-0 ring-1 ring-white/15 backdrop-blur-md transition-[opacity,background-color] duration-200 group-hover/tile:opacity-100 hover:bg-black/60 focus-visible:opacity-100 touch:opacity-100"
           >
             <RotateCcw className="size-3.5" />
           </button>

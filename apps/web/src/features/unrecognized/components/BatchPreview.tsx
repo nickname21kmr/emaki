@@ -45,7 +45,7 @@ export function BatchPreview({ items, onToggle }: { items: UnrecognizedItem[]; o
                   className="size-full"
                   imgClassName="transition-transform duration-[800ms] ease-[var(--ease-out-soft)] group-hover:scale-[1.04]"
                 />
-                <span className="absolute top-1.5 right-1.5 flex size-6 items-center justify-center rounded-full bg-black/45 text-white opacity-0 backdrop-blur-sm transition-opacity duration-150 group-hover:opacity-100">
+                <span className="absolute top-1.5 right-1.5 flex size-6 items-center justify-center rounded-full bg-black/45 text-white opacity-0 backdrop-blur-sm transition-opacity duration-150 group-hover:opacity-100 touch:opacity-100">
                   <X className="size-3.5" />
                 </span>
               </button>

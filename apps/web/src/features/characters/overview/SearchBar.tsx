@@ -55,7 +55,7 @@ export function SearchBar({
   };
 
   return (
-    <div className="flex items-center gap-4">
+    <div className="flex items-center gap-4 compact:gap-2">
       <SearchInput
         ref={inputRef}
         // 用 text 而不是 search：Chromium 会给 search 输入框再画一个原生清除按钮，和我们自己的重复
@@ -76,14 +76,14 @@ export function SearchBar({
         }}
         placeholder="搜索角色或作品（未花、ミカ、mika、蔚蓝档案都可以）"
         aria-label="搜索角色或作品"
-        className="w-[500px] max-w-full shadow-[0_0_0_1px_var(--c-line)] [&:hover:not(:focus-within)]:shadow-[0_0_0_1px_var(--c-line-strong)]"
+        className="w-[500px] max-w-full shadow-[0_0_0_1px_var(--c-line)] [&:hover:not(:focus-within)]:shadow-[0_0_0_1px_var(--c-line-strong)] compact:w-auto compact:min-w-0 compact:flex-1"
         trailing={
           draft ? null : (
-            <Kbd className="pointer-events-none opacity-80">{modKeyLabel === '⌘' ? '⌘F' : 'Ctrl F'}</Kbd>
+            <Kbd className="pointer-events-none opacity-80 touch:hidden">{modKeyLabel === '⌘' ? '⌘F' : 'Ctrl F'}</Kbd>
           )
         }
       />
-      <div className="flex-1" />
+      <div className="flex-1 compact:hidden" />
       <Tooltip content="切换视图" shortcut="V">
         <div>
           <Segmented value={view} onChange={onViewChange} options={VIEW_OPTIONS} />

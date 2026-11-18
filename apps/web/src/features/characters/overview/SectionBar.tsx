@@ -99,8 +99,17 @@ export function SortMenu({ value, onChange }: { value: CharacterSort; onChange: 
 
 export function NewCharacterButton({ onClick }: { onClick: () => void }) {
   return (
-    <Button variant="ghost" size="sm" icon={<Plus className="size-3.5" />} trailing={<Kbd className="ml-0.5">N</Kbd>} onClick={onClick}>
-      新建角色
+    // 手机竖屏（A1）只留加号；触屏上没有键盘，不写快捷键
+    <Button
+      variant="ghost"
+      size="sm"
+      icon={<Plus className="size-3.5" />}
+      trailing={<Kbd className="ml-0.5 touch:hidden">N</Kbd>}
+      onClick={onClick}
+      aria-label="新建角色"
+      className="touch-hit compact:w-9 compact:px-0"
+    >
+      <span className="compact:sr-only">新建角色</span>
     </Button>
   );
 }

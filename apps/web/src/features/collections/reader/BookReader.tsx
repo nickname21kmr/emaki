@@ -14,7 +14,7 @@ import { useCollection } from '@/lib/queries';
 import { useBlurPrefs, useLightbox, useOverlays, usePrefs } from '@/lib/stores';
 import { readerSpreadFits, useViewport } from '@/lib/viewport';
 import { previousPath } from './previousPath';
-import { useReaderSwipe } from './useReaderSwipe';
+import { useSwipePager } from '@/lib/useSwipePager';
 import { buildSpreads, spreadIndexOf } from './spreads';
 
 /**
@@ -165,7 +165,7 @@ function Reader({ data }: { data: GetCollectionResponse }) {
   }, { enabled: on, preventDefault: false });
 
   // 触屏（A1）：左右滑翻页（跟手，过阈值翻、没过弹回），点两侧三分之一翻页（热区按钮），点中间切换顶栏和胶片条
-  const swipe = useReaderSwipe({
+  const swipe = useSwipePager({
     hasPrev: cur > 0 || ended,
     rtl,
     onForward: next,

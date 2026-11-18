@@ -134,7 +134,7 @@ export function TriageCards({ summary: s }: { summary: LibrarySummary }) {
   if (!active.length) {
     // 都没事：一行
     body = (
-      <div className="flex h-[72px] items-center gap-8 rounded-[16px] px-5 ring-1 ring-line ring-inset">
+      <div className="flex h-[72px] items-center gap-8 rounded-[16px] px-5 ring-1 ring-line ring-inset compact:h-auto compact:flex-col compact:items-start compact:gap-3 compact:py-4">
         {quiet.map((c) => (
           <Link key={c.key} to={c.to} className="flex min-w-0 items-center gap-2.5 text-[13px]">
             <IconDot>{c.icon}</IconDot>
@@ -147,8 +147,9 @@ export function TriageCards({ summary: s }: { summary: LibrarySummary }) {
     );
   } else if (active.length === 1) {
     body = (
-      <div className="grid grid-cols-3 gap-3">
-        <ActiveCard card={active[0]!} index={0} wide className="col-span-2" />
+      // 手机竖屏（A1）单列
+      <div className="grid grid-cols-3 gap-3 compact:grid-cols-1">
+        <ActiveCard card={active[0]!} index={0} wide className="col-span-2 compact:col-span-1" />
         <div className="flex flex-col gap-3">
           {quiet.map((c, i) =>
             quiet.length > 1 ? <CompactCard key={c.key} card={c} /> : <QuietCard key={c.key} card={c} index={i + 1} />,
@@ -158,7 +159,7 @@ export function TriageCards({ summary: s }: { summary: LibrarySummary }) {
     );
   } else {
     body = (
-      <div className={cn('grid gap-3', active.length === 2 && quiet.length === 0 ? 'grid-cols-2' : 'grid-cols-3')}>
+      <div className={cn('grid gap-3 compact:grid-cols-1', active.length === 2 && quiet.length === 0 ? 'grid-cols-2' : 'grid-cols-3')}>
         {active.map((c, i) => (
           <ActiveCard key={c.key} card={c} index={i} />
         ))}
@@ -282,7 +283,7 @@ export function TriageCardsSkeleton() {
   return (
     <section aria-hidden>
       <SectionTitle>待处理</SectionTitle>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-3 gap-3 compact:grid-cols-1">
         {[0, 1, 2].map((i) => (
           <div key={i} className="flex h-[172px] flex-col rounded-[16px] p-5 ring-1 ring-line">
             <div className="flex items-center gap-2">

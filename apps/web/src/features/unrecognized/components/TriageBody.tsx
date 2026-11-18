@@ -7,6 +7,8 @@ import { Button, EmptyState, ErrorState } from '@/components/ui';
 import { formatCount } from '@/lib/format';
 import { useHotkey } from '@/lib/hotkeys';
 import { useLightbox } from '@/lib/stores';
+import { useSwipePager } from '@/lib/useSwipePager';
+import { cn } from '@/lib/cn';
 import { digitIndex, usePriorityKeys, useTriageKeysEnabled } from '../hooks';
 import { useTriage } from '../useTriage';
 import type { UnrecognizedView } from '../useUnrecognizedParams';
@@ -40,6 +42,8 @@ export function TriageBody({
 }) {
   const navigate = useNavigate();
   const triage = useTriage(bucket, artKind);
+  // 触屏（A1）：大图左滑跳过（下一张）、右滑上一张（lib/useSwipePager.ts）
+  const swipe = useSwipePager({ hasPrev: triage.index > 0, onForward: triage.next, onBack: triage.prev });
   const { query, items, current, batch } = triage;
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -153,9 +157,19 @@ export function TriageBody({
     );
   } else {
     body = (
-      <>
+      // 电脑上 contents：队列 | 大图 | 决策面板三栏照旧排在外层的 flex 里。
+      // 窄屏（A1）排成网格：平板竖屏是队列在左、右边大图在上决策在下；手机竖屏单列，大图 → 决策 → 队列
+      <div
+        className={cn(
+          'contents narrow:grid narrow:min-w-0 narrow:flex-1 narrow:grid-cols-[200px_minmax(0,1fr)] narrow:grid-rows-[min(52vh,560px)_auto] narrow:gap-5',
+          // 手机横屏（矮）也这样排：三栏挤在 390 高里，大图只剩一条
+          'short:grid short:min-w-0 short:flex-1 short:grid-cols-[220px_minmax(0,1fr)] short:grid-rows-[78vh_auto] short:gap-5',
+          'compact:grid-cols-1 compact:grid-rows-[min(58vh,500px)_auto_auto] compact:gap-4',
+        )}
+      >
         <TriageQueue triage={triage} />
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        {/* 触屏：大图左滑跳过、右滑上一张 */}
+        <div {...swipe.handlers} ref={swipe.layerRef} className="relative flex min-h-0 min-w-0 flex-1 touch-pan-y flex-col">
           {batch ? (
             <BatchPreview items={triage.selectedItems} onToggle={triage.toggleSelect} />
           ) : (
@@ -176,7 +190,7 @@ export function TriageBody({
         ) : (
           current && <DecisionPanel triage={triage} item={current} searchRef={searchRef} />
         )}
-      </>
+      </div>
     );
   }
 

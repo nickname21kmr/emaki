@@ -108,7 +108,8 @@ export function Field({
   className?: string;
 }) {
   return (
-    <div className={cn('flex items-center justify-between gap-6 py-3.5', className)}>
+    // 手机竖屏（A1）：说明长的时候控件换到下一行（左说明、右控件 → 上下排），短的照旧同一行
+    <div className={cn('flex items-center justify-between gap-6 py-3.5 compact:flex-wrap compact:gap-y-2.5', className)}>
       <div className="min-w-0">
         <div className="text-sm font-medium">{label}</div>
         {hint && <div className="mt-0.5 text-[12.5px] leading-relaxed text-fg-muted">{hint}</div>}

@@ -121,7 +121,13 @@ export function PageHeader({
               )}
               {/* 手机竖屏：标题变小（副标题在下面整行） */}
               <div className={cn('flex min-w-0 items-baseline gap-4', showChapter && 'mt-2.5 short:mt-0')}>
-                <h1 className={cn('display-title shrink-0', stuck.value ? 'text-[20px]' : 'text-[34px] compact:text-[26px] short:text-[24px]')}>
+                {/* 手机竖屏上长标题（合集书名）折行，不压到右边的按钮上 */}
+                <h1
+                  className={cn(
+                    'display-title shrink-0 compact:min-w-0 compact:shrink compact:leading-[1.15]',
+                    stuck.value ? 'text-[20px]' : 'text-[34px] compact:text-[26px] short:text-[24px]',
+                  )}
+                >
                   {title}
                 </h1>
                 {subtitle && !stuck.value && <div className="min-w-0 truncate text-[13px] text-fg-muted tabular compact:hidden">{subtitle}</div>}
@@ -135,7 +141,8 @@ export function PageHeader({
               {subtitle && !stuck.value && <div className="mt-1 text-[13px] text-fg-muted tabular compact:hidden">{subtitle}</div>}
             </div>
           )}
-          <div className="ml-auto flex shrink-0 items-center gap-1.5 @max-[400px]/head:shrink @max-[400px]/head:flex-wrap @max-[400px]/head:justify-end">
+          {/* 窄屏、手机横屏（A1）：按钮多的页面（未识别）这一排自己折行，不伸出纸外 */}
+          <div className="ml-auto flex shrink-0 items-center gap-1.5 @max-[400px]/head:shrink @max-[400px]/head:flex-wrap @max-[400px]/head:justify-end narrow:shrink narrow:flex-wrap narrow:justify-end short:shrink short:flex-wrap short:justify-end">
             {actions}
             <GlobalActions />
           </div>
@@ -209,7 +216,7 @@ export function GlobalActions() {
       >
         <Search className="size-4" />
         <span className="flex-1 text-left @max-[600px]/head:hidden compact:hidden">跳到角色</span>
-        <Kbd className="@max-[600px]/head:hidden compact:hidden">{modKeyLabel === '⌘' ? '⌘K' : 'Ctrl K'}</Kbd>
+        <Kbd className="@max-[600px]/head:hidden touch:hidden">{modKeyLabel === '⌘' ? '⌘K' : 'Ctrl K'}</Kbd>
       </button>
       <IconButton label={blur ? `显示${what}` : `模糊${what}`} shortcut="B" active={blur} onClick={toggleBlur} className="compact:hidden">
         {blur ? <EyeOff /> : <Eye />}

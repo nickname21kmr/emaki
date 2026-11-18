@@ -1,20 +1,33 @@
 /**
- * 阅读器的触屏翻页（A1）：左右滑翻页，页面跟手，过阈值翻、没过弹回，第一页再往回有阻尼；
- * 点中间（不是两侧的热区按钮、也不是页面上的按钮）切换顶栏和胶片条。两侧的点按由热区按钮自己的 click 处理。
- * 右开（rtl）时方向反过来：往右滑是下一页。只认 pointerType === 'touch'；判定都在 lib/gestures.ts。
+ * 左右滑翻一页（A1）：阅读器翻页、未识别里跳过 / 上一张。跟手移动「跟手层」（layerRef），过阈值翻、没过弹回，第一页再往回有阻尼；
+ * 没滑动的点按（不在按钮上）交给 onCenterTap（阅读器：切换顶栏和胶片条）。按钮上的点按照常是按钮自己的 click。
+ * rtl（本子右开）时方向反过来：往右滑是下一页。只认 pointerType === 'touch'，竖着的滑动交给浏览器滚动；判定都在 lib/gestures.ts。
  */
 import { useRef, type PointerEvent as ReactPointerEvent } from 'react';
-import { isTap, lockAxis, pushSample, swipeDecision, swipeOffset, velocityOf, type Sample } from '@/lib/gestures';
+import { isTap, lockAxis, pushSample, swipeDecision, swipeOffset, velocityOf, type Sample } from './gestures';
 
-/** 松手时往哪翻：forward = 下一页，back = 上一页，null = 弹回。rtl 时手指往右是下一页 */
-export function readerSwipeDecision(p: { dx: number; vx: number; width: number; rtl: boolean; hasPrev: boolean }): 'forward' | 'back' | null {
+/** 松手时往哪翻：forward = 下一页，back = 上一页，null = 弹回。rtl 时手指往右是下一页；hasNext 默认有（阅读器最后一开后面是结尾卡） */
+export function swipePagerDecision(p: {
+  dx: number;
+  vx: number;
+  width: number;
+  rtl: boolean;
+  hasPrev: boolean;
+  hasNext?: boolean;
+}): 'forward' | 'back' | null {
   const k = p.rtl ? -1 : 1;
-  // 读到最后一开再往后是结尾卡，所以总有「下一页」
-  const go = swipeDecision({ dx: p.dx * k, vx: p.vx * k, width: p.width, hasPrev: p.hasPrev, hasNext: true });
+  const go = swipeDecision({ dx: p.dx * k, vx: p.vx * k, width: p.width, hasPrev: p.hasPrev, hasNext: p.hasNext ?? true });
   return go === 1 ? 'forward' : go === -1 ? 'back' : null;
 }
 
-export function useReaderSwipe(o: { hasPrev: boolean; rtl: boolean; onForward: () => void; onBack: () => void; onCenterTap: () => void }) {
+export function useSwipePager(o: {
+  hasPrev: boolean;
+  hasNext?: boolean;
+  rtl?: boolean;
+  onForward: () => void;
+  onBack: () => void;
+  onCenterTap?: () => void;
+}) {
   const opts = useRef(o);
   opts.current = o;
   const layerRef = useRef<HTMLDivElement>(null);
@@ -48,9 +61,9 @@ export function useReaderSwipe(o: { hasPrev: boolean; rtl: boolean; onForward: (
         e.currentTarget.setPointerCapture(e.pointerId);
       }
       if (!g.swiping) return;
-      const { rtl, hasPrev } = opts.current;
+      const { rtl, hasPrev, hasNext = true } = opts.current;
       const k = rtl ? -1 : 1;
-      setLayer(k * swipeOffset(g.dx * k, { hasPrev, hasNext: true }));
+      setLayer(k * swipeOffset(g.dx * k, { hasPrev, hasNext }));
     },
     onPointerUp: (e: ReactPointerEvent<HTMLElement>) => {
       const g = s.current;
@@ -59,10 +72,10 @@ export function useReaderSwipe(o: { hasPrev: boolean; rtl: boolean; onForward: (
       touchedAt.current = performance.now();
       const O = opts.current;
       if (!g.swiping) {
-        if (!g.onButton && isTap(e.timeStamp - g.start.t, Math.hypot(g.dx, g.dy))) O.onCenterTap();
+        if (!g.onButton && isTap(e.timeStamp - g.start.t, Math.hypot(g.dx, g.dy))) O.onCenterTap?.();
         return;
       }
-      const go = readerSwipeDecision({ dx: g.dx, vx: velocityOf(g.samples).vx, width: g.width, rtl: O.rtl, hasPrev: O.hasPrev });
+      const go = swipePagerDecision({ dx: g.dx, vx: velocityOf(g.samples).vx, width: g.width, rtl: !!O.rtl, hasPrev: O.hasPrev, hasNext: O.hasNext });
       if (!go) return void setLayer(0, 220);
       // 往手指的方向滑出去一点再换页（新的一页淡入）
       setLayer(Math.sign(g.dx) * g.width * 0.6, 140);
@@ -72,6 +85,7 @@ export function useReaderSwipe(o: { hasPrev: boolean; rtl: boolean; onForward: (
         setLayer(0);
       }, 130);
     },
+    // 浏览器接手竖着滚动时会发 pointercancel：弹回
     onPointerCancel: () => {
       if (s.current?.swiping) setLayer(0, 220);
       s.current = null;

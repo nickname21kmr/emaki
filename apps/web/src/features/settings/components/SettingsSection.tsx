@@ -23,7 +23,8 @@ export function SettingsSection({
   const domId = sectionDomId(id);
   return (
     <section id={domId} aria-labelledby={`${domId}-title`} className="scroll-mt-8">
-      <header className="mb-4 flex items-end justify-between gap-6">
+      {/* 手机竖屏（A1）：本节的操作换到说明下面，说明不再缩进 */}
+      <header className="mb-4 flex items-end justify-between gap-6 compact:flex-wrap compact:gap-y-3">
         <div className="min-w-0">
           <div className="flex items-baseline gap-3">
             <span aria-hidden className="numeral w-8 shrink-0 text-[28px] text-fg-subtle tabular">
@@ -34,9 +35,9 @@ export function SettingsSection({
             </h2>
           </div>
           {/* 说明和标题左对齐（跳过编号列：w-8 + gap-3） */}
-          {description && <p className="mt-1.5 pl-11 text-[13px] leading-relaxed text-fg-muted">{description}</p>}
+          {description && <p className="mt-1.5 pl-11 text-[13px] leading-relaxed text-fg-muted compact:pl-0">{description}</p>}
         </div>
-        {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+        {actions && <div className="flex shrink-0 items-center gap-2 compact:flex-wrap">{actions}</div>}
       </header>
       {children}
     </section>

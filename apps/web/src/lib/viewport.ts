@@ -65,6 +65,12 @@ export function gridRowHeight(v: Pick<Viewport, 'width' | 'height'>, preferred: 
   return preferred;
 }
 
+/**
+ * 两端对齐行要不要「平衡」（components/media/justify.ts 的 balance）：窄屏一行只有两三张，
+ * 最后挤进来的宽图会把整行压得很矮，平衡后行高更接近目标。宽屏照旧（一行张数多，影响小，电脑上不变）。
+ */
+export const balancedRows = (v: Pick<Viewport, 'width'>): boolean => v.width !== 'expanded';
+
 /** 卡片网格（别册的截图、漫画页、表情）的最小卡宽：手机竖屏收到 8 成，一行至少两张 */
 export const cardMinWidth = (v: Pick<Viewport, 'width'>, min: number): number => (v.width === 'compact' ? Math.round(min * 0.8) : min);
 

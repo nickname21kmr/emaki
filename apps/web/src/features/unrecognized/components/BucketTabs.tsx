@@ -50,5 +50,14 @@ export function BucketTabs({
     },
   );
   if ((art?.shelved ?? 0) > 0 || value === 'shelved') options.push({ value: 'shelved', label: <>放下的 {count(art?.shelved)}</> });
-  return <Segmented<UnrecognizedView> size="md" value={value} onChange={onChange} options={options} />;
+  // 手机竖屏（A1）：放不下时横向滚动
+  return (
+    <Segmented<UnrecognizedView>
+      size="md"
+      value={value}
+      onChange={onChange}
+      options={options}
+      className="compact:max-w-full compact:overflow-x-auto compact:scrollbar-none"
+    />
+  );
 }

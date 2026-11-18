@@ -48,9 +48,10 @@ export function UnrecognizedPage() {
   else body = <SheetLayout key={viewKey} mode={p.bucket} p={p} summary={p.summary} />;
 
   return (
-    <div className="flex h-full min-h-[620px] flex-col">
+    // 窄屏（A1）：整页正常往下滚，不再是固定高度里各栏自己滚
+    <div className="flex h-full min-h-[620px] flex-col narrow:h-auto narrow:min-h-0 short:h-auto short:min-h-0">
       <PageHeader title="未识别" subtitle={<Subtitle />} actions={
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 compact:flex-wrap">
             {p.area === 'art' && allow.pixiv && <PixivTagsButton />}
             {p.kind && <PromoteSuggestionsButton kind={p.kind} />}
             {allow.retag && <RetagButton />}
@@ -67,7 +68,7 @@ export function UnrecognizedPage() {
           )}
         </div>
       </PageHeader>
-      <div className="flex min-h-0 flex-1 gap-6 px-8 pt-4 pb-6">{body}</div>
+      <div className="flex min-h-0 flex-1 gap-6 px-8 pt-4 pb-6 narrow:px-5 compact:px-4">{body}</div>
     </div>
   );
 }

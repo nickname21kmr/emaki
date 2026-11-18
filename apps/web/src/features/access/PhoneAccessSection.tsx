@@ -144,7 +144,7 @@ function StatusRow({ status }: { status: AccessStatus }) {
   const urls = status.addresses.map((a) => `https://${a}:${status.port}`);
   return (
     <div className="py-3.5">
-      <div className="flex items-center justify-between gap-6">
+      <div className="flex items-center justify-between gap-6 compact:flex-wrap compact:gap-y-3">
         <div className="text-sm font-medium">状态</div>
         {status.error ? (
           <Badge tone="danger" dot>

@@ -445,7 +445,7 @@ function CustomChip({
         onClick={onEdit}
         className={cn(
           'absolute -top-1 -right-1 flex size-4 items-center justify-center rounded-full bg-raised text-fg-muted shadow-[0_0_0_1px_var(--c-line-strong)]',
-          'opacity-0 transition-opacity duration-150 group-hover/custom:opacity-100 hover:text-fg focus-visible:opacity-100',
+          'opacity-0 transition-opacity duration-150 group-hover/custom:opacity-100 hover:text-fg focus-visible:opacity-100 touch:opacity-100',
         )}
       >
         <Pencil className="size-2.5" />

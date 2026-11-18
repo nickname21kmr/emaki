@@ -149,7 +149,8 @@ export function DecisionPanel({
 /** 面板外壳：内容区独立滚动，操作键固定在底部 */
 export function PanelShell({ children, footer }: { children: ReactNode; footer: ReactNode }) {
   return (
-    <section className="flex min-h-0 w-[300px] shrink-0 flex-col xl:w-[340px] 2xl:w-[380px]">
+    // 窄屏（A1）：在大图下面，宽度跟着网格，内容多长就多高（整页滚）
+    <section className="flex min-h-0 w-[300px] shrink-0 flex-col xl:w-[340px] 2xl:w-[380px] narrow:w-auto short:w-auto compact:order-2">
       {/* 左右各留 12px：卡片描边、hover 阴影和输入框的焦点光圈不会被滚动容器裁掉 */}
       <div className="-mx-3 min-h-0 flex-1 overflow-y-auto px-3 pt-1 pb-6 scrollbar-thin">{children}</div>
       <div className="shrink-0 border-t border-line pt-4">{footer}</div>

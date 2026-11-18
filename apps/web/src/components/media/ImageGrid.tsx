@@ -17,7 +17,7 @@ import type { BlurContext } from '@/lib/blur';
 import { useCan } from '@/lib/capabilities';
 import { Button } from '@/components/ui';
 import { useLongPress } from '@/lib/useLongPress';
-import { gridGap, gridRowHeight, useViewport } from '@/lib/viewport';
+import { balancedRows, gridGap, gridRowHeight, useViewport } from '@/lib/viewport';
 
 const NO_FLASH: ReadonlySet<ID> = new Set();
 
@@ -73,7 +73,8 @@ export function ImageGrid({
   const viewport = useViewport();
   const target = gridRowHeight(viewport, rowHeight);
   const g = gridGap(viewport, gap);
-  const rows = useMemo(() => justify(images, width, target, g), [images, width, target, g]);
+  const balance = balancedRows(viewport);
+  const rows = useMemo(() => justify(images, width, target, g, { balance }), [images, width, target, g, balance]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,

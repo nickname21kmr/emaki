@@ -328,7 +328,8 @@ function RootRow({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, x: -12, transition: { duration: 0.2 } }}
       transition={{ duration: 0.35, ease: EASE_OUT }}
-      className="group flex items-center gap-4 bg-raised py-4"
+      // 手机竖屏（A1）：图标和路径一行，张数和开关换到第二行
+      className="group flex items-center gap-4 bg-raised py-4 compact:flex-wrap compact:gap-y-2"
     >
       <span
         className={cn(
@@ -339,7 +340,7 @@ function RootRow({
         {off ? <FolderX /> : <FolderOpen />}
       </span>
 
-      <div className={cn('min-w-0 flex-1 transition-opacity duration-300', off && 'opacity-55')}>
+      <div className={cn('min-w-0 flex-1 transition-opacity duration-300 compact:basis-[calc(100%-56px)]', off && 'opacity-55')}>
         <div className="flex min-w-0 items-center gap-2">
           <div className="truncate text-sm font-medium" title={root.path}>
             <span className="text-fg-subtle">{parent}</span>
@@ -388,20 +389,20 @@ function RootRow({
         )}
       </div>
 
-      <div className={cn('w-24 text-right transition-opacity duration-300', off && 'opacity-40')}>
+      <div className={cn('w-24 text-right transition-opacity duration-300 compact:ml-14 compact:w-auto compact:text-left', off && 'opacity-40')}>
         <div className="numeral text-[26px] tabular">{formatCount(root.imageCount)}</div>
         <div className="mt-1 text-[11px] text-fg-subtle tabular">
           {share !== null ? `张 · 占 ${formatPercent(share)}` : '张'}
         </div>
       </div>
 
-      <div className="flex items-center gap-1 pl-2">
+      <div className="flex items-center gap-1 pl-2 compact:ml-auto">
         <ModeMenu root={root} onUpdate={onUpdate} />
         <Switch checked={root.enabled} onCheckedChange={(enabled) => onUpdate({ enabled })} label={`启用 ${root.path}`} />
         <IconButton
           label="移除（不会删除磁盘上的文件）"
           onClick={onRemove}
-          className="ml-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+          className="ml-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 touch:opacity-100"
         >
           <Trash />
         </IconButton>
