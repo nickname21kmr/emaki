@@ -301,9 +301,11 @@ SSE 里 `job`、`job-item` 是进度（不编号、不补发）；`changed`、`c
 设置 →「手机访问」里打开（默认关），另开一个 https 端口（默认 5175，监听所有网卡），本机入口 `127.0.0.1:5174` 不变。
 - 页面和接口在同一个入口上：静态文件不要身份；`/api/` 全部要设备凭证（`Authorization: Bearer`，或网页用的 Cookie `emaki_device`），
   只有 `GET /api/v1/hello`、配对 `POST /api/v1/pair`、`POST /api/v1/pair/:id/reveal`、`GET /api/v1/pair/:id?wait=` 例外；`GET /api/v1/me` 确认凭证还有效。
+  两个入口都有 `GET /api/me`（谁在调用：本机入口 `local` + 全部 scope，局域网入口是这台设备 + 真正生效的 scope），网页按它隐藏用不了的入口（`lib/capabilities.ts`）。
   不挂 AI 助手的路由。配对协议（commit / reveal、6 位校验码、长轮询）写在 `access/pairing.ts` 的文件头。
 - 权限：设备凭证带一组 scope（默认 `DEVICE_DEFAULT_SCOPES`，最多 `DEVICE_GRANTABLE_SCOPES`），由注册表统一拦截（403）；`devices`（管理设备）、
-  `desktop`（在电脑屏幕上弹窗）永远拿不到。
+  `desktop`（在电脑屏幕上弹窗）永远拿不到。读设置（`settings.get`）是 `read`，改设置是 `settings`。
+  改了一台设备的名称或权限，只给它开着的事件连接推一条 `{ type: 'me' }`（不经过事件总线，别的设备、本机页面收不到）。
 - 本机页面用的查询和命令（scope `devices`）：`GET /api/access`、`PATCH /api/access`、`POST /api/access/requests/:id/approve | reject`、
   `PATCH | DELETE /api/devices/:id`、`POST /api/access/tickets`（扫码的一次性口令）。SSE 的 `access` 事件只推给本机入口。
 - 假手机：`npx tsx apps/server/scripts/lan-client.ts discover | pair <主机:端口> | call <方法> <路径> [json] | events`。

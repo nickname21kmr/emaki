@@ -127,6 +127,15 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - `lib/motion.ts`、`lib/viewTransition.ts`、`lib/kinds.ts`（类型的图标、`ANIMATED_LABEL`；类型名、印章字、说明转自 `packages/shared`）、`lib/blur.ts`（转出 `packages/shared` 的 `blurReason`）、`lib/format.ts`（`formatCount` `formatCompact` `formatBytes` `formatRelative` `formatDate`；`RATING_LABEL` 转自 shared）、`lib/hotkeys.ts`（`useHotkey('mod+k', fn)`）、`lib/events.ts`（SSE：`changed` 按变化类型只让相关的 query 失效（`REFRESH`），写操作等自己那条事件的刷新（`settleRefresh`），助手的可撤销修改进撤销栈；识别进行中排名类列表最多一分钟重拉一次，未识别列表只标记过期）、`lib/urlPrefs.ts`（收拢组图的模式进 URL）
 - `blocks/`：页面区块注册表 `registry.ts` 和按注册表渲染的 `PageBlocks`（见下面「页面区块」）
 
+### 按能力显示入口（docs/mobile.md 4.4）
+
+手机（局域网入口上的设备）只看得到自己能用的入口；电脑上什么都不隐藏。规则集中在 `lib/capabilities.ts`（`useCapabilities`、`useCan`、`useAllowed`、`useAllowedActions`），
+各处**声明需要的能力**（`need`：某个 scope、`assistant`，或者 `null` = 谁都能用），不在组件里判断是不是手机：
+- 新页面先在 `src/pages.ts` 登记（路径、标题、need），`router.tsx` 用 `page()` 挂上，没权限时 `PageGate` 显示说明页；链接到别的页用 `useCanVisit()` 判断；
+- 侧栏的项写目标地址，need 取那一页的；设置的新分区在 `features/settings/sections.ts` 写 need；命令面板的命令、看图器和多选栏的操作各自写 need；
+- 页面里改东西的按钮按它调的命令的 scope 判断（`useCan`），能读不能改的页面照常显示、改的入口隐藏；
+- 会发出请求的（助手设置、手机访问状态这类设备上必然 403 的）用 `known(need)`：确定是电脑上才发。
+
 页面的筛选状态放在 URL 查询参数（`useSearchParams`），刷新后保留。会影响列表里有哪些图的本机偏好也写进 URL：图库的类型 `?kind=`、收拢组图 `?collapse=`（没写时把偏好补进去，写了以 URL 为准），AI 助手拿到的页面地址和用户看到的一致。
 
 ### 数字从哪来（P5）
@@ -248,6 +257,8 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 ## 9. 设置 `/settings`（`features/settings`）
 
 左侧小目录（sticky）+ 右侧分组卡片，分组：
+
+每节在 `sections.ts` 声明需要的能力，这台设备没有的整节不显示、编号往前补（手机访问 devices、AI 助手 assistant、后台任务 jobs，外观和关于不要，其余 settings）。
 
 1. **图库文件夹**：列表（路径、张数、上次扫描、启用 `Switch`、移除），「添加文件夹」（输入绝对路径的 Dialog），「立即扫描」按钮。
 2. **识别**：模型（只读文本 + 说明）、运行设备（`Segmented` CPU / GPU(DirectML)）、角色阈值 / 通用标签阈值 / 自动采纳阈值（`Slider` + 数值）、批大小。「对全部未识别图片运行识别」。
