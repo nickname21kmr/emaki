@@ -6,6 +6,7 @@
  * - 不限制 Host（地址会变），靠设备凭证：除了 `/api/v1/hello`、`/api/v1/pair*` 和网页的静态文件，所有 `/api/` 都要
  *   `Authorization: Bearer <token>` 或 Cookie `emaki_device=<token>`；没有或不认识 401 unauthorized，撤销了 401 device_revoked；
  * - 认证通过后在 runAsDevice 里处理请求：actor 是 device:<id>，注册表按这台设备的权限范围拦截（commands/registry.ts）；
+ * - 只接受局域网里的地址（isLanAddress：私有地址、运营商 NAT / Tailscale、链路本地、回环），公网来的一律 403；
  * - 写请求照样核对 Origin（必须是 https://<Host>）和 sec-fetch-site，POST 必须是 JSON；
  * - 不挂 AI 助手的路由（/api/assistant/* 里有外部 MCP 的令牌）；SSE 不推 access 事件，设备被撤销时立即断开它的连接。
  *
@@ -39,6 +40,29 @@ const PUBLIC_ROUTES = new Set(['/api/v1/hello', '/api/v1/pair', '/api/v1/pair/:i
 
 /** 请求的来源地址（IPv4 映射成 IPv6 的去掉前缀） */
 export const addressOf = (req: FastifyRequest): string | null => (req.ip ? req.ip.replace(/^::ffff:/, '') : null);
+
+/**
+ * 局域网里的地址（docs/mobile.md 2.6）：10/8、172.16/12、192.168/16、100.64/10（运营商 NAT、Tailscale）、169.254/16、127/8，
+ * IPv6 的 ::1、fc00::/7、fe80::/10。局域网入口只接受这些地址来的连接：电脑直接拿到公网 IP 时，入口不会暴露在公网上
+ * （连接本来就要批准，但陌生人可以不停地发请求、弹提示）。地址取的是 TCP 连接的对端（不看 X-Forwarded-For），伪造不了。
+ */
+export function isLanAddress(ip: string | null): boolean {
+  if (!ip) return false;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return (
+      a === 10 ||
+      a === 127 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254)
+    );
+  }
+  const v6 = ip.toLowerCase();
+  return v6 === '::1' || /^f[cd][0-9a-f]{2}:/.test(v6) || /^fe[89ab][0-9a-f]:/.test(v6);
+}
 
 /** 请求带的设备凭证：Authorization: Bearer 优先，其次 Cookie */
 function tokenOf(req: FastifyRequest): string | null {
@@ -77,8 +101,11 @@ export async function buildLanApp(engine: Engine, bus: EventBus, access: Access,
   // forceCloseConnections：关掉入口（或换端口）时，手机开着的事件连接、长轮询一起断开
   const app = createFastify({ https: { key: tls.key, cert: tls.cert }, forceCloseConnections: true });
 
-  // 1. 只认自己的页面（同本机入口，只是协议是 https、Host 不限）；POST 必须是 JSON。配对的接口也一样
+  // 1. 只接受局域网里的地址；只认自己的页面（同本机入口，只是协议是 https、Host 不限）；POST 必须是 JSON。配对的接口也一样
   app.addHook('onRequest', async (req, reply) => {
+    if (!isLanAddress(addressOf(req))) {
+      return reply.code(403).send({ ok: false, error: '手机访问只接受局域网里的连接', code: 'forbidden' });
+    }
     const host = (req.headers.host ?? '').toLowerCase();
     const origin = req.headers.origin?.toLowerCase();
     const site = req.headers['sec-fetch-site'];

@@ -10,7 +10,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { buildLanApp } from '../../src/access/lan.ts';
+import { buildLanApp, isLanAddress } from '../../src/access/lan.ts';
 import { COMPAT_ROUTES } from '../../src/http/compat.ts';
 import { stripComments } from '../architecture/sqlWrites.ts';
 import { lanFixture, makeDevice, type LanFixture } from './harness.ts';
@@ -201,5 +201,34 @@ describe('最后访问时间和地址', () => {
     f.setNow(Date.parse('2026-11-18T10:01:01Z'));
     await req('::ffff:192.168.1.22');
     expect(row()).toEqual({ last_seen_at: '2026-11-18T10:01:01.000Z', last_address: '192.168.1.22' });
+  });
+});
+
+describe('只接受局域网里的地址（docs/mobile.md 2.6）', () => {
+  it('私有地址、运营商 NAT / Tailscale、链路本地、回环算局域网；公网和相邻的号段不算', () => {
+    const lan = ['192.168.0.122', '10.0.0.5', '172.16.0.1', '172.31.255.255', '100.64.0.1', '100.101.102.103', '100.127.255.254'];
+    const lan2 = ['169.254.18.139', '127.0.0.1', '::1', 'fd7a:115c:a1e0::1', 'fe80::ab5d:bdba:60a0:846f'];
+    for (const ip of [...lan, ...lan2]) expect([ip, isLanAddress(ip)]).toEqual([ip, true]);
+    const wan = ['8.8.8.8', '64.81.114.36', '172.15.0.1', '172.32.0.1', '100.63.255.255', '100.128.0.1', '192.169.0.1', '2001:db8::1'];
+    for (const ip of [...wan, '', null]) expect([ip, isLanAddress(ip)]).toEqual([ip, false]);
+  });
+
+  it('公网地址来的请求：hello、配对、网页、带凭证的接口都 403；局域网地址照常', async () => {
+    const { auth } = makeDevice(f.ds);
+    const calls = [
+      { method: 'GET', url: '/api/v1/hello' },
+      { method: 'POST', url: '/api/v1/pair', payload: { name: 'x', commit: '0'.repeat(64) } },
+      { method: 'GET', url: '/' },
+      { method: 'GET', url: '/api/summary', headers: auth },
+    ] as const;
+    for (const c of calls) {
+      const res = await f.app.inject({ ...c, remoteAddress: '64.81.114.36' });
+      expect([c.url, res.statusCode]).toEqual([c.url, 403]);
+      expect(res.json()).toMatchObject({ code: 'forbidden', error: '手机访问只接受局域网里的连接' });
+    }
+    for (const remoteAddress of ['192.168.0.122', '::ffff:10.1.2.3', '100.101.102.103']) {
+      expect((await f.app.inject({ method: 'GET', url: '/api/v1/hello', remoteAddress })).statusCode).toBe(200);
+      expect((await f.app.inject({ method: 'GET', url: '/api/summary', headers: auth, remoteAddress })).statusCode).toBe(200);
+    }
   });
 });
