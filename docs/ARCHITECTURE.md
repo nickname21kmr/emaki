@@ -154,14 +154,24 @@ return this.ctx.mutate((u) => {
   （挪到 `.emaki-discarded/<id>/…`，扫描永远不进以 . 开头的目录），文件作为新图入库，不复活旧 id 和旧关联。还在撤销窗口里的不动；
   系统回收站移不动（被占用）的没标丢失，文件还在原处，下次扫描照常回来。
 
-**分析模块**（P4a，第 2.4、3.1 节，附录 #23）：派生数据——缩略图回写的 dHash、主色、生成时间、解码错误，帧数、相机，自动类型、主题、画质分——只由
-`domain/analysis/` 写。唯一的入口是 `analyze(tx, ids, { probes, fileChanged })`：从现在的事实（路径、尺寸、格式、帧数、相机、识别标签、漫画区）重算类型、主题、
-画质分，最终类型变了声明 `image.kindChanged`。
-- 调用它的：反应 `analyze`（入库、文件内容变化、移动、漫画区变化）、识别写入（每批）、缩略图任务和识别任务读到的帧数 / 相机、手动改类型（`setManualKind`）、
+**分析模块**（P4a，第 2.4、3.1 节，附录 #23）：派生数据——缩略图回写的 dHash、主色、生成时间、解码错误，帧数、相机，自动类型、是否动图（D5）、主题、画质分——只由
+`domain/analysis/` 写。唯一的入口是 `analyze(tx, ids, { probes, fileChanged })`：从现在的事实（路径、尺寸、格式、帧数、相机、识别标签、漫画区）重算类型、是否动图、
+主题、画质分，最终类型变了声明 `image.kindChanged`，是否动图变了声明 `image.animatedChanged`。
+- 调用它的：反应 `analyze`（入库、文件内容变化、移动、漫画区变化）、识别写入（每批）、缩略图任务和识别任务读到的相机、手动改类型（`setManualKind`）、
   撤销切换导入方式（`restoreKinds`）、启动时版本过期的行（`classifyStale`）。别处不要调分类器。
 - 读文件头才知道的帧数、相机由调用方交进来（变化里的 `probes`），分析模块先写上再判类型；入库的 INSERT 里不再顺手算类型。
+  缩略图任务给旧图补读到的帧数走 `recordFrames`：只写帧数和是否动图，不重判类型（帧数不影响类型，已有的类型和判定依据原样保留）。
 - 缩略图文件本身还在 `ThumbnailService`（按 sha 缓存），它算出的主色、dHash 交给 `recordPixels` / `recordDecodeError` 按 sha 写，不传播（看图时生成缩略图不该让前端整页重拉），
-  只有类型变了才传播。
+  只有类型、是否动图变了才传播。
+
+**内容类型和动图**（T27，D5 于 P4b 拆开，迁移 038）：两个互不相干的维度。
+- **类型**（`content_kind`）：插画 / 漫画 / 截图 / 照片 / 文字 / 表情，互斥。最终类型 = 手动类型（`content_kind_manual`，归类的决定）?? 自动类型（分析模块按规则判，
+  `services/classify/rules.ts`，判定依据记在 `content_kind_source` / `content_kind_evidence`）。插画以外的统称「别册」：不计入角色张数、不进未识别（漫画页看设置）。
+- **是否动图**（`images.animated`）：分析模块按帧数、格式派生（`isAnimated`）——HTML 逐帧动画一律算，读过帧数的看帧数（> 1），还没读过帧数的 GIF 先算、
+  读到单帧就不算。不是手动选项：改类型不动它，「归入…」菜单里没有动图。动的插画就是插画（照样计入角色、进未识别、建档、查 Pixiv），动的表情就是表情。
+- 按类型判断的地方（自动建档、Pixiv 资格、未识别的两个大类、统计的 `kindCounts`）不看是否动图；看是否动图的只有：查重（动图只认文件完全相同）、
+  合集判定（截图 / 照片 / 表情 / 动图页超过 20% 的文件夹不成册）、统计的 `animatedCount`、列表筛选 `animated=true|false`（只看动图时按入库时间翻页走部分索引
+  `idx_images_animated_live`，SQL 字面写 `i.animated = 1`，见 `sql.ts` 的 `ANIMATED_SQL`）。
 - 缓存回收（`cacheGc.ts` + `library/replace.ts` 的 `collectReplacementBackups`，启动 10 分钟后后台做一次）：只进数据目录下的 `thumbs/v1`、`animations/v1`、
   `image-replacements`，只删名字符合格式、没有任何图片行引用的 sha 的普通文件，和撤销令牌已经过期的替换备份；缓存目录和任何图库文件夹重叠、
   图库还没扫完过时整个不做。

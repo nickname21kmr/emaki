@@ -1,6 +1,6 @@
 # Emaki 核心架构设计（v2 草案）
 
-> 状态：D1、D2、D3、D4、D5、D7、D8 已批准（2026-11-17）；D6 和插件挪到下一阶段（第 13 节）。P0、P1、P2、P3 已完成（P3 完成于 2026-11-17），P4 进行中（P4a 已完成 2026-11-18，P4b 是 D5），见第 12 节。依据的代码快照：fork 的起点（`codex/flexible-collections` @ 13c677d 加上当时未提交的改动，2026-11-17）。
+> 状态：D1、D2、D3、D4、D5、D7、D8 已批准（2026-11-17）；D6 和插件挪到下一阶段（第 13 节）。P0、P1、P2、P3、P4 已完成（P3 完成于 2026-11-17，P4 完成于 2026-11-18：P4a 入库与分析收口，P4b 是 D5），见第 12 节。依据的代码快照：fork 的起点（`codex/flexible-collections` @ 13c677d 加上当时未提交的改动，2026-11-17）。
 > 现状盘点和已知的不一致见 [core-architecture-inventory.md](core-architecture-inventory.md)。本文里「附录 #n」指那里的第 n 条。
 
 ## 0. 要解决什么
@@ -45,7 +45,7 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
 | 类别 | 含义 | 谁能写 | 可否重算 | 例子 |
 | --- | --- | --- | --- | --- |
 | 观测 | 文件系统上看到的客观情况 | 只有「图库与文件」模块（扫描、导入、替换、移动、回收） | 重新扫描可得 | 路径、大小、sha256、修改时间、是否丢失、是否在回收站 |
-| 派生 | 由观测、证据、决定纯计算出来的结果 | 只有对应的派生计算，带版本号，版本变了就重算 | 随时可以丢掉重算 | 缩略图、dHash、主色、帧数、自动判定的内容类型、主题、画质分、按文件夹成册的合集、合集页码、排除结果、各种计数 |
+| 派生 | 由观测、证据、决定纯计算出来的结果 | 只有对应的派生计算，带版本号，版本变了就重算 | 随时可以丢掉重算 | 缩略图、dHash、主色、帧数、自动判定的内容类型、是否动图、主题、画质分、按文件夹成册的合集、合集页码、排除结果、各种计数 |
 | 证据 | 某个来源对图片提出的主张，本身不改变图库 | 只有这个来源的提供者，按「图片 × 来源」整体替换 | 来源重跑可得 | 模型打出的标签和角色分数、Pixiv 投稿标签和原创信号、文件名解析出的来源、查重的比对结果、Danbooru 元数据 |
 | 决定 | 图库最终认定的事实，带来历 | 只有对应的主人模块，经过命令写入 | 手动的不可重算；自动的可由规则重算 | 图↔角色、图↔作品（手动）、原创、手动类型、手动分级、收藏、放下、排除例外、手选合集成员、画师、角色合并 |
 
@@ -95,7 +95,9 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
 - **作品关联分成证据和决定两部分**。模型给出的作品是证据；只有经过关联角色或手动指定得到的，才算图的作品（附录 #8）。
   P3b 实现：模型给的作品记在 `work_evidence`（按作品标签，不要求作品已建档）；`v_image_works` = 关联角色的作品 ∪ `image_copyrights`（手动指定）∪ 原创图 →「原创」作品，
   侧栏的作品数、作品筛选、合集的作品统计按同一口径。
-- **内容类型 = 手动类型 ?? 自动类型**，两部分分开存。自动类型是派生的，手动类型是决定。只要最终类型变了，就发出一条变化，不管是谁改的。（「动图」能不能和「插画」同时成立，见第 13 节 D5。）
+- **内容类型 = 手动类型 ?? 自动类型**，两部分分开存。自动类型是派生的，手动类型是决定。只要最终类型变了，就发出一条变化，不管是谁改的。
+  「动图」不是类型（D5，P4b 已实现）：类型是插画 / 漫画 / 截图 / 照片 / 文字 / 表情，互斥；**是否动图**是另一个维度，由帧数、格式派生（`images.animated`），
+  不是手动选项，变了发 `image.animatedChanged`。动的插画就是插画。
 - **来源（站点、投稿号）= 手动来源 ?? 解析来源**。解析来源是证据（来自文件名），手动来源是决定。
 
 ### 2.4 对象和主人
@@ -103,7 +105,7 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
 | 模块 | 负责的事实 | 主要命令 | 发出的变化 |
 | --- | --- | --- | --- |
 | 图库与文件 | 图库文件夹、漫画区设置、图片的观测列、扫描错误、回收批次、移动记录 | 加 / 改 / 移除图库文件夹、扫描、导入、替换文件、移动、移到回收站、从回收站恢复 | `image.added`、`image.fileChanged`、`image.moved`、`image.gone`、`image.returned`、`image.trashed`、`image.restored`、`root.visibilityChanged`、`root.modeChanged` |
-| 分析 | 缩略图、dHash、主色、帧数、相机信息、自动类型、主题、画质分 | 只有一个入口 `analyze(ids)`，由反应和任务调用 | `image.kindChanged`（最终类型变化）、`image.analyzed` |
+| 分析 | 缩略图、dHash、主色、帧数、相机信息、自动类型、是否动图（D5）、主题、画质分 | 只有一个入口 `analyze(ids)`，由反应和任务调用 | `image.kindChanged`（最终类型变化）、`image.animatedChanged`（是否动图变化，P4b）、`image.analyzed` |
 | 证据 | 模型标签和角色分数、Pixiv 缓存与投稿标签、文件名解析的来源、Danbooru 元数据 | 每个来源一个「提供者」写自己那一份 | `evidence.changed { provider }`、`image.sourceChanged` |
 | 编目 | 角色、作品、画师、别名（带来历）、合并重定向、Danbooru 绑定、角色↔作品 | 建角色、改角色、合并、绑定 / 解绑 Danbooru、关联作品；`resolve(tag)` 只有这一个实现 | `catalog.characterChanged`、`catalog.merged`、`catalog.bindingChanged` |
 | 归类 | 图↔角色、图↔作品（手动）、原创、手动类型、手动分级、收藏、放下、画师、否决 | `link`、`unlink`、`setOriginal`、`setKind`、`setRating`、`favorite`、`shelve`、`setArtists`；自动决定只经过「自动决定规则」写入 | `curation.charactersChanged`、`curation.originalChanged`、`curation.shelvedChanged` 等 |
@@ -143,7 +145,7 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
 | 模块 | 目录 | 表 | `images` 的列 |
 | --- | --- | --- | --- |
 | 图库与文件 | `domain/library/` | `library_roots`、`comic_folders`、`scan_errors`、`pending_trash`、`pending_trash_items` | 新增、删除整行；`root_id`、`rel_path`、`file_name`、尺寸、`bytes`、`format`、`sha256`、`added_at`、`modified_at`、`missing`、`trashed_at` |
-| 分析 | `domain/analysis/` | （P4a 删掉了没人读写的 `image_fingerprints`，迁移 037） | `dhash`、`dominant_color`、`thumb_at`、`decode_error`、`content_kind*`（手动标记除外）、`camera`、`kind_signals`、`theme`、`art_score`、`frame_count` |
+| 分析 | `domain/analysis/` | （P4a 删掉了没人读写的 `image_fingerprints`，迁移 037） | `dhash`、`dominant_color`、`thumb_at`、`decode_error`、`content_kind*`（手动标记除外）、`camera`、`kind_signals`、`theme`、`art_score`、`frame_count`、`animated`（P4b，迁移 038） |
 | 证据 | `domain/evidence/` | `tags`、`image_tags`、`image_evidence`、`character_evidence`、`work_evidence`（P3b；建议是它们派生的视图 `v_character_suggestions`）、`pixiv_artwork_cache`、`pixiv_character_checks`、`pixiv_unavailable_posts`、`danbooru_tags`、`danbooru_artists` | `tagged_at`、`tagger_model`、`retag`、`artist_checked_at`、`source_site` / `source_post_id` / `source_artist` / `source_url` |
 | 编目 | `domain/catalog/` | `characters`、`works`、`character_works`、`aliases`、`danbooru_tag_redirects`、`custom_character_matches`、`character_verified_forms`、`character_verified_names`、`artist_links`、`tag_i18n`、`tag_name_keys`、`tag_renames` | |
 | 归类 | `domain/curation/`（P3a 建立） | `image_characters`、`image_copyrights`（手动指定的作品）、`image_artists`、`character_vetoes` | `rating`、`rating_manual`、`favorite`、`shelved_at`、`original_at` 和原创的来历列、`content_kind_manual`、`artist_manual`、`source_manual` |
@@ -208,7 +210,7 @@ decideAuto(image: ImageFacts, evidence: Evidence[], current: Decisions, settings
 - **P3b 的实现（2026-11-17）**：`decideAuto` 在 `domain/curation/auto.ts`，只有反应 `reevaluateAuto`（`curation/reevaluate.ts`）调用它并写入结果。
   - 输入照上面：图片事实（最终类型、放下、原创和它的来历、是否整本处理、是否在漫画区、是否被排除或不可见）、各来源的证据（候选、置信度、原创信号，
     以及「这个来源的证据刚换过」）、当前决定（关联和来历、否决）、每个来源的自动阈值、编目解析（标签 → 角色，能不能建档，同一轮里别的图会不会建）。
-  - 规则：可以加关联的图（没放下、没归原创、不在漫画区、没被排除）上，分数达到这个来源自动阈值的候选都关联，否决过的不加；还没有角色的候选只在插画、漫画、动图上建档，
+  - 规则：可以加关联的图（没放下、没归原创、不在漫画区、没被排除）上，分数达到这个来源自动阈值的候选都关联，否决过的不加；还没有角色的候选只在插画、漫画上建档（P4b 之前还有类型「动图」；现在动的插画、漫画照样建档，D5），
     别的类型复用同一轮里别的图建的角色。一轮先跑一遍收集要建档的标签，再跑一遍得出结果，和图在批次里的先后无关（附录 #1）。
     整本处理的合集现在不影响决定（本子的页照样按证据关联，角色在本子里出现的页数靠它），只影响要不要去查 Pixiv；类型变了照样重新评估。
   - 阈值按来源取自设置 `tagger.autoAcceptBySource`（`tagger` / `pixiv` / `plugin:<id>`），没设的来源用 `autoAcceptThreshold`。
@@ -235,6 +237,7 @@ decideAuto(image: ImageFacts, evidence: Evidence[], current: Decisions, settings
 | `image.trashed` / `image.restored` | 回收与恢复 | |
 | `root.visibilityChanged` / `root.modeChanged` | 图库文件夹启用、停用、移除；漫画区变化 | |
 | `image.kindChanged` | 最终类型变化 | 自动重判和手动修改都会发出 |
+| `image.animatedChanged` | 是否动图变化（P4b，D5） | 只有帧数、格式变了才会变：入库、换了文件、缩略图任务给旧图补读到帧数 |
 | `image.sourceChanged` | 最终来源变化 | |
 | `evidence.changed` | 某个来源的证据变了 | `provider` |
 | `curation.*Changed` | 角色、原创、放下、分级、收藏、画师、否决变化 | 角色变化带上新增 / 移除和来历 |
@@ -254,15 +257,15 @@ decideAuto(image: ImageFacts, evidence: Evidence[], current: Decisions, settings
 | --- | --- | --- | --- |
 | `reparseSource` | `image.moved`（来源未手动锁定时） | 事务内 | 只有扫描时的移动会重新解析（附录 #13）。三条移动路径和撤回移动都发 `image.moved` |
 | `staleFileEvidence`（P4a） | `image.fileChanged` | 事务内 | 文件内容变了（D1）：这份文件版本的识别过期（识别时间、模型、画师识别时间清空，排队重认）；以前只有扫描会清识别、替换全保留、两条路都不重置画师（附录 #10） |
-| `analyze`（P4a，原 `reclassifyByPath`） | `image.added`、`image.fileChanged`、`image.moved`、`root.modeChanged` | 事务内 | 分析唯一的入口：入库判类型；内容变了清掉旧文件的像素派生、按新文件重判；路径相关的分类、漫画文件夹的类型和分级、去掉识别器的角色；声明 `image.kindChanged`、`curation.charactersChanged`（附录 #23） |
+| `analyze`（P4a，原 `reclassifyByPath`） | `image.added`、`image.fileChanged`、`image.moved`、`root.modeChanged` | 事务内 | 分析唯一的入口：入库判类型；内容变了清掉旧文件的像素派生、按新文件重判；路径相关的分类、漫画文件夹的类型和分级、去掉识别器的角色；声明 `image.kindChanged`、`image.animatedChanged`（P4b）、`curation.charactersChanged`（附录 #23） |
 | `reevaluateAuto`（P3b） | 证据、最终类型、放下 / 原创、否决、合集、漫画区、编目合并 / 绑定、补采纳命令（见第 4.2 节） | 事务内 | 识别写入、补采纳、改类型、Pixiv 补充四条路各自的判断（附录 #1–#3）；证据不再支持时撤回（D2），Pixiv 原创（D8） |
 | `dropStalePixivEvidence` | `image.sourceChanged` | 事务内 | 来源变了，按旧投稿号查的 Pixiv 证据和检查记录去掉（附录 #13）；以前只有改识别方式会做。P3b 起去掉证据声明 `evidence.changed`，依据它的自动关联由 `reevaluateAuto` 撤回 |
 | `reevaluateExclusions` | `visibility.rulesChanged`、`curation.charactersChanged`、`evidence.changed`（标签）、`image.added`、`image.moved`、`library.opened` | 事务内，同时负责排除和解除排除 | 现在 6 处会套用排除规则、4 处没套，而且从来不解除（附录 #14、#15） |
 | `queuePixivCheck` | `image.sourceChanged`、`image.kindChanged`、放下、原创、角色、`visibility.changed`、`evidence.changed`、`root.modeChanged`、`collections.changed` | 事务内登记（持久化的队列） | 现在只在识别批次结束时登记（附录 #19） |
 | `refreshPostGroups` | `image.sourceChanged` | 事务内（后台任务延后到结束） | 只有部分来源修改的路径会刷新 |
-| `refreshFolderCollections` | `image.*`、`image.kindChanged`、`visibility.changed`、`evidence.changed` | 事务内按 id（后台任务延后到结束全量） | `collectionsHook` 的 20 处调用，以及漏掉的移动、撤回移动、相机识别、让出或中止的任务（附录 #17） |
+| `refreshFolderCollections` | `image.*`、`image.kindChanged`、`image.animatedChanged`（P4b）、`visibility.changed`、`evidence.changed` | 事务内按 id（后台任务延后到结束全量） | `collectionsHook` 的 20 处调用，以及漏掉的移动、撤回移动、相机识别、让出或中止的任务（附录 #17） |
 | `renumberCollections` | `collections.changed`（手动增删成员） | 事务内 | `onUndoLast` 里的页序重排 |
-| `markDedupeDirty` | `image.added` / `fileChanged` / `gone` / `returned` / `trashed` / `restored`、`visibility.changed`、`root.visibilityChanged` | 排队，持久化在 `pending_work` | 现在只有图库文件夹变化会标记，而且重启就丢（附录 #18） |
+| `markDedupeDirty` | `image.added` / `fileChanged` / `gone` / `returned` / `trashed` / `restored`、`image.animatedChanged`（P4b：动图只认文件完全相同）、`visibility.changed`、`root.visibilityChanged` | 排队，持久化在 `pending_work` | 现在只有图库文件夹变化会标记，而且重启就丢（附录 #18） |
 | `rescanRoots`、`queueTagging`、`queueAnalysis`、`queueArtists`、`schedulePixiv`、`rematchCachedPixiv` | 文件夹重新显示；放出排除、离开漫画文件夹、新图；新图和换了文件；改回自动画师；资格变了；来源变了 | 排队（只有用户和助手的操作直接拉起任务） | 恢复排除后不会重新识别（附录 #16）；撤销改识别方式、`artist-auto` 不会重跑（附录 #22） |
 | `refreshAllCollections` | `root.*`、`library.opened` | 提交后（全量） | 文件夹启停、漫画设置变化后的手工全量重算。P4a：启动（`library.opened`）只在合集判定的版本变了、或者有没做完的延后重算时全量重判（附录 #23） |
 | `recomputeCustomMatches` | `catalog.*` | 提交后 | 5 处手动调用 |
@@ -427,10 +430,12 @@ AI 助手已经能读写图库，还可以让它直接写新页面（比如各�
 Pixiv 只产出证据和原创信号，原创是带来历的决定（D8）；证据不再支持时撤回（D2，记 `change_log` 的 auto-retract）；编目唯一的 `resolve`、规范化、别名来历、解绑语义（#37，迁移 036）；
 归类、证据、编目的表都只由主人写，允许清单里没有它们了；附录 #1、#2、#3、#7、#8、#9、#37 关闭（`crossEntry.test.ts`、`evidence.closure.test.ts`、`catalog.closure.test.ts`、
 `domain/curation/auto.test.ts`、`db/evidence.migration.test.ts`、`db/catalogOrigins.migration.test.ts`） | L |
-| **P4 入库与分析收口**（进行中，P4a 已完成 2026-11-18） | 统一文件内容变化的语义（按 D1）；`analyze` 唯一入口；三条移动路径合一；合集判定版本号真正生效；派生数据都带版本。P4b：D5（类型拆成「类型」+「是否动图」两个维度） | 附录 #10、#11、#23 关闭。**P4a 已完成**：图库与文件（`domain/library/`）、分析（`domain/analysis/`）两个模块，允许清单里它们的表和列清零；
+| **P4 入库与分析收口**（已完成 2026-11-18） | 统一文件内容变化的语义（按 D1）；`analyze` 唯一入口；三条移动路径合一；合集判定版本号真正生效；派生数据都带版本。P4b：D5（类型拆成「类型」+「是否动图」两个维度） | 附录 #10、#11、#23 关闭。**P4a 已完成**：图库与文件（`domain/library/`）、分析（`domain/analysis/`）两个模块，允许清单里它们的表和列清零；
 D1：扫描发现和用户替换都走 `recordFileChanged` → `image.fileChanged`，识别过期（`staleFileEvidence`）、派生重算（`analyze`）、过期证据不新加自动关联（`decideAuto` 规则 5）；
 移动一条路径（`moveImages` / `revertMoveLog` / 扫描的 `recordMoved`），「不能动文件」只有 `assertFilesIdle` 一处；派生数据的版本统一记在 `derived_versions`（迁移 037），合集判定的版本真正生效；
-删掉 `image_fingerprints`；回收站行的匹配规则；缓存回收；暂停持久化。附录 #10、#11、#23 关闭（`crossEntry.test.ts`、`library.closure.test.ts`、`domain/analysis/cacheGc.test.ts`） | M |
+删掉 `image_fingerprints`；回收站行的匹配规则；缓存回收；暂停持久化。附录 #10、#11、#23 关闭（`crossEntry.test.ts`、`library.closure.test.ts`、`domain/analysis/cacheGc.test.ts`）。
+**P4b 已完成**（2026-11-18）：D5，类型拆成「类型」+「是否动图」（`images.animated`，迁移 038），实现说明见第 13 节 D5；
+`crossEntry.test.ts`（同一张动图从扫描入库和改类型两条路进来结果一致）、`db/animated.migration.test.ts`、`queries/listImages.test.ts`（动图筛选和查询计划） | M |
 | **P5 读模型与前端** | 命名口径唯一；状态拆成三个事实；汇总接口；共用的展示规则移进 `packages/shared`；前端删掉自带的业务规则；设置只有一份 | 附录 #24–#30、#32、#38 关闭 | M |
 | **P6 命令注册表与接口** | 命令 / 查询注册表；HTTP 和 MCP 从注册表生成；记录 actor；带类型的事件；合并重复的接口 | `DataSource` 接口删除；附录 #33–#36 关闭 | M |
 | 下一阶段 | 个性化页面与插件（第 10 节），另行设计 | | |
@@ -449,7 +454,28 @@ D1：扫描发现和用户替换都走 `recordFileChanged` → `image.fileChange
 | D2 | 证据不再支持某个自动关联时（重新识别没再认出、来源插件被停用），要不要撤回 | **已批准**：只撤回「自动 + 依据的就是这个来源」的关联；手动的永远不动；撤回会记入审计，可以撤销。现在是只增不减，也就是旧模型的错误永远留着。**P3b 已实现**：只在这个来源的证据刚换过（重新识别、来源失效）时撤回，新证据里没有这个候选或分数低于这个来源的自动阈值；阈值调高、补采纳、改类型不撤回；来历不明的（rule `legacy`）和手动的不动；别的来源仍然支持时只改来历。撤回记 `change_log`（auto-retract），在「最近的自动改动」里撤回会把关联加回来并记成手动，这次撤回本身也能撤销；用户操作里连带的撤回随操作一起撤销 |
 | D3 | 用户手动加回一个被自己否决过的角色 | **已批准**：加回时清掉否决。现在不清，导致以后的自动规则仍然认为「用户不要」（附录 #39） |
 | D4 | 删掉 MockDataSource，演示改跑真实引擎 | **已批准**，P1 已完成（2026-11-17）。来龙去脉见第 8 节：只删第二套业务逻辑，演示能力和演示数据保留。`ARCHITECTURE.md` 的「设计决策 2」已改写 |
-| D5 | 「动图」和「插画 / 漫画」是同一个互斥类型里的值，但一张图可以既是动图又是插画 | **已批准**：拆成「类型」（插画 / 漫画 / 截图 / 照片 / 文字 / 表情）+「是否动图」两个维度。别册里的「动图」变成按维度筛选。要改界面和统计，放在 P4 一起做 |
+| D5 | 「动图」和「插画 / 漫画」是同一个互斥类型里的值，但一张图可以既是动图又是插画 | **已批准**：拆成「类型」（插画 / 漫画 / 截图 / 照片 / 文字 / 表情）+「是否动图」两个维度。别册里的「动图」变成按维度筛选。要改界面和统计，放在 P4 一起做。**P4b 已实现**（2026-11-18，见下方「D5 的实现」） |
 | D6 | 插件的信任模型 | 挪到下一阶段，和个性化页面一起设计（第 10 节） |
 | D7 | fork 之后和上游的关系 | 已定：独立演进。P2 之后结构差异会大到没法再直接合并上游，上游的修复按需手工移植；本文作为 fork 的架构基线 |
 | D8 | Pixiv 的「原创」标记 | **已批准**：当作自动决定，由 `decideAuto` 根据 Pixiv 证据给出，可以被手动覆盖。现在 Pixiv 用的是和手动原创相同的存法（附录 #7）。**P3b 已实现**：证据里有原创信号、图还没有原创的决定也还没有角色时标成自动原创（`auto-original@1`）；手动标、手动取消（包括撤回那一轮 Pixiv）都是手动的决定，自动不再改；自动标的在 Pixiv 新证据没有原创信号时按 D2 撤回 |
+
+**D5 的实现（P4b，2026-11-18，迁移 038）**：
+
+- **数据**：`images.animated`（0 / 1）是分析模块的派生列，`isAnimated`（`services/classify/rules.ts`）按读文件头拿到的帧数和格式判：HTML 逐帧动画一律算；
+  读过帧数的看帧数（> 1，多帧的 GIF / WebP / PNG / AVIF）；还没读过帧数的 GIF 先算动图，缩略图任务读到帧数后按帧数改（静态 GIF 不算）。
+  分类器去掉了「GIF / 多帧 → animated」（`CLASSIFIER_VERSION` 1 → 2），动图照样按其余规则判类型：动的插画判插画，动的表情判表情，「3话」文件夹里的判漫画。
+  `ContentKind` 去掉 `animated`；`ImageItem.animated`、`ImageDetail.animatedReason`（「GIF · 24 帧」）、`LibraryStats.animatedCount`（跨类型，`kindCounts` 只有六类）、
+  `ListImagesQuery.animated`；HTTP 的 `kind=animated` 返回 400 并说明改用 `animated=true`，MCP 工具的类型枚举也去掉了它。
+- **写入和传播**：分类的 UPDATE 顺带写 `animated`（手动类型的图也写：手动只保护类型）；缩略图任务给旧图补帧数走 `recordFrames`，只写帧数和是否动图、不重判类型。
+  是否动图变了声明 `image.animatedChanged`，`refreshFolderCollections`（动图页太多的文件夹不成册）、`markDedupeDirty`（动图只认文件完全相同）订阅它；
+  `reevaluateAuto`、`queuePixivCheck` 不订阅：它们只看类型。
+- **按类型的规则保持原意**：自动建档（`AUTO_CREATE_KINDS`）、Pixiv 资格只看插画 / 漫画——动的插画和静态插画一样建档、一样去查 Pixiv，动的表情和静态表情一样不建档、不查；
+  未识别里动的插画进「插画 · 漫画」，「照片 · 文字等」只剩截图 / 文字 / 照片 / 表情；启动补登 Pixiv 动图改看 `animated`；查重、合集判定改看 `animated`。
+- **迁移 038**：先按上面的规则给所有图写 `animated`（表情包文件夹里的 GIF 这类原来被文件夹规则判成表情的动图也算）；原来类型是 `animated` 的图——自动判的和手动选的——
+  手动标记清掉，类型放成插画占位、版本清空，启动时按新规则重判（手动选 animated 的本意是「这是动图」，现在由帧数决定，帧数显示不是动图的就不再是）；
+  别的图版本直接记成 2：去掉的规则只会判出 animated，没被它判中的图结果不变，启动时不整库重判（10 万张合成数据：迁移约 0.9 秒，启动只重判原来的 animated，1000 张 0.15 秒）。
+  统计的覆盖索引加 `animated`，只看动图按入库时间翻页走部分索引 `idx_images_animated_live`。迁移前后的核对：`apps/server/scripts/verify-migration-038.sql`
+  （备份库只用迁移 010 之前就有的列，从多早的版本升上来都能跑）。
+- **界面**：类型印（Seal）只给类型。目次（`KindIndex`）和首页别册在五类别册后面隔一道细线，写「筛选 · 动图」，记号是细线圆圈里的播放三角；
+  点进去是 `/annex/animated`，各类里会动的图都在这里，格子带类型印。图库工具条有「动图」chip，在当前类型里再筛。网格左下角是墨色小签（播放三角 +「动」），
+  和类型印、合集页码排成一行（`TileMarks`），悬停显示角色名时让位；看图器「类型」栏在六枚类型印下面写「动图 · GIF · 9 帧」。改类型的菜单没有动图。
