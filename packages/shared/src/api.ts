@@ -78,7 +78,8 @@ export interface ImportImagesBody {
   rootId: ID;
   /** Relative destination folder; empty string means the root itself. */
   dir: string;
-  files: { path: string; fileName?: string }[];
+  /** modifiedAt：入库后的文件改成这个修改时间（手机上传保留手机上的时间，docs/mobile.md 5.4）；不给就是复制时的时间 */
+  files: { path: string; fileName?: string; modifiedAt?: string }[];
   /** Only set when the user wants to keep both versions of a same-named file. */
   keepBoth?: boolean;
 }

@@ -17,6 +17,9 @@ export const SEEN_WRITE_MS = 60_000;
 
 export interface Device extends DeviceInfo {
   revokedAt: string | null;
+  /** 传上来的图放到哪（B1，docs/mobile.md 5.4）：都是 null = 默认；解析成实际的位置在 domain/upload/ */
+  uploadRootId: number | null;
+  uploadDir: string | null;
 }
 
 export type AuthResult = { device: Device } | { error: 'unauthorized' | 'device_revoked' };
@@ -31,9 +34,11 @@ interface Row {
   last_seen_at: string | null;
   last_address: string | null;
   revoked_at: string | null;
+  upload_root_id: number | null;
+  upload_dir: string | null;
 }
 
-const COLUMNS = 'id, name, model, scopes, token_hash, created_at, last_seen_at, last_address, revoked_at';
+const COLUMNS = 'id, name, model, scopes, token_hash, created_at, last_seen_at, last_address, revoked_at, upload_root_id, upload_dir';
 
 export const hashToken = (token: string): string => createHash('sha256').update(token, 'utf8').digest('hex');
 
@@ -50,10 +55,12 @@ function toDevice(r: Row): Device {
     lastSeenAt: r.last_seen_at,
     lastAddress: r.last_address,
     revokedAt: r.revoked_at,
+    uploadRootId: r.upload_root_id,
+    uploadDir: r.upload_dir,
   };
 }
 
-export const deviceInfo = ({ revokedAt: _revoked, ...info }: Device): DeviceInfo => info;
+export const deviceInfo = ({ revokedAt: _revoked, uploadRootId: _root, uploadDir: _dir, ...info }: Device): DeviceInfo => info;
 
 export class Devices {
   /** 凭证的哈希 → 设备（包括撤销了的）；null = 还没读过库 */
@@ -108,6 +115,8 @@ export class Devices {
       lastSeenAt: null,
       lastAddress: null,
       revokedAt: null,
+      uploadRootId: null,
+      uploadDir: null,
     };
     this.cache();
     this.db
@@ -146,6 +155,16 @@ export class Devices {
     if (patch.scopes !== undefined) e.device.scopes = [...patch.scopes];
     this.db.prepare('UPDATE devices SET name = ?, scopes = ? WHERE id = ?').run(e.device.name, JSON.stringify(e.device.scopes), id);
     for (const fn of this.updatedListeners) fn(id);
+    return e.device;
+  }
+
+  /** 改传上来的图放到哪（rootId 为 null 恢复默认，dir 一起清掉）。之后上传的才按新的，已经传上来的不搬 */
+  setUpload(id: string, rootId: number | null, dir: string): Device | null {
+    const e = this.entry(id);
+    if (!e || e.device.revokedAt) return null;
+    e.device.uploadRootId = rootId;
+    e.device.uploadDir = rootId === null ? null : dir;
+    this.db.prepare('UPDATE devices SET upload_root_id = ?, upload_dir = ? WHERE id = ?').run(e.device.uploadRootId, e.device.uploadDir, id);
     return e.device;
   }
 

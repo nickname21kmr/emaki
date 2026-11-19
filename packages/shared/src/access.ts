@@ -142,3 +142,61 @@ export interface AccessEvent {
   reason: 'requested' | 'changed';
   request?: PairRequestInfo;
 }
+
+// ---------------------------------------------------------------- 手机上传（B1，docs/mobile.md 5.4）
+
+/** 设备传上来的图放到哪：图库文件夹 + 相对路径（手动上传再进「手动上传」子文件夹，同步的相册进相册名的子文件夹） */
+export interface UploadTarget {
+  deviceId: string;
+  /** 图库文件夹；null = 没有可用的（一个自动识别的图库文件夹都没有） */
+  rootId: string | null;
+  rootPath: string | null;
+  /** 相对图库文件夹，正斜杠；'' = 图库文件夹本身 */
+  dir: string;
+  /** 没设过，用的是默认（收件箱/手机/<设备名>） */
+  isDefault: boolean;
+}
+
+/** POST /api/uploads/check：这些图电脑上有没有（按 sha256） */
+export interface UploadCheckResult {
+  results: { sha256: string; imageId: string | null }[];
+}
+
+export type UploadStatus = 'receiving' | 'imported' | 'existing' | 'failed';
+
+/** POST /api/uploads：开始（或接着）传一个文件 */
+export interface UploadBeginResult {
+  uploadId: string;
+  /** 已经收到的字节数：接着从这里传 */
+  received: number;
+  status: UploadStatus;
+  /** 已经传完（这台设备传过同一个文件）：电脑上那张图 */
+  imageId: string | null;
+}
+
+/** POST /api/uploads/:id/complete */
+export interface UploadCompleteResult {
+  ok: true;
+  message: string;
+  status: 'imported' | 'existing';
+  imageId: string;
+}
+
+/** GET /api/uploads/batches：电脑上看最近的上传 */
+export interface UploadBatch {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  /** null = 手动上传 */
+  album: string | null;
+  createdAt: string;
+  updatedAt: string;
+  undoneAt: string | null;
+  imported: number;
+  existing: number;
+  failed: number;
+  /** 还在传的 */
+  receiving: number;
+  /** 这一批新入库的图（最多 12 张，给缩略图） */
+  imageIds: string[];
+}

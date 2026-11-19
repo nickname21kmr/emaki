@@ -60,7 +60,7 @@ describe('注册表的定义', () => {
     }
   });
 
-  it('查询都是只读的 scope、设置或设备管理（手机访问的状态）；HTTP 地址不重复', () => {
+  it('查询都是只读的 scope、设置、设备管理（手机访问的状态），或者上传前问电脑有没有（upload.check）；HTTP 地址不重复', () => {
     const seen = new Set<string>();
     for (const d of DEFINITIONS)
       for (const h of d.http ?? []) {
@@ -68,7 +68,7 @@ describe('注册表的定义', () => {
         expect(seen.has(key), key).toBe(false);
         seen.add(key);
       }
-    for (const d of DEFINITIONS.filter((x) => x.kind === 'query')) expect(['read', 'settings', 'devices'], d.name).toContain(d.scope);
+    for (const d of DEFINITIONS.filter((x) => x.kind === 'query')) expect(['read', 'settings', 'devices', 'upload'], d.name).toContain(d.scope);
   });
 });
 
@@ -78,6 +78,8 @@ describe('每个 HTTP 写路由都对应一个命令（附录 #33、#35）', () 
       for (const h of d.http ?? []) {
         if (h.method === 'GET') continue;
         if (d.kind === 'command') continue;
+        // 手机上传前问有没有（upload.check）：请求体是一批哈希（最多 500 个），只有 POST
+        if (d.scope === 'upload') continue;
         // 只读查询的 POST：一定也有 GET
         expect(
           (d.http ?? []).some((x) => x.method === 'GET'),
@@ -91,8 +93,10 @@ describe('每个 HTTP 写路由都对应一个命令（附录 #33、#35）', () 
     const writes = literalRoutes().filter((r) => r.method !== 'GET');
     // 配对（access/lan.ts，docs/mobile.md 2.3）：手机还没有凭证时用的协议，只建设备凭证，不碰图库
     const pairing = (r: { path: string; file: string }) => r.file === 'access/lan.ts' && r.path.startsWith('/api/v1/pair');
+    // 手机上传的一段字节（http/uploads.ts，docs/mobile.md 5.4）：请求体是二进制，进不了注册表；只写 .part 和进度，入库在命令 upload.complete 里
+    const chunk = (r: { method: string; path: string; file: string }) => r.file === 'http/uploads.ts' && r.method === 'PUT' && r.path === '/api/uploads/:id';
     const allowed = (r: { method: string; path: string; file: string }) =>
-      compat.has(`${r.method} ${r.path}`) || r.path === '/api/commands/:name' || r.path.startsWith('/api/assistant/') || pairing(r);
+      compat.has(`${r.method} ${r.path}`) || r.path === '/api/commands/:name' || r.path.startsWith('/api/assistant/') || pairing(r) || chunk(r);
     const stray = writes.filter((r) => !allowed(r));
     expect(stray).toEqual([]);
     for (const r of COMPAT_ROUTES) for (const c of r.commands) expect(byName.get(c)?.kind, `${r.path} → ${c}`).toBe('command');

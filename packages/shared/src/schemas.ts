@@ -412,6 +412,30 @@ export const AccessConfigureInput = z.object({
 export const DeviceApproveInput = z.object({ id: Id, scopes: DeviceScopes.optional(), name: deviceName.optional() });
 /** 改设备的名称、权限 */
 export const DeviceUpdateInput = z.object({ id: Id, name: deviceName.optional(), scopes: DeviceScopes.optional() });
+/** 改设备传上来的图放到哪：rootId 为 null 恢复默认（收件箱/手机/<设备名>） */
+export const DeviceUploadInput = z.object({ id: Id, rootId: Id.nullable(), dir: z.string().max(400).default('') });
+
+// ------------------------------------------------------------------ 手机上传（B1，docs/mobile.md 5.4）
+
+const Sha256 = z.string().regex(/^[0-9a-f]{64}$/, 'sha256 要是 64 位小写十六进制');
+/** 每个文件最多 128 MiB（和导入图片一样） */
+export const UPLOAD_MAX_BYTES = 128 * 1024 * 1024;
+/** 一段最多 8 MiB（PUT /api/uploads/:id 的请求体） */
+export const UPLOAD_CHUNK_MAX = 8 * 1024 * 1024;
+export const UploadCheckInput = z.object({ files: z.array(z.object({ sha256: Sha256, size: z.number().int().min(1).max(UPLOAD_MAX_BYTES) })).min(1).max(500) });
+export const UploadBeginInput = z.object({
+  batchId: z.string().uuid(),
+  sha256: Sha256,
+  size: z.number().int().min(1).max(UPLOAD_MAX_BYTES),
+  fileName: z.string().min(1).max(200),
+  /** 手机上的修改时间（ISO），入库后的文件照这个时间 */
+  modifiedAt: z.string().datetime({ offset: true }).optional(),
+  /** 同步的相册名；手动上传不给 */
+  album: z.string().min(1).max(100).optional(),
+  /** 手机上这个文件的标识（相册同步用 MediaStore 的 id） */
+  clientKey: z.string().min(1).max(200).optional(),
+});
+export const UploadBatchesInput = z.object({ limit: qNumber.min(1).max(100).optional() });
 
 // ------------------------------------------------------------------ 查询
 

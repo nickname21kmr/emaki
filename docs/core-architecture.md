@@ -156,6 +156,7 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
 | 命令层 | `commands/` | `change_log`、`command_log`（审计记录和 operationId 幂等，P6 迁移 040），以及撤销回放这类按表名拼 SQL 的通用写入 | |
 | 变更传播（P2） | `propagation/` | `pending_work`（排队状态和用户的暂停，迁移 033）、`derived_versions`（派生数据的版本，P4a，迁移 037） | |
 | 设备与访问（手机端 N，docs/mobile.md 第 2 节） | `access/` | `lan_access`（局域网入口的配置）、`devices`（批准过的设备、凭证的哈希），迁移 041 | |
+| 手机上传（B1，docs/mobile.md 5.4） | `domain/upload/` | `upload_batches`（一批上传）、`uploads`（每个文件的进度和结果），迁移 042；`devices` 的落点两列照旧由 `access/` 写 | 入库走图库与文件的导入（`domain/library/import.ts`） |
 
 - 永久例外只有 `demo/`：演示数据直接灌进空的一次性库，不经过命令。
 - P2 已搬进主人目录的：合集（原 `services/collections/` → `domain/collections/`）、可见性（原 `datasource/sqlite/exclusions.ts` → `domain/visibility/`）；

@@ -895,6 +895,39 @@ describe('手机访问（注册表：access.*、devices.*，只在本机入口�
   });
 });
 
+describe('手机上传（注册表：upload.*、devices.setUpload；http/uploads.ts）：本机入口上没有设备，传不了；整套流程见 test/upload/', () => {
+  const sha = 'a'.repeat(64);
+  route('POST /api/uploads/check', async () => {
+    const { status, json } = await call('POST', '/api/uploads/check', { files: [{ sha256: sha, size: 10 }] });
+    expect([status, json]).toEqual([200, { results: [{ sha256: sha, imageId: null }] }]);
+    expect((await call('POST', '/api/uploads/check', { files: [{ sha256: 'xyz', size: 10 }] })).status).toBe(400);
+  });
+  route('POST /api/uploads', async () => {
+    const begin = { batchId: '7f1d6f0a-1c2b-4c5d-8e9f-0a1b2c3d4e5f', sha256: sha, size: 10, fileName: 'a.png' };
+    const { status, json } = await call('POST', '/api/uploads', begin);
+    expect([status, json]).toEqual([400, apiError('bad_request')]);
+  });
+  route('PUT /api/uploads/:id', async () => {
+    const res = await app.inject({ method: 'PUT', url: '/api/uploads/u1?offset=0', payload: Buffer.from('abc'), headers: { 'content-type': 'application/octet-stream' } });
+    expect([res.statusCode, res.json()]).toEqual([400, apiError('bad_request')]);
+  });
+  route('POST /api/uploads/:id/complete', async () => {
+    expect((await call('POST', '/api/uploads/u1/complete')).status).toBe(400);
+  });
+  route('GET /api/uploads/batches', async () => {
+    expect(await call('GET', '/api/uploads/batches')).toMatchObject({ status: 200, json: [] });
+  });
+  route('POST /api/uploads/batches/:id/undo', async () => {
+    expect(await call('POST', '/api/uploads/batches/nope/undo')).toMatchObject({ status: 404, json: apiError('not_found') });
+  });
+  route('GET /api/uploads/targets', async () => {
+    expect(await call('GET', '/api/uploads/targets')).toMatchObject({ status: 200, json: [] });
+  });
+  route('PATCH /api/devices/:id/upload', async () => {
+    expect(await call('PATCH', '/api/devices/nope/upload', { rootId: null })).toMatchObject({ status: 404, json: apiError('not_found') });
+  });
+});
+
 describe('本机安全（T23）', () => {
   it('非本机 Host → 403（防 DNS rebinding）', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/health', headers: { host: 'evil.example' } });

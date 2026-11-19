@@ -5,7 +5,7 @@
  */
 import type { ImportImagesBody, ImportImagesResult } from '@emaki/shared';
 import { randomUUID } from 'node:crypto';
-import { constants, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { constants, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
@@ -149,6 +149,9 @@ export async function importImages(ctx: SqliteContext, body: ImportImagesBody, o
             if (!body.keepBoth) throw new ConflictError('目标文件已出现，请确认替换或保留两个版本后重试');
           }
         }
+        // 保留原来的修改时间（手机上传）：在读 mtime 入库之前改
+        const keepTime = file.modifiedAt ? new Date(file.modifiedAt) : null;
+        if (keepTime && !Number.isNaN(keepTime.getTime())) utimesSync(target, keepTime, keepTime);
         const now = new Date(ctx.clock()).toISOString();
         const source = parseSource(rel, readSettings(ctx.db).tagger.pixivFilenameMode);
         const comic = ComicAreas.load(ctx.db).of(root.id,rel);

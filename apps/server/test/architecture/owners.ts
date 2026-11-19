@@ -20,7 +20,8 @@ export type ModuleId =
   | 'settings'
   | 'commands'
   | 'propagation'
-  | 'access';
+  | 'access'
+  | 'upload';
 
 /** 模块的中文名和目录（相对 apps/server/src，以 / 结尾） */
 export const MODULES: Record<ModuleId, { name: string; dir: string }> = {
@@ -39,6 +40,8 @@ export const MODULES: Record<ModuleId, { name: string; dir: string }> = {
   propagation: { name: '变更传播', dir: 'propagation/' },
   // 设备与访问（docs/mobile.md 第 2 节）：局域网入口、配对、设备凭证
   access: { name: '设备与访问', dir: 'access/' },
+  // 手机上传（docs/mobile.md 5.4）：上传的批次和每个文件的进度；入库走图库与文件的导入
+  upload: { name: '手机上传', dir: 'domain/upload/' },
 };
 
 /** 表（images 是 images#<列组>）→ 主人 */
@@ -108,6 +111,9 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   // 设备与访问：局域网入口的配置（迁移 041）、批准过的设备和凭证的哈希
   lan_access: 'access',
   devices: 'access',
+  // 手机上传（迁移 042）
+  upload_batches: 'upload',
+  uploads: 'upload',
 };
 
 /**

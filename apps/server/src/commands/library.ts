@@ -453,7 +453,8 @@ export async function revealImage(e: Engine, id: ID): Promise<void> {
 }
 
 /** 移到回收站：先只在库里标记、记一批待移，最近几次可撤销；挤出窗口后才真的移到系统回收站（绝不永久删除） */
-async function trashImages(e: Engine, ids: number[]): Promise<MutationResult> {
+/** 移到回收站（可撤销）；手机上传的「撤销这一批」也用它（commands/upload.ts） */
+export async function trashImages(e: Engine, ids: number[]): Promise<MutationResult> {
   const now = iso(e.ctx.clock());
   const rows = e.ctx.db
     .prepare(

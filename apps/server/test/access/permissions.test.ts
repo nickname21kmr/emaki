@@ -55,8 +55,17 @@ describe('范围的定义', () => {
     expect(byName.get('library.reveal')?.scope).toBe('desktop');
     expect(byName.get('system.pickFolder')?.scope).toBe('desktop');
     expect(DEFINITIONS.filter((d) => d.scope === 'ui').map((d) => d.name)).toEqual(['catalog.markSeen']);
-    expect(DEFINITIONS.filter((d) => d.scope === 'devices').map((d) => d.name)).toEqual([...DEVICE_COMMANDS, 'access.status']);
-    expect(DEFINITIONS.filter((d) => d.scope === 'upload')).toEqual([]);
+    expect(DEFINITIONS.filter((d) => d.scope === 'devices').map((d) => d.name)).toEqual([
+      ...DEVICE_COMMANDS,
+      'access.status',
+      // 手机上传：电脑上看、撤销、改落点（docs/mobile.md 5.4）
+      'upload.undoBatch',
+      'devices.setUpload',
+      'upload.batches',
+      'upload.targets',
+    ]);
+    // 上传的三步是手机上的 App 调的：设备默认有 upload
+    expect(DEFINITIONS.filter((d) => d.scope === 'upload').map((d) => d.name)).toEqual(['upload.begin', 'upload.complete', 'upload.check']);
   });
 });
 

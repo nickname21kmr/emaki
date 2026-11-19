@@ -9,6 +9,7 @@ import { libraryCommands, libraryQueries } from './library.ts';
 import { queries } from './queries.ts';
 import { Registry, type Def } from './registry.ts';
 import { systemCommands, systemQueries } from './system.ts';
+import { uploadCommands, uploadQueries } from './upload.ts';
 
 export const DEFINITIONS: readonly Def[] = [
   ...curationCommands,
@@ -20,6 +21,8 @@ export const DEFINITIONS: readonly Def[] = [
   ...systemQueries,
   ...accessCommands,
   ...accessQueries,
+  ...uploadCommands,
+  ...uploadQueries,
 ];
 
 export function createRegistry(engine: SqliteDataSource): Registry {

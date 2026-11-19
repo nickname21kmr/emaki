@@ -274,6 +274,41 @@
 - **在电脑上看得到每一批**：「最近的导入」里按批次列出来自哪台设备，可以撤销（移到回收站）；
 - **权限**：只有带 upload 权限的设备能上传；只写进为它指定的文件夹，不能写到别处。
 
+### 5.4 B1 的实现（2026-11-20 定）
+
+目标是 B2（自动同步相册），B1 是它的第一步：电脑这一侧的上传、去重、入库、按批撤销，以及 App 里的上传器，B2 都直接用；
+B2 只多一个「在后台找出相册里的新文件」。所以上传写在 App 的原生代码里（后台同步只能是原生的），网页上的「从手机添加」只是调起它。
+
+**落点**：每台设备一个「上传到」（`devices.upload_root_id` + `upload_dir`，电脑上在设置 →「手机访问」里改）。
+没设过的设备默认 `<第一个自动识别的图库文件夹>/收件箱/手机/<设备名>`。手动上传放 `<上传到>/手动上传/`，B2 同步的相册放 `<上传到>/<相册名>/`。
+「按漫画导入」的图库文件夹不能选（传上来的图会被当成漫画页）。改了只影响之后上传的，已经传上来的不搬。
+用户的平板定为 `下载图片/平板导入`：以前拷过来的 `下载/`、`QQ浏览器/` 等原样不动，新图接着放（2026-11-20）。
+
+**接口**（两个入口都有；局域网入口要 `upload` 权限，执行者记为这台设备）：
+
+| 接口 | 做什么 |
+| --- | --- |
+| `POST /api/uploads/check`（`upload.check`） | `{ files: [{ sha256, size }] }` → 每个哈希在电脑上有没有（有就给图片 id，没有是 null）。一次最多 500 个 |
+| `POST /api/uploads`（`upload.begin`） | `{ batchId, sha256, size, fileName, modifiedAt?, album?, clientKey? }` → `{ uploadId, received, status, imageId? }`。同一台设备同一个文件（`clientKey` 或 相册 + 哈希）已经传完的直接回 `done` 和图片 id；传了一半的回已收到的字节数，接着传 |
+| `PUT /api/uploads/:id?offset=N` | 请求体是这一段的字节（`application/octet-stream`，一段最多 8 MiB）；offset 必须等于已收到的字节数 → `{ received }` |
+| `POST /api/uploads/:id/complete`（`upload.complete`） | 核对大小和 sha256，入库 → `{ status: 'imported' \| 'existing', imageId }` |
+| `GET /api/uploads/batches`（`upload.batches`） | 电脑上看最近的上传批次：哪台设备、什么时候、传了几张、几张本来就有 |
+| `POST /api/uploads/batches/:id/undo`（`upload.undoBatch`） | 这一批新入库的图移到回收站（本来就有的不动），可以再撤销 |
+| `PATCH /api/devices/:id/upload`（`devices.setUpload`） | 改这台设备的「上传到」 |
+
+- 入库走「导入图片」同一套（`domain/library/import.ts`）：同名不同内容保留两份（`图 (1).png`），不覆盖；保留手机上的修改时间；
+  入库后识别、分类、合集、查重由反应接上，和电脑上新下载的图一样。
+- 判断「同一个文件」：整个图库里有内容相同（sha256）的图就不再存一份，直接回那张的 id；B2 另外按 设备 + 相册 + 文件标识 记下传过的，
+  电脑上删掉的图不会被同步回来。
+- 没传完的放在 `<数据目录>/uploads/<uploadId>.part`，7 天没动静的清掉。
+- 表 `upload_batches`、`uploads` 的主人是新模块 `domain/upload/`（迁移 042）；`devices` 的两列照旧由 `access/` 写。
+
+**App**：`window.EmakiApp.pickImages()` 打开系统的选图界面（Android Photo Picker，可多选），选完交给后台任务（WorkManager）上传：
+先算 sha256、问电脑有没有，只传没有的，每段 4 MiB，断了从断点接着传；通知栏显示进度，传完一条「已传 8 张，2 张电脑上本来就有」。
+网页上「从手机添加」只在 App 里、而且这台设备有 upload 权限时显示（图库页头）。手机浏览器（没有 App）暂时不做，以后需要再加 `<input type=file>` 的网页版。
+
+**验收**：服务端测试覆盖重复上传、断点续传、同名不同内容、权限、按批撤销、清理；真机上选图上传，电脑上入库、被识别，落在平板导入下面。
+
 ## 6. 从家外访问
 
 不自建中转服务。推荐用 Tailscale、ZeroTier 这类自组网：手机和电脑在同一个虚拟局域网里，App 按 2.4 节自动改走它的地址，证书和设备凭证照样检查。不支持直接把端口暴露到公网：局域网入口只接受局域网里的地址（2.6 节），从公网来的连接一律拒绝。

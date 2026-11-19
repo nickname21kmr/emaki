@@ -8,6 +8,7 @@ import type { SqliteDataSource } from './datasource/sqlite/SqliteDataSource.ts';
 import { toApiError } from './http/errors.ts';
 import { eventRoutes, type EventRouteOptions } from './http/events.ts';
 import { registryRoutes } from './http/routes.ts';
+import { uploadRoutes } from './http/uploads.ts';
 import { keepAwakeStatus } from './services/system/keepAwake.ts';
 import { assistantRoutes } from './assistant/routes.ts';
 import { actorFromHeaders, runAs } from './propagation/actor.ts';
@@ -41,6 +42,7 @@ export function mountShared(app: FastifyInstance, engine: SqliteDataSource, bus:
   });
 
   registryRoutes(app, engine.registry);
+  uploadRoutes(app, engine);
   eventRoutes(app, bus, events);
 
   // 谁在调用（docs/mobile.md 2.5）：本机入口是 local、全部范围；局域网入口是这台设备和它真正生效的范围。网页按它隐藏用不了的入口
