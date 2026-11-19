@@ -16,7 +16,17 @@ import {
   UNRECOGNIZED_BUCKETS,
   UNRECOGNIZED_THEMES,
 } from './api.ts';
-import { CONTENT_KINDS, type ContentKind } from './domain.ts';
+import {
+  CONTENT_KINDS,
+  type CharacterSource,
+  type CollectionKind,
+  type CollectionMembership,
+  type ContentKind,
+  type ExclusionKind,
+  type ImageStatus,
+  type LibraryRootMode,
+  type Rating,
+} from './domain.ts';
 
 /** shared 不带 DOM / node 的类型：这里只用到 URL 的这几个字段（运行时是全局的 URL） */
 declare const URL: new (url: string) => { protocol: string; username: string; password: string };
@@ -54,6 +64,21 @@ export const CollectionKindSchema = z.enum(['doujin', 'artbook', 'group']);
 /** 合集的成员怎么来的：folder = 按文件夹成册，selection = 手动挑的，post = 同一投稿自动收拢 */
 export const CollectionMembershipSchema = z.enum(['folder', 'selection', 'post']);
 export const RootModeSchema = z.enum(['auto', 'comic']);
+export const ExclusionKindSchema = z.enum(['image', 'folder', 'tag', 'character']);
+export const ImageStatusSchema = z.enum(['recognized', 'unrecognized', 'excluded']);
+export const CharacterSourceSchema = z.enum(['danbooru', 'custom']);
+
+/** 两个类型完全相同时是 true：保证这里的枚举和 domain.ts 一致，哪边多一个、少一个值都编译不过（上游 303f138） */
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const same = <T extends true>() => undefined as unknown as T;
+same<Same<z.infer<typeof RatingSchema>, Rating>>();
+same<Same<z.infer<typeof KindSchema>, ContentKind>>();
+same<Same<z.infer<typeof CollectionKindSchema>, CollectionKind>>();
+same<Same<z.infer<typeof CollectionMembershipSchema>, CollectionMembership>>();
+same<Same<z.infer<typeof RootModeSchema>, LibraryRootMode>>();
+same<Same<z.infer<typeof ExclusionKindSchema>, ExclusionKind>>();
+same<Same<z.infer<typeof ImageStatusSchema>, ImageStatus>>();
+same<Same<z.infer<typeof CharacterSourceSchema>, CharacterSource>>();
 
 /** 一批图片（批量操作可能带几千个 id） */
 export const ImageIds = z.array(z.string()).min(1).max(5000);
@@ -122,7 +147,7 @@ export const PromoteInput = z.object({ kind: KindSchema.optional() });
 
 // ------------------------------------------------------------------ 可见性
 
-export const CreateExclusionInput = z.object({ kind: z.enum(['image', 'folder', 'tag', 'character']), target: z.string().min(1) });
+export const CreateExclusionInput = z.object({ kind: ExclusionKindSchema, target: z.string().min(1) });
 
 // ------------------------------------------------------------------ 编目（catalog）
 
@@ -359,7 +384,7 @@ const tagList = qList(z.string().min(1).max(100)).refine((a) => a.length <= CUST
 export const ListImagesInput = z.object({
   characterId: z.string().optional(),
   workId: z.string().optional(),
-  status: z.enum(['recognized', 'unrecognized', 'excluded']).optional(),
+  status: ImageStatusSchema.optional(),
   rating: qList(RatingSchema).optional(),
   q: z.string().optional(),
   orientation: z.enum(['portrait', 'landscape', 'square']).optional(),
@@ -391,7 +416,7 @@ export const ListCharactersInput = z.object({
   workId: workFilter,
   q: z.string().optional(),
   sort: z.enum(['imageCount', 'recent', 'name', 'newCount']).optional(),
-  source: z.enum(['danbooru', 'custom']).optional(),
+  source: CharacterSourceSchema.optional(),
   includeOther: qBool.optional(),
   cursor: z.string().optional(),
   limit: qNumber.min(1).max(200).optional(),
