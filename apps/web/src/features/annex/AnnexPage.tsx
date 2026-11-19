@@ -178,6 +178,7 @@ function AnnexView({ scope, count }: { scope: AnnexScope | null; count: number |
           <div className="mt-3">
             <GalleryToolbar
               filters={filters}
+              query={query}
               update={update}
               hasFilters={hasFilters}
               onClearFilters={clearFilters}

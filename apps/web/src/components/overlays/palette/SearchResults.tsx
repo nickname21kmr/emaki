@@ -136,18 +136,31 @@ export function SearchResults({
 
       {tags.length > 0 && (
         <Command.Group heading={<GroupHeading title="标签" extra={tags.length} />}>
-          {tags.map(({ tag, imageCount }) => (
+          {tags.map(({ tag, name, imageCount }) => (
             <PaletteItem
               key={tag}
               value={`tag:${tag}`}
               onSelect={() => actions.openTag(tag)}
               leading={<TagTile />}
+              // 有中文名时标题用中文，英文标签名放到副标题里；没有中文名的照旧显示英文
               title={
-                <span className="font-mono text-[13px] font-normal">
-                  <Highlight text={tag} query={query} />
-                </span>
+                name !== tag.replace(/_/g, ' ') ? (
+                  <Highlight text={name} query={query} />
+                ) : (
+                  <span className="font-mono text-[13px] font-normal">
+                    <Highlight text={tag} query={query} />
+                  </span>
+                )
               }
-              subtitle="在图库中筛选"
+              subtitle={
+                name !== tag.replace(/_/g, ' ') ? (
+                  <>
+                    <span className="font-mono">{tag}</span> · 在图库中筛选
+                  </>
+                ) : (
+                  '在图库中筛选'
+                )
+              }
               trailing={<CountMeta count={imageCount} />}
             />
           ))}
