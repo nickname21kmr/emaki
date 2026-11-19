@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch --import tsx src/index.ts",
-    "dev:mock": "node --watch --import tsx src/index.ts --mock",
+    "dev:demo": "node --watch --import tsx src/index.ts --demo",
     "start": "tsx src/index.ts",
     "typecheck": "tsc -p tsconfig.json",
     "tagger": "tsx src/services/tagger/cli.ts",

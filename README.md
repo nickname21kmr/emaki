@@ -15,7 +15,7 @@
 | ![图库](docs/screenshots/real-gallery.webp) 图库 | ![未识别](docs/screenshots/real-unrecognized.webp) 没认出来的图，按数字键归类 |
 | ![合集](docs/screenshots/real-collections.webp) 本子、画集按页读 | ![设置](docs/screenshots/real-settings.webp) 识别设置 |
 
-<sub>以上是一个 8.4 万张图的真实图库。想先看看界面、又不想导入自己的图，可以用 `npm run dev:mock` 打开演示数据：跑的是同一套程序，数据是生成的约 9,000 张示例（图片是色块占位），放在 `data/demo/`，每次启动重建，不会读写你电脑上的图片文件夹。</sub>
+<sub>以上是一个 8.4 万张图的真实图库。想先看看界面、又不想导入自己的图，可以用 `npm run dev:demo` 打开演示数据：跑的是同一套程序，数据是生成的约 9,000 张示例（图片是色块占位），放在 `data/demo/`，每次启动重建，不会读写你电脑上的图片文件夹。</sub>
 
 ## 能做什么
 
@@ -169,7 +169,7 @@ npm run dev
 ## 开发
 
 ```bash
-npm run dev:mock    # 用演示数据跑：真实引擎 + data/demo 里的一次性演示库，不碰真实图库和图片文件夹
+npm run dev:demo    # 用演示数据跑：真实引擎 + data/demo 里的一次性演示库，不碰真实图库和图片文件夹
 npm run typecheck
 npm test
 node scripts/pack-portable.mjs   # 打免安装版 zip（只能在 Windows x64 上打）

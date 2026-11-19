@@ -17,12 +17,12 @@ export type ModelSourceId = 'huggingface' | 'hf-mirror' | 'modelscope';
 // 相对路径一律按仓库根目录解析：npm -w 运行时 cwd 是 apps/server，按 cwd 解析会落到 apps/server/data
 const dataDir = path.resolve(repoRoot, process.env.EMAKI_DATA_DIR ?? 'data');
 
-/** 命令行 --mock（或 --demo）> 环境变量 EMAKI_DATA_SOURCE（demo，旧写法 mock 也认）> 默认 sqlite */
+/** 命令行 --demo（旧写法 --mock 也认）> 环境变量 EMAKI_DATA_SOURCE（demo，旧写法 mock 也认）> 默认 sqlite */
 const demo =
   process.argv.includes('--mock') || process.argv.includes('--demo') || ['demo', 'mock'].includes(process.env.EMAKI_DATA_SOURCE ?? '');
 
 /**
- * 所有配置都来自环境变量（或仓库根目录的 .env），`npm run dev:mock` 切到演示数据。
+ * 所有配置都来自环境变量（或仓库根目录的 .env），`npm run dev:demo` 切到演示数据。
  * 见 docs/ARCHITECTURE.md「配置」一节。
  */
 export const config = {
@@ -41,7 +41,7 @@ export const config = {
   /**
    * sqlite：真实图库，读写 dataDir 下的数据库和缩略图缓存（默认）。
    * demo：演示数据，跑的也是真实引擎，只是换成演示数据和假部件，绝不碰用户的图库文件夹。
-   * 优先级：命令行 --mock / --demo > 环境变量（demo，旧写法 mock）> 默认 sqlite。
+   * 优先级：命令行 --demo / --mock > 环境变量（demo，旧写法 mock）> 默认 sqlite。
    */
   dataSource: (demo ? 'demo' : 'sqlite') as DataSourceKind,
   /** 数据库、缩略图缓存、模型文件、AI 助手的设置都放这里；已被 .gitignore 忽略 */

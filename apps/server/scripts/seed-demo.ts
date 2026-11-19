@@ -1,5 +1,5 @@
 /**
- * 把默认的演示数据灌进一个空的 SQLite 库（开发 / 演示用；平时直接用 npm run dev:mock 就行）。
+ * 把默认的演示数据灌进一个空的 SQLite 库（开发 / 演示用；平时直接用 npm run dev:demo 就行）。
  *   npx tsx apps/server/scripts/seed-demo.ts <dataDir>
  * 库里已有图片时拒绝执行，避免覆盖真实数据。
  */

@@ -132,7 +132,7 @@ Node 后端 + 浏览器前端，`npm run dev` 就能用。以后要做成桌面�
 项目早期先写了一个完整的内存版 `MockDataSource` 让前端独立开发，再逐个方法实现 SQLite 版并用契约测试对齐两边。SQLite 版完成后，mock 反而成了第二套业务逻辑：每个功能写两遍、两边已经走样（[core-architecture.md](core-architecture.md) 第 8 节、附录 #31）。2026-11-17（P1）删掉了 mock：
 
 - 业务逻辑只有 `SqliteDataSource` 一份。会产生副作用的部件集中在 `infra/ports.ts`：时钟、系统回收站、图片文件的读取、对用户图库文件夹的改动、后台任务（扫描、识别模型、Pixiv / Danbooru 联网都只在后台任务里发生）。
-- **演示模式**（`npm run dev:mock`，命令行 `--mock`）：同一个引擎打开 `data/demo/emaki.sqlite`（每次启动清空重建），灌入 `demo/fixtures.ts` 的演示数据，换上 `demo/ports.ts` 的假部件——图片是 SVG 占位图，后台任务只走进度条，移动 / 导入 / 替换 / 在资源管理器中显示 / 添加图库文件夹一律拒绝，回收站只记录；演示用的图库路径是不可能存在的 `<演示图库>/…`。所以演示模式绝不读写用户真实的文件夹，看到的却是真实的规则（合集判定、同投稿成组等）。
+- **演示模式**（`npm run dev:demo`，命令行 `--demo`，旧写法 `--mock` 也认）：同一个引擎打开 `data/demo/emaki.sqlite`（每次启动清空重建），灌入 `demo/fixtures.ts` 的演示数据，换上 `demo/ports.ts` 的假部件——图片是 SVG 占位图，后台任务只走进度条，移动 / 导入 / 替换 / 在资源管理器中显示 / 添加图库文件夹一律拒绝，回收站只记录；演示用的图库路径是不可能存在的 `<演示图库>/…`。所以演示模式绝不读写用户真实的文件夹，看到的却是真实的规则（合集判定、同投稿成组等）。
 - **测试**：引擎测试和契约测试都是「真实引擎 + 一次性的库 + 固定的测试数据」；HTTP 冒烟和 AI 助手的路由测试用演示部件。原来「两套实现互相对照」由固定的期望结果和跨入口一致性测试代替。
 
 ### 3. 契约放在 packages/shared
@@ -332,7 +332,7 @@ WD14 tagger（ONNX，`onnxruntime-node`，Windows 上用 DirectML 走显卡）�
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `EMAKI_DATA_SOURCE` | `sqlite` | `sqlite` 真实图库 / `demo` 演示数据（旧写法 `mock` 也认；也可以 `npm run dev:mock`，即命令行 `--mock`，优先级最高）。演示数据放在 `<数据目录>/demo`，每次启动重建 |
+| `EMAKI_DATA_SOURCE` | `sqlite` | `sqlite` 真实图库 / `demo` 演示数据（旧写法 `mock` 也认；也可以 `npm run dev:demo`，即命令行 `--demo`，优先级最高）。演示数据放在 `<数据目录>/demo`，每次启动重建 |
 | `EMAKI_DATA_DIR` | `./data` | 数据库、缩略图缓存、模型文件 |
 | `EMAKI_PORT` | `5174` | 后端端口（前端 dev server 固定 5173，代理 `/api`） |
 | `EMAKI_HOST` | `127.0.0.1` | 只监听本机。手机访问请用设置里的「手机访问」（局域网入口，https + 设备凭证）；把它和 `EMAKI_ALLOWED_HOSTS` 改成局域网地址没有任何身份验证，不推荐 |

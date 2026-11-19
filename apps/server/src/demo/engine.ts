@@ -1,5 +1,5 @@
 /**
- * 演示模式（npm run dev:mock，命令行 --mock）：真实引擎 + 演示数据 + 假部件（docs/core-architecture.md 第 8 节）。
+ * 演示模式（npm run dev:demo，命令行 --demo，旧写法 --mock 也认）：真实引擎 + 演示数据 + 假部件（docs/core-architecture.md 第 8 节）。
  *
  * - 数据目录每次打开前清空重建，用文件数据库（AI 助手的只读 SQL 直接读这个文件）；
  * - 灌入演示数据（buildDemoDb），再经过真实的启动步骤（合集重算等）；

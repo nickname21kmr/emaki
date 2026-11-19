@@ -149,7 +149,7 @@ export function Sidebar() {
       <div className="flex-1" />
 
       {demo && (
-        <Tooltip content="正在使用演示数据（npm run dev:mock），改动不会保存" side="right">
+        <Tooltip content="正在使用演示数据（npm run dev:demo），改动不会保存" side="right">
           <span className="mb-3">
             <Badge tone="warn" className="px-1.5 text-[10px]">
               演示数据

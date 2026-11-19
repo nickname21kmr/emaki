@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "dev": "concurrently -k -n server,web -c magenta,cyan \"npm:dev -w @emaki/server\" \"npm:dev -w @emaki/web\"",
-    "dev:mock": "concurrently -k -n server,web -c magenta,cyan \"npm:dev:mock -w @emaki/server\" \"npm:dev -w @emaki/web\"",
+    "dev:demo": "concurrently -k -n server,web -c magenta,cyan \"npm:dev:demo -w @emaki/server\" \"npm:dev -w @emaki/web\"",
     "dev:web": "npm run dev -w @emaki/web",
     "dev:server": "npm run dev -w @emaki/server",
     "build": "npm run build -w @emaki/web",
