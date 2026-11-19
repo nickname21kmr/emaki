@@ -44,7 +44,8 @@ export function Sheet({
             content.current?.focus();
           }}
           className={cn(
-            'fixed inset-x-0 bottom-0 z-50 flex max-h-[85dvh] flex-col rounded-t-[var(--radius-sheet)] bg-raised shadow-pop ring-1 ring-line outline-none',
+            // 平板竖屏（medium）不铺满 800 宽，和看图器的信息面板一样居中、最宽 600
+            'fixed inset-x-0 bottom-0 z-50 flex max-h-[85dvh] flex-col rounded-t-[var(--radius-sheet)] bg-raised shadow-pop ring-1 ring-line outline-none medium:mx-auto medium:max-w-[600px]',
             'pb-[env(safe-area-inset-bottom)] data-[state=closed]:animate-[sheet-up_220ms_var(--ease-out-soft)_reverse_both] data-[state=open]:animate-sheet-up',
             className,
           )}

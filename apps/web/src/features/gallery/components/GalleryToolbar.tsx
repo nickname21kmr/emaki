@@ -84,7 +84,8 @@ function orderLabel(sort: GallerySort, order: SortOrder): string {
  * 头部下方的工具条：左搜索 / 右筛选 chip。
  * 高度固定一行（chip 多了横向滚动），这样网格的位置不会因为筛选而跳动。
  * 收藏、排序、缩放不在这一行，在上面目次那一行的右端（GalleryViewControls），这一行整行留给筛选。
- * 宽度 compact（手机竖屏，A1）：搜索框占满一行，chip 收进「筛选」按钮打开的底部面板（sheetTop 放在面板最上面，图库给收藏和排序）。
+ * 窄屏（宽度 < 840：手机竖屏、平板竖屏，A1）：搜索框占满一行，chip 收进「筛选」按钮打开的底部面板（sheetTop 放在面板最上面，图库给收藏和排序）。
+ * 平板竖屏原来是电脑的排法，搜索框只剩 168 宽、chip 和目次都挤在横向滚动里（2026-11-19 平板实测）。
  */
 export function GalleryToolbar({
   filters,
@@ -182,11 +183,11 @@ export function GalleryToolbar({
         <GallerySearch
           value={filters.q}
           onCommit={(q) => update({ q })}
-          className="w-[248px] shrink-0 @max-[600px]/toolbar:w-[168px] compact:min-w-0 compact:flex-1"
+          className="w-[248px] shrink-0 @max-[600px]/toolbar:w-[168px] narrow:w-auto narrow:min-w-0 narrow:flex-1"
         />
 
-        {/* 手机竖屏：「筛选」按钮，chip 都在底部面板里 */}
-        <span className="hidden compact:contents">
+        {/* 窄屏：「筛选」按钮，chip 都在底部面板里 */}
+        <span className="hidden narrow:contents">
           <Button
             variant={active ? 'primary' : 'outline'}
             size="md"
@@ -225,7 +226,7 @@ export function GalleryToolbar({
         </span>
 
         {/* 筛选 chip：放不下时横向滚动，左右渐隐。「+」和「清除筛选」跟在 chip 后面，但不在滚动区里，放不下时停在右端不会被挤走 */}
-        <div className="-ml-3 flex min-w-0 flex-1 items-center compact:hidden">
+        <div className="-ml-3 flex min-w-0 flex-1 items-center narrow:hidden">
           <div className="min-w-0 overflow-x-auto scrollbar-none fade-x">
             <div className="flex w-max items-center gap-1.5 py-1 pr-8 pl-4">
               <GroupLabel>分级</GroupLabel>

@@ -110,7 +110,9 @@ export function PreviewStage({
       <div className="pointer-events-none absolute inset-x-0 bottom-3.5 flex justify-center">
         <span className="flex items-center gap-1.5 text-[11.5px] text-fg-subtle">
           <Kbd>空格</Kbd>
-          <span className="hidden touch:inline">点按</span>查看大图
+          <span>
+            <span className="hidden touch:inline">点按</span>查看大图
+          </span>
         </span>
       </div>
     </div>
