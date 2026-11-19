@@ -83,7 +83,8 @@ function PaletteBody() {
       },
       openTag: (tag) => {
         close();
-        navigate(`/gallery?${new URLSearchParams({ q: tag, kind: 'all' })}`);
+        // 按标签筛（必含），不再当文字搜索：中文名搜到的标签也能准确筛出来
+        navigate(`/gallery?${new URLSearchParams({ tags: tag, kind: 'all' })}`);
       },
       go: (to) => {
         close();

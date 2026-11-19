@@ -215,6 +215,13 @@ describe('统计、作品、角色、搜索（routes/library.ts）', () => {
     expect((await call('GET', '/api/tags')).json[0]).toMatchObject({ tag: '1girl' });
     expect((await call('GET', '/api/tags?limit=99')).status).toBe(400);
   });
+
+  route('GET /api/search/phrase', async () => {
+    const { status, json } = await call('GET', `/api/search/phrase?q=${encodeURIComponent('穿 thighhighs 的 宇宙飞船')}`);
+    expect(status).toBe(200);
+    expect(json).toEqual({ tags: [{ tag: 'thighhighs', name: expect.any(String), count: 1 }], rest: '宇宙飞船', total: 1 });
+    expect((await call('GET', `/api/search/phrase?q=${'x'.repeat(101)}`)).status).toBe(400);
+  });
 });
 
 describe('合集（routes/collections.ts）', () => {

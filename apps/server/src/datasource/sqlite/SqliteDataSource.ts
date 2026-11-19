@@ -44,6 +44,8 @@ import type {
   SearchQuery,
   TagSuggestion,
   TagSuggestionsQuery,
+  TagPhraseQuery,
+  TagPhraseResponse,
   Settings,
   ThumbWidth,
   TopCharactersQuery,
@@ -424,6 +426,9 @@ export class SqliteDataSource implements DataSource {
 
   // T05 图片查询与文件服务
   async listImages(query: ListImagesQuery): Promise<Page<ImageItem>> {
+    return this.listImagesNow(query);
+  }
+  private listImagesNow(query: ListImagesQuery): Page<ImageItem> {
     return listImages(this.ctx.db, query, (key, compute) => this.results.get('count:' + key, compute) as number);
   }
 
@@ -517,6 +522,11 @@ export class SqliteDataSource implements DataSource {
   // T20 搜索
   async tagSuggestions(query: TagSuggestionsQuery): Promise<TagSuggestion[]> {
     return this.searchQueries.tagSuggestions(query);
+  }
+
+  async tagPhrase(query: TagPhraseQuery): Promise<TagPhraseResponse> {
+    // 张数和图库「必含」同一个查询，也共用总数缓存
+    return this.searchQueries.tagPhrase(query.q, (tags) => this.listImagesNow({ tagsAll: tags, limit: 1 }).total);
   }
 
   async search(query: SearchQuery): Promise<SearchHit[]> {

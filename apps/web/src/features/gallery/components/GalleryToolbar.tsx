@@ -1,5 +1,6 @@
 import { CollapseGroupsMenu } from '@/components/media/CollectionControls';
-import { BROWSE_THEMES, type CustomTheme } from '@emaki/shared';
+import { BROWSE_THEMES, type CustomTheme, type ListImagesQuery } from '@emaki/shared';
+import { useQuery } from '@tanstack/react-query';
 import { THEME_META } from '@/features/unrecognized/themes';
 import {
   ArrowDownAZ,
@@ -11,6 +12,7 @@ import {
   HardDrive,
   Heart,
   Image as ImageIcon,
+  Check,
   Pencil,
   Plus,
   Shuffle,
@@ -29,7 +31,8 @@ import {
   Tooltip,
 } from '@/components/ui';
 import { cn } from '@/lib/cn';
-import { themeItems, themeSentence } from '@/lib/customTheme';
+import { api } from '@/lib/api';
+import { plainTag, themeItems, themeSentence } from '@/lib/customTheme';
 import { RATING_LABEL } from '@/lib/format';
 import { usePrefs } from '@/lib/stores';
 import {
@@ -84,12 +87,15 @@ function orderLabel(sort: GallerySort, order: SortOrder): string {
  */
 export function GalleryToolbar({
   filters,
+  query,
   update,
   hasFilters,
   onClearFilters,
   customThemes,
 }: {
   filters: GalleryFilters;
+  /** 当前的图片查询（搜索下拉里的张数按它数） */
+  query: Omit<ListImagesQuery, 'cursor'>;
   update: (patch: Partial<GalleryFilters>) => void;
   hasFilters: boolean;
   onClearFilters: () => void;
@@ -115,12 +121,28 @@ export function GalleryToolbar({
             if (filters.custom === id) update({ custom: undefined });
           }}
         />
-        <GallerySearch value={filters.q} onCommit={(q) => update({ q })} className="w-[248px] shrink-0 @max-[600px]/toolbar:w-[168px]" />
+        <GallerySearch
+          value={filters.q}
+          onCommit={(q) => update({ q })}
+          onAddTags={(tags, q) => update({ tags: [...filters.tags, ...tags], q })}
+          baseQuery={query}
+          className="w-[248px] shrink-0 @max-[600px]/toolbar:w-[168px]"
+        />
 
         {/* 筛选 chip：放不下时横向滚动，左右渐隐。「+」和「清除筛选」跟在 chip 后面，但不在滚动区里，放不下时停在右端不会被挤走 */}
         <div className="-ml-3 flex min-w-0 flex-1 items-center">
           <div className="min-w-0 overflow-x-auto scrollbar-none fade-x">
             <div className="flex w-max items-center gap-1.5 py-1 pr-8 pl-4">
+              {/* 搜索框「按标签」和 ⌘K 加进来的必含标签 */}
+              {filters.tags.length > 0 && (
+                <>
+                  <GroupLabel>必含</GroupLabel>
+                  {filters.tags.map((t) => (
+                    <TagFilterChip key={t} tag={t} onRemove={() => update({ tags: filters.tags.filter((x) => x !== t) })} />
+                  ))}
+                  <Divider />
+                </>
+              )}
               <GroupLabel>分级</GroupLabel>
               {RATINGS.map((r) => (
                 <Chip key={r} size="sm" selected={filters.rating.includes(r)} onClick={() => toggleRating(r)}>
@@ -337,6 +359,33 @@ function CustomChip({
         )}
       >
         <Pencil className="size-2.5" />
+      </button>
+    </span>
+  );
+}
+
+/**
+ * 必含的一个标签：样子和自定义画面对话框里「必含」的标签一样（墨色实心 + 对勾），右边的叉去掉。
+ * 中文名按标签名查一次（搜索下拉选的时候已经记下了，不会再请求）
+ */
+function TagFilterChip({ tag, onRemove }: { tag: string; onRemove: () => void }) {
+  const { data } = useQuery({ queryKey: ['tag-name', tag], queryFn: () => api.tags(tag, 1), staleTime: Infinity });
+  const hit = data?.find((s) => s.tag === tag);
+  const label = hit?.name ?? plainTag(tag);
+  return (
+    <span
+      title={hit ? `${tag} · ${hit.count.toLocaleString()} 张` : tag}
+      className="inline-flex h-7 shrink-0 animate-fade-in items-center gap-1 rounded-full bg-ink pr-1 pl-2.5 text-xs font-medium text-fg-inverse"
+    >
+      <Check className="size-3" />
+      {label}
+      <button
+        type="button"
+        aria-label={`去掉 ${label}`}
+        onClick={onRemove}
+        className="flex size-5 items-center justify-center rounded-full text-fg-inverse/60 hover:bg-fg-inverse/15 hover:text-fg-inverse"
+      >
+        <X className="size-3" />
       </button>
     </span>
   );

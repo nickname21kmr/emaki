@@ -158,6 +158,7 @@ function AnnexView({ kind, count }: { kind: ContentKind | null; count: number | 
           <div className="mt-3">
             <GalleryToolbar
               filters={filters}
+              query={query}
               update={update}
               hasFilters={hasFilters}
               onClearFilters={clearFilters}

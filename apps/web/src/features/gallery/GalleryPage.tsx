@@ -188,6 +188,7 @@ export function GalleryPage() {
         <div className="mt-3">
           <GalleryToolbar
             filters={filters}
+            query={query}
             update={update}
             hasFilters={hasFilters}
             onClearFilters={clearFilters}

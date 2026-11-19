@@ -115,6 +115,9 @@ export const searchQuery = z.object({ q: z.string().default(''), limit: qNumber.
 /** GET /api/tags?q=&limit=20 —— 一般标签联想（自定义画面用）；q 为空 = 最常见的 */
 export const tagSuggestionsQuery = z.object({ q: z.string().max(100).default(''), limit: qNumber.min(1).max(50).optional() });
 
+/** GET /api/search/phrase?q= —— 把一句话拆成标签（图库搜索框的「按标签」） */
+export const tagPhraseQuery = z.object({ q: z.string().max(100).default('') });
+
 // ---------------------------------------------------------------- 图片
 
 /** 自定义画面的标签列表 */

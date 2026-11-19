@@ -422,7 +422,8 @@ export type CreateExclusionBody = z.infer<typeof S.createExclusionBody>;
 export type SearchHit =
   | { type: 'character'; character: Character; workName: string | null }
   | { type: 'work'; work: Work }
-  | { type: 'tag'; tag: string; imageCount: number };
+  /** name：显示名，有中文用中文，否则把下划线换成空格 */
+  | { type: 'tag'; tag: string; imageCount: number; name: string };
 
 /** GET /api/search?q=&limit=20 */
 export type SearchQuery = z.infer<typeof S.searchQuery>;
@@ -441,6 +442,17 @@ export interface TagSuggestion {
   count: number;
 }
 export type TagSuggestionsResponse = TagSuggestion[];
+
+/** GET /api/search/phrase?q= —— 「两个黑色长发女孩」→ 2girls + black_hair + long_hair（只给库里有的标签） */
+export type TagPhraseQuery = z.infer<typeof S.tagPhraseQuery>;
+export interface TagPhraseResponse {
+  /** 认出来的标签，按出现顺序；count 和标签联想一样是分数达标的张数 */
+  tags: TagSuggestion[];
+  /** 没认出来的字（归一化之后的，几段之间空格隔开）；全认出来是空串 */
+  rest: string;
+  /** 同时有这些标签的图数（和图库「必含」同一口径，不限类型）；一个标签都没认出时是 0 */
+  total: number;
+}
 
 /** 自定义画面按标签筛图时的最低分数（和内置画面里最宽的一组一致） */
 export const TAG_FILTER_MIN_SCORE = 0.5;

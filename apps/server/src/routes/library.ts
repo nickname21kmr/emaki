@@ -68,4 +68,6 @@ export function libraryRoutes(app: FastifyInstance, ds: LibraryData & CharacterD
   app.get('/api/search', (req) => ds.search(parse(S.searchQuery, req.query)));
 
   app.get('/api/tags', (req) => ds.tagSuggestions(parse(S.tagSuggestionsQuery, req.query)));
+
+  app.get('/api/search/phrase', (req) => ds.tagPhrase(parse(S.tagPhraseQuery, req.query)));
 }

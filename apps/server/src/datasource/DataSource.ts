@@ -46,6 +46,8 @@ import type {
   SearchQuery,
   TagSuggestion,
   TagSuggestionsQuery,
+  TagPhraseQuery,
+  TagPhraseResponse,
   PromotableSuggestions,
   Settings,
   ThumbWidth,
@@ -90,6 +92,8 @@ export interface LibraryData {
   search(query: SearchQuery): Promise<SearchHit[]>;
   /** 一般标签联想（自定义画面） */
   tagSuggestions(query: TagSuggestionsQuery): Promise<TagSuggestion[]>;
+  /** 一句话拆成标签（图库搜索框的「按标签」） */
+  tagPhrase(query: TagPhraseQuery): Promise<TagPhraseResponse>;
 }
 
 /** 角色：列表、详情、封面候选、新建 / 编辑 / 合并、自建角色的 Danbooru 关联（routes/library.ts） */

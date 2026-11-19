@@ -229,7 +229,7 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 
 - 用 `cmdk`。宽 600px，顶部 18vh，大输入框（「跳到角色、作品、标签…」），结果分组：角色（`ChipAvatar` 封面 + 名字 + 作品 + 张数）、作品、标签、命令（前往各页面、切换模糊、切换主题、运行识别、查找重复）。
 - `useSearch(q)`，输入为空时显示「最近访问的角色」（localStorage 记录最近 8 个）和常用命令。
-- 选中角色 → 导航 `/characters/:id`；作品 → `/works/:id`；标签 → `/gallery?q=tag`。
+- 选中角色 → 导航 `/characters/:id`；作品 → `/works/:id`；标签 → `/gallery?tags=tag`（按中文名、别名也能搜到）。
 - 底部一行快捷键提示：↑↓ 选择 · ↵ 打开 · Esc 关闭。
 
 ### 帮助面板（`HelpDialog.tsx`）

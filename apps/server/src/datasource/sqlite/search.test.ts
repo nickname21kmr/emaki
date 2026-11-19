@@ -95,3 +95,41 @@ describe('搜索的标签张数', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 });
+
+describe('一句话拆标签 / ⌘K 中文标签', () => {
+  it('只认库里有图的标签；张数、总数和「必含」同一口径（分数够才算）', async () => {
+    const dataDir = makeTmpDir('phrase');
+    const ds = await SqliteDataSource.open(new EventBus(), dataDir, { memory: true, autoJobs: false, importDict: false });
+    const db = ds.ctx.db;
+    db.exec(`INSERT INTO library_roots (id, path) VALUES (1, 'D:/x');
+      INSERT INTO tags (id, name, category) VALUES (1, '2girls', 'general'), (2, 'black_hair', 'general'), (3, 'long_hair', 'general'), (4, 'twintails', 'general');
+      INSERT INTO tag_i18n (tag, category, zh, aliases) VALUES ('2girls', 0, '两个女孩', '[]'), ('black_hair', 0, '黑发', '["黑毛"]'),
+        ('long_hair', 0, '长发', '[]'), ('twintails', 0, '双马尾', '[]'), ('blonde_hair', 0, '金发', '[]');`);
+    // 1–3 张：2girls + black_hair + long_hair；第 3 张 black_hair 分数不够；第 4 张只有 long_hair；双马尾只在不达标的分数上
+    const img = db.prepare(`INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at, tagged_at)
+      VALUES (?, 1, ?, 'a.png', 1, 1, 1, 'png', ?, 'x', 'x', 'x')`);
+    const tag = db.prepare('INSERT INTO image_tags (image_id, tag_id, score) VALUES (?, ?, ?)');
+    for (let id = 1; id <= 4; id++) img.run(id, `${id}.png`, `s${id}`);
+    for (const id of [1, 2, 3]) tag.run(id, 1, 0.9), tag.run(id, 2, id === 3 ? 0.3 : 0.9), tag.run(id, 3, 0.9);
+    tag.run(4, 3, 0.9);
+    tag.run(4, 4, 0.2);
+
+    const r = await ds.tagPhrase({ q: '两个黑色长发女孩' });
+    expect(r.tags).toEqual([
+      { tag: '2girls', name: '两个女孩', count: 3 },
+      { tag: 'black_hair', name: '黑发', count: 2 },
+      { tag: 'long_hair', name: '长发', count: 4 },
+    ]);
+    expect(r).toMatchObject({ rest: '', total: 2 });
+    expect(r.total).toBe((await ds.listImages({ tagsAll: ['2girls', 'black_hair', 'long_hair'], limit: 1 })).total);
+    // 金发库里没有图、双马尾分数都不够：都不认，留在 rest
+    expect(await ds.tagPhrase({ q: '金发双马尾' })).toEqual({ tags: [], rest: '金发双马尾', total: 0 });
+
+    // ⌘K：中文名、别名也能搜到标签，带中文显示名
+    const hits = (await ds.search({ q: '黑毛' })).filter((h) => h.type === 'tag');
+    expect(hits).toEqual([{ type: 'tag', tag: 'black_hair', name: '黑发', imageCount: 3 }]);
+
+    await ds.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+});

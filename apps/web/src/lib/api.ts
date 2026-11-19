@@ -63,6 +63,7 @@ import type {
   MutationResult,
   SearchResponse,
   TagSuggestionsResponse,
+  TagPhraseResponse,
   Settings,
   TopCharactersQuery,
   TopCharactersResponse,
@@ -194,6 +195,8 @@ export const api = {
   search: (q: string, limit = 20) => get<SearchResponse>('/search', { q, limit }),
   /** 一般标签联想（自定义画面）；q 为空 = 最常见的 */
   tags: (q: string, limit = 20) => get<TagSuggestionsResponse>('/tags', { q, limit }),
+  /** 一句话拆成标签（图库搜索框的「按标签」） */
+  tagPhrase: (q: string) => get<TagPhraseResponse>('/search/phrase', { q }),
 
   settings: () => get<GetSettingsResponse>('/settings'),
   /** 可选的识别模型（设置页下拉框） */
