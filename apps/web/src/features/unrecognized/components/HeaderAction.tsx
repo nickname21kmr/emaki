@@ -12,8 +12,16 @@ export const HeaderAction = forwardRef<HTMLButtonElement, ButtonProps & { tip: s
 ) {
   return (
     <Tooltip content={<span className="block max-w-64 leading-relaxed whitespace-normal">{tip}</span>}>
-      {/* 手机竖屏（A1）矮一号，三个能排在一行 */}
-      <Button ref={ref} variant="outline" {...rest} className={cn('compact:h-8 compact:gap-1.5 compact:px-2.5 compact:text-[12.5px]', rest.className)} />
+      {/* 手机竖屏、手机横屏（A1）矮一号：竖屏三个能排在一行，横屏能和标题排在一行 */}
+      <Button
+        ref={ref}
+        variant="outline"
+        {...rest}
+        className={cn(
+          'compact:h-8 compact:gap-1.5 compact:px-2.5 compact:text-[12.5px] short:h-8 short:gap-1.5 short:px-2.5 short:text-[12.5px]',
+          rest.className,
+        )}
+      />
     </Tooltip>
   );
 });

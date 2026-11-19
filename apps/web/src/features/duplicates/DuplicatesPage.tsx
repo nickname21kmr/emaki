@@ -280,7 +280,7 @@ export function DuplicatesPage() {
           />
           {view === 'pending' && groups.length > 0 && (
             <div className="ml-auto flex items-center gap-4">
-              <span className="hidden items-center gap-1.5 text-[12px] text-fg-subtle lg:flex">
+              <span className="hidden items-center gap-1.5 text-[12px] text-fg-subtle lg:flex touch:hidden">
                 <span className="size-1.5 rounded-full bg-shu" aria-hidden />
                 <span className="mr-3">朱色为组内最优</span>
                 <Kbd>J</Kbd>

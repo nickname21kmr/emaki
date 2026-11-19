@@ -157,7 +157,7 @@ function NewCharacterForm({
       </FormRow>
 
       <DialogFooter className="mt-7">
-        <span className="mr-auto hidden items-center gap-1 text-[11px] text-fg-subtle sm:inline-flex">
+        <span className="mr-auto hidden items-center gap-1 text-[11px] text-fg-subtle sm:inline-flex touch:hidden">
           <Kbd>{modKeyLabel}</Kbd>
           <Kbd>↵</Kbd>
           创建

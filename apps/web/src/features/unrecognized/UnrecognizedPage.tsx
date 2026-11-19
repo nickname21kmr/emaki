@@ -48,8 +48,9 @@ export function UnrecognizedPage() {
   else body = <SheetLayout key={viewKey} mode={p.bucket} p={p} summary={p.summary} />;
 
   return (
-    // 窄屏（A1）：整页正常往下滚，不再是固定高度里各栏自己滚
-    <div className="flex h-full min-h-[620px] flex-col narrow:h-auto narrow:min-h-0 short:h-auto short:min-h-0">
+    // 手机竖屏、手机横屏（A1）：整页正常往下滚。平板竖屏（medium）和电脑一样是固定高度、各栏自己滚：
+    // 队列有几百张，整页滚的话决策面板的操作键会被队列撑到页面最底下（2026-11-19 平板实测）
+    <div className="flex h-full min-h-[620px] flex-col compact:h-auto compact:min-h-0 short:h-auto short:min-h-0">
       <PageHeader title="未识别" subtitle={<Subtitle />} actions={
           <div className="flex items-center gap-2 compact:flex-wrap">
             {p.area === 'art' && allow.pixiv && <PixivTagsButton />}

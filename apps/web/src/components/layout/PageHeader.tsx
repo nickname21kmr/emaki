@@ -188,6 +188,7 @@ function useStuck(enabled: boolean, headRef: RefObject<HTMLElement | null>) {
 /**
  * 截图右上角那一排：跳到角色（⌘K）、模糊开关、撤销、帮助。
  * 宽度 compact（A1）：跳到角色只剩放大镜（点开是全宽的命令面板），模糊、撤销、帮助收进「…」菜单。
+ * 高度 short（手机横屏）：跳到角色也只剩放大镜，页头的操作能和标题排在一行。
  */
 export function GlobalActions() {
   const client = useQueryClient();
@@ -212,11 +213,11 @@ export function GlobalActions() {
       <button
         onClick={() => setCommandOpen(true)}
         aria-label="跳到角色"
-        className="group ml-1 flex h-9 w-52 shrink-0 items-center gap-2 rounded-full bg-sunken pr-1.5 pl-3.5 text-[13px] text-fg-subtle transition-colors touch-hit hover:bg-hover hover:text-fg-muted @max-[600px]/head:w-9 @max-[600px]/head:justify-center @max-[600px]/head:px-0 compact:ml-0 compact:w-9 compact:justify-center compact:px-0"
+        className="group ml-1 flex h-9 w-52 shrink-0 items-center gap-2 rounded-full bg-sunken pr-1.5 pl-3.5 text-[13px] text-fg-subtle transition-colors touch-hit hover:bg-hover hover:text-fg-muted @max-[600px]/head:w-9 @max-[600px]/head:justify-center @max-[600px]/head:px-0 compact:ml-0 compact:w-9 compact:justify-center compact:px-0 short:w-9 short:justify-center short:px-0"
       >
         <Search className="size-4" />
-        <span className="flex-1 text-left @max-[600px]/head:hidden compact:hidden">跳到角色</span>
-        <Kbd className="@max-[600px]/head:hidden touch:hidden">{modKeyLabel === '⌘' ? '⌘K' : 'Ctrl K'}</Kbd>
+        <span className="flex-1 text-left @max-[600px]/head:hidden compact:hidden short:hidden">跳到角色</span>
+        <Kbd className="@max-[600px]/head:hidden short:hidden">{modKeyLabel === '⌘' ? '⌘K' : 'Ctrl K'}</Kbd>
       </button>
       <IconButton label={blur ? `显示${what}` : `模糊${what}`} shortcut="B" active={blur} onClick={toggleBlur} className="compact:hidden">
         {blur ? <EyeOff /> : <Eye />}

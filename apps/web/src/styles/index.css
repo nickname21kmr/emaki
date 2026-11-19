@@ -26,6 +26,7 @@
  *   touch:   主要指针是触屏（平板横屏也是）       narrow: 宽度 < 840（compact + medium）
  *   medium:  600 ≤ 宽度 < 840（平板竖屏）        short:  高度 < 480（手机横屏）
  *   compact: 宽度 < 600（手机竖屏）
+ *   touch-low: 触屏而且高度 < 820（平板横屏 720 高）：侧栏收掉徽记、收紧间距，十项导航不用滚。只认触屏：768 高的笔记本照旧
  * 定义的先后就是生效的先后：同一属性上 compact: 盖过 narrow:。
  */
 @custom-variant touch (@media (pointer: coarse));
@@ -33,6 +34,7 @@
 @custom-variant medium (@media (600px <= width < 840px));
 @custom-variant short (@media (height < 480px));
 @custom-variant compact (@media (width < 600px));
+@custom-variant touch-low (@media (pointer: coarse) and (height < 820px));
 
 /* 语义颜色用 inline：工具类直接引用 var(--c-*)，所以任何子树写 data-theme="light|dark" 都能局部换肤（设置页的主题预览就靠这个） */
 @theme inline {

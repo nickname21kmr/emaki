@@ -85,7 +85,9 @@ function ShortcutRow({ item }: { item: ShortcutItem }) {
             {i > 0 && <span className="text-[11px] text-fg-subtle">/</span>}
             <span className="flex items-center gap-0.5">
               {combo.map((k) => (
-                <Kbd key={k}>{k}</Kbd>
+                <Kbd key={k} doc>
+                  {k}
+                </Kbd>
               ))}
             </span>
           </Fragment>
@@ -108,7 +110,7 @@ function PageJumps({ onJump, canVisit }: { onJump: (to: string) => void; canVisi
             onClick={() => onJump(p.to)}
             className="group flex flex-col items-center gap-1.5 rounded-[10px] bg-sunken/60 py-2.5 transition-[background-color,transform] duration-200 hover:bg-hover active:scale-[0.97]"
           >
-            <Kbd>{p.key}</Kbd>
+            <Kbd doc>{p.key}</Kbd>
             <span className="text-[11.5px] text-fg-muted transition-colors group-hover:text-fg">{p.label}</span>
           </button>
         ))}

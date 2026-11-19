@@ -79,8 +79,9 @@ export function TriageQueue({ triage }: { triage: Triage }) {
   }, [busy]);
 
   return (
-    // 窄屏（A1）：平板竖屏占左边一列的两行；手机竖屏排在最下面，给一个固定高度自己滚
-    <aside className="flex min-h-0 w-[232px] shrink-0 flex-col xl:w-[264px] narrow:row-span-2 narrow:w-auto short:row-span-2 short:w-auto compact:order-3 compact:row-span-1 compact:h-[60vh]">
+    // 窄屏（A1）：平板竖屏占左边一列的两行（第一行是 1fr，队列不参与定行高，自己滚）；
+    // 手机横屏只占第一行、和大图并排；手机竖屏排在最下面，给一个固定高度自己滚
+    <aside className="flex min-h-0 w-[232px] shrink-0 flex-col xl:w-[264px] narrow:row-span-2 narrow:w-auto short:row-span-1 short:w-auto compact:order-3 compact:row-span-1 compact:h-[60vh]">
       <div className="flex h-8 items-center justify-between px-2">
         <span className="text-[13px] font-semibold tracking-tight">队列</span>
         <span className="flex items-center gap-2">

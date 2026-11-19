@@ -219,7 +219,7 @@ function GroupPickerPanel({ ids, excludeId, onDone }: { ids: ID[]; excludeId?: I
         )}
       </Command.List>
 
-      <div className="flex items-center gap-3 border-t border-line px-6 py-2.5 text-[11px] text-fg-subtle">
+      <div className="flex items-center gap-3 border-t border-line px-6 py-2.5 text-[11px] text-fg-subtle touch:hidden">
         <span className="flex items-center gap-1">
           <Kbd>↑</Kbd>
           <Kbd>↓</Kbd>

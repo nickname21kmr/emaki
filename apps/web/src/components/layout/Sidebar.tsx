@@ -124,11 +124,12 @@ export function Sidebar() {
 
   return (
     // 窗口矮（768 的笔记本、计数和任务环都在）时侧栏自己滚，不把整个页面撑高
-    // 手机横屏（高度 compact）：不放徽记，上下留白收紧；左边让出刘海（safe-area）
-    <aside className="flex w-[76px] shrink-0 flex-col items-center overflow-x-hidden overflow-y-auto py-4 scrollbar-none compact:hidden short:box-content short:py-2 short:pl-[env(safe-area-inset-left)]">
+    // 触屏而且矮（平板横屏 720 高，touch-low）：不放徽记、间距收紧，十项导航一屏放得下（2026-11-19 平板实测最后一项被截掉）
+    // 手机横屏（高度 compact）：同样不放徽记，上下留白收紧；左边让出刘海（safe-area）
+    <aside className="flex w-[76px] shrink-0 flex-col items-center overflow-x-hidden overflow-y-auto py-4 scrollbar-none compact:hidden touch-low:py-2 short:box-content short:py-2 short:pl-[env(safe-area-inset-left)]">
       <Logo />
 
-      <nav className="mt-6 flex flex-col items-center gap-1 short:mt-0">
+      <nav className="mt-6 flex flex-col items-center gap-1 touch-low:mt-0 touch-low:gap-0 short:mt-0">
         {main.map((item) => (
           <SidebarLink key={item.to} item={item} />
         ))}
@@ -136,8 +137,8 @@ export function Sidebar() {
 
       {triage.length > 0 && (
         <>
-          <div className="my-4 h-px w-8 shrink-0 bg-line-strong short:my-2" />
-          <nav className="flex flex-col items-center gap-1">
+          <div className="my-4 h-px w-8 shrink-0 bg-line-strong touch-low:my-2 short:my-2" />
+          <nav className="flex flex-col items-center gap-1 touch-low:gap-0">
             {triage.map((item) => (
               <SidebarLink key={item.to} item={item} />
             ))}
@@ -176,7 +177,7 @@ export function Sidebar() {
 
 function Logo() {
   return (
-    <NavLink to="/" className="group flex flex-col items-center gap-1 short:hidden" aria-label="Emaki 首页">
+    <NavLink to="/" className="group flex flex-col items-center gap-1 touch-low:hidden short:hidden" aria-label="Emaki 首页">
       <Emblem size={40} spin />
       <span className="text-[10px] font-semibold tracking-[0.12em] text-fg-muted uppercase">Emaki</span>
     </NavLink>
@@ -204,7 +205,7 @@ function SidebarLinkInner({ item, ...rest }: { item: NavItem }) {
       {...rest}
       to={item.to}
       end={item.to === '/'}
-      className="group relative flex w-[64px] flex-col items-center gap-0.5 py-1.5"
+      className="group relative flex w-[64px] flex-col items-center gap-0.5 py-1.5 touch-low:py-1"
     >
       {({ isActive }) => (
         <>

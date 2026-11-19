@@ -151,6 +151,7 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 | 宽度 expanded | ≥ 840 | （不写，默认样式） | 平板横屏、电脑、手机横屏 |
 | 高度 compact | 高 < 480 | `short:` | 手机横屏 |
 | 触屏 | `pointer: coarse` | `touch:`（= 内置的 `pointer-coarse:`） | 手机、平板（横屏也是） |
+| 触屏而且矮 | 触屏、高 < 820 | `touch-low:` | 平板横屏（720 高）：侧栏收掉徽记、收紧间距。只认触屏，768 高的笔记本不受影响 |
 
 - **桌面优先**：组件里照旧写电脑上的样式，再用上面的变体覆盖；变体都是媒体查询，宽屏 + 鼠标时一条都不生效。`compact:` 定义在 `narrow:` 后面，同一属性上盖过它。
   只在某一级出现的元素外面包 `hidden compact:contents`（或 `touch:contents`），电脑上整个不占位。
@@ -162,7 +163,8 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
   全局操作只剩放大镜和「…」。`index.html` 有 `viewport-fit=cover`：贴底的东西（标签栏、底部面板、多选栏、看图器的信息面板）加 `pb-[env(safe-area-inset-bottom)]`，手机横屏的侧栏让出左边刘海。
 - **弹层**：`Dialog` 在 compact 下自动排成底部面板；只在手机上出现的面板用 `Sheet`（`components/ui/Sheet.tsx`，把手往下拖收起）。菜单、弹出框最宽是窗口减边距。
 - **触控目标**：触屏上可点的至少 44×44。`IconButton`、看图器按钮已经带 `touch-hit`（透明的 `::after` 把点击区域扩到 44，视觉尺寸不变）；自己写的小按钮也加它。
-  只在悬停时出现的按钮，触屏上要常显（`touch:opacity-100`）或者有别的入口（长按、底部面板、看图器里）。键盘提示（`Kbd`、「Ctrl / ⌘ 点击多选」）在触屏上 `touch:hidden`。
+  只在悬停时出现的按钮，触屏上要常显（`touch:opacity-100`）或者有别的入口（长按、底部面板、看图器里）。键盘提示在触屏上不显示：`Kbd` 自己带 `touch:hidden`（帮助对话框这种说明快捷键本身的地方传 `doc`），菜单项的快捷键也是；
+  整行都是按键说明的（「↑↓ 选择 · ↵ 确认 · Esc 关闭」「Ctrl / ⌘ 点击多选」）那一行自己 `touch:hidden`，需要的话换一句触屏的说法（`touch:inline`）。
 - **手势**只认 `pointerType === 'touch'`，鼠标、键盘的行为不经过它们；判定是 `lib/gestures.ts` 里的纯函数（方向锁定、滑动的距离 / 速度阈值、下滑关闭、捏合缩放的中心、点按 / 双击），阈值都在 `GESTURE`：
   看图器 `lightbox/useTouchGestures.ts`、左右翻页 `lib/useSwipePager.ts`（阅读器、未识别）、长按 `lib/useLongPress.ts`（网格、未识别队列：进入多选并选中）。
   跟手的位移直接写 style，不走 React 状态。没有引入手势库。

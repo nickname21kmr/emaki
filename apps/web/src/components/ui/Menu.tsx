@@ -84,7 +84,8 @@ export function MenuItem({
     >
       {icon}
       <span className="flex-1">{children}</span>
-      {shortcut && <span className="text-[11px] text-fg-subtle">{shortcut}</span>}
+      {/* 快捷键：触屏上不显示（A1） */}
+      {shortcut && <span className="text-[11px] text-fg-subtle touch:hidden">{shortcut}</span>}
     </M.Item>
   );
 }
