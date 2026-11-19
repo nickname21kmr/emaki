@@ -8,6 +8,8 @@
  *   npx tsx apps/server/scripts/lan-client.ts call GET /api/summary              用保存的凭证请求（只认保存的证书指纹）
  *   npx tsx apps/server/scripts/lan-client.ts call POST /api/commands/curation.setFavorite '{"ids":["1"],"value":true}'
  *   npx tsx apps/server/scripts/lan-client.ts events                             连 SSE，打印收到的事件（撤销时会被断开）
+ *   npx tsx apps/server/scripts/lan-client.ts upload a.png b.jpg [--album 名] [--chunk 字节]   传图（docs/mobile.md 5.4）：
+ *       先问电脑有没有（按 sha256），只传没有的；一段段 PUT，断了重跑同一条命令会从断点接着传
  * 选项：--state <文件>（保存的状态，默认 ./lan-client.json）；--host <地址:端口>（call、events 换一个地址连）
  *
  * 和 App 要做的一样的几件事：
@@ -18,7 +20,8 @@
  */
 import { Bonjour } from 'bonjour-service';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { basename } from 'node:path';
 import http from 'node:http';
 import { isIP } from 'node:net';
 import os from 'node:os';
@@ -105,11 +108,13 @@ async function request(
   fingerprint: string,
   method: string,
   path: string,
-  opts: { body?: unknown; token?: string; stream?: (res: http.IncomingMessage) => void } = {},
+  opts: { body?: unknown; token?: string; stream?: (res: http.IncomingMessage) => void; bytes?: Buffer } = {},
 ): Promise<Response> {
   const { host, port } = splitHost(hostPort);
   const { socket } = await connect(host, port, fingerprint);
-  const payload = opts.body === undefined ? (method === 'POST' ? '{}' : undefined) : JSON.stringify(opts.body);
+  const payload: string | Buffer | undefined =
+    opts.bytes ?? (opts.body === undefined ? (method === 'POST' ? '{}' : undefined) : JSON.stringify(opts.body));
+  const type = opts.bytes ? 'application/octet-stream' : 'application/json';
   return new Promise((resolve, reject) => {
     const req = http.request(
       {
@@ -121,7 +126,7 @@ async function request(
           host: hostPort,
           accept: 'application/json',
           ...(opts.token ? { authorization: `Bearer ${opts.token}` } : {}),
-          ...(payload !== undefined ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {}),
+          ...(payload !== undefined ? { 'content-type': type, 'content-length': Buffer.byteLength(payload) } : {}),
         },
       },
       (res) => {
@@ -294,14 +299,74 @@ async function events(): Promise<void> {
   console.log('事件连接被电脑断开了');
 }
 
+/**
+ * 传图（docs/mobile.md 5.4）：App 的上传器照这个写。一批用同一个 batchId（这一次运行生成的）；
+ * 先问 → 没有的 begin（传过的直接 done、传了一半的拿到断点）→ 一段段 PUT → complete
+ */
+async function upload(files: string[]): Promise<void> {
+  const st = loadState();
+  const hostPort = flags.get('host') || st.host;
+  const chunk = Number(flags.get('chunk') || 4 * 1024 * 1024);
+  const album = flags.get('album') || undefined;
+  const req = (method: string, path: string, opts: { body?: unknown; bytes?: Buffer } = {}) =>
+    request(hostPort, st.fingerprint, method, path, { ...opts, token: st.token });
+  const items = files.map((f) => {
+    const bytes = readFileSync(f);
+    return { file: f, bytes, sha256: createHash('sha256').update(bytes).digest('hex'), mtime: statSync(f).mtime.toISOString() };
+  });
+  const check = await req('POST', '/api/uploads/check', {
+    body: { files: items.map((i) => ({ sha256: i.sha256, size: i.bytes.length })) },
+  });
+  if (check.status !== 200) fail(`问不了（${check.status}）：${show(check.body)}`);
+  const have = new Map((check.body as { results: { sha256: string; imageId: string | null }[] }).results.map((r) => [r.sha256, r.imageId]));
+  const batchId = crypto.randomUUID();
+  let imported = 0;
+  let existing = 0;
+  for (const it of items) {
+    const name = basename(it.file);
+    if (have.get(it.sha256)) {
+      console.log(`= ${name}：电脑上本来就有（图片 ${have.get(it.sha256)}），不传`);
+      existing++;
+      continue;
+    }
+    const begin = await req('POST', '/api/uploads', {
+      body: { batchId, sha256: it.sha256, size: it.bytes.length, fileName: name, modifiedAt: it.mtime, ...(album ? { album } : {}) },
+    });
+    if (begin.status !== 200) fail(`${name}：begin ${begin.status} ${show(begin.body)}`);
+    const b = begin.body as { uploadId: string; received: number; status: string; imageId: string | null };
+    if (b.status !== 'receiving') {
+      console.log(`= ${name}：这台设备传过（图片 ${b.imageId}）`);
+      existing++;
+      continue;
+    }
+    if (b.received) console.log(`… ${name}：从断点 ${b.received} 接着传`);
+    for (let off = b.received; off < it.bytes.length; off += chunk) {
+      const put = await req('PUT', `/api/uploads/${b.uploadId}?offset=${off}`, { bytes: it.bytes.subarray(off, off + chunk) });
+      if (put.status !== 200) fail(`${name}：PUT ${put.status} ${show(put.body)}`);
+    }
+    const done = await req('POST', `/api/uploads/${b.uploadId}/complete`);
+    if (done.status !== 200) fail(`${name}：complete ${done.status} ${show(done.body)}`);
+    const d = done.body as { status: string; imageId: string };
+    console.log(
+      `${d.status === 'imported' ? '✓' : '='} ${name}：${d.status === 'imported' ? '已入库' : '电脑上本来就有'}（图片 ${d.imageId}）`,
+    );
+    if (d.status === 'imported') imported++;
+    else existing++;
+  }
+  console.log(`已传 ${imported} 张，${existing} 张电脑上本来就有`);
+}
+
 const [cmd, ...rest] = args;
 try {
   if (cmd === 'discover') await discover();
   else if (cmd === 'pair' && rest[0]) await pair(rest[0]);
   else if (cmd === 'call' && rest[0] && rest[1]) await call(rest[0], rest[1], rest[2]);
   else if (cmd === 'events') await events();
+  else if (cmd === 'upload' && rest.length) await upload(rest);
   else {
-    console.log('用法：lan-client.ts discover | pair <主机:端口> [--name 名称] | call <GET|POST|PATCH|DELETE> <路径> [json] | events');
+    console.log(
+      '用法：lan-client.ts discover | pair <主机:端口> [--name 名称] | call <GET|POST|PATCH|DELETE> <路径> [json] | events | upload <文件…> [--album 名] [--chunk 字节]',
+    );
     console.log('选项：--state <文件>（默认 ./lan-client.json）、--host <主机:端口>');
     process.exitCode = cmd ? 1 : 0;
   }

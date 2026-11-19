@@ -72,3 +72,23 @@ export function useRevokeDevice() {
   const m = useMutate((id: string) => api.revokeDevice(id).then(done), { undo: false });
   return { ...m, revoke: (id: string, onSuccess?: () => void) => m.mutate(id, { onError: refetch, onSuccess }) };
 }
+
+/** 改一台设备传上来的图放到哪（rootId 为 null 恢复默认）；不可撤销（之后上传的才按新的） */
+export function useSetDeviceUpload() {
+  const client = useQueryClient();
+  type Body = { id: string; rootId: string | null; dir?: string };
+  const m = useMutate((v: Body) => api.setDeviceUpload(v.id, { rootId: v.rootId, dir: v.dir }).then(done), { undo: false });
+  const save = (v: Body, onSuccess?: () => void) =>
+    m.mutate(v, { onSuccess, onSettled: () => void client.invalidateQueries({ queryKey: qk.uploadTargets }) });
+  return { ...m, save };
+}
+
+/** 撤销从手机传上来的一批：新入库的图移到回收站。可撤销（toast 上的「撤销」把图拿回来） */
+export function useUndoUploadBatch() {
+  const client = useQueryClient();
+  const m = useMutate((id: string) => api.undoUploadBatch(id), { label: '撤销这一批上传' });
+  return {
+    ...m,
+    undoBatch: (id: string) => m.mutate(id, { onSettled: () => void client.invalidateQueries({ queryKey: qk.uploadBatches }) }),
+  };
+}

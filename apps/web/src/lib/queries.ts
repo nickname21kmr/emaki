@@ -76,6 +76,8 @@ export const qk = {
   health: ['health'] as const,
   /** 设置 →「手机访问」和批准提示（GET /api/access）；null = 这个入口上看不了（局域网入口的设备没有 devices 权限） */
   access: ['access'] as const,
+  uploadTargets: ['uploads', 'targets'] as const,
+  uploadBatches: ['uploads', 'batches'] as const,
   /** 谁在调用（GET /api/me）：网页按它隐藏用不了的入口（lib/capabilities.ts） */
   me: ['me'] as const,
 };
@@ -268,6 +270,11 @@ export function useCustomThemes(): CustomTheme[] {
 export const useTaggerModels = () => useQuery({ queryKey: qk.taggerModels, queryFn: api.taggerModels });
 
 export const useJobs = () => useQuery({ queryKey: qk.jobs, queryFn: api.jobs });
+
+/** 每台设备传上来的图放到哪（设置 →「手机访问」） */
+export const useUploadTargets = (enabled = true) => useQuery({ queryKey: qk.uploadTargets, queryFn: api.uploadTargets, enabled });
+/** 最近从手机传上来的批次：传图时 upload.* 的命令事件让它重新取（lib/events.ts） */
+export const useUploadBatches = (enabled = true) => useQuery({ queryKey: qk.uploadBatches, queryFn: api.uploadBatches, enabled });
 
 /**
  * 手机访问的状态：开关、端口、地址、等批准的请求、已批准的设备。变化靠 SSE 的 access 事件（lib/events.ts）。

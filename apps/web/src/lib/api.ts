@@ -84,6 +84,8 @@ import type {
   UpdateLibraryRootBody,
   UpdateArtistLinksBody,
   Work,
+  UploadBatch,
+  UploadTarget,
 } from '@emaki/shared';
 import { SLOW_REQUEST_MS, suspect } from './connection';
 import { noteResponse } from './deviceAuth';
@@ -327,4 +329,13 @@ export const api = {
   revokeDevice: (id: string) => del<{ ok: true; message: string }>(`/devices/${encodeURIComponent(id)}`),
   /** 扫码添加用的一次性口令（2 分钟有效，用一次就失效）；局域网入口没开时 409 */
   createAccessTicket: () => post<AccessTicket>('/access/tickets'),
+
+  // 手机上传（docs/mobile.md 5.4）：电脑上看最近的批次、撤销一批、改每台设备的落点（scope devices，只有本机入口能用）
+  uploadTargets: () => get<UploadTarget[]>('/uploads/targets'),
+  uploadBatches: () => get<UploadBatch[]>('/uploads/batches'),
+  /** rootId 为 null 恢复默认（收件箱/手机/<设备名>） */
+  setDeviceUpload: (id: string, body: { rootId: ID | null; dir?: string }) =>
+    patch<{ ok: true; message: string; target: UploadTarget }>(`/devices/${encodeURIComponent(id)}/upload`, body),
+  /** 这一批新入库的图移到回收站（可撤销） */
+  undoUploadBatch: (id: string) => post<MutationResult>(`/uploads/batches/${encodeURIComponent(id)}/undo`),
 };

@@ -12,12 +12,13 @@ import { SettingsCard, SettingsSection } from '@/features/settings/components/Se
 import { useNow } from '@/features/settings/hooks';
 import { cn } from '@/lib/cn';
 import { copyText } from '@/lib/clipboard';
-import { errorMessage, useAccessStatus } from '@/lib/queries';
+import { errorMessage, useAccessStatus, useUploadBatches, useUploadTargets } from '@/lib/queries';
 import { DeviceList } from './DeviceList';
 import { useConfigureAccess } from './hooks';
 import { useRequestListRef } from './listOnScreen';
 import { QrDialog } from './QrDialog';
 import { RequestCard } from './RequestCard';
+import { UploadBatches } from './UploadBatches';
 
 export function PhoneAccessSection() {
   const status = useAccessStatus();
@@ -56,6 +57,9 @@ export function AccessBody({ status }: { status: AccessStatus }) {
   const on = status.enabled;
   // 这一段在屏幕上时，浮着的批准提示不再另外弹
   const listRef = useRequestListRef();
+  const hasDevices = status.devices.length > 0;
+  const targets = useUploadTargets(hasDevices).data;
+  const batches = useUploadBatches(hasDevices).data ?? [];
 
   return (
     <div className="space-y-6">
@@ -126,11 +130,19 @@ export function AccessBody({ status }: { status: AccessStatus }) {
         <Group title="已连接的设备" count={status.devices.length}>
           {status.devices.length ? (
             <SettingsCard>
-              <DeviceList devices={status.devices} />
+              <DeviceList devices={status.devices} targets={targets} />
             </SettingsCard>
           ) : (
             <Empty>还没有。批准过的手机会列在这里，可以改名称、改权限，也可以随时移除。</Empty>
           )}
+        </Group>
+      )}
+
+      {batches.length > 0 && (
+        <Group title="从手机传来的" count={batches.length}>
+          <SettingsCard>
+            <UploadBatches batches={batches} />
+          </SettingsCard>
         </Group>
       )}
 

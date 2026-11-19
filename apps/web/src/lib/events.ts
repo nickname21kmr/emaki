@@ -141,6 +141,11 @@ const BY_COMMAND: Record<string, readonly string[]> = {
   'devices.reject': ['access'],
   'devices.update': ['access'],
   'devices.revoke': ['access'],
+  // 手机上传：批次的进度、撤销、落点（入库本身有 image.added，图库那边照常刷新）
+  'upload.begin': ['uploads'],
+  'upload.complete': ['uploads'],
+  'upload.undoBatch': ['uploads'],
+  'devices.setUpload': ['uploads'],
 };
 
 /** 这些变化要刷新的查询（第一段）；null 是全部 */

@@ -1,4 +1,4 @@
-import type { DeviceInfo, Scope } from '@emaki/shared';
+import type { DeviceInfo, Scope, UploadTarget } from '@emaki/shared';
 import { Pencil, Smartphone, Trash2 } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Button, Dialog, DialogFooter, Input } from '@/components/ui';
@@ -6,6 +6,7 @@ import { formatDateTime, formatRelative } from '@/lib/format';
 import { describeScopes, scopeText, sortScopes } from './format';
 import { useRevokeDevice, useUpdateDevice } from './hooks';
 import { ScopePicker } from './ScopePicker';
+import { UploadTargetDialog, UploadTargetLine } from './UploadTarget';
 
 /** 「3 分钟前 · 192.168.1.23」；还没用过时写「还没连接过」 */
 export function lastSeenText(d: Pick<DeviceInfo, 'lastSeenAt' | 'lastAddress'>, now = Date.now()): string {
@@ -13,10 +14,15 @@ export function lastSeenText(d: Pick<DeviceInfo, 'lastSeenAt' | 'lastAddress'>, 
   return [formatRelative(d.lastSeenAt, now), d.lastAddress].filter(Boolean).join(' · ');
 }
 
-/** 设置 →「手机访问」里已批准的设备：名称、型号、最后访问、权限；「编辑」（改名称、权限）「移除」 */
-export function DeviceList({ devices }: { devices: DeviceInfo[] }) {
+/**
+ * 设置 →「手机访问」里已批准的设备：名称、型号、最后访问、权限、传上来的图放到哪（有上传权限的）；
+ * 「编辑」（改名称、权限）「移除」，「更改」落点
+ */
+export function DeviceList({ devices, targets = [] }: { devices: DeviceInfo[]; targets?: UploadTarget[] }) {
   const [editing, setEditing] = useState<DeviceInfo | null>(null);
   const [removing, setRemoving] = useState<DeviceInfo | null>(null);
+  const [placing, setPlacing] = useState<DeviceInfo | null>(null);
+  const targetOf = (id: string) => targets.find((t) => t.deviceId === id);
   return (
     <>
       <ul className="divide-y divide-line">
@@ -35,6 +41,7 @@ export function DeviceList({ devices }: { devices: DeviceInfo[] }) {
                 <span className="text-fg-subtle"> · </span>
                 <span title={sortScopes(d.scopes).map((s) => scopeText(s).head).join('、')}>{describeScopes(d.scopes)}</span>
               </div>
+              <UploadTargetLine device={d} target={targetOf(d.id)} onChange={() => setPlacing(d)} />
             </div>
             <Button size="sm" variant="ghost" icon={<Pencil />} onClick={() => setEditing(d)}>
               编辑
@@ -48,6 +55,7 @@ export function DeviceList({ devices }: { devices: DeviceInfo[] }) {
       {/* key：换一台设备时表单从头来 */}
       <EditDeviceDialog key={editing?.id ?? 'none'} device={editing} onClose={() => setEditing(null)} />
       <RemoveDeviceDialog device={removing} onClose={() => setRemoving(null)} />
+      <UploadTargetDialog key={`place-${placing?.id ?? 'none'}`} device={placing} target={placing ? targetOf(placing.id) : undefined} onClose={() => setPlacing(null)} />
     </>
   );
 }
