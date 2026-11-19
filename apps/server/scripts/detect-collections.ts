@@ -4,8 +4,8 @@
  * 输出含真实文件夹名，只放在本机（F:/Claude/.work），不要进仓库。
  */
 import Database from 'better-sqlite3';
-import { autoKind, decideCollection, dirFeatures, isJudged, orderPages, type DirPage } from '../src/services/collections/detect.ts';
-import { parseFolderName } from '../src/services/collections/parseName.ts';
+import { autoKind, decideCollection, dirFeatures, isJudged, orderPages, type DirPage } from '../src/domain/collections/detect.ts';
+import { parseFolderName } from '../src/domain/collections/parseName.ts';
 
 const file = process.argv[2];
 if (!file) throw new Error('用法：detect-collections.ts <emaki.sqlite>');
@@ -13,10 +13,12 @@ const db = new Database(file, { readonly: true });
 if ((db.pragma('user_version', { simple: true }) as number) < 6) throw new Error('需要先完成 T27（库版本 ≥ 6）');
 
 const t0 = performance.now();
+// 是否动图（D5，迁移 038）：更早的库还没有这一列，按旧的类型 animated 算
+const hasAnimated = (db.pragma('table_info(images)') as { name: string }[]).some((c) => c.name === 'animated');
 const rows = db
   .prepare(
     `SELECT i.id, i.root_id, i.rel_path, i.file_name, i.width, i.height, i.modified_at, i.content_kind, i.content_kind_source,
-            i.content_kind_manual, i.tagged_at
+            i.content_kind_manual, ${hasAnimated ? 'i.animated' : "(i.content_kind = 'animated')"} AS animated, i.tagged_at
      FROM images i JOIN library_roots r ON r.id = i.root_id
      WHERE r.enabled = 1 AND r.removed_at IS NULL AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL`,
   )
@@ -31,6 +33,7 @@ const rows = db
   content_kind: string;
   content_kind_source: string | null;
   content_kind_manual: number;
+  animated: number;
   tagged_at: string | null;
 }[];
 
@@ -48,6 +51,7 @@ for (const r of rows) {
     height: r.height,
     modifiedAt: r.modified_at,
     kind: r.content_kind,
+    animated: r.animated === 1,
     judged: isJudged(r),
   });
 }

@@ -23,7 +23,7 @@ const ctx = (aborted = false, yielded = false): JobContext => {
   return { signal: c.signal, setTotal() {}, advance() {}, setMessage() {}, shouldYield: () => false, requeue() {}, yielded };
 };
 
-function setup(o: { scan?: ScanSummary; tagPending?: number; tagReady?: boolean; artists?: { enabled: boolean; pending: number; ready?: boolean }; danbooru?: boolean } = {}) {
+function setup(o: { scan?: ScanSummary; tag?: PipelineDeps['tag']; tagPending?: number; tagReady?: boolean; artists?: { enabled: boolean; pending: number; ready?: boolean }; danbooru?: boolean } = {}) {
   const enqueued: JobKind[] = [];
   const requeue: JobKind[] = [];
   const jobs = {
@@ -38,7 +38,7 @@ function setup(o: { scan?: ScanSummary; tagPending?: number; tagReady?: boolean;
     scanner: { scan: async () => o.scan ?? summary() },
     thumbs: { runBackfill: async () => '缩略图完成' },
     pixelPendingCount: () => 0,
-    tag: { isReady: () => o.tagReady ?? true, pendingCount: () => o.tagPending ?? 0, run: async () => '识别完成' },
+    tag: o.tag ?? { isReady: () => o.tagReady ?? true, pendingCount: () => o.tagPending ?? 0, run: async () => '识别完成' },
     artists: o.artists && { enabled: () => o.artists!.enabled, isReady: () => o.artists!.ready ?? true, pendingCount: () => o.artists!.pending, run: async () => '画师完成' },
     danbooru: o.danbooru === undefined ? undefined : { shouldRunAfterTag: () => o.danbooru, run: async () => '同步完成' },
   } as unknown as PipelineDeps;
@@ -46,6 +46,16 @@ function setup(o: { scan?: ScanSummary; tagPending?: number; tagReady?: boolean;
 }
 
 describe('Pipeline', () => {
+  it('register 支持多个注册者：钩子累加、按顺序都调用；同一阶段注册两次报错，不会悄悄覆盖（附录 #34）', async () => {
+    const { pipeline } = setup({ tagPending: 0 });
+    const calls: string[] = [];
+    pipeline.register({ afterScan: () => calls.push('a'), afterTag: () => calls.push('t1') });
+    pipeline.register({ afterScan: () => calls.push('b'), afterTag: () => calls.push('t2') });
+    await pipeline.runner('scan')(ctx());
+    await pipeline.runner('tag')(ctx());
+    expect(calls).toEqual(['a', 'b', 't1', 't2']);
+    expect(() => pipeline.register({ tag: { isReady: () => true, pendingCount: () => 0, run: async () => '' } })).toThrow(/已经注册过/);
+  });
   it('显式导入直接续接缩略图、识别和查重，不再扫描；暂停的识别保持暂停',async()=>{
     const p=setup({tagPending:1});p.pipeline.afterImport();
     expect(p.enqueued).toEqual(['tag','thumbnail']);
@@ -202,9 +212,8 @@ describe('Pipeline', () => {
   });
 
   it('识别任务知道是不是用户手动点的（自动排上的不下载旧图模型）；手动标记只用一次', async () => {
-    const { pipeline } = setup({ tagPending: 10 });
     const seen: (boolean | undefined)[] = [];
-    pipeline.register({ tag: { isReady: () => true, pendingCount: () => 10, run: async (_c, o) => void seen.push(o?.manual) } });
+    const { pipeline } = setup({ tag: { isReady: () => true, pendingCount: () => 10, run: async (_c, o) => void seen.push(o?.manual) } });
     await pipeline.runner('tag')(ctx());
     pipeline.noteManualStart('tag');
     await pipeline.runner('tag')(ctx());

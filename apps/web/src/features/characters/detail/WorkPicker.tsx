@@ -3,6 +3,7 @@ import { Plus, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Chip, ChipAvatar, SearchInput, Skeleton } from '@/components/ui';
 import { useWorks } from '@/lib/queries';
+import { matchesQuery } from '@emaki/shared';
 
 /**
  * 所属作品多选：上面是已选（第一个是主作品），下面是可搜索的候选。
@@ -18,16 +19,11 @@ export function WorkPicker({ value, onChange }: { value: ID[]; onChange: (v: ID[
     return w ? [w] : [];
   });
 
-  const needle = q.trim().toLowerCase();
+  // 搜索的归一化和服务端同一份（matchesQuery，附录 #38）
+  const needle = q.trim();
   const candidates = works
     .filter((w) => !value.includes(w.id))
-    .filter(
-      (w) =>
-        !needle ||
-        w.name.toLowerCase().includes(needle) ||
-        (w.danbooruTag ?? '').includes(needle) ||
-        w.aliases.some((a) => a.toLowerCase().includes(needle)),
-    )
+    .filter((w) => matchesQuery(needle, [w.name, w.danbooruTag, ...w.aliases]))
     .slice(0, needle ? 12 : 8);
 
   if (isPending) {

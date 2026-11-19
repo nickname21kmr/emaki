@@ -8,6 +8,8 @@ export interface FanCover {
   rating: Rating;
   color?: string | null;
   focus?: FocusPoint | null;
+  /** 文件版本（修改时间）：换了文件缩略图地址跟着变 */
+  modifiedAt?: string;
 }
 
 /*
@@ -90,7 +92,7 @@ export function CoverFan({
           <div key={slot} className={cn(CARD, card, slots[slot])} style={cover ? undefined : { background: envelope }}>
             {cover ? (
               <Thumb
-                image={{ id: cover.imageId, rating: cover.rating, dominantColor: cover.color ?? envelope }}
+                image={{ id: cover.imageId, rating: cover.rating, dominantColor: cover.color ?? envelope, modifiedAt: cover.modifiedAt }}
                 width={slot === 0 ? (bigCenter ? 960 : 480) : 240}
                 focus={cover.focus}
                 blurBadge={slot === 0 ? 'center' : 'none'}

@@ -15,6 +15,7 @@ import { JobAction } from './JobAction';
 import { ModelPicker } from './ModelPicker';
 import { SettingsCard, SettingsSection } from './SettingsSection';
 import { ThresholdMap } from './ThresholdMap';
+import { PromoteSuggestionsButton } from '@/components/media/PromoteSuggestionsButton';
 
 const f2 = (v: number) => v.toFixed(2);
 
@@ -137,7 +138,7 @@ export function TaggerSection({
 
         <Field
           label="未识别里也列出漫画页"
-          hint="关掉后漫画页不用找角色：它们离开「未识别」和它的计数，也不查 Pixiv，在「别册 · 漫画」里照样能看。"
+          hint="关掉后漫画页离开「未识别」和它的计数，在「别册 · 漫画」里照样能看；识别、自动归类和 Pixiv 补充照常。"
         >
           <Switch
             checked={tagger.comicInUnrecognized !== false}
@@ -157,7 +158,7 @@ export function TaggerSection({
           />
         </Field>
 
-        <Field label="角色阈值" hint="角色标签的分数高于它，才算认出了这个角色。">
+        <Field label="角色阈值" hint="角色标签达到这个分数后，可以进入建议列表。">
           <CommitSlider
             label="角色阈值"
             value={tagger.characterThreshold}
@@ -174,8 +175,8 @@ export function TaggerSection({
           label="自动采纳阈值"
           hint={
             <>
-              达到它直接归到角色；介于两者之间的交给你在「未识别」里确认。调低只影响之后的识别，已有的建议不会自动归。
-              <PromoteSuggestions threshold={tagger.autoAcceptThreshold} />
+              达标时直接关联已有角色。插画、漫画（动的也一样）也可自动新建角色，其他类型的新角色留在「未识别」。已有建议可在这里补采纳。
+              <span className="mt-2 block"><PromoteSuggestionsButton threshold={tagger.autoAcceptThreshold} /></span>
             </>
           }
         >
@@ -241,7 +242,7 @@ export function TaggerSection({
                 ? '目前没有未识别的图片。'
                 : untaggedCount
                   ? `还有 ${formatCount(unrecognizedCount)} 张没有归到角色，其中 ${formatCount(untaggedCount)} 张还没识别过。识别在后台进行，可以继续做别的事。`
-                  : `还有 ${formatCount(unrecognizedCount)} 张没有归到角色，但都已经识别过：模型没认出来（原创、冷门或看不清的角色），点这里不会再认。可以到「未识别」里手动归类；换过模型、调低过阈值，或者想用现在的模型再认一遍，到「未识别」页右上角点「重认没认出的」。`
+                  : `还有 ${formatCount(unrecognizedCount)} 张没有归到角色，都已经识别过。可在上方补采纳达标的旧建议，或到「未识别」查看其余结果。`
           }
         >
           <JobAction kind="tag" icon={<ScanFace />} disabled={unrecognizedCount === 0}>
@@ -317,26 +318,6 @@ function SourceModeSwitch({ mode }: { mode: SourceMode }) {
         </DialogFooter>
       </Dialog>
     </>
-  );
-}
-
-/**
- * 调低自动采纳阈值后：已有建议里有多少张达标，用户点按钮才归到角色（toast 里可撤销）。
- * 平时（没调低过）数量是 0，不显示
- */
-function PromoteSuggestions({ threshold }: { threshold: number }) {
-  const { data } = useQuery({ queryKey: ['tagger', 'promotable', threshold], queryFn: api.promotableSuggestions });
-  const promote = useMutate(() => api.promoteSuggestions());
-  // 保存还没回来时查到的是旧阈值的数，不显示
-  if (!data || data.threshold !== threshold || data.images === 0) return null;
-  const n = formatCount(data.images);
-  return (
-    <span className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-      <span className="text-fg">已有建议里有 {n} 张图达到这个阈值。</span>
-      <Button size="sm" variant="secondary" loading={promote.isPending} onClick={() => promote.mutate(undefined)}>
-        把 {n} 张达标的建议归到角色
-      </Button>
-    </span>
   );
 }
 

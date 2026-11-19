@@ -4,7 +4,7 @@ import { EventBus } from '../../core/events.ts';
 import { openDatabase, type Db } from '../../db/connection.ts';
 import { migrate } from '../../db/migrate.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
-import { SqliteDataSource } from './SqliteDataSource.ts';
+import { SqliteDataSource } from '../../../test/helpers/client.ts';
 import { refreshTagCounts } from './search.ts';
 
 /** 原来的写法：从计入张数的图出发联 image_tags 分组。新写法要和它逐个一致 */
@@ -85,7 +85,7 @@ describe('搜索的标签张数', () => {
     expect(await hit()).toBe(3);
 
     db.prepare("UPDATE images SET trashed_at = 'x' WHERE id = 1").run();
-    bus.emit({ type: 'library-changed', reason: 'scan' });
+    ds.ctx.invalidate('all', { soft: true }); // 后台任务写库后，变更传播的提交后反应就是这样让缓存失效的
     expect(stored()).toBe(3); // 只是标记了
     expect(await hit()).toBe(2); // 不用等计时器，下一次搜索就是新的
     expect(stored()).toBe(2);

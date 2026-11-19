@@ -14,6 +14,7 @@ import { COLLAPSED_COUNT } from './constants';
 import { WorkCharacters, WorkCharactersSkeleton } from './WorkCharacters';
 import { WorkHero, WorkHeroSkeleton } from './WorkHero';
 import { WorkImages } from './WorkImages';
+import { PageBlocks } from '@/blocks/PageBlocks';
 
 /**
  * 作品页：Hero（染色纸 + 封面）→ 角色书架 → 全部插画。
@@ -98,39 +99,40 @@ export function WorkDetail({ id }: { id: ID }) {
     <>
       {header}
       <PageBody className="flex flex-col gap-10">
-        <WorkHero work={w} heroRef={heroRef} />
-
-        {chars.isPending ? (
-          <WorkCharactersSkeleton count={Math.min(Math.max(w.characterCount, 1), COLLAPSED_COUNT)} />
-        ) : (
-          <WorkCharacters
-            characters={allChars}
-            total={charTotal}
-            onVisibleCount={setVisibleChars}
-            otherOnly={chars.data?.pages[0]?.otherOnlyCount ?? 0}
-            includeOther={includeOther}
-            onIncludeOther={(v) => {
-              setIncludeOther(v);
-              if (v) setExpanded(true);
-            }}
-            expanded={expanded}
-            onToggle={() => setExpanded((v) => !v)}
-            hasMore={!!chars.hasNextPage}
-            loadingMore={chars.isFetchingNextPage}
-            onLoadMore={loadMoreChars}
-            error={chars.isError ? chars.error : undefined}
-            onRetry={() => void chars.refetch()}
-          />
-        )}
-
-        {!chars.isPending && <CollectionsStrip workId={id} />}
-
-        {/* 角色书架定高之后再挂网格：ImageGrid 挂载时测量自己在滚动容器里的位置 */}
-        {chars.isPending ? (
-          <ImagesSkeleton />
-        ) : (
-          <WorkImages workId={id} gridKey={`${expanded ? 'all' : 'top'}-${visibleChars}`} />
-        )}
+        {/* 区块按注册表的顺序（blocks/registry.ts 的 work） */}
+        <PageBlocks
+          page="work"
+          render={{
+            'work.hero': () => <WorkHero work={w} heroRef={heroRef} />,
+            'work.characters': () =>
+              chars.isPending ? (
+                <WorkCharactersSkeleton count={Math.min(Math.max(w.characterCount, 1), COLLAPSED_COUNT)} />
+              ) : (
+                <WorkCharacters
+                  characters={allChars}
+                  total={charTotal}
+                  onVisibleCount={setVisibleChars}
+                  otherOnly={chars.data?.pages[0]?.otherOnlyCount ?? 0}
+                  includeOther={includeOther}
+                  onIncludeOther={(v) => {
+                    setIncludeOther(v);
+                    if (v) setExpanded(true);
+                  }}
+                  expanded={expanded}
+                  onToggle={() => setExpanded((v) => !v)}
+                  hasMore={!!chars.hasNextPage}
+                  loadingMore={chars.isFetchingNextPage}
+                  onLoadMore={loadMoreChars}
+                  error={chars.isError ? chars.error : undefined}
+                  onRetry={() => void chars.refetch()}
+                />
+              ),
+            'work.collections': () => !chars.isPending && <CollectionsStrip workId={id} />,
+            // 角色书架定高之后再挂网格：ImageGrid 挂载时测量自己在滚动容器里的位置
+            'work.images': () =>
+              chars.isPending ? <ImagesSkeleton /> : <WorkImages workId={id} gridKey={`${expanded ? 'all' : 'top'}-${visibleChars}`} />,
+          }}
+        />
       </PageBody>
     </>
   );

@@ -40,6 +40,7 @@ export function SuggestionRow({
   valueUnit,
   isNew,
   sourceLabel,
+  bar = true,
   title,
   onPick,
   checked,
@@ -55,7 +56,10 @@ export function SuggestionRow({
   valueUnit?: ReactNode;
   /** 库里还没有这个角色，采纳时会新建 */
   isNew?: boolean;
+  /** 证据的来源（识别模型 / Pixiv 标签） */
   sourceLabel?: string;
+  /** 底边画不画置信度条（Pixiv 只有「确认 / 候选」两档，不画） */
+  bar?: boolean;
   title?: string;
   onPick: () => void;
   checked?: boolean;
@@ -89,7 +93,7 @@ export function SuggestionRow({
         <span className="text-[17px] font-semibold tracking-tight">{valueLabel}</span>
         {valueUnit && <span className="ml-0.5 text-[11px] text-fg-muted">{valueUnit}</span>}
       </span>}
-      {valueLabel != null && <span className="absolute inset-x-0 bottom-0 h-[3px] bg-line" aria-hidden>
+      {valueLabel != null && bar && <span className="absolute inset-x-0 bottom-0 h-[3px] bg-line" aria-hidden>
         <span
           className="block h-full rounded-r-full bg-shu transition-[width] duration-500 ease-[var(--ease-out-soft)]"
           style={{ width: `${Math.max(0, Math.min(1, value)) * 100}%` }}

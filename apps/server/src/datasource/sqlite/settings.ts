@@ -27,6 +27,8 @@ export const DEFAULT_SETTINGS = {
     generalThreshold: 0.35,
     characterThreshold: 0.35,
     autoAcceptThreshold: 0.85,
+    // 按来源的自动阈值（tagger / pixiv / plugin:<id>）；没设的来源用 autoAcceptThreshold（decideAuto，P3b）
+    autoAcceptBySource: {} as Partial<Record<string, number>>,
     batchSize: 8,
     legacyModel: 'SmilingWolf/wd-eva02-large-tagger-v3' as string | null,
     legacyBefore: '2024-03-01' as string | null,
@@ -43,11 +45,23 @@ export const DEFAULT_SETTINGS = {
   // 不存 hasApiKey；默认不联网，T21 的引导里让用户选
   danbooru: { enabled: false, username: '', lastSyncAt: null as string | null },
   dedupe: { hammingThreshold: 8, lastRunAt: null as string | null },
-  ui: { theme: 'system', blurSensitive: true, density: 'comfortable' },
+  // 只放图库设置；模糊、密度这类是本机偏好，在浏览器里（迁移 039 删掉了以前写进来的 blurSensitive、density）
+  ui: { theme: 'system' },
   browse: { customThemes: [] as CustomTheme[] },
 } as const;
 
 const SECTIONS: SettingsSection[] = ['tagger', 'danbooru', 'dedupe', 'ui', 'browse'];
+
+/**
+ * 不再是图库设置的键（P5，附录 #32）：模糊开关、网格密度是本机偏好。读的时候不返回、写的时候不存，
+ * 迁移 039 之前写进来的、内部调用（不经过接口的 zod）带进来的都一样
+ */
+const RETIRED: Partial<Record<SettingsSection, readonly string[]>> = { ui: ['blurSensitive', 'density'] };
+const withoutRetired = (k: SettingsSection, v: Record<string, unknown>) => {
+  const out = { ...v };
+  for (const key of RETIRED[k] ?? []) delete out[key];
+  return out;
+};
 
 function readRaw(db: Db): Map<string, string> {
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
@@ -69,7 +83,7 @@ function parseSection(key: SettingsSection, raw: string | undefined): Record<str
 export function readSettings(db: Db): Omit<Settings, 'libraryRoots'> {
   const raw = readRaw(db);
   const merged = Object.fromEntries(
-    SECTIONS.map((k) => [k, { ...DEFAULT_SETTINGS[k], ...parseSection(k, raw.get(SETTINGS_KEYS[k])) }]),
+    SECTIONS.map((k) => [k, withoutRetired(k, { ...DEFAULT_SETTINGS[k], ...parseSection(k, raw.get(SETTINGS_KEYS[k])) })]),
   ) as unknown as Omit<Settings, 'libraryRoots'>;
   merged.danbooru = { ...merged.danbooru, hasApiKey: raw.has(SETTINGS_KEYS.danbooruApiKey) };
   return merged;
@@ -92,7 +106,7 @@ export function applySettingsPatch(
     for (const k of SECTIONS) {
       const patch = body[k];
       if (!patch) continue;
-      const merged: Record<string, unknown> = { ...current[k], ...patch };
+      const merged: Record<string, unknown> = withoutRetired(k, { ...current[k], ...patch });
       if (k === 'danbooru') {
         delete merged.hasApiKey;
         merged.lastSyncAt = current.danbooru.lastSyncAt ?? null;

@@ -14,6 +14,7 @@ import {
   Image as ImageIcon,
   Check,
   Pencil,
+  Play,
   Plus,
   Shuffle,
   X,
@@ -92,6 +93,7 @@ export function GalleryToolbar({
   hasFilters,
   onClearFilters,
   customThemes,
+  animatedChip = true,
 }: {
   filters: GalleryFilters;
   /** 当前的图片查询（搜索下拉里的张数按它数） */
@@ -101,6 +103,8 @@ export function GalleryToolbar({
   onClearFilters: () => void;
   /** 用户自己加的画面（设置里的 browse.customThemes） */
   customThemes: CustomTheme[];
+  /** 显示「动图」chip（别册的动图页本身就是这个筛选，不显示） */
+  animatedChip?: boolean;
 }) {
   const toggleRating = (r: GalleryFilters['rating'][number]) =>
     update({ rating: filters.rating.includes(r) ? filters.rating.filter((x) => x !== r) : [...filters.rating, r] });
@@ -165,6 +169,21 @@ export function GalleryToolbar({
                   </span>
                 </Chip>
               ))}
+
+              {animatedChip && (
+                <>
+                  <Divider />
+                  {/* 是否动图（D5）：不是类型，是在当前类型里再筛一层 */}
+                  <Tooltip content="只看动图：按帧数自动认出，和类型无关">
+                    <Chip size="sm" selected={filters.animated} onClick={() => update({ animated: !filters.animated })}>
+                      <span className="inline-flex items-center gap-1.5">
+                        <Play className="size-2.5 fill-current" strokeWidth={0} aria-hidden />
+                        动图
+                      </span>
+                    </Chip>
+                  </Tooltip>
+                </>
+              )}
 
               <Divider />
               <GroupLabel>画面</GroupLabel>

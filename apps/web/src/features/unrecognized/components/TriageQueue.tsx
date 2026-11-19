@@ -3,10 +3,11 @@ import { Check, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { memo, useCallback, useEffect, useRef } from 'react';
+import { AnimatedMark } from '@/components/media/KindBadge';
 import { Thumb } from '@/components/media/Thumb';
 import { Spinner } from '@/components/ui';
 import { cn } from '@/lib/cn';
-import { formatCount, formatConfidence } from '@/lib/format';
+import { formatCount, formatConfidence, suggestionEvidence } from '@/lib/format';
 import type { ClickModifiers, Triage } from '../useTriage';
 import { FreshButton } from './FreshButton';
 import { EASE_OUT } from '@/lib/motion';
@@ -213,6 +214,8 @@ const QueueRow = memo(function QueueRow({
             )}
           >
             <Thumb image={image} width={240} className="size-full rounded-[10px]" />
+            {/* 右下角：动图（D5，动的插画和静态插画一样在这里识别） */}
+            {image.animated && <AnimatedMark compact className="pointer-events-none absolute -right-1 -bottom-1" />}
             {/* 左上角的小圆圈：鼠标也能多选 */}
             <span
               aria-hidden
@@ -243,7 +246,7 @@ const QueueRow = memo(function QueueRow({
               </span>
               <span className="shrink-0 text-[10.5px] text-fg-subtle tabular">{position}</span>
             </span>
-            {top?.source === 'pixiv' ? <span className="mt-1 block text-[11px] text-fg-subtle">Pixiv 标签</span> : top && top.score > 0 ? (
+            {top?.source === 'pixiv' ? <span className="mt-1 block text-[11px] text-fg-subtle">Pixiv 标签 · {suggestionEvidence(top).value}</span> : top && top.score > 0 ? (
               <span className="mt-1 flex items-center gap-2">
                 <span className="relative h-[3px] w-full max-w-16 overflow-hidden rounded-full bg-line">
                   <span

@@ -9,6 +9,7 @@ import { FOCUS_TAGS, inferCoverFocus } from '../../services/covers/focus.ts';
 import { COVER_TAG_WEIGHTS, coverQuality, isUnfitCover } from '../../services/covers/quality.ts';
 import type { SqliteContext } from './context.ts';
 import { DAY, iso, RECENT_DAYS } from './sql.ts';
+import { ART_KINDS_SQL, ILLUSTRATION } from '../../readmodel/terms.ts';
 
 export interface CharacterRec {
   id: number;
@@ -40,6 +41,8 @@ export interface CharacterRec {
   recentCount: number;
   /** searchKey(名字、标签、全部别名（含隐藏的）、所属作品名和别名) */
   keys: string[];
+  /** 与作品名区分，让角色原名和别名的命中优先。 */
+  nameKeys: string[];
 }
 
 export interface WorkRec {
@@ -162,7 +165,7 @@ export class Derived {
         db
           .prepare(
             `SELECT ic.character_id AS id, COUNT(*) AS n FROM image_characters ic
-             JOIN v_counted_images i ON i.id = ic.image_id WHERE i.content_kind <> 'illustration' GROUP BY ic.character_id`,
+             JOIN v_counted_images i ON i.id = ic.image_id WHERE NOT ${ILLUSTRATION} GROUP BY ic.character_id`,
           )
           .all() as { id: number; n: number }[]
       ).map((r) => [r.id, r.n]),
@@ -172,7 +175,7 @@ export class Derived {
         db
           .prepare(
             `SELECT w.work_id AS id, COUNT(*) AS n FROM v_image_works w
-             JOIN v_counted_images i ON i.id = w.image_id WHERE i.content_kind <> 'illustration' GROUP BY w.work_id`,
+             JOIN v_counted_images i ON i.id = w.image_id WHERE NOT ${ILLUSTRATION} GROUP BY w.work_id`,
           )
           .all() as { id: number; n: number }[]
       ).map((r) => [r.id, r.n]),
@@ -192,7 +195,7 @@ export class Derived {
       .prepare(
         `SELECT ${COVER_CANDIDATE_COLS.replace('COALESCE(cr.n, 1) - 1', '0')}
          FROM image_characters ic JOIN v_counted_images i ON i.id = ic.image_id
-         WHERE i.content_kind IN ('illustration','comic')`,
+         WHERE ${ART_KINDS_SQL}`,
       )
       .all() as CoverCandidate[]) {
       r.others = (crowd.get(r.iid) ?? 1) - 1;
@@ -300,6 +303,8 @@ export class Derived {
     const characters = new Map<number, CharacterRec>();
     for (const c of charRows) {
       const all = aliasList('character', c.id);
+      const nameKeys = [c.name, c.danbooru_tag, ...all.map((a) => a.alias)]
+        .filter((x): x is string => !!x).map(searchKey);
       const st = charStats.get(c.id);
       const workIds = workIdsOf.get(c.id) ?? [];
       const workKeys = workIds.flatMap((wid) => works.get(wid)?.keys ?? []);
@@ -333,10 +338,8 @@ export class Derived {
         coverManual: c.cover_manual === 1,
         coverColor: null,
         recentCount: st?.recent_count ?? 0,
-        keys: [
-          ...[c.name, c.danbooru_tag, ...all.map((a) => a.alias)].filter((x): x is string => !!x).map(searchKey),
-          ...workKeys,
-        ],
+        nameKeys,
+        keys: [...nameKeys, ...workKeys],
       });
     }
 
@@ -452,7 +455,7 @@ export type ScoredCoverCandidate = CoverCandidate & { q: number };
 
 /** 候选封面的列（C 自动封面和「换封面」候选共用）；FROM image_characters ic JOIN v_counted_images i，crowd 是同图角色数 */
 export const COVER_CANDIDATE_COLS = `ic.character_id AS cid, i.id AS iid, i.width AS w, i.height AS h, i.file_name AS fileName,
-  i.favorite AS fav, COALESCE(ic.score, 0.9) AS cs, COALESCE(cr.n, 1) - 1 AS others,
+  i.favorite AS fav, COALESCE(ic.evidence_score, 0.9) AS cs, COALESCE(cr.n, 1) - 1 AS others,
   CASE i.rating WHEN 'questionable' THEN 1 WHEN 'explicit' THEN 2 ELSE 0 END + (i.content_kind = 'comic') * 3 AS tier`;
 
 /** 一批图里和封面评分、焦点有关的标签 */

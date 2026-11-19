@@ -1,12 +1,11 @@
-import type { Job } from '@emaki/shared';
+import { JOB_KINDS, type Job } from '@emaki/shared';
 import { Ban, BookCopy, LibraryBig, CircleHelp, Copy, House, Images, Settings, Sparkles, UsersRound, type LucideIcon } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { NavLink } from 'react-router';
 import { cn } from '@/lib/cn';
 import { useLiveJobs, useRunningJobs } from '@/lib/events';
 import { formatCompact, formatCount } from '@/lib/format';
-import { annexTotal } from '@/lib/kinds';
-import { useHealth, useStats } from '@/lib/queries';
+import { useHealth, useSummary } from '@/lib/queries';
 import { Badge, RollingNumber, Tooltip } from '@/components/ui';
 import { Emblem } from '@/components/ui/Emblem';
 
@@ -27,7 +26,8 @@ interface NavItem {
  * 当前项：图标底座变成纸色卡片 + 左侧一道朱色竖线（像书签）。
  */
 export function Sidebar() {
-  const { data: stats } = useStats();
+  // 计数都读汇总接口：服务端按命名口径算好，这里不加减（附录 #28）
+  const { data: s } = useSummary();
   const jobs = useRunningJobs();
   const demo = useHealth().data?.dataSource === 'demo';
 
@@ -36,45 +36,51 @@ export function Sidebar() {
       to: '/',
       label: '首页',
       icon: House,
-      dot: !!stats?.addedLast7Days[6],
-      hint: stats?.addedLast7Days[6] ? `今天新收 ${formatCount(stats.addedLast7Days[6])} 张` : undefined,
+      dot: !!s?.added.today,
+      hint: s?.added.today ? `今天新收 ${formatCount(s.added.today)} 张` : undefined,
     },
     { to: '/gallery', label: '图库', icon: Images },
     { to: '/characters', label: '角色', icon: UsersRound },
     // 原创（用户 2026-09-29）：直达「原创」作品页；还没有原创作品时不显示
-    ...(stats?.originalWorkId
+    ...(s?.originalWorkId
       ? [
           {
-            to: `/works/${stats.originalWorkId}`,
+            to: `/works/${s.originalWorkId}`,
             label: '原创',
             icon: Sparkles,
-            hint: stats.originalCount ? `你归为原创的 ${formatCount(stats.originalCount)} 张，和原创角色的图` : '原创角色的图',
+            hint: s.images.original ? `你归为原创的 ${formatCount(s.images.original)} 张，和原创角色的图` : '原创角色的图',
           },
         ]
       : []),
     // 合集（T38d）：本子与画集，不显示数量
     { to: '/collections', label: '合集', icon: LibraryBig },
     // 别册：截图、漫画等不打扰插画的图（T32b），只显示总数
-    { to: '/annex', label: '别册', icon: BookCopy, count: annexTotal(stats?.kindCounts) },
+    { to: '/annex', label: '别册', icon: BookCopy, count: s?.images.annex ?? 0 },
   ];
   const triage: NavItem[] = [
     {
       to: '/unrecognized',
       label: '未识别',
       icon: CircleHelp,
-      // 待识别的不算（识别跑完会自动处理）；成册待整理的按本算
-      count: stats ? stats.unrecognizedCount - stats.untaggedCount + stats.pendingCollectionCount : undefined,
-      hint: stats
+      // 待处理数（唯一定义见汇总接口 triage）：等你确认的张数 + 成册待整理的本数；待识别的不算（识别跑完会自动处理）
+      count: s?.triage.total,
+      hint: s
         ? [
-            `${formatCount(stats.unrecognizedCount - stats.untaggedCount)} 张等你确认`,
-            stats.pendingCollectionCount ? `${formatCount(stats.pendingCollectionCount)} 本待整理` : '',
-            stats.untaggedCount ? `另有 ${formatCount(stats.untaggedCount)} 张等待识别` : '',
+            `${formatCount(s.triage.images)} 张等你确认`,
+            s.triage.books ? `${formatCount(s.triage.books)} 本待整理` : '',
+            s.triage.waiting ? `另有 ${formatCount(s.triage.waiting)} 张等待识别` : '',
           ]
             .filter(Boolean)
             .join(' · ')
         : undefined,
     },
-    { to: '/duplicates', label: '重复', icon: Copy, count: stats?.duplicateGroupCount, hint: stats?.duplicateGroupCount ? `${formatCount(stats.duplicateGroupCount)} 组重复等你处理` : undefined },
+    {
+      to: '/duplicates',
+      label: '重复',
+      icon: Copy,
+      count: s?.duplicates,
+      hint: s?.duplicates ? `${formatCount(s.duplicates)} 组重复等你处理` : undefined,
+    },
     { to: '/excluded', label: '已排除', icon: Ban },
   ];
 
@@ -100,7 +106,7 @@ export function Sidebar() {
       <div className="flex-1" />
 
       {demo && (
-        <Tooltip content="正在使用演示图库（npm run dev:demo），改动重启后就没了" side="right">
+        <Tooltip content="正在使用演示数据（npm run dev:demo），改动不会保存" side="right">
           <span className="mb-3">
             <Badge tone="warn" className="px-1.5 text-[10px]">
               演示数据
@@ -191,8 +197,6 @@ function SidebarLinkInner({ item, ...rest }: { item: NavItem }) {
   );
 }
 
-const JOB_GLYPH: Record<Job['kind'], string> = { scan: '扫', thumbnail: '图', tag: '识', dedupe: '重', 'danbooru-sync': '同', artists: '画', 'pixiv-tags': 'P' };
-
 /** 后台任务进度环（TR-7）：环里是任务类型字，下面是百分比；点一下去设置页的后台任务 */
 function JobRing({ kind, progress, label }: { kind: Job['kind']; progress: number | null; label: string }) {
   const r = 13;
@@ -205,7 +209,7 @@ function JobRing({ kind, progress, label }: { kind: Job['kind']; progress: numbe
       <NavLink to="/settings#jobs" className="group mb-2 flex w-[64px] flex-col items-center gap-0.5 py-1">
         <span className="relative flex size-9 items-center justify-center">
         <span className="absolute inset-0 flex items-center justify-center font-display text-[11px] leading-none text-fg-muted">
-          {JOB_GLYPH[kind]}
+          {JOB_KINDS[kind].glyph}
         </span>
         <svg viewBox="0 0 32 32" className={cn('size-8 -rotate-90', progress === null && 'animate-spin')}>
           <circle cx="16" cy="16" r={r} fill="none" stroke="var(--c-line-strong)" strokeWidth="2.5" />

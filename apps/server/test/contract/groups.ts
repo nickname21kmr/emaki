@@ -1,6 +1,6 @@
 /**
- * DataSource 的行为用例，跑在导入了契约夹具的 SQLite 上。期望值见 test/fixtures/contract-db.ts 顶部注释。
- * 每组对应一个任务编号（docs/TASKS.md）。
+ * 契约用例：对唯一的实现（真实引擎 + 契约夹具）做接口测试。期望值见 test/fixtures/contract-db.ts 顶部注释。
+ * 每组对应 docs/TASKS.md 的一个任务。
  */
 import { mkdirSync, rmSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it } from 'vitest';
@@ -20,7 +20,7 @@ function useEnv(make: ContractFactory): () => ContractEnv {
 }
 
 /** 一个肯定不存在的 id */
-const MISSING = '999999';
+const missing = (_env: ContractEnv, _prefix: string) => '999999';
 
 // ---------------------------------------------------------------- T02 设置
 
@@ -39,7 +39,8 @@ export function settingsContract(make: ContractFactory) {
       // 自动查 Pixiv 会联网，默认关
       expect(s.tagger.pixiv).toBe(false);
       expect(s.danbooru.hasApiKey).toBe(false);
-      expect(s.ui).toEqual({ theme: 'system', blurSensitive: true, density: 'comfortable' });
+      // 模糊开关、网格密度是本机偏好，不在图库设置里（P5，附录 #32）
+      expect(s.ui).toEqual({ theme: 'system' });
     });
 
     it('调低自动采纳阈值：保存时不动已有建议，显示达标张数，点按钮才归到角色（可撤销）', async () => {
@@ -92,7 +93,7 @@ export function settingsContract(make: ContractFactory) {
     it('修改设置：深合并，API key 只写不读', async () => {
       const e = env();
       const s = await e.ds.updateSettings({ ui: { theme: 'dark' }, danbooruApiKey: 'abc' });
-      expect(s.ui).toEqual({ theme: 'dark', blurSensitive: true, density: 'comfortable' });
+      expect(s.ui).toEqual({ theme: 'dark' });
       expect(s.danbooru.hasApiKey).toBe(true);
       expect(JSON.stringify(s)).not.toContain('abc');
       expect((await e.ds.getSettings()).ui.theme).toBe('dark');
@@ -106,7 +107,7 @@ export function settingsContract(make: ContractFactory) {
       await e.ds.updateSettings({ browse: { customThemes: [a, b] } });
       expect((await e.ds.getSettings()).browse.customThemes).toEqual([a, b]);
       // 改别的段不影响
-      await e.ds.updateSettings({ ui: { density: 'compact' } });
+      await e.ds.updateSettings({ ui: { theme: 'light' } });
       expect((await e.ds.getSettings()).browse.customThemes).toEqual([a, b]);
       await e.ds.updateSettings({ browse: { customThemes: [b] } });
       expect((await e.ds.getSettings()).browse.customThemes).toEqual([b]);
@@ -158,7 +159,7 @@ export function settingsContract(make: ContractFactory) {
       const ids = [e.id('image', 'i1')];
       await expect(e.ds.moveImages({ ids, rootId: e.id('root', 'root1'), dir: 'a:b' })).rejects.toThrow('不能包含');
       await expect(e.ds.moveImages({ ids, rootId: e.id('root', 'root2'), dir: '' })).rejects.toThrow('停用');
-      await expect(e.ds.moveImages({ ids, rootId: MISSING, dir: '' })).rejects.toThrow('找不到图库文件夹');
+      await expect(e.ds.moveImages({ ids, rootId: missing(e, 'root'), dir: '' })).rejects.toThrow('找不到图库文件夹');
     });
 
     it('停用文件夹可撤销', async () => {
@@ -269,7 +270,8 @@ export function statsContract(make: ContractFactory) {
         shelvedCount: 0,
         recentImport: null,
         lastAddedAt: new Date(NOW - 60_000).toISOString(),
-        kindCounts: { illustration: 32, comic: 0, screenshot: 0, text: 0, photo: 0, meme: 0, animated: 0 },
+        kindCounts: { illustration: 32, comic: 0, screenshot: 0, text: 0, photo: 0, meme: 0 },
+      animatedCount: 0,
         pendingTagCount: 1,
         collectionCounts: { doujin: 0, artbook: 0, group: 0 },
         pendingCollectionCount: 0,
@@ -318,7 +320,7 @@ export function worksContract(make: ContractFactory) {
       const w = await e.ds.getWork(e.id('work', 'w2'));
       expect(w?.name).toBe('原神');
       expect(w?.imageCount).toBe(12);
-      expect(await e.ds.getWork(MISSING)).toBeNull();
+      expect(await e.ds.getWork(missing(e, 'w'))).toBeNull();
     });
   });
 }
@@ -408,7 +410,7 @@ export function charactersContract(make: ContractFactory) {
       ]);
       const c6 = await e.ds.getCharacter(e.id('character', 'c6'));
       expect(c6?.character.workIds.map((w) => e.back('work', w))).toEqual(['w1', 'w2']);
-      expect(await e.ds.getCharacter(MISSING)).toBeNull();
+      expect(await e.ds.getCharacter(missing(e, 'c'))).toBeNull();
     });
 
     it('换封面候选（CB-7）：只列计入的图，安全档在前、按质量分排；自动封面排第一；恢复自动后回到自动封面', async () => {
@@ -440,7 +442,7 @@ export function charactersContract(make: ContractFactory) {
       await e.ds.undo(r.undoToken!);
       expect((await e.ds.getCharacter(c1))!.character).toMatchObject({ coverImageId: pick, coverManual: true });
 
-      await expect(e.ds.listCoverCandidates(MISSING, 12)).rejects.toMatchObject({ statusCode: 404 });
+      await expect(e.ds.listCoverCandidates(missing(e, 'c'), 12)).rejects.toMatchObject({ statusCode: 404 });
     });
   });
 }
@@ -457,7 +459,7 @@ export function characterMutationsContract(make: ContractFactory) {
       expect(r.character.workIds.map((w) => e.back('work', w))).toEqual(['w3']);
       expect((await e.ds.listCharacters({ source: 'custom' })).total).toBe(2);
       await expect(e.ds.createCharacter({ name: '  ', workIds: [] })).rejects.toThrow('角色名不能为空');
-      await expect(e.ds.createCharacter({ name: 'x', workIds: [MISSING] })).rejects.toMatchObject({ statusCode: 404 });
+      await expect(e.ds.createCharacter({ name: 'x', workIds: [missingWork(e)] })).rejects.toMatchObject({ statusCode: 404 });
       await expect(e.ds.createCharacter({ name: 'x', workIds: [], danbooruTag: 'mika_(blue_archive)' })).rejects.toMatchObject({ statusCode: 409 });
       await e.ds.undo(r.undoToken!);
       expect((await e.ds.listCharacters({ source: 'custom' })).total).toBe(1);
@@ -512,6 +514,7 @@ export function characterMutationsContract(make: ContractFactory) {
   });
 }
 
+const missingWork = (_e: ContractEnv) => '999999';
 export function unrecognizedContract(make: ContractFactory) {
   contract('T15', '未识别', () => {
     const env = useEnv(make);
@@ -608,7 +611,7 @@ export function unrecognizedContract(make: ContractFactory) {
       expect((await e.ds.getStats()).unrecognizedCount).toBe(6);
       expect((await e.ds.unrecognizedSummary()).art.total).toBe(6);
       expect((await e.ds.listImages({ status: 'unrecognized' })).total).toBe(6);
-      expect((await e.ds.getImage(i25))?.status).toBe('recognized');
+      expect((await e.ds.getImage(i25))?.queue).toBeNull();
       const original = (await e.ds.listWorks({})).find((w) => w.name === '原创');
       expect(original).toBeDefined();
       expect((await e.ds.listImages({ workId: original!.id })).items.map((x) => e.back('image', x.id))).toContain('i25');
@@ -863,7 +866,7 @@ export function exclusionsContract(make: ContractFactory) {
     it('错误：空目标 / 不存在的规则', async () => {
       const e = env();
       await expect(e.ds.createExclusion({ kind: 'tag', target: '  ' })).rejects.toMatchObject({ code: 'bad_request' });
-      await expect(e.ds.deleteExclusion(MISSING)).rejects.toMatchObject({ code: 'not_found' });
+      await expect(e.ds.deleteExclusion(missing(e, 'x'))).rejects.toMatchObject({ code: 'not_found' });
     });
 
     it('错误：同一条规则建两次', async () => {
@@ -887,7 +890,7 @@ export function searchContract(make: ContractFactory) {
           ? `c:${e.back('character', h.character.id)}/${h.workName}`
           : h.type === 'work'
             ? `w:${e.back('work', h.work.id)}`
-            : `t:${h.tag}=${h.imageCount}`,
+            : h.type === 'tag' ? `t:${h.tag}=${h.imageCount}` : `candidate:${h.danbooruTag}`,
       );
     };
 
@@ -913,7 +916,7 @@ export function searchContract(make: ContractFactory) {
 
     it('标签联想：只要一般标签，按张数；空查询 = 最常见的；被排除的不算', async () => {
       const e = env();
-      const tags = async (q?: string, limit?: number) => (await e.ds.tagSuggestions({ q: q ?? '', limit })).map((t) => `${t.tag}=${t.count}`);
+      const tags = async (q?: string, limit?: number) => (await e.ds.tagSuggestions({ q, limit })).map((t) => `${t.tag}=${t.count}`);
       expect(await tags('thigh')).toEqual(['thighhighs=1']);
       expect(await tags('')).toEqual(['1girl=32', 'thighhighs=1']);
       expect(await tags(undefined, 1)).toEqual(['1girl=32']);
@@ -996,7 +999,7 @@ export function imagesContract(make: ContractFactory) {
     it('getImage：标签与建议；不可见返回 null', async () => {
       const e = env();
       const img = await e.ds.getImage(e.id('image', 'i24'));
-      expect(img?.status).toBe('unrecognized');
+      expect([img?.characterCount, img?.queue]).toEqual([0, 'art']);
       expect(img?.workIds.map((w) => e.back('work', w))).toEqual(['w1']);
       expect(img?.tags.map((t) => t.tag)).toContain('1girl');
       expect(img?.characterSuggestions.map((s) => [s.danbooruTag, s.name, s.workName, s.characterId && e.back('character', s.characterId)])).toEqual([
@@ -1091,7 +1094,7 @@ export function duplicatesContract(make: ContractFactory) {
       const d1 = e.id('duplicate', 'd1');
       await expect(e.ds.resolveDuplicate(d1, [])).rejects.toMatchObject({ statusCode: 400, message: '至少保留一张' });
       await expect(e.ds.resolveDuplicate(d1, [e.id('image', 'i1')])).rejects.toMatchObject({ statusCode: 400 });
-      await expect(e.ds.resolveDuplicate(MISSING, [e.id('image', 'i15')])).rejects.toMatchObject({ statusCode: 404 });
+      await expect(e.ds.resolveDuplicate(missing(e, 'd'), [e.id('image', 'i15')])).rejects.toMatchObject({ statusCode: 404 });
     });
 
     it('ignore：进入已处理，可撤销', async () => {
@@ -1102,7 +1105,7 @@ export function duplicatesContract(make: ContractFactory) {
       expect((await e.ds.listDuplicates({ resolved: true })).map((g) => e.back('duplicate', g.id)).sort()).toEqual(['d1', 'd2']);
       await e.ds.undo(r.undoToken!);
       expect((await e.ds.listDuplicates({})).map((g) => e.back('duplicate', g.id))).toEqual(['d1']);
-      await expect(e.ds.ignoreDuplicate(MISSING)).rejects.toMatchObject({ statusCode: 404 });
+      await expect(e.ds.ignoreDuplicate(missing(e, 'd'))).rejects.toMatchObject({ statusCode: 404 });
     });
   });
 }
@@ -1120,7 +1123,7 @@ export function bulkContract(make: ContractFactory) {
         for (const id of ids) expect((await e.ds.getImage(id))!.characterIds.map((c) => e.back('character', c))).not.toContain('c1');
       }],
       ['exclude', () => ({ type: 'exclude' }), '已排除 2 张图', async (e, ids) => {
-        for (const id of ids) expect((await e.ds.getImage(id))!.status).toBe('excluded');
+        for (const id of ids) expect((await e.ds.getImage(id))!.excluded).toBe(true);
       }],
       ['favorite', () => ({ type: 'favorite', value: true }), '已收藏 2 张图', async (e, ids) => {
         for (const id of ids) expect((await e.ds.getImage(id))!.favorite).toBe(true);
@@ -1232,7 +1235,7 @@ export function bulkContract(make: ContractFactory) {
       const before = await snapshot(e, ids);
       const r = await e.ds.bulkImages({ ids, action: { type: 'restore' } });
       expect(r.message).toBe('已恢复 2 张图');
-      for (const id of ids) expect((await e.ds.getImage(id))!.status).not.toBe('excluded');
+      for (const id of ids) expect((await e.ds.getImage(id))!.excluded).toBe(false);
       await e.ds.undo(r.undoToken!);
       expect(await snapshot(e, ids)).toEqual(before);
     });
@@ -1241,7 +1244,7 @@ export function bulkContract(make: ContractFactory) {
       const e = env();
       const id = e.id('image', 'i1');
       const before = await snapshot(e, [id]);
-      await expect(e.ds.bulkImages({ ids: [id, MISSING], action: { type: 'favorite', value: true } })).rejects.toMatchObject({
+      await expect(e.ds.bulkImages({ ids: [id, '999999'], action: { type: 'favorite', value: true } })).rejects.toMatchObject({
         statusCode: 404,
       });
       expect(await snapshot(e, [id])).toEqual(before);
@@ -1299,7 +1302,7 @@ export function undoContract(make: ContractFactory) {
       e.events.length = 0;
       await e.ds.undo(res.undoToken!);
       expect(await e.ds.getImage(id)).toEqual(before);
-      expect(e.events.some((ev) => ev.type === 'library-changed')).toBe(true);
+      expect(e.events.some((ev) => ev.type === 'changed')).toBe(true);
     });
 
     it('同一个 token 撤销两次 → not_found', async () => {
@@ -1344,26 +1347,26 @@ export function kindsContract(make: ContractFactory) {
       const e = env();
       const id = e.id('image', 'i24');
       const r = await e.ds.bulkImages({ ids: [id], action: { type: 'kind', value: 'screenshot' } });
-      expect(r.message).toBe('已把 1 张图标为「截图」');
+      expect(r.message).toBe('已标为「截图」'); // P6：单张和批量是同一个命令，一张图时用单张的说法
       const stats = await e.ds.getStats();
       expect(stats.unrecognizedCount).toBe(6);
       expect(stats.kindCounts).toMatchObject({ illustration: 31, screenshot: 1 });
       expect(Object.values(stats.kindCounts).reduce((a, b) => a + b, 0)).toBe(stats.imageCount);
       const img = await e.ds.getImage(id);
-      expect([img?.kind, img?.status, img?.kindSource, img?.kindReason]).toEqual(['screenshot', 'recognized', 'manual', null]);
+      expect([img?.kind, img?.queue, img?.kindSource, img?.kindReason]).toEqual(['screenshot', 'annex', 'manual', null]);
       expect(ids(e, (await e.ds.listImages({ kind: ['screenshot'] })).items)).toEqual(['i24']);
       expect((await e.ds.listImages({ kind: 'all' })).total).toBe(32);
       expect((await e.ds.listImages({ status: 'unrecognized' })).total).toBe(6);
       const u = await e.ds.listUnrecognized({});
       expect([u.total, u.annexCount]).toEqual([6, 1]);
       const kinds = await e.ds.listContentKinds();
-      expect(kinds.map((k) => k.kind)).toEqual(['illustration', 'comic', 'screenshot', 'text', 'photo', 'meme', 'animated']);
+      expect(kinds.map((k) => k.kind)).toEqual(['illustration', 'comic', 'screenshot', 'text', 'photo', 'meme']);
       expect(kinds[2]).toMatchObject({ count: 1, recentCount: 1 });
       expect(kinds[2]!.previews.map((p) => e.back('image', p.id))).toEqual(['i24']);
 
       await e.ds.undo(r.undoToken!);
       const back = await e.ds.getImage(id);
-      expect([back?.kind, back?.status]).toEqual(['illustration', 'unrecognized']);
+      expect([back?.kind, back?.queue]).toEqual(['illustration', 'art']);
       expect(back?.kindSource).not.toBe('manual');
       expect((await e.ds.getStats()).unrecognizedCount).toBe(7);
     });

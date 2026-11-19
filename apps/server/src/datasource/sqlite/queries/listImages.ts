@@ -11,7 +11,8 @@ import { tagsOfArtist } from '../artists.ts';
 import type { Db } from '../../../db/connection.ts';
 import { hydrateImages, IMAGE_COLS, type ImageRow } from '../hydrate.ts';
 import { THEME_FILTERS } from '../../../services/classify/theme.ts';
-import { ART_KINDS_SQL, UNRECOGNIZED, decodeCursor, encodeCursor, IMAGE_IN_WORK, LIVE_IMAGES, parseId } from '../sql.ts';
+import { ANIMATED_SQL, ART_KINDS_SQL, HAS_CHARACTER, IMAGE_IN_WORK, LIVE_IMAGES, UNRECOGNIZED } from '../../../readmodel/terms.ts';
+import { decodeCursor, encodeCursor, parseId } from '../sql.ts';
 
 const EMPTY_PAGE: Page<ImageItem> = { items: [], nextCursor: null, total: 0 };
 
@@ -19,7 +20,7 @@ const SORT_EXPR: Record<Exclude<ImageSort, 'random'>, string> = {
   page: 'i.page_no',
   addedAt: 'i.added_at',
   modifiedAt: 'i.modified_at',
-  fileName: 'i.file_name COLLATE NOCASE', // better-sqlite3 不支持自定义 collation，所以不是 localeCompare 的顺序
+  fileName: 'i.file_name COLLATE NOCASE', // better-sqlite3 不支持自定义 collation，按 NOCASE 排
   bytes: 'i.bytes',
 };
 const SORT_FIELD: Record<Exclude<ImageSort, 'random'>, keyof ImageRow> = {
@@ -94,7 +95,7 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
     case 'recognized':
       both(
         '+i.excluded_by IS NULL',
-        `(EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id) OR i.original_at IS NOT NULL OR NOT (${ART_KINDS_SQL}))`,
+        `(${HAS_CHARACTER('i')} OR i.original_at IS NOT NULL OR NOT (${ART_KINDS_SQL}))`,
       );
       break;
     case 'unrecognized':
@@ -137,6 +138,8 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
       p.kinds = JSON.stringify(q.kind);
     }
   }
+  // 是否动图（D5）：和类型是两个维度。只看动图时按入库时间翻页走部分索引 idx_images_animated_live（字面条件，见 ANIMATED_SQL）
+  if (q.animated !== undefined) both(q.animated ? ANIMATED_SQL : 'i.animated = 0');
   // 合集（T38c）：具体 id = 这一本的页；none = 不在合集里的图
   let collection: number | null = null;
   if (q.collectionId === 'none') both('i.collection_id IS NULL');
@@ -233,11 +236,13 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
     where.push(`(instr(search_key(i.file_name), @qk) > 0
       OR EXISTS (SELECT 1 FROM image_tags it WHERE it.image_id = i.id AND it.tag_id IN (SELECT value FROM json_each(@qtags)))
       OR EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id AND ic.character_id IN (SELECT value FROM json_each(@qchars)))
-      OR EXISTS (SELECT 1 FROM image_copyrights x WHERE x.image_id = i.id AND x.work_id IN (SELECT value FROM json_each(@qworks))))`);
+      OR EXISTS (SELECT 1 FROM image_copyrights x WHERE x.image_id = i.id AND x.work_id IN (SELECT value FROM json_each(@qworks)))
+      OR (i.original_at IS NOT NULL AND EXISTS (SELECT 1 FROM works ow WHERE ow.danbooru_tag = 'original' AND ow.id IN (SELECT value FROM json_each(@qworks)))))`);
     countWhere.push(`(instr(search_key(i.file_name), @qk) > 0
       OR i.id IN (SELECT it.image_id FROM image_tags it WHERE it.tag_id IN (SELECT value FROM json_each(@qtags)))
       OR i.id IN (SELECT ic.image_id FROM image_characters ic WHERE ic.character_id IN (SELECT value FROM json_each(@qchars)))
-      OR i.id IN (SELECT x.image_id FROM image_copyrights x WHERE x.work_id IN (SELECT value FROM json_each(@qworks))))`);
+      OR i.id IN (SELECT x.image_id FROM image_copyrights x WHERE x.work_id IN (SELECT value FROM json_each(@qworks)))
+      OR (i.original_at IS NOT NULL AND EXISTS (SELECT 1 FROM works ow WHERE ow.danbooru_tag = 'original' AND ow.id IN (SELECT value FROM json_each(@qworks)))))`);
   }
 
   const from = 'FROM images i';

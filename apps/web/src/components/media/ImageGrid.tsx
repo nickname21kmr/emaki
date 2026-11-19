@@ -9,11 +9,13 @@ import { useMutate } from '@/lib/queries';
 import { useLightbox, useSelection } from '@/lib/stores';
 import { pickRevealed } from '@/lib/undoPlace';
 import { GroupBadge, selectionIds, toggleImageSelection } from './CollectionControls';
+import { TileMarks } from './KindBadge';
 import { useUndoRevealTarget } from '@/lib/useUndoReveal';
 import { justify } from './justify';
 
 const NO_FLASH: ReadonlySet<ID> = new Set();
 import { Thumb } from './Thumb';
+import type { BlurContext } from '@/lib/blur';
 
 export interface ImageGridProps {
   images: ImageItem[];
@@ -25,12 +27,16 @@ export interface ImageGridProps {
   /** 目标行高 */
   rowHeight?: number;
   gap?: number;
-  /** 自定义每张图上的叠加层（右下角信息等） */
+  /** 自定义每张图上的叠加层（自己定位，例如右上角的「新」点） */
   renderOverlay?: (image: ImageItem) => ReactNode;
+  /** 左下角的小标记（类型印、合集页码，不用定位）：和动图标记排成一行，悬停显示角色名时淡出 */
+  renderBadges?: (image: ImageItem) => ReactNode;
   /** 整个列表的总数（看图器显示「N / 总数」并跨分页翻，BR-B1） */
   total?: number;
-  /** 哪些图强制按敏感模糊（没识别过的本子页） */
-  forceBlur?: (image: ImageItem) => boolean;
+  /** 每张的分级可不可信（识别过没有）；和 blurContext 一起决定模糊（共用的 blurReason，附录 #30） */
+  rated?: (image: ImageItem) => boolean;
+  /** 展示场合：本子页是 cautious（分级不可信就打码，bookBlurContext），默认 browse */
+  blurContext?: BlurContext;
   /** 点击图片的默认行为是打开看图器；传这个可以覆盖 */
   onOpen?: (image: ImageItem, index: number) => void;
 }
@@ -52,8 +58,10 @@ export function ImageGrid({
   rowHeight = 240,
   gap = 6,
   renderOverlay,
+  renderBadges,
   onOpen,
-  forceBlur,
+  rated,
+  blurContext,
   total,
 }: ImageGridProps) {
   const { scrollRef, containerRef, width, scrollMargin } = useGridBox();
@@ -133,7 +141,9 @@ export function ImageGrid({
                   onToggle={() => toggleImageSelection(image)}
                   onFavorite={() => favorite.mutate({ ids: selectionIds(image), value: !(image.collectionGroup?.allFavorite ?? image.favorite) })}
                   overlay={renderOverlay?.(image)}
-                  forceBlur={forceBlur?.(image)}
+                  badges={renderBadges?.(image)}
+                  rated={rated?.(image)}
+                  blurContext={blurContext}
                 />
               );
             })}
@@ -317,7 +327,9 @@ function Tile({
   onClick,
   onToggle,
   overlay,
-  forceBlur,
+  badges,
+  rated,
+  blurContext,
   onFavorite,
   flash,
 }: {
@@ -332,11 +344,14 @@ function Tile({
   onClick: (e: React.MouseEvent) => void;
   onToggle: () => void;
   overlay?: ReactNode;
-  forceBlur?: boolean;
+  badges?: ReactNode;
+  rated?: boolean;
+  blurContext?: BlurContext;
   onFavorite: () => void;
 }) {
   const thumbWidth = gridThumbWidth(width);
   const starred = image.collectionGroup?.allFavorite ?? image.favorite;
+  const names = !selecting && width >= 120 && height >= 120;
   return (
     <div
       className={cn(
@@ -361,14 +376,15 @@ function Tile({
           className="size-full"
           blurBadge="corner"
           revealOnHover
-          forceBlur={forceBlur}
+          rated={rated}
+          blurContext={blurContext}
           imgClassName="group-hover/tile:scale-[1.03]"
         />
       </button>
 
-      <GroupBadge image={image} forceBlur={forceBlur} />
+      <GroupBadge image={image} rated={rated} blurContext={blurContext} />
       {/* 悬停：底部渐变 + 这是谁（BR-5）；多选时和窄格子不显示 */}
-      {!selecting && width >= 120 && height >= 120 && (
+      {names && (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-linear-to-t from-black/55 via-black/20 to-transparent opacity-0 transition-opacity duration-300 group-hover/tile:opacity-100">
           <span
             className={cn(
@@ -380,7 +396,8 @@ function Tile({
               ? image.characterNames.slice(0, 2).join('、') + (image.characterNames.length > 2 ? ` 等 ${image.characterNames.length} 位` : '')
               : image.original
                 ? '原创'
-                : image.kind === 'illustration' || image.kind === 'comic'
+                : // 要找角色还没找到的才写「未识别」：读服务端给的所在队列，不自己按类型推（附录 #27）
+                  image.queue === 'art' || image.queue === 'shelved' || image.queue === 'book'
                   ? '未识别'
                   : ''}
           </span>
@@ -403,6 +420,10 @@ function Tile({
         </button>
       )}
       {overlay}
+      {/* 左下角：类型印、页码、动图标记（D5）；悬停显示角色名时让位 */}
+      <TileMarks animated={image.animated} fadeOnHover={names}>
+        {badges}
+      </TileMarks>
 
       <MountFrame selected={selected} />
       {selectable && <SelectCircle selected={selected} selecting={selecting} onToggle={onToggle} />}

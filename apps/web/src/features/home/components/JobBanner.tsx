@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { JobFilmstrip } from '@/components/media/JobFilmstrip';
 import { Button } from '@/components/ui';
 import { cn } from '@/lib/cn';
-import { api } from '@/lib/api';
+import { api, withMeta } from '@/lib/api';
 import { useRunningJob } from '@/lib/events';
 import { formatCount, formatPercent } from '@/lib/format';
 import { useMutate } from '@/lib/queries';
@@ -17,7 +17,7 @@ export function JobBanner() {
   const job = useRunningJob();
   // cancelJob 只返回 { ok }，补成 MutationResult 好让 useMutate 统一出 toast
   const cancel = useMutate((id: ID) =>
-    api.cancelJob(id).then(() => ({ ok: true as const, message: '已取消后台任务', undoToken: null })),
+    api.cancelJob(id).then((r) => withMeta({ ok: true as const, message: '已取消后台任务', undoToken: null }, r)),
   );
 
   const fraction = job?.total ? job.progress / job.total : null;

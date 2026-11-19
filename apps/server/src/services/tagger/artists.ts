@@ -7,6 +7,8 @@
  */
 import type { JobRunner } from '../../core/jobs.ts';
 import type { Db } from '../../db/connection.ts';
+import { setAutoArtists } from '../../domain/curation/artists.ts';
+import { markArtistsChecked } from '../../domain/evidence/artists.ts';
 import { toAbs } from '../fs/paths.ts';
 import { acquireTagger, releaseTagger, type TaggerLike, type TaggerStartOptions } from './client.ts';
 import { NOT_SKIPPED, noteReadFailures, skipIds } from './readBackoff.ts';
@@ -14,6 +16,8 @@ import { ResilientTagger } from './resilient.ts';
 import { ensureModelFiles } from './download.ts';
 import { clampBatch, findModel } from './models.ts';
 import type { HostItemResult } from './protocol.ts';
+import { COUNTED, ILLUSTRATION } from '../../readmodel/terms.ts';
+import { formatEta } from '@emaki/shared';
 
 export const ARTIST_THRESHOLD = 0.35;
 /** 能认画师的模型 */
@@ -24,16 +28,12 @@ export const ARTIST_MODEL = 'A1yCE/pixai-tagger-v1.0-onnx-fp16';
  */
 const IN_FLIGHT = 2;
 
-/** 记下一张图的画师（替换旧的），并标记跑过；用户手动改过画师的图不动。必须在事务里调用 */
+/**
+ * 记下一张图的画师（替换旧的，归类模块的自动画师），并标记跑过（证据模块的进度）；用户手动改过画师的图只标跑过。必须在事务里调用
+ */
 export function writeArtists(db: Db, imageId: number, artists: [string, number][], now: string): void {
-  if (db.prepare('SELECT artist_manual FROM images WHERE id = ?').pluck().get(imageId)) {
-    db.prepare('UPDATE images SET artist_checked_at = ? WHERE id = ? AND artist_checked_at IS NULL').run(now, imageId);
-    return;
-  }
-  db.prepare('DELETE FROM image_artists WHERE image_id = ?').run(imageId);
-  const ins = db.prepare('INSERT INTO image_artists (image_id, artist, score) VALUES (?, ?, ?)');
-  for (const [a, s] of artists) ins.run(imageId, a, s);
-  db.prepare('UPDATE images SET artist_checked_at = ? WHERE id = ?').run(now, imageId);
+  const changed = setAutoArtists(db, imageId, artists);
+  markArtistsChecked(db, null, [imageId], now, !changed);
 }
 
 /**
@@ -41,8 +41,7 @@ export function writeArtists(db: Db, imageId: number, artists: [string, number][
  * 读不了、正在退避的（readBackoff）先不算，免得自动续补为它们反复加载模型
  */
 const PENDING = `FROM images i JOIN library_roots r ON r.id = i.root_id
-  WHERE i.artist_checked_at IS NULL AND i.tagged_at IS NOT NULL AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL
-    AND r.enabled = 1 AND r.removed_at IS NULL AND i.content_kind = 'illustration' AND ${NOT_SKIPPED}`;
+  WHERE i.artist_checked_at IS NULL AND i.tagged_at IS NOT NULL AND ${COUNTED()} AND ${ILLUSTRATION} AND ${NOT_SKIPPED}`;
 
 export function artistPendingCount(db: Db): number {
   return (db.prepare(`SELECT COUNT(*) AS n ${PENDING}`).get({ skip: skipIds() }) as { n: number }).n;
@@ -147,8 +146,8 @@ export function createArtistJobRunner(deps: ArtistJobDeps): JobRunner {
         done += head.rows.length;
         const rate = done / ((performance.now() - t0) / 1000);
         const left = (total - done) / rate;
-        const eta = left < 60 ? `${Math.ceil(left)} 秒` : left < 3600 ? `${Math.ceil(left / 60)} 分钟` : `${(left / 3600).toFixed(1)} 小时`;
-        ctx.advance(head.rows.length, `识别画师：${done} / ${total} · 认出 ${found} 张 · ${rate.toFixed(1)} 张/秒 · 剩余约 ${eta}`);
+        ctx.setEta?.(left);
+        ctx.advance(head.rows.length, `识别画师：${done} / ${total} · 认出 ${found} 张 · ${rate.toFixed(1)} 张/秒 · 剩余约 ${formatEta(left) ?? '—'}`);
       }
     } finally {
       client.close();

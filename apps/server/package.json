@@ -9,7 +9,8 @@
     "start": "tsx src/index.ts",
     "typecheck": "tsc -p tsconfig.json",
     "tagger": "tsx src/services/tagger/cli.ts",
-    "build:zh-dict": "tsx scripts/build-zh-dict.ts"
+    "build:zh-dict": "tsx scripts/build-zh-dict.ts",
+    "build:character-index": "tsx scripts/build-character-index.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.3.0",

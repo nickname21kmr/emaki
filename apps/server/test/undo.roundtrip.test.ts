@@ -5,7 +5,7 @@
  */
 import type { MutationResult } from '@emaki/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { SqliteDataSource } from '../src/datasource/sqlite/SqliteDataSource.ts';
+import type { SqliteDataSource } from './helpers/client.ts';
 import { sqliteFactory, type ContractEnv, type Kind } from './contract/harness.ts';
 import { dumpCore } from './helpers/dump.ts';
 
@@ -17,7 +17,7 @@ beforeEach(async () => {
 });
 afterEach(() => env.close());
 
-const id = (kind: Kind, mockId: string) => env.id(kind, mockId);
+const id = (kind: Kind, fixtureId: string) => env.id(kind, fixtureId);
 const img = (...xs: string[]) => xs.map((x) => id('image', x));
 
 interface Op {
@@ -213,7 +213,7 @@ describe('改类型提升了建议、命中排除规则', () => {
     const i24 = Number(id('image', 'i24'));
     await ds.createExclusion({ kind: 'character', target: id('character', 'c1') });
     await ds.updateImage(id('image', 'i24'), { kind: 'screenshot' });
-    ds.ctx.db.prepare('UPDATE character_suggestions SET score = 0.99 WHERE image_id = ?').run(i24);
+    ds.ctx.db.prepare('UPDATE character_evidence SET score = 0.99 WHERE image_id = ?').run(i24);
     const before = dumpCore(ds.ctx.db);
     const r = await ds.bulkImages({ ids: img('i24'), action: { type: 'kind', value: 'illustration' } });
     expect(ds.ctx.db.prepare('SELECT excluded_by FROM images WHERE id = ?').pluck().get(i24)).not.toBeNull();
@@ -228,7 +228,7 @@ describe('改类型提升了建议、命中排除规则', () => {
     const cid = Number(await makeCollection());
     const made = await ds.createCharacter({ name: 'X', workIds: [], danbooruTag: 'xx_(emaki_test)' });
     await ds.updateImage(String(page), { kind: 'screenshot' });
-    db.prepare('INSERT OR REPLACE INTO character_suggestions (image_id, danbooru_tag, score) VALUES (?, ?, 0.99)').run(page, 'xx_(emaki_test)');
+    db.prepare('INSERT OR REPLACE INTO character_evidence (image_id, tag, score, provider) VALUES (?, ?, 0.99, \'tagger\')').run(page, 'xx_(emaki_test)');
     await ds.createExclusion({ kind: 'character', target: made.character.id });
     const pos = () => db.prepare('SELECT collection_id, page_no, excluded_by FROM images WHERE id = ?').get(page) as Record<string, unknown>;
     expect(pos()).toMatchObject({ collection_id: cid, excluded_by: null });

@@ -6,10 +6,11 @@ import type { ContentKind, Rating, Settings } from '@emaki/shared';
 import type { EventBus } from '../../core/events.ts';
 import type { JobContext } from '../../core/jobs.ts';
 import type { Db } from '../../db/connection.ts';
-import { CharacterCatalog } from '../catalog/characterCatalog.ts';
+import { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import { CopyrightResolver, type CopyrightSource } from '../catalog/copyrights.ts';
 import { toAbs } from '../fs/paths.ts';
-import { backfillClassification } from '../classify/backfill.ts';
+import { analyze, recordCameras } from '../../domain/analysis/analyze.ts';
+import { collectingTx } from '../../domain/tx.ts';
 import { readCameraFromExif, readJpegExifHead } from '../image/exif.ts';
 import type { TagStage } from '../pipeline.ts';
 import { acquireTagger, releaseTagger, shutdownTagger, type TaggerLike, type TaggerStartOptions } from './client.ts';
@@ -17,10 +18,12 @@ import { ARTIST_THRESHOLD } from './artists.ts';
 import { ensureModelFiles, isModelReady } from './download.ts';
 import { clampBatch, findModel, TAGGER_MODELS, type TaggerModelSpec } from './models.ts';
 import type { HostItemResult, HostThresholds } from './protocol.ts';
-import { IN_COMIC } from '../classify/comicAreas.ts';
 import { NOT_SKIPPED, noteReadFailures, skipIds } from './readBackoff.ts';
 import { ResilientTagger } from './resilient.ts';
-import { TagResultWriter } from './writer.ts';
+import { TagResultWriter } from '../../domain/evidence/tagger.ts';
+import type { Change } from '../../propagation/changes.ts';
+import { COUNTED, NO_CHARACTER, TAGGABLE } from '../../readmodel/terms.ts';
+import { formatEta } from '@emaki/shared';
 
 export interface TagJobDeps {
   db: Db;
@@ -30,8 +33,13 @@ export interface TagJobDeps {
   getTaggerSettings(): Settings['tagger'];
   /** 每次任务 new 一个 catalog；T11 / T12 注入升级版 */
   makeCatalog?: () => { catalog: CharacterCatalog; copyrights: CopyrightSource };
-  /** T17：同一事务里对本批图应用排除规则 */
-  afterBatchInTx?: (imageIds: number[]) => void;
+  /** 每批写完、同一事务里：声明变化（见 TagResultWriter 的 afterBatchInTx） */
+  afterBatchInTx?: (imageIds: number[], changes: Change[]) => void;
+  /**
+   * 读到的相机交给分析模块写，读到相机的重判类型；fn 在一个事务里执行，声明的变化（image.kindChanged）交给变更传播。
+   * 引擎里是 ctx.apply；不给时只开事务、不传播（单元测试）
+   */
+  applyAnalysis?: (fn: (emit: (c: Change) => void) => void) => void;
   log?: (msg: string) => void;
   now?: () => number;
   // 测试注入
@@ -61,16 +69,16 @@ function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T | null> 
  * - 旧模型轮：没识别过、文件时间早于 @before
  * - 主模型轮：没识别过、文件时间不早于 @before；以及别的模型识别过、没认出角色、文件时间不早于 @before 的（@retryOld = 1 时不看时间）；
  *   以及用户在「未识别」里要求重新识别的（retag = 1，不管之前是哪个模型认的）
- * 两轮都跳过相机照片（@skipCamera = 1）和按漫画导入的文件夹。@before 为 NULL 时主模型轮覆盖全部。
+ * 两轮都只看计入统计的图（COUNTED），跳过相机照片（@skipCamera = 1）和按漫画导入的文件夹（TAGGABLE，和首页「还没识别」同一份口径）。
+ * @before 为 NULL 时主模型轮覆盖全部。
  */
-const BASE = `r.enabled = 1 AND r.removed_at IS NULL AND NOT ${IN_COMIC('i')} AND i.missing = 0 AND i.trashed_at IS NULL AND i.excluded_by IS NULL
-  AND NOT (@skipCamera = 1 AND i.content_kind = 'photo' AND COALESCE(i.camera, '') <> '')`;
+const BASE = `${COUNTED()} AND ${TAGGABLE}`;
 const NEWER = '(@before IS NULL OR i.modified_at >= @before)';
 const WHERE_PRIMARY = `${BASE} AND (
   (i.tagged_at IS NULL AND ${NEWER})
   OR i.retag = 1
   OR (i.tagged_at IS NOT NULL AND i.tagger_model IS NOT @model AND (${NEWER} OR @retryOld = 1)
-      AND NOT EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id)))`;
+      AND ${NO_CHARACTER('i')}))`;
 const WHERE_LEGACY = `${BASE} AND i.tagged_at IS NULL AND i.modified_at < @before`;
 const count = (where: string) => `SELECT COUNT(*) AS n FROM images i JOIN library_roots r ON r.id = i.root_id WHERE ${where} AND ${NOT_SKIPPED}`;
 const batch = (where: string) => `SELECT i.id AS id, r.path AS rootPath, i.rel_path AS relPath, i.format AS format, i.camera AS camera
@@ -109,18 +117,11 @@ interface Row {
  * 所以要提前多发几个；一张一批的模型（PixAI）每个请求只有一张，多给一个
  */
 const inFlight = (batchSize: number) => (batchSize === 1 ? 4 : 3);
-const EMIT_MS = 5000;
 /** 识别胶卷的 job-item 最短间隔（每秒最多 4 条） */
 const ITEM_MS = 250;
 
 const mb = (n: number) => (n / 1048576).toFixed(0);
 
-function formatEta(sec: number): string {
-  if (!Number.isFinite(sec)) return '—';
-  if (sec < 60) return `${Math.ceil(sec)} 秒`;
-  if (sec < 3600) return `${Math.ceil(sec / 60)} 分钟`;
-  return `${(sec / 3600).toFixed(1)} 小时`;
-}
 
 export function createTagJobRunner(deps: TagJobDeps): TagRunner {
   const { db } = deps;
@@ -181,7 +182,7 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
     const selBatch = db.prepare(batch(pass.where));
     const itemImage = db.prepare('SELECT dominant_color, rating, content_kind FROM images WHERE id = ?');
     const itemChars = db.prepare(
-      'SELECT c.name, ic.score FROM image_characters ic JOIN characters c ON c.id = ic.character_id WHERE ic.image_id = ? ORDER BY ic.score DESC',
+      'SELECT c.name, ic.evidence_score AS score FROM image_characters ic JOIN characters c ON c.id = ic.character_id WHERE ic.image_id = ? ORDER BY ic.evidence_score DESC',
     );
 
     const { catalog, copyrights } = deps.makeCatalog?.() ?? {
@@ -191,8 +192,6 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
     const writer = new TagResultWriter(db, catalog, copyrights, {
       repo: spec.repo,
       generalThreshold: t.generalThreshold,
-      characterThreshold: t.characterThreshold,
-      autoAcceptThreshold: t.autoAcceptThreshold,
       afterBatchInTx: deps.afterBatchInTx,
       now: deps.now,
       artists: !!t.artists && spec.labelsFormat === 'pixai-json',
@@ -251,7 +250,8 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
       if (fallbackNote) ctx.setMessage(fallbackNote);
       const th: HostThresholds = {
         general: t.generalThreshold,
-        character: Math.min(t.characterThreshold, t.autoAcceptThreshold),
+        // 角色候选：达到建议阈值或模型这个来源的自动阈值（较低的那个）的都要，全部记成证据
+        character: Math.min(t.characterThreshold, t.autoAcceptBySource?.tagger ?? t.autoAcceptThreshold),
         ...(t.artists ? { artist: ARTIST_THRESHOLD } : {}),
       };
       const B = tagger.current.batchSize;
@@ -260,7 +260,6 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
       let done = 0;
       let skipped = 0;
       const t0 = performance.now();
-      let lastEmit = t0;
       let lastItem = 0;
 
       // 识别胶卷（SEL-19）：这一批里挑一张（优先认出了角色的），限流每秒最多 4 条
@@ -285,8 +284,9 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
         });
       };
 
-      // 缩略图任务最后才读相机信息；和它并行时，这里先把本批 JPEG 的相机读出来，相机照片当场跳过（不送进模型）
-      const setCamera = db.prepare('UPDATE images SET camera = ? WHERE id = ?');
+      // 缩略图任务最后才读相机信息；和它并行时，这里先把本批 JPEG 的相机读出来，相机照片当场跳过（不送进模型）。
+      // 相机由分析模块写，类型变了由它声明（以前这里改了类型不声明，附录 #3）
+      const applyAnalysis = deps.applyAnalysis ?? ((fn: (emit: (c: Change) => void) => void) => db.transaction(() => fn(collectingTx(db).changed))());
       const next = async (): Promise<Row[]> => {
         for (;;) {
           const rows = selBatch.all({ ...params, beforeId, limit: B }) as Row[];
@@ -298,10 +298,10 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
             unknown.map(async (r) => [r, await readJpegExifHead(toAbs(r.rootPath, r.relPath)).then(readCameraFromExif, () => '')] as const),
           );
           const hits = cams.filter(([, c]) => c).map(([r]) => r.id);
-          db.transaction(() => {
-            for (const [r, c] of cams) setCamera.run(c, r.id);
-            if (hits.length) backfillClassification(db, { ids: hits });
-          })();
+          applyAnalysis((emit) => {
+            recordCameras(db, cams.map(([r, camera]) => ({ id: r.id, camera })));
+            analyze({ db, changed: emit }, hits);
+          });
           if (!hits.length || !params.skipCamera) return rows;
           advance(hits.length);
           skipped += hits.length;
@@ -348,14 +348,10 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
         const rate = done / ((performance.now() - t0) / 1000);
         // 剩余时间只按这一轮的速度估（旧模型快、新模型慢）；后面还有轮次时注明
         const later = counts.slice(passes.indexOf(pass) + 1).reduce((a, b) => a + b, 0);
-        advance(
-          rows.length,
-          `${tag}${done} / ${total} · ${deviceLabel} · ${rate.toFixed(1)} 张/秒 · 这一轮剩余约 ${formatEta((total - done) / rate)}${later ? ` · 之后还有 ${later} 张用新模型` : ''}`,
-        );
-        if (performance.now() - lastEmit > EMIT_MS) {
-          deps.bus.emit({ type: 'library-changed', reason: 'tag' });
-          lastEmit = performance.now();
-        }
+        const left = (total - done) / rate;
+        ctx.setEta?.(left);
+        const rest = `这一轮剩余约 ${formatEta(left) ?? '—'}${later ? ` · 之后还有 ${later} 张用新模型` : ''}`;
+        advance(rows.length, `${tag}${done} / ${total} · ${deviceLabel} · ${rate.toFixed(1)} 张/秒 · ${rest}`);
       }
       if (yielded && !ctx.signal.aborted) return { message: null, yielded: true };
       const s = writer.stats;

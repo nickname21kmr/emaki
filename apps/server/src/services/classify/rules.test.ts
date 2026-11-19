@@ -1,6 +1,6 @@
 import type { ContentKind, ImageFormat } from '@emaki/shared';
 import { describe, expect, it } from 'vitest';
-import { classifyContent, type ClassifyResult } from './rules.ts';
+import { classifyContent, describeAnimation, isAnimated, type ClassifyResult } from './rules.ts';
 
 interface Case {
   name: string;
@@ -23,7 +23,11 @@ const CASES: Case[] = [
   { name: '表情包文件夹里的 gif 仍是表情', path: '表情包2/a.gif', format: 'gif', kind: 'meme', source: 'folder' },
   { name: '表情差分不是表情包', path: '立绘/表情差分/01.png', kind: 'illustration', source: 'default' },
   { name: 'N话 文件夹', path: '半夜的X仪式 3话/012.jpg', format: 'jpeg', kind: 'comic', source: 'folder' },
-  { name: 'gif → 动图', path: 'a.gif', format: 'gif', kind: 'animated', source: 'format' },
+  // D5：动图不是类型，GIF 照样按其余规则判类型
+  { name: 'gif 不再单列类型：没识别的按插画', path: 'a.gif', format: 'gif', kind: 'illustration', source: 'default' },
+  { name: '动的插画（标签）', path: 'a.gif', format: 'gif', tags: { '1girl': 0.99 }, kind: 'illustration', source: 'tags' },
+  { name: '动的表情（标签）', path: 'a.gif', format: 'gif', tags: { meme: 0.8 }, kind: 'meme', source: 'tags' },
+  { name: 'N话 文件夹里的 gif 是漫画', path: '某漫画 3话/01.gif', format: 'gif', kind: 'comic', source: 'folder' },
   { name: '漫画标签', tags: { comic: 0.93, monochrome: 0.99, speech_bubble: 0.7 }, kind: 'comic', source: 'tags' },
   { name: '低分漫画 + 单色 + 竖版', w: 1000, h: 1500, tags: { comic: 0.46, monochrome: 0.99 }, kind: 'comic', source: 'tags' },
   { name: '低分漫画 + 单色 + 横版 → 分镜截取', w: 1500, h: 1000, tags: { comic: 0.46, monochrome: 0.99 }, kind: 'meme', source: 'tags' },
@@ -85,5 +89,39 @@ describe('classifyContent', () => {
       const r = classifyContent({ fileName, relPath: `Vol.01/${fileName}`, width: 1080, height: 2400, format: 'png', camera: null, tags, comicRoot: true });
       expect(r).toEqual({ kind: 'comic', source: 'folder', evidence: '按漫画导入的文件夹' });
     }
+  });
+});
+
+describe('是否动图（D5）', () => {
+  it('按帧数、格式判断：HTML 一律算，读过帧数的看帧数，没读过的 GIF 先算动图', () => {
+    const cases: [ImageFormat, number | null, boolean][] = [
+      ['gif', 24, true],
+      ['gif', 1, false],
+      ['gif', null, true],
+      ['webp', 2, true],
+      ['png', 8, true],
+      ['avif', 3, true],
+      ['webp', 1, false],
+      ['png', null, false],
+      ['jpeg', null, false],
+      ['html', 12, true],
+      ['html', 1, true],
+      ['html', null, true],
+    ];
+    for (const [format, frames, want] of cases) expect([format, frames, isAnimated({ format, frames })]).toEqual([format, frames, want]);
+  });
+
+  it('判定依据写成人话', () => {
+    expect(describeAnimation({ format: 'gif', frames: 24 })).toBe('GIF · 24 帧');
+    expect(describeAnimation({ format: 'webp', frames: 2 })).toBe('WEBP · 2 帧');
+    expect(describeAnimation({ format: 'html', frames: 12 })).toBe('HTML 逐帧动画 · 12 帧');
+    expect(describeAnimation({ format: 'gif', frames: null })).toBe('GIF（帧数还没读）');
+    expect(describeAnimation({ format: 'gif', frames: 1 })).toBeNull();
+    expect(describeAnimation({ format: 'png', frames: null })).toBeNull();
+  });
+
+  it('GIF 不再排在尺寸、标签前面：手机屏幕尺寸的 GIF（录屏）是截图', () => {
+    const base = { fileName: 'a.gif', relPath: 'x/a.gif', width: 1080, height: 2244, format: 'gif' as const, camera: null, tags: null };
+    expect(classifyContent(base)).toEqual({ kind: 'screenshot', source: 'size', evidence: '尺寸 1080×2244 与手机屏幕一致' });
   });
 });

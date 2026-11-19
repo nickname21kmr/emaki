@@ -12,7 +12,8 @@ const ANNEX_SUB: Record<string, string> = {
   text: '文字',
   photo: '照片',
   meme: '表情',
-  animated: '动图',
+  // 不是类型（D5）：别册里跨类型的动图筛选
+  animated: '动图 · 跨类型',
 };
 
 /** 按路由给出页头的册号（SEL-3）：整个应用是一套「私人相簿」，每个页面是其中一册 */
@@ -28,7 +29,7 @@ export function getChapter(pathname: string, now: Date = new Date()): Chapter {
     case 'collections':
       return { mark: '合集', sub: '本子 · 画集 · 组图' };
     case 'annex':
-      return { mark: '别册', sub: ANNEX_SUB[b ?? ''] ?? '截图 · 漫画 · 文字 · 照片 · 表情 · 动图' };
+      return { mark: '别册', sub: ANNEX_SUB[b ?? ''] ?? '截图 · 漫画 · 文字 · 照片 · 表情' };
     case 'unrecognized':
       return { mark: '整理', sub: '其一' };
     case 'duplicates':

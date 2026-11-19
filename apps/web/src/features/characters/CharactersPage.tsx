@@ -21,6 +21,7 @@ import { WorkChips } from './overview/WorkChips';
 import { WorksShelf } from './overview/WorksShelf';
 import { useWorkIndex } from './overview/works';
 import { EASE_OUT } from '@/lib/motion';
+import { PageBlocks, type BlockRenderers } from '@/blocks/PageBlocks';
 
 const EASE = EASE_OUT;
 
@@ -91,6 +92,58 @@ export function CharactersPage() {
   const scopeKey = `${work ?? 'all'}|${source ?? ''}`;
   useScrollMemory(scrollRef, `${scopeKey}|${view}`);
 
+  const blocks: BlockRenderers<'characters'> = {
+    'characters.top': () =>
+      // 总览的列表视图 = 按角色看全部，不需要 Top
+      showBento &&
+      !(work === null && !filtered && view === 'list') && (
+        <div className={overview ? 'mb-10' : 'mb-8'}>
+          <TopBento
+            workId={work}
+            byId={byId}
+            title="你最常看的"
+            hint={work === 'recent' ? '最近 30 天有新图 · 按收藏张数' : workObj ? `${workObj.name} · 按收藏张数` : '按收藏张数'}
+            actions={
+              workObj ? (
+                <Link
+                  to={`/works/${workObj.id}`}
+                  className="group/link inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+                >
+                  作品页
+                  <ArrowUpRight className="size-3.5 transition-transform duration-300 group-hover/link:translate-x-px group-hover/link:-translate-y-px" />
+                </Link>
+              ) : undefined
+            }
+          />
+        </div>
+      ),
+    'characters.recent': () => <OverviewRecent byId={byId} onSeeAll={() => selectWork('recent', true)} />,
+    'characters.works': () => (
+      <WorksShelf
+        onPick={(id) => selectWork(id, true)}
+        onShowAll={() => {
+          setView('list');
+          scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+      />
+    ),
+    'characters.list': () => (
+      <FlatCharacters
+        view={view}
+        work={work}
+        q={qTrimmed}
+        sort={sort}
+        source={source}
+        byId={byId}
+        customMatchable={stats?.customMatchableCount ?? 0}
+        onSortChange={(v) => params.setSort(v, work)}
+        onClearQuery={() => params.setQ('')}
+        onClearSource={() => params.setSource(undefined)}
+        onCreate={openCreate}
+      />
+    ),
+  };
+
   return (
     <>
       <PageHeader
@@ -126,34 +179,8 @@ export function CharactersPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, ease: EASE }}
         >
-          {/* 总览的列表视图 = 按角色看全部，不需要 Top */}
-          {showBento && !(work === null && !filtered && view === 'list') && (
-            <div className={overview ? 'mb-10' : 'mb-8'}>
-              <TopBento
-                workId={work}
-                byId={byId}
-                title="你最常看的"
-                hint={
-                  work === 'recent'
-                    ? '最近 30 天有新图 · 按收藏张数'
-                    : workObj
-                      ? `${workObj.name} · 按收藏张数`
-                      : '按收藏张数'
-                }
-                actions={
-                  workObj ? (
-                    <Link
-                      to={`/works/${workObj.id}`}
-                      className="group/link inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-fg-muted transition-colors hover:bg-hover hover:text-fg"
-                    >
-                      作品页
-                      <ArrowUpRight className="size-3.5 transition-transform duration-300 group-hover/link:translate-x-px group-hover/link:-translate-y-px" />
-                    </Link>
-                  ) : undefined
-                }
-              />
-            </div>
-          )}
+          {/* 区块按注册表的顺序（blocks/registry.ts 的 characters）：scope 一片在作用域淡入里，overview / list 在视图淡入里 */}
+          <PageBlocks page="characters" region="scope" render={blocks} />
 
           <motion.div
             key={view}
@@ -163,29 +190,10 @@ export function CharactersPage() {
           >
             {overview ? (
               <div className="space-y-10">
-                <OverviewRecent byId={byId} onSeeAll={() => selectWork('recent', true)} />
-                <WorksShelf
-                  onPick={(id) => selectWork(id, true)}
-                  onShowAll={() => {
-                    setView('list');
-                    scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
-                  }}
-                />
+                <PageBlocks page="characters" region="overview" render={blocks} />
               </div>
             ) : (
-              <FlatCharacters
-                view={view}
-                work={work}
-                q={qTrimmed}
-                sort={sort}
-                source={source}
-                byId={byId}
-                customMatchable={stats?.customMatchableCount ?? 0}
-                onSortChange={(v) => params.setSort(v, work)}
-                onClearQuery={() => params.setQ('')}
-                onClearSource={() => params.setSource(undefined)}
-                onCreate={openCreate}
-              />
+              <PageBlocks page="characters" region="list" render={blocks} />
             )}
           </motion.div>
         </motion.div>

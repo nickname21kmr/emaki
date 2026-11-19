@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import path from 'node:path';
 import { z } from 'zod';
-import type { DataSource } from '../datasource/DataSource.ts';
+import type { SqliteDataSource } from '../datasource/sqlite/SqliteDataSource.ts';
 import { config } from '../config.ts';
 import { BadRequestError } from '../http/errors.ts';
 import { parse } from '../http/validate.ts';
@@ -10,7 +10,7 @@ import { apiModelsInput, fetchApiModels } from './apiModels.ts';
 
 const origin = (url: string) => (URL.canParse(url) ? new URL(url).origin : '');
 
-export function assistantRoutes(app: FastifyInstance, ds: DataSource) {
+export function assistantRoutes(app: FastifyInstance, ds: SqliteDataSource) {
   const streams = new Set<import('node:http').ServerResponse>();
   const service = new AssistantService(path.join(config.dataDir, 'assistant'), config.repoRoot, () => {
     const address = app.server.address(); return `http://127.0.0.1:${typeof address === 'object' && address ? address.port : config.port}/api/assistant/mcp`;
@@ -71,9 +71,9 @@ export function assistantRoutes(app: FastifyInstance, ds: DataSource) {
     const auth = service.authorize(token);
     // MCP SDK 和 sharp 用到时才加载，助手没开时启动不付这份开销
     const [{ StreamableHTTPServerTransport }, { createLibraryMcp }] = await Promise.all([import('@modelcontextprotocol/sdk/server/streamableHttp.js'), import('./tools.ts')]);
-    // SQL 工具直接读库文件；演示模式下 dataDir 是演示库自己的目录
-    const file = path.join(config.dataDir, 'emaki.sqlite');
-    const server = createLibraryMcp(app, ds, file, service, auth.scope, auth.sessionId);
+    // SQL 工具直接读引擎正在用的库文件（演示模式是 data/demo 里那份，不会读到真实图库）；内存库没有文件，不提供
+    const file = ds.databaseFile ?? null;
+    const server = createLibraryMcp(ds.registry, file, service, auth.scope, auth.sessionId);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport); reply.hijack();
     reply.raw.once('close', () => { void server.close(); });

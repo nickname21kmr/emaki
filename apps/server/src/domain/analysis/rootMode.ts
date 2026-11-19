@@ -1,0 +1,53 @@
+/**
+ * 图库文件夹「按漫画导入」（library_roots.content_mode = 'comic'）要一直成立的几条：
+ * - 漫画文件夹里没手动改过类型的页都按漫画判（来源 folder、依据「按漫画导入的文件夹」），别的文件夹里没有这样判的页；
+ * - 漫画文件夹里没识别过、没手动改过分级的页用文件夹选的分级；
+ * - 漫画文件夹里的页不挂自动关联的角色（改成漫画之前识别过的页会带着一堆误认的角色；手动加的、单张采纳的留着，附录 #6）。
+ *   去掉关联经归类模块（domain/curation 的 unlink，按来历只删 auto 的）；
+ *   清掉角色的页同时标成要重新识别：在漫画文件夹里识别任务不领它，离开之后（改回插画、移出去、磁盘上挪走）就会重新认。
+ * 扫描开始后才切换导入方式（扫描按开始时的设置判）、应用内把图移进 / 移出漫画文件夹之后调用一次，把不符合的行改过来。
+ * 能撤销的调用方先用 recordRootModeUndo 记下会动的行。
+ */
+import type { Db } from '../../db/connection.ts';
+import type { UndoRecorder } from '../../datasource/sqlite/undo.ts';
+import { snapshotAutoLinks, unlinkEach } from '../curation/links.ts';
+import { rateComicPages } from '../curation/marks.ts';
+import { markComicRetag, snapshotRetag } from '../evidence/retag.ts';
+import type { Change } from '../../propagation/changes.ts';
+import { backfillClassification } from './classify.ts';
+import { IN_COMIC } from '../../services/classify/comicAreas.ts';
+import { COMIC_ROOT_EVIDENCE } from '../../services/classify/rules.ts';
+
+/**
+ * ids 不传 = 全库检查（一次全表扫描，扫描结束后用）；返回改了的行数。
+ * changed：去掉角色时归类模块声明的变化交给谁（ctx.changed、反应的 emit）；测试里可以不传
+ */
+export function syncRootModes(db: Db, ids?: number[], changed: (c: Change) => void = () => {}): number {
+  const scope = ids ? 'AND i.id IN (SELECT value FROM json_each(@ids))' : '';
+  const p = { ids: JSON.stringify(ids ?? []), evidence: COMIC_ROOT_EVIDENCE };
+  const stale = db
+    .prepare(`SELECT i.id FROM images i WHERE i.content_kind_manual = 0 AND (${IN_COMIC('i')}) <> (i.content_kind_evidence IS @evidence) ${scope}`)
+    .pluck()
+    .all(p) as number[];
+  if (stale.length) backfillClassification(db, { ids: stale });
+  // 自动分级（归类模块）：没识别过、没手动改过分级的页用范围选的分级
+  const rated = rateComicPages(db, ids);
+  // 要清角色的页先标重新识别（证据模块；只标真被清掉的，本来就没认出角色的不用重跑）
+  const retagged = markComicRetag(db, ids);
+  const autoLinks = db
+    .prepare(
+      `SELECT image_id AS imageId, character_id AS characterId FROM image_characters
+       WHERE decision = 'auto' AND image_id IN (SELECT i.id FROM images i WHERE ${IN_COMIC('i')} ${scope})`,
+    )
+    .all(p) as { imageId: number; characterId: number }[];
+  // 规则去掉的，不记否决（离开漫画文件夹后重新识别还可以认回来）；撤销由调用方事先记的快照还原（recordRootModeUndo）
+  const unlinked = unlinkEach({ db, changed }, null, autoLinks, { veto: false, only: (r) => r.decision === 'auto' }).length;
+  return retagged + stale.length + rated + unlinked;
+}
+
+/** 撤销用：syncRootModes 会动的自动关联和重新识别标记，在调用之前记下（ids 是之后要同步的图） */
+export function recordRootModeUndo(u: UndoRecorder, ids: number[]): void {
+  if (!ids.length) return;
+  snapshotAutoLinks(u, ids);
+  snapshotRetag(u, ids);
+}

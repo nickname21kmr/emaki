@@ -1,8 +1,8 @@
-import type { LibraryStats } from '@emaki/shared';
+import type { LibrarySummary } from '@emaki/shared';
 import { PageBody, PageHeader } from '@/components/layout/PageHeader';
 import { ErrorState } from '@/components/ui';
 import { formatCount, formatRelative } from '@/lib/format';
-import { useSettings, useStats } from '@/lib/queries';
+import { useSettings, useSummary } from '@/lib/queries';
 import { AnnexIndex } from './components/AnnexIndex';
 import { JobBanner } from './components/JobBanner';
 import { LatestImages, LatestImagesSkeleton } from './components/LatestImages';
@@ -12,16 +12,18 @@ import { StatsStrip, StatsStripSkeleton } from './components/StatsStrip';
 import { TriageCards, TriageCardsSkeleton } from './components/TriageCards';
 import { DailyPlate } from './components/DailyPlate';
 import { ImportPanel } from './components/ImportPanel';
-import { greeting, importPhase, sum, type ImportPhase } from './utils';
+import { greeting, importPhase, type ImportPhase } from './utils';
 import { useRunningJob } from '@/lib/events';
+import { PageBlocks } from '@/blocks/PageBlocks';
 
 /**
  * 首页：打开应用第一眼看到「最近收了什么、有什么待处理」。
  * 顺序：统计条 → 待处理 → 最近在收 → 最新入库；空库时换成首次使用引导。
  */
 export function HomePage() {
-  const stats = useStats();
-  const s = stats.data;
+  // 首页的数都读汇总接口（P5，附录 #28）
+  const summary = useSummary();
+  const s = summary.data;
   const jobs = {
     scan: useRunningJob('scan'),
     thumbnail: useRunningJob('thumbnail'),
@@ -31,19 +33,25 @@ export function HomePage() {
   const phase = s ? importPhase(s, jobs) : null;
 
   let body;
-  if (stats.isError && !s) body = <ErrorState error={stats.error} onRetry={() => void stats.refetch()} />;
+  if (summary.isError && !s) body = <ErrorState error={summary.error} onRetry={() => void summary.refetch()} />;
   else if (!s) body = <HomeSkeleton />;
-  else if (s.imageCount === 0) body = <Onboarding />;
+  else if (s.images.total === 0) body = <Onboarding />;
   else
     body = (
       <div className="flex flex-col gap-10">
-        {phase && <ImportPanel stats={s} phase={phase} />}
-        <StatsStrip stats={s} />
-        {s.kindCounts.illustration > 0 && <DailyPlate />}
-        <TriageCards stats={s} />
-        <RecentCharacters stats={s} />
-        <LatestImages stats={s} />
-        <AnnexIndex />
+        {/* 区块按注册表的顺序（blocks/registry.ts 的 home） */}
+        <PageBlocks
+          page="home"
+          render={{
+            'home.import': () => phase && <ImportPanel summary={s} phase={phase} />,
+            'home.stats': () => <StatsStrip summary={s} />,
+            'home.daily': () => s.images.illustrations > 0 && <DailyPlate />,
+            'home.triage': () => <TriageCards summary={s} />,
+            'home.recent': () => <RecentCharacters summary={s} />,
+            'home.latest': () => <LatestImages summary={s} />,
+            'home.annex': () => <AnnexIndex />,
+          }}
+        />
       </div>
     );
 
@@ -52,7 +60,7 @@ export function HomePage() {
       {!phase && <JobBanner />}
       <PageHeader
         title="首页"
-        subtitle={s ? <Subtitle stats={s} phase={phase} /> : <span className="skeleton inline-block h-3 w-56 rounded-sm align-middle" />}
+        subtitle={s ? <Subtitle summary={s} phase={phase} /> : <span className="skeleton inline-block h-3 w-56 rounded-sm align-middle" />}
       />
       <PageBody className="pt-2">{body}</PageBody>
     </>
@@ -60,27 +68,27 @@ export function HomePage() {
 }
 
 /** 「晚上好 · 本周新收 312 张 · 上次扫描 2 小时前」 */
-function Subtitle({ stats, phase }: { stats: LibraryStats; phase: ImportPhase }) {
+function Subtitle({ summary: s, phase }: { summary: LibrarySummary; phase: ImportPhase }) {
   const roots = useSettings().data?.libraryRoots ?? [];
-  const week = sum(stats.addedLast7Days);
+  const week = s.added.week;
   const summary =
-    stats.imageCount === 0
+    s.images.total === 0
       ? roots.length > 0 && roots.every((r) => !r.enabled)
         ? '图库文件夹都停用了'
         : '图库还是空的'
-      : phase && stats.recentImport
-        ? `刚导入 ${formatCount(stats.recentImport.count)} 张${phase === 'tagging' ? '，正在识别角色' : ''}`
+      : phase && s.recentImport
+        ? `刚导入 ${formatCount(s.recentImport.count)} 张${phase === 'tagging' ? '，正在识别角色' : ''}`
         : week
           ? `本周新收 ${formatCount(week)} 张`
-          : stats.recentImport
-            ? `${formatRelative(stats.recentImport.at)}导入了 ${formatCount(stats.recentImport.count)} 张`
-            : stats.lastAddedAt
-              ? `上次新收是 ${formatRelative(stats.lastAddedAt)}`
+          : s.recentImport
+            ? `${formatRelative(s.recentImport.at)}导入了 ${formatCount(s.recentImport.count)} 张`
+            : s.added.lastAt
+              ? `上次新收是 ${formatRelative(s.added.lastAt)}`
               : '这周还没有新收';
   return (
     <>
       {greeting()} · {summary}
-      {stats.lastScanAt && <span className="text-fg-subtle"> · 上次扫描 {formatRelative(stats.lastScanAt)}</span>}
+      {s.lastScanAt && <span className="text-fg-subtle"> · 上次扫描 {formatRelative(s.lastScanAt)}</span>}
     </>
   );
 }

@@ -1,4 +1,4 @@
-import type { ImageItem, LibraryStats } from '@emaki/shared';
+import type { ImageItem, LibrarySummary } from '@emaki/shared';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ImageGrid, ImageGridSkeleton } from '@/components/media/ImageGrid';
 import { justify } from '@/components/media/justify';
@@ -16,7 +16,7 @@ const MAX_ROWS = 4;
  * 最新入库：取第一页，只保留能铺满的整行（约 24 张），
  * 避免首页底部出现一行参差不齐的「半行」。
  */
-export function LatestImages({ stats }: { stats: LibraryStats }) {
+export function LatestImages({ summary }: { summary: LibrarySummary }) {
   // 最新入库只取插画（T27 CL 七）；收拢时由插画决定哪些组图上首页，格子代表整组
   const query = useImagesInfinite({ sort: 'addedAt', kind: ['illustration'], includeWholeCollections: true });
   const all = query.data?.pages[0]?.items;
@@ -46,7 +46,7 @@ export function LatestImages({ stats }: { stats: LibraryStats }) {
   return (
     <section>
       <SectionTitle
-        hint={latestHint(stats, newest?.addedAt)}
+        hint={latestHint(summary, newest?.addedAt)}
         actions={<SeeAllLink to="/gallery" />}
       >
         最新入库
@@ -82,8 +82,8 @@ export function LatestImagesSkeleton() {
 }
 
 /** 最新入库的提示（HO-12）：首次导入时说实话，早于 30 天的写日期 */
-function latestHint(stats: LibraryStats, at: string | undefined): string | undefined {
-  if (stats.recentImport && stats.addedLast7Days.every((n) => n === 0)) return '首次导入 · 按文件时间排列';
+function latestHint(summary: LibrarySummary, at: string | undefined): string | undefined {
+  if (summary.recentImport && summary.added.week === 0) return '首次导入 · 按文件时间排列';
   if (!at) return undefined;
   if (Date.now() - Date.parse(at) > 30 * 86_400_000) return `最近一张 · ${formatDate(at)}`;
   return `最近一张 · ${formatRelative(at)}`;

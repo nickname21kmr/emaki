@@ -1,5 +1,5 @@
 /**
- * T13：统计、作品、角色的查询。
+ * T13：统计、作品、角色的查询（排序 / 过滤 / 分页的口径见 docs/TASKS.md T13）。
  */
 import {
   CONTENT_KINDS,
@@ -21,7 +21,20 @@ import type { SqliteContext } from './context.ts';
 import { readSettings } from './settings.ts';
 import { COVER_CANDIDATE_COLS, loadCoverTags, scoreCoverCandidates, type CharacterRec, type CoverCandidate, type Derived, type WorkRec } from './derived.ts';
 import { loadImageItems } from './hydrate.ts';
-import { IN_COMIC_I, DAY, LIVE_IMAGES, DEFAULT_DOMINANT, iso, paginateOffset, parseId, QUEUE, QUEUE_KINDS_SQL, RECENT_DAYS, toId, UNRECOGNIZED, UNTAGGED_UNRECOGNIZED, NOT_IN_BOOK } from './sql.ts';
+import {
+  ART_KINDS_SQL,
+  BOOK_OR_COMIC_IDS,
+  COUNTED_LIVE,
+  ILLUSTRATION,
+  LIVE_IMAGES,
+  QUEUE,
+  QUEUE_KINDS_SQL,
+  SHELVED_QUEUE,
+  TAG_PENDING,
+  UNTAGGED_UNRECOGNIZED,
+  WORK_HAS_ILLUSTRATION,
+} from '../../readmodel/terms.ts';
+import { DAY, DEFAULT_DOMINANT, iso, paginateOffset, parseId, RECENT_DAYS, toId } from './sql.ts';
 
 const zhCollator = new Intl.Collator('zh');
 
@@ -71,6 +84,13 @@ const emptyAuto = (c: CharacterRec) => c.imageCount === 0 && c.otherCount === 0 
 /** 按 id 升序排好（之后用稳定排序，并列就保持 id 顺序） */
 const byId = <T extends { id: number }>(xs: Iterable<T>) => [...xs].sort((a, b) => a.id - b.id);
 
+/** 统计这一遍扫描数出来的全部计数：公开的 LibraryStats，加上只给汇总接口用的（P5） */
+export interface LibraryCounts {
+  stats: LibraryStats;
+  /** 「插画 · 漫画」队列的范围（含放下的、含已经认出的）：已认出比例的分母 */
+  artScope: number;
+}
+
 export class LibraryQueries {
   constructor(
     private readonly ctx: SqliteContext,
@@ -83,8 +103,16 @@ export class LibraryQueries {
   ) {}
 
   getStats(): LibraryStats {
+    return this.readCounts().stats;
+  }
+
+  /** 统计的全部计数，一遍扫完（口径都来自 readmodel/terms.ts） */
+  readCounts(): LibraryCounts {
     const db = this.ctx.db;
-    // 一遍扫完所有活着的图（窄覆盖索引 idx_images_live_stats，T22），类型张数也在这一遍里数
+    const skipCamera = readSettings(db).tagger.skipCameraPhotos === false ? 0 : 1;
+    // 一遍扫完所有活着的图（窄覆盖索引 idx_images_live_stats，T22），类型张数也在这一遍里数。
+    // 带子查询的条件写成 CASE WHEN：表达式里的 AND 不一定短路，CASE WHEN 的条件一定短路（10 万张合成数据上队列这一列 138 → 117 ms）
+    const n = (cond: string) => `COALESCE(SUM(CASE WHEN i.excluded_by IS NULL AND ${cond} THEN 1 ELSE 0 END), 0)`;
     const kindSums = CONTENT_KINDS.map((k) => `COALESCE(SUM(i.excluded_by IS NULL AND i.content_kind = '${k}'), 0) AS "k_${k}"`).join(',\n          ');
     const row = db
       .prepare(
@@ -92,27 +120,25 @@ export class LibraryQueries {
         `SELECT
           COALESCE(SUM(i.excluded_by IS NULL), 0) AS image_count,
           COALESCE(SUM(i.excluded_by IS NOT NULL), 0) AS excluded_count,
-          COALESCE(SUM(i.excluded_by IS NULL AND ${QUEUE}), 0) AS unrecognized_count,
+          ${n(QUEUE)} AS unrecognized_count,
           COALESCE(SUM(CASE WHEN i.excluded_by IS NULL THEN i.bytes END), 0) AS total_bytes,
           (SELECT COUNT(*) FROM duplicate_groups g
              WHERE g.resolved_at IS NULL AND g.ignored = 0
                AND (SELECT COUNT(*) FROM duplicate_members m JOIN v_images vi ON vi.id = m.image_id
                      WHERE m.group_id = g.id) >= 2) AS duplicate_group_count,
           (SELECT MAX(last_scan_at) FROM library_roots WHERE removed_at IS NULL) AS last_scan_at,
-          COALESCE(SUM(i.excluded_by IS NULL AND ${UNTAGGED_UNRECOGNIZED}), 0) AS untagged_count,
-          MAX(CASE WHEN i.excluded_by IS NULL AND i.content_kind = 'illustration' THEN i.added_at END) AS last_added_at,
-          -- 和识别任务领图的条件一致（tagJob 的 BASE）：设置里跳过的相机照片永远不会识别，不算待识别
-          -- camera 不在 idx_images_live_stats 里：只在照片这一支读，免得每行回表
-          COALESCE(SUM(CASE WHEN i.excluded_by IS NULL AND i.tagged_at IS NULL AND NOT ${IN_COMIC_I}
-             THEN CASE WHEN @skipCamera = 1 AND i.content_kind = 'photo' THEN COALESCE(i.camera, '') = '' ELSE 1 END
-             ELSE 0 END), 0) AS pending_tag_count,
-          COALESCE(SUM(i.excluded_by IS NULL AND ${QUEUE_KINDS_SQL} AND ${UNRECOGNIZED} AND ${NOT_IN_BOOK}
-             AND i.shelved_at IS NOT NULL), 0) AS shelved_count,
+          ${n(UNTAGGED_UNRECOGNIZED)} AS untagged_count,
+          MAX(CASE WHEN i.excluded_by IS NULL AND ${ILLUSTRATION} THEN i.added_at END) AS last_added_at,
+          -- 和识别任务领图的条件一致（TAGGABLE）：设置里跳过的相机照片永远不会识别，不算待识别
+          ${n(TAG_PENDING)} AS pending_tag_count,
+          ${n(SHELVED_QUEUE)} AS shelved_count,
           COALESCE(SUM(i.excluded_by IS NULL AND i.original_at IS NOT NULL), 0) AS original_count,
+          -- 动图（D5）：跨类型，animated 在覆盖索引里（迁移 038）
+          COALESCE(SUM(i.excluded_by IS NULL AND i.animated = 1), 0) AS animated_count,
           ${kindSums}
          FROM images i INDEXED BY idx_images_live_stats WHERE ${LIVE_IMAGES}`,
       )
-      .get({ skipCamera: readSettings(db).tagger.skipCameraPhotos === false ? 0 : 1 }) as Record<`k_${ContentKind}`, number> & {
+      .get({ skipCamera }) as Record<`k_${ContentKind}`, number> & {
       image_count: number;
       excluded_count: number;
       unrecognized_count: number;
@@ -124,6 +150,7 @@ export class LibraryQueries {
       pending_tag_count: number;
       shelved_count: number;
       original_count: number;
+      animated_count: number;
     };
     const kindCounts = Object.fromEntries(CONTENT_KINDS.map((k) => [k, 0])) as Record<ContentKind, number>;
     for (const k of CONTENT_KINDS) kindCounts[k] = row[`k_${k}`];
@@ -148,19 +175,17 @@ export class LibraryQueries {
         `SELECT MAX(imported_at) AS at,
                 (SELECT COUNT(*) FROM v_counted_images i JOIN library_roots r2 ON r2.id = i.root_id
                   WHERE r2.imported_at >= @since) AS count,
-                -- 这些文件夹里还没识别的，条件同上面的 pending_tag_count：首页导入面板只说这次加的，不混进整个库
-                (SELECT COALESCE(SUM(CASE WHEN i.excluded_by IS NULL AND i.tagged_at IS NULL AND NOT ${IN_COMIC_I}
-                   THEN CASE WHEN @skipCamera = 1 AND i.content_kind = 'photo' THEN COALESCE(i.camera, '') = '' ELSE 1 END
-                   ELSE 0 END), 0)
-                  FROM images i JOIN library_roots r3 ON r3.id = i.root_id
-                  WHERE ${LIVE_IMAGES} AND r3.imported_at >= @since) AS pending
+                -- 这些文件夹里还没识别的，口径同上面的 pending_tag_count：首页导入面板只说这次加的，不混进整个库
+                (SELECT COUNT(*) FROM images i JOIN library_roots r3 ON r3.id = i.root_id
+                  WHERE ${COUNTED_LIVE} AND ${TAG_PENDING} AND r3.imported_at >= @since) AS pending
          FROM library_roots WHERE removed_at IS NULL AND imported_at >= @since`,
       )
-      .get({ since, skipCamera: readSettings(db).tagger.skipCameraPhotos === false ? 0 : 1 }) as { at: string | null; count: number; pending: number };
+      .get({ since, skipCamera }) as { at: string | null; count: number; pending: number };
 
     // 有插画的角色 / 作品数，口径同 Derived 的 imageCount > 0。不用 derived.get()：每次用户操作都会让它整份重建（真实库 1.5 秒以上），
     // 侧栏统计一直在拉，等于每点一次收藏就重建一次。EXISTS 走索引，各几毫秒。
-    // 作品拆成两支 EXISTS，不套 v_image_works（UNION 会被整个物化，约 200 ms）
+    // 作品数和作品列表（listWorks：imageCount > 0）同口径（附录 #26）：WORK_HAS_ILLUSTRATION 是 v_image_works ⋈ v_illust_images 的三支 EXISTS，
+    // 不套视图（UNION 会被整个物化，约 200 ms）
     const characterCount = db
       .prepare(
         `SELECT COUNT(*) FROM characters c
@@ -169,16 +194,11 @@ export class LibraryQueries {
       .pluck()
       .get() as number;
     const workCount = db
-      .prepare(
-        `SELECT COUNT(*) FROM works w
-         WHERE EXISTS (SELECT 1 FROM image_copyrights x JOIN v_illust_images i ON i.id = x.image_id WHERE x.work_id = w.id)
-            OR EXISTS (SELECT 1 FROM character_works cw JOIN image_characters ic ON ic.character_id = cw.character_id
-                       JOIN v_illust_images i ON i.id = ic.image_id WHERE cw.work_id = w.id)`,
-      )
+      .prepare(`SELECT COUNT(*) FROM works w WHERE ${WORK_HAS_ILLUSTRATION}`)
       .pluck()
       .get() as number;
     const originalWork = db.prepare("SELECT id FROM works WHERE danbooru_tag = 'original'").pluck().get() as number | undefined;
-    return {
+    const stats: LibraryStats = {
       imageCount: row.image_count,
       characterCount,
       workCount,
@@ -194,14 +214,23 @@ export class LibraryQueries {
       recentImport: imp.at ? { at: imp.at, count: imp.count, pending: imp.pending } : null,
       lastAddedAt: row.last_added_at,
       kindCounts,
+      animatedCount: row.animated_count,
       pendingTagCount: row.pending_tag_count,
       ...this.collectionStats(),
       originalWorkId: originalWork === undefined ? null : toId(originalWork),
       originalCount: row.original_count,
     };
+    // 「插画 · 漫画」队列的范围（ART_QUEUE_SCOPE）= 队列类型的张数 − 其中成册、在漫画区的。后者按合集、漫画区的索引数，
+    // 不在上面那遍扫描里逐行判断（10 万张合成数据上逐行判断要多 130 ms）；等价性见 readmodel/summary.test.ts 的对账
+    const outside = db
+      .prepare(`SELECT COUNT(*) FROM v_counted_images i WHERE i.id IN (${BOOK_OR_COMIC_IDS}) AND ${QUEUE_KINDS_SQL}`)
+      .pluck()
+      .get() as number;
+    const comicInQueue = readSettings(db).tagger.comicInUnrecognized !== false;
+    return { stats, artScope: kindCounts.illustration + (comicInQueue ? kindCounts.comic : 0) - outside };
   }
 
-  /** 别册首页（T27）：每一类的张数、30 天内张数、最多的顶层文件夹、最新 3 张预览；按 CONTENT_KINDS 顺序，7 项 */
+  /** 别册首页（T27）：每一类的张数、30 天内张数、最多的顶层文件夹、最新 3 张预览；按 CONTENT_KINDS 顺序，6 项（动图不是类型，D5） */
   listContentKinds(): ContentKindSummary[] {
     const db = this.ctx.db;
     const cutoff = iso(this.ctx.clock() - RECENT_DAYS * DAY);
@@ -347,7 +376,7 @@ export class LibraryQueries {
          FROM image_characters me
          JOIN v_counted_images i ON i.id = me.image_id
          JOIN image_characters o ON o.image_id = me.image_id AND o.character_id <> me.character_id
-         WHERE me.character_id = ? AND i.content_kind IN ('illustration','comic')
+         WHERE me.character_id = ? AND ${ART_KINDS_SQL}
          GROUP BY o.character_id
          ORDER BY shared DESC, o.character_id ASC
          LIMIT 8`,
@@ -381,7 +410,7 @@ export class LibraryQueries {
          FROM image_characters ic
          JOIN v_counted_images i ON i.id = ic.image_id
          LEFT JOIN crowd cr ON cr.image_id = i.id
-         WHERE ic.character_id = ? AND i.content_kind IN ('illustration','comic')`,
+         WHERE ic.character_id = ? AND ${ART_KINDS_SQL}`,
       )
       .all(c.id) as CoverCandidate[];
     const scored = scoreCoverCandidates(rows, loadCoverTags(this.ctx.db, rows.map((r) => r.iid)));

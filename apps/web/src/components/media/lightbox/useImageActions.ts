@@ -65,6 +65,9 @@ export function useImageActions(current: CurrentImage | undefined) {
   const accept = useMutate((v: { id: ID; danbooruTag: string }) =>
     api.acceptSuggestion(v.id, { danbooruTag: v.danbooruTag }),
   );
+  const assignCandidate = useMutate((v: { id: ID; danbooruTag: string }) =>
+    api.bulkImages({ ids: [v.id], action: { type: 'assignTag', danbooruTag: v.danbooruTag } }),
+  );
   const artist = useMutate((v: { id: ID; action: BulkImageAction }) => api.bulkImages({ ids: [v.id], action: v.action }));
   const exclude = useMutate((id: ID) => api.bulkImages({ ids: [id], action: { type: 'exclude' } }), {
     label: '排除这张',
@@ -117,6 +120,9 @@ export function useImageActions(current: CurrentImage | undefined) {
     addCharacter: (characterId: ID) => {
       if (current && !characterIds.includes(characterId))
         characters.mutate({ id: current.id, characterIds: [...characterIds, characterId] });
+    },
+    addCandidate: (danbooruTag: string) => {
+      if (current && !assignCandidate.isPending) assignCandidate.mutate({ id: current.id, danbooruTag });
     },
     removeCharacter: (characterId: ID) => {
       if (current) characters.mutate({ id: current.id, characterIds: characterIds.filter((c) => c !== characterId) });

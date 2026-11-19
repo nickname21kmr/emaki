@@ -1,4 +1,4 @@
-import type { JobKind, MutationResult, Settings, ThemePreference } from '@emaki/shared';
+import { JOB_LABEL, matchesQuery, type MutationResult, type Settings, type ThemePreference } from '@emaki/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Ban,
@@ -25,7 +25,7 @@ import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { formatCount } from '@/lib/format';
-import { qk, requestUndo, undoTitle, useMutate, useSettings, useStartJob, useStats } from '@/lib/queries';
+import { qk, requestUndo, undoTitle, useMutate, useSettings, useStartJob, useSummary } from '@/lib/queries';
 import { placeText } from '@/lib/undoPlace';
 import { useOverlays, usePrefs, useUndoStore } from '@/lib/stores';
 import { GLOBAL_KEYS, PAGE_JUMPS, type KeyCombo } from '../shortcuts';
@@ -43,12 +43,6 @@ export interface PaletteCommand {
   keys?: KeyCombo;
   run: () => void;
 }
-
-const JOB_LABEL: Partial<Record<JobKind, string>> = {
-  tag: '识别',
-  dedupe: '查找重复',
-  scan: '扫描图库',
-};
 
 const THEME_MESSAGE: Record<ThemePreference, string> = {
   light: '已切换到浅色主题',
@@ -70,10 +64,11 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
   const lastUndo = useUndoStore((s) => s.entries[0]);
   const setHelpOpen = useOverlays((s) => s.setHelpOpen);
   const { data: settings } = useSettings();
-  const { data: stats } = useStats();
+  // 计数读汇总接口（附录 #28）
+  const { data: summary } = useSummary();
 
   const startJob = useStartJob((job) => {
-    const label = JOB_LABEL[job.kind] ?? '任务';
+    const label = JOB_LABEL[job.kind];
     return job.status === 'queued' ? `${label}已加入任务队列` : `已开始${label}`;
   });
 
@@ -159,7 +154,8 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
       value: 'act:tag',
       section: 'act',
       label: '运行识别',
-      meta: stats?.unrecognizedCount ? `${formatCount(stats.unrecognizedCount)} 张待确认` : undefined,
+      // 识别处理的是待识别的图（以前写的是含待识别的未识别总数「待确认」，和侧栏对不上）
+      meta: summary?.triage.waiting ? `${formatCount(summary.triage.waiting)} 张待识别` : undefined,
       keywords: ['tag', 'tagger', 'recognize', '识别', '打标', 'shibie', 'sb'],
       icon: ScanFace,
       run: act(() => startJob.mutate('tag')),
@@ -168,7 +164,7 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
       value: 'act:dedupe',
       section: 'act',
       label: '查找重复',
-      meta: stats?.duplicateGroupCount ? `已有 ${formatCount(stats.duplicateGroupCount)} 组` : undefined,
+      meta: summary?.duplicates ? `已有 ${formatCount(summary.duplicates)} 组` : undefined,
       keywords: ['dedupe', 'duplicate', '重复', '查重', 'chongfu', 'cf'],
       icon: ScanSearch,
       run: act(() => startJob.mutate('dedupe')),
@@ -209,11 +205,9 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
   return [...nav, ...actions];
 }
 
-/** 本地过滤命令：标签或任一关键词包含输入即可 */
+/** 本地过滤命令：标签或任一关键词包含输入即可（共用的 matchesQuery） */
 export function matchCommand(cmd: PaletteCommand, query: string): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  return [cmd.label, ...cmd.keywords].some((s) => s.toLowerCase().includes(q));
+  return matchesQuery(query, [cmd.label, ...cmd.keywords]);
 }
 
 // 和侧边栏同一套图标，用户一眼能对上

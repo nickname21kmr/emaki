@@ -13,6 +13,15 @@ export const IN_COMIC = (a = 'i') =>
   `(${a}.root_id IN (SELECT id FROM library_roots WHERE content_mode = 'comic')
     OR EXISTS (SELECT 1 FROM comic_folders cf WHERE cf.root_id = ${a}.root_id AND substr(${a}.rel_path, 1, length(cf.rel_dir) + 1) = cf.rel_dir || '/'))`;
 
+/**
+ * 在按漫画导入的范围里的图的 id：和 IN_COMIC 同一个范围，只是按索引找（整个文件夹按 root_id，子文件夹按 (root_id, rel_path) 取范围，
+ * '/' 的下一个字符是 '0'）。要数「范围里有多少张」时用它，不用对每一行判断 IN_COMIC
+ */
+export const COMIC_AREA_IMAGE_IDS = `SELECT ci.id FROM images ci
+      WHERE ci.root_id IN (SELECT id FROM library_roots WHERE content_mode = 'comic')
+    UNION SELECT fi.id FROM comic_folders cf
+      JOIN images fi ON fi.root_id = cf.root_id AND fi.rel_path >= cf.rel_dir || '/' AND fi.rel_path < cf.rel_dir || '0'`;
+
 /** 范围选的分级：最里层的漫画子文件夹优先，再是图库文件夹（只对在范围里的图有意义） */
 export const COMIC_RATING = (a = 'i') =>
   `COALESCE((SELECT cf.comic_rating FROM comic_folders cf WHERE cf.root_id = ${a}.root_id AND substr(${a}.rel_path, 1, length(cf.rel_dir) + 1) = cf.rel_dir || '/'

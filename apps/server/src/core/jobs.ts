@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import type { Job, JobKind } from '@emaki/shared';
+import { JOB_KINDS, JOB_LABEL as JOB_LABELS, type Job, type JobKind } from '@emaki/shared';
 import type { EventBus } from './events.ts';
+import { jobActor, runAs } from '../propagation/actor.ts';
 
 /**
  * 一个后台任务的执行体。通过 ctx 汇报进度、检查取消。
@@ -17,6 +18,8 @@ export interface JobContext {
   /** 进度 +n，并可更新提示文字 */
   advance(n?: number, message?: string): void;
   setMessage(message: string): void;
+  /** 预计还要多少秒（结构化，界面直接用；不知道传 null）。任务名和剩余时间的文案在 packages/shared（JOB_LABEL、formatEta） */
+  setEta?(seconds: number | null): void;
   /** 有更高优先级的任务在排队：长任务应尽快 requeue() 然后 return */
   shouldYield(): boolean;
   /** 当前任务结束后再排一个同类任务 */
@@ -25,27 +28,17 @@ export interface JobContext {
   readonly yielded: boolean;
 }
 
-const JOB_LABELS: Record<JobKind, string> = {
-  scan: '扫描图库',
-  thumbnail: '生成缩略图',
-  tag: '识别角色',
-  'danbooru-sync': '同步 Danbooru',
-  dedupe: '查找重复',
-  artists: '识别画师',
-  'pixiv-tags': '补充 Pixiv 角色',
-};
-
-/** 数字越小越先跑：新放进来的图要先扫描、出缩略图，别被一个多小时的打标签堵住 */
-const PRIORITY: Record<JobKind, number> = { scan: 0, thumbnail: 1, dedupe: 2, tag: 3, 'danbooru-sync': 4, artists: 5, 'pixiv-tags': 6 };
+/** 数字越小越先跑（任务种类的注册表 packages/shared/src/jobs.ts） */
+const PRIORITY = (kind: JobKind): number => JOB_KINDS[kind].priority;
 
 /** 已结束的任务最多保留这么多条（queued / running 永远不删） */
 const KEEP_FINISHED = 100;
 
 /**
  * 两条道（2026-09-28）：识别主要吃显卡，单独一条 gpu 道；扫描、缩略图、查重、同步吃 CPU / 硬盘，在 io 道里串行。
- * 两条道同时跑，所以缩略图不会再把识别堵在后面。
+ * 两条道同时跑，所以缩略图不会再把识别堵在后面。每种任务在哪条道登记在任务种类的注册表里
  */
-const LANE: Record<JobKind, 'io' | 'gpu'> = { scan: 'io', thumbnail: 'io', dedupe: 'io', tag: 'gpu', 'danbooru-sync': 'io', artists: 'gpu', 'pixiv-tags': 'io' };
+const LANE = (kind: JobKind): 'io' | 'gpu' => JOB_KINDS[kind].lane;
 
 /**
  * 任务队列：每条道同一时间只跑一个任务，道内按优先级出队，同优先级先进先出。
@@ -60,6 +53,11 @@ export class JobQueue {
   constructor(
     private readonly bus: EventBus,
     private readonly resolveRunner: (kind: JobKind) => JobRunner,
+    /**
+     * 任务结束时（完成、让出、取消、失败都算）：变更传播做掉延后的全量重算、推 changed 事件（reason 是任务种类，附录 #20）。
+     * 不给时直接推一条 changed 事件（单元测试）
+     */
+    private readonly onFinished?: (kind: JobKind) => void,
   ) {}
 
   list(): Job[] {
@@ -81,6 +79,7 @@ export class JobQueue {
       progress: 0,
       total: null,
       message: `${JOB_LABELS[kind]}：等待中`,
+      etaSeconds: null,
       startedAt: null,
       finishedAt: null,
     };
@@ -94,7 +93,7 @@ export class JobQueue {
 
   cancel(id: string): void {
     const job = this.jobs.find((j) => j.id === id);
-    if (!job) return;
+    if (!job || !JOB_KINDS[job.kind].cancellable) return;
     if (job.status === 'queued') {
       job.status = 'cancelled';
       job.finishedAt = new Date().toISOString();
@@ -115,8 +114,8 @@ export class JobQueue {
   private pickNext(lane: 'io' | 'gpu'): Job | undefined {
     let best: Job | undefined;
     for (const j of this.jobs) {
-      if (j.status !== 'queued' || LANE[j.kind] !== lane) continue;
-      if (!best || PRIORITY[j.kind] < PRIORITY[best.kind]) best = j;
+      if (j.status !== 'queued' || LANE(j.kind) !== lane) continue;
+      if (!best || PRIORITY(j.kind) < PRIORITY(best.kind)) best = j;
     }
     return best;
   }
@@ -156,8 +155,11 @@ export class JobQueue {
         job.message = message;
         this.publishThrottled(job);
       },
+      setEta: (seconds) => {
+        job.etaSeconds = seconds !== null && Number.isFinite(seconds) && seconds >= 0 ? Math.round(seconds) : null;
+      },
       // 只让给同一条道里更急的任务（另一条道本来就在并行跑）
-      shouldYield: () => this.jobs.some((j) => j.status === 'queued' && LANE[j.kind] === lane && PRIORITY[j.kind] < PRIORITY[job.kind]),
+      shouldYield: () => this.jobs.some((j) => j.status === 'queued' && LANE(j.kind) === lane && PRIORITY(j.kind) < PRIORITY(job.kind)),
       requeue: () => {
         yielded = true;
         this.enqueue(job.kind, { requeueIfRunning: true });
@@ -168,7 +170,9 @@ export class JobQueue {
     };
 
     try {
-      const result = await this.runners.get(job.id)!(ctx);
+      // 执行体里的写操作都记在 job:<任务种类> 名下（弱刷新、事件节流）；不继承排队时那个请求的 actor
+      const run = this.runners.get(job.id)!;
+      const result = await runAs(jobActor(job.kind), () => run(ctx));
       job.status = controller.signal.aborted ? 'cancelled' : 'done';
       job.message =
         typeof result === 'string' && job.status === 'done'
@@ -183,10 +187,12 @@ export class JobQueue {
           : `${JOB_LABELS[job.kind]}失败：${err instanceof Error ? err.message : String(err)}`;
     } finally {
       job.finishedAt = new Date().toISOString();
+      job.etaSeconds = null;
       this.controllers.delete(job.id);
       this.runners.delete(job.id);
       this.publish(job);
-      this.bus.emit({ type: 'library-changed', reason: job.kind === 'tag' ? 'tag' : 'scan' });
+      if (this.onFinished) this.onFinished(job.kind);
+      else this.bus.publish({ type: 'changed', changes: [], reason: job.kind, actor: `job:${job.kind}` });
       this.running[lane] = false;
       void this.pump();
     }

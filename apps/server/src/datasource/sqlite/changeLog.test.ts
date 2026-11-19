@@ -10,7 +10,7 @@ import type { JobContext } from '../../core/jobs.ts';
 import { cacheArtwork } from '../../services/pixiv/cache.ts';
 import type { PixivArtwork } from '../../services/pixiv/client.ts';
 import { queuePixivImages, resetPixivBackoff, syncPixivCharacters } from '../../services/pixiv/sync.ts';
-import type { SqliteDataSource } from './SqliteDataSource.ts';
+import type { SqliteDataSource } from '../../../test/helpers/client.ts';
 
 let env: ContractEnv;
 let ds: SqliteDataSource;
@@ -23,7 +23,7 @@ afterEach(() => env.close());
 const db = () => ds.ctx.db;
 const img = (id: string) => Number(env.id('image', id));
 const NOW_ISO = () => new Date(env.now).toISOString();
-const links = (cid: number) => db().prepare('SELECT image_id, origin FROM image_characters WHERE character_id = ? ORDER BY image_id').all(cid);
+const links = (cid: number) => db().prepare('SELECT image_id, decision FROM image_characters WHERE character_id = ? ORDER BY image_id').all(cid);
 /** 词库里的名字（pixiv 匹配、自建角色对 Danbooru 都靠它） */
 function name(tag: string, value: string, category = 4, extra: { zh?: string; copyright?: string } = {}) {
   db().prepare('INSERT OR IGNORE INTO tag_i18n (tag, category, zh, copyright_guess, post_count) VALUES (?, ?, ?, ?, 5000)').run(tag, category, extra.zh ?? null, extra.copyright ?? null);
@@ -38,14 +38,14 @@ describe('自动关联 Danbooru 标签', () => {
     name('hoshino_(blue_archive)', '小鸟游星野', 4, { zh: '小鸟游星野', copyright: 'blue_archive' });
     const cid = Number(db().prepare("INSERT INTO characters (name, source, created_at) VALUES ('小鸟游星野', 'custom', ?)").run(NOW_ISO()).lastInsertRowid);
     db().prepare('INSERT INTO character_works (character_id, work_id) VALUES (?, ?)').run(cid, Number(env.id('work', 'w1')));
-    db().prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (?, ?, 'manual', 'x')").run(img('i30'), cid);
+    db().prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, added_at) VALUES (?, ?, 'manual', 'user', 'x')").run(img('i30'), cid);
     (ds as unknown as { characters: { associateAutomatic(): void } }).characters.associateAutomatic();
     expect(db().prepare('SELECT danbooru_tag, source FROM characters WHERE id = ?').get(cid)).toEqual({ danbooru_tag: 'hoshino_(blue_archive)', source: 'danbooru' });
     expect(env.events.filter((e) => e.type === 'auto-change')).toEqual([
-      { type: 'auto-change', change: expect.objectContaining({ kind: 'auto-associate', summary: '「小鸟游星野」自动绑上了 Danbooru 标签 hoshino_(blue_archive)' }) },
+      { type: 'auto-change', id: expect.any(Number), change: expect.objectContaining({ kind: 'auto-associate', summary: '「小鸟游星野」自动绑上了 Danbooru 标签 hoshino_(blue_archive)' }) },
     ]);
     // 绑定之后识别器按这个标签归进来一张
-    db().prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (?, ?, 'tagger', ?)").run(img('i27'), cid, NOW_ISO());
+    db().prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_tag, evidence_score, added_at) VALUES (?, ?, 'auto', 'job:tag', 'auto-accept@1', 'tagger', ?, 0.9, ?)").run(img('i27'), cid, 'hoshino_(blue_archive)', NOW_ISO());
     const [entry] = await ds.listChanges('auto');
     expect(entry).toMatchObject({ kind: 'auto-associate', count: 1, revertable: true, revertedAt: null });
     expect(entry!.revertHint).toContain('去掉之后经这个标签自动归进来的 1 张图');
@@ -54,7 +54,7 @@ describe('自动关联 Danbooru 标签', () => {
     const r = await ds.revertChange(entry!.id);
     expect(r.message).toBe('已撤回自动关联：「小鸟游星野」不再绑 hoshino_(blue_archive)，去掉了 1 张自动归进来的图');
     expect(db().prepare('SELECT danbooru_tag, source FROM characters WHERE id = ?').get(cid)).toEqual({ danbooru_tag: null, source: 'custom' });
-    expect(links(cid)).toEqual([{ image_id: img('i30'), origin: 'manual' }]);
+    expect(links(cid)).toEqual([{ image_id: img('i30'), decision: 'manual' }]);
     expect(db().prepare('SELECT image_id FROM character_vetoes WHERE character_id = ?').pluck().all(cid)).toEqual([img('i27')]);
     expect(db().prepare('SELECT danbooru_tag, dismissed FROM custom_character_matches WHERE character_id = ?').get(cid)).toEqual({ danbooru_tag: 'hoshino_(blue_archive)', dismissed: 1 });
     expect((await ds.listChanges('auto'))[0]).toMatchObject({ revertable: false, revertedAt: NOW_ISO() });
@@ -67,6 +67,30 @@ describe('自动关联 Danbooru 标签', () => {
     expect(dumpCore(db())).toEqual(before);
     expect(db().prepare('SELECT count(*) FROM character_vetoes WHERE character_id = ?').pluck().get(cid)).toBe(0);
     expect((await ds.listChanges('auto'))[0]).toMatchObject({ revertable: true, revertedAt: null });
+  });
+
+  // 附录 #6（P3a 已关闭）：以前撤回时去掉绑定之后所有 origin = 'tagger' 的关联，Pixiv 按名字对上的、按别的标签补采纳的也一起删了
+  it('撤回只去掉这次绑定造成的：依据这个标签的自动关联；Pixiv 按名字对上的、依据别的标签的、迁移前的 Pixiv 关联都留着', async () => {
+    name('hoshino_(blue_archive)', '小鸟游星野', 4, { zh: '小鸟游星野', copyright: 'blue_archive' });
+    const cid = Number(db().prepare("INSERT INTO characters (name, source, created_at) VALUES ('小鸟游星野', 'custom', ?)").run(NOW_ISO()).lastInsertRowid);
+    db().prepare('INSERT INTO character_works (character_id, work_id) VALUES (?, ?)').run(cid, Number(env.id('work', 'w1')));
+    (ds as unknown as { characters: { associateAutomatic(): void } }).characters.associateAutomatic();
+    const link = db().prepare(
+      `INSERT INTO image_characters (image_id, character_id, decision, actor, rule, evidence_provider, evidence_tag, evidence_score, added_at)
+       VALUES (?, ?, 'auto', ?, ?, ?, ?, ?, ?)`,
+    );
+    // 绑定之后：识别器按这个标签认的（去掉）、迁移前的模型关联（不知道标签，按以前的办法算这次绑定的，去掉）
+    link.run(img('i27'), cid, 'job:tag', 'auto-accept@1', 'tagger', 'hoshino_(blue_archive)', 0.9, NOW_ISO());
+    link.run(img('i28'), cid, 'system:migration', 'legacy:tagger', 'tagger', null, 0.9, NOW_ISO());
+    // Pixiv 按自建角色的名字对上的、依据合并重定向的另一个标签补采纳的、迁移前的 Pixiv 关联：都不是这次绑定造成的
+    link.run(img('i29'), cid, 'job:pixiv-tags', 'pixiv@1', 'pixiv', `emaki:character:${cid}`, null, NOW_ISO());
+    link.run(img('i30'), cid, 'user', 'promote@1', 'tagger', 'hoshino_(swimsuit)_(blue_archive)', 0.88, NOW_ISO());
+    link.run(img('i31'), cid, 'system:migration', 'legacy:pixiv', 'pixiv', null, null, NOW_ISO());
+    const [entry] = await ds.listChanges('auto');
+    expect(entry).toMatchObject({ kind: 'auto-associate', count: 2 });
+    await ds.revertChange(entry!.id);
+    expect(links(cid).map((l) => (l as { image_id: number }).image_id)).toEqual([img('i29'), img('i30'), img('i31')]);
+    expect(db().prepare('SELECT image_id FROM character_vetoes WHERE character_id = ? ORDER BY image_id').pluck().all(cid)).toEqual([img('i27'), img('i28')]);
   });
 
   it('角色之后改过标签就不能自动撤回', async () => {
@@ -96,8 +120,8 @@ describe('Pixiv 补充', () => {
     await syncPixivCharacters(ds.ctx, job(), ds.makeCatalog, client, 0);
     const yuuka = Number(env.id('character', 'c2'));
     expect(links(yuuka).filter((l) => [img('i27'), img('i28')].includes((l as { image_id: number }).image_id))).toEqual([
-      { image_id: img('i27'), origin: 'tagger' },
-      { image_id: img('i28'), origin: 'tagger' },
+      { image_id: img('i27'), decision: 'auto' },
+      { image_id: img('i28'), decision: 'auto' },
     ]);
     expect(db().prepare('SELECT original_at FROM images WHERE id = ?').pluck().get(img('i29'))).not.toBeNull();
     const [entry] = await ds.listChanges('auto');
@@ -137,7 +161,7 @@ describe('切换 Pixiv 投稿号识别方式', () => {
     // i27：下载器命名，只有宽泛模式认；i28：标准命名，两种模式都认
     db().prepare('UPDATE images SET rel_path = ?, file_name = ? WHERE id = ?').run(TITLED, '144506494_キス魔な山賊.jpg', img('i27'));
     db().prepare("UPDATE images SET rel_path = '未整理/777777_p0.png', file_name = '777777_p0.png' WHERE id = ?").run(img('i28'));
-    db().prepare("DELETE FROM settings WHERE key = 'sourceParserMode'").run();
+    db().prepare("DELETE FROM derived_versions WHERE name = 'source'").run();
   });
 
   it('先数影响，再切换：只去掉投稿号变了的 Pixiv 建议，切回来从缓存找回；可撤销', async () => {
@@ -150,17 +174,17 @@ describe('切换 Pixiv 投稿号识别方式', () => {
     name('hina_(blue_archive)', 'ヒナ');
     queuePixivImages(ds.ctx, [img('i27'), img('i28')]);
     await syncPixivCharacters(ds.ctx, job(), ds.makeCatalog, client, 0);
-    const pixivSugs = (id: string) => db().prepare("SELECT danbooru_tag FROM character_suggestions WHERE image_id = ? AND source = 'pixiv' ORDER BY danbooru_tag").pluck().all(img(id));
+    const pixivSugs = (id: string) => db().prepare("SELECT danbooru_tag FROM v_character_suggestions WHERE image_id = ? AND source = 'pixiv' ORDER BY danbooru_tag").pluck().all(img(id));
     expect(pixivSugs('i27')).toEqual(['hina_(blue_archive)', 'yuuka_(blue_archive)']);
-    // i28 本来就有 hina 的模型建议，Pixiv 只补 yuuka
-    expect(pixivSugs('i28')).toEqual(['yuuka_(blue_archive)']);
+    // i28 本来就有 hina 的模型建议：迁移 035 之后两个来源各一份证据（以前共用主键，Pixiv 只能补 yuuka，附录 #9）
+    expect(pixivSugs('i28')).toEqual(['hina_(blue_archive)', 'yuuka_(blue_archive)']);
 
     expect(await ds.previewSourceMode('strict')).toEqual({ mode: 'strict', changed: 1, suggestionsDropped: 1, requeued: 0, cached: 0 });
     const toStrict = await ds.setSourceMode('strict');
     expect(toStrict.message).toBe('已改为严格：1 张图的来源变了；1 张的 Pixiv 建议先去掉了（投稿号变了，切回来能找回）');
     expect(pixivSugs('i27')).toEqual([]);
     // 投稿号没变的不动
-    expect(pixivSugs('i28')).toEqual(['yuuka_(blue_archive)']);
+    expect(pixivSugs('i28')).toEqual(['hina_(blue_archive)', 'yuuka_(blue_archive)']);
     expect((await ds.getSettings()).tagger.pixivFilenameMode).toBe('strict');
 
     expect(await ds.previewSourceMode('broad')).toEqual({ mode: 'broad', changed: 1, suggestionsDropped: 0, requeued: 1, cached: 1 });

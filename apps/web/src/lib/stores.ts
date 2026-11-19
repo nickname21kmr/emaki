@@ -10,11 +10,19 @@ import type { CoverCrop } from './coverCrop';
 import { currentPlace } from './undoPlace';
 
 // ------------------------------------------------------------------ 偏好（持久化到 localStorage）
+//
+// 这里是「本机偏好」：只改这台设备、这个浏览器上怎么显示，换一台设备不必一样（docs/core-architecture.md 第 6 节「设置的归属」）。
+// 图库设置（识别、Danbooru、查重、画面筛选、图库文件夹、主题）在服务端，读 useSettings。
+// 会影响查询结果的本机偏好（图库的类型、收拢组图）同时写进 URL（?kind= / ?collapse=），助手拿到的页面上下文和用户看到的一致（附录 #32）。
+// 阅读进度（lib/collections.ts 的 readProgress）也留在这台设备上，理由见那里。
 
 export type CharactersView = 'shelf' | 'list';
 /** 底色：米纸（默认）/ 黑白 / 薄荷 / 天青 / 雾紫，浅色深色各一套（styles/index.css 的 data-palette） */
 export type Palette = 'washi' | 'mono' | 'mint' | 'sky' | 'lilac';
 export type CollapseMode = 'auto' | 'on' | 'off';
+export const COLLAPSE_MODES: readonly CollapseMode[] = ['auto', 'on', 'off'];
+/** 网格密度：落到 gridRowHeight 上，图库里的行高滑块还能再细调 */
+export type Density = 'comfortable' | 'compact';
 
 interface PrefsState {
   /** 收拢组图：auto = 结果超过 AUTO_COLLAPSE_MIN 张才收拢，on = 总是收拢，off = 总是逐张 */
@@ -44,6 +52,9 @@ interface PrefsState {
   charactersView: CharactersView;
   /** 网格目标行高（px），图库页的缩放滑块 */
   gridRowHeight: number;
+  /** 网格密度（设置 → 外观）；以前也写进服务端但没人读，P5 起只在这里 */
+  density: Density;
+  setDensity: (v: Density) => void;
   /** 角色封面裁剪：优先保住头（默认）/ 跟着构图 */
   coverCrop: CoverCrop;
   setCoverCrop: (v: CoverCrop) => void;
@@ -83,6 +94,8 @@ export const usePrefs = create<PrefsState>()(
       setRevealOnHover: (revealOnHover) => set({ revealOnHover }),
       charactersView: 'shelf',
       gridRowHeight: 240,
+      density: 'comfortable',
+      setDensity: (density) => set({ density }),
       sidebarCollapsed: false,
       galleryKinds: ['illustration'],
       galleryKindTipSeen: false,
@@ -304,6 +317,8 @@ export interface UndoEntry {
   at?: number;
   /** 撤销后要带用户去看的东西：图片 / 重复组 */
   focus?: UndoFocus;
+  /** 谁做的：不写是这个页面的用户；assistant 是 AI 助手（服务端的 command 事件放进来的） */
+  by?: string;
 }
 
 export interface UndoFocus {

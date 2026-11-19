@@ -1,4 +1,4 @@
-import type { Character, GetCharacterResponse, ID } from '@emaki/shared';
+import type { Character, GetCharacterResponse, ID, SearchHit } from '@emaki/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { Command } from 'cmdk';
 import { Check, CornerDownLeft, Plus, Search } from 'lucide-react';
@@ -28,6 +28,7 @@ export interface CharacterPickerProps {
   /** 触发按钮（asChild） */
   children: ReactNode;
   onPick: (character: Character) => void;
+  onCandidate: (danbooruTag: string) => void;
   /** 已经关联的角色：显示「已关联」且不能再选 */
   selectedIds?: readonly ID[];
   title?: ReactNode;
@@ -42,6 +43,7 @@ export interface CharacterPickerProps {
 export function CharacterPicker({
   children,
   onPick,
+  onCandidate,
   selectedIds,
   title = '归到角色',
   meta,
@@ -85,6 +87,7 @@ export function CharacterPicker({
                 onPick(c);
                 setOpen(false);
               }}
+              onCandidate={(tag) => { onCandidate(tag); setOpen(false); }}
             />
           </Popover.Content>
         </Popover.Portal>
@@ -99,16 +102,18 @@ export function CharacterPicker({
   );
 }
 
-interface PickerRow {
+type PickerRow = {
   character: Character;
   workName: string | null;
   /** 最近使用的是快照，张数可能过时，不显示 */
   showCount: boolean;
-}
+} | Extract<SearchHit, { type: 'characterCandidate' }>;
+const rowKey = (row: PickerRow) => 'character' in row ? row.character.id : `candidate:${row.danbooruTag}`;
 
 /** 选择器本体（不带弹出框），想内嵌在别的面板里时直接用它 */
 export function CharacterPickerPanel({
   onPick,
+  onCandidate,
   onCreate,
   initialQuery = '',
   selectedIds,
@@ -117,6 +122,7 @@ export function CharacterPickerPanel({
   className,
 }: {
   onPick: (character: Character) => void;
+  onCandidate: (danbooruTag: string) => void;
   onCreate?: (name: string) => void;
   initialQuery?: string;
   selectedIds?: readonly ID[];
@@ -128,7 +134,7 @@ export function CharacterPickerPanel({
   const q = useDebounced(text.trim(), 160);
   const typing = text.trim() !== q;
 
-  const search = useSearch(q);
+  const search = useSearch(q, true);
   const top = useTopCharacters({ limit: 8 });
   const works = useWorks();
   const qc = useQueryClient();
@@ -150,8 +156,9 @@ export function CharacterPickerPanel({
   // 输入为空：最近使用 + 常用；有输入：搜索结果
   const groups = useMemo<{ heading: string; rows: PickerRow[] }[]>(() => {
     if (q) {
-      const rows = (search.data ?? []).flatMap((hit) =>
-        hit.type === 'character' ? [{ character: hit.character, workName: hit.workName, showCount: true }] : [],
+      const rows = (search.data ?? []).flatMap<PickerRow>((hit) =>
+        hit.type === 'character' ? [{ character: hit.character, workName: hit.workName, showCount: true }]
+          : hit.type === 'characterCandidate' ? [hit] : [],
       );
       return [{ heading: '搜索结果', rows }];
     }
@@ -171,8 +178,10 @@ export function CharacterPickerPanel({
   }, [q, search.data, recents, top.data, workName]);
 
   const flat = groups.flatMap((g) => g.rows);
-  const canCreate = !!onCreate && !!q && !typing && !search.isFetching && !search.isError && !!search.data && !flat.some((r) => r.character.name === q);
-  const firstPickable = flat.find((r) => !selected.has(r.character.id))?.character.id ?? (canCreate ? 'create-character' : '');
+  const canCreate = !!onCreate && !!q && !typing && !search.isFetching && !search.isError && !!search.data &&
+    !flat.some(r => 'character' in r ? r.character.name === q : r.name === q || r.matchedName === q);
+  const firstRow = flat.find((r) => !selected.has(rowKey(r)));
+  const firstPickable = firstRow ? rowKey(firstRow) : canCreate ? 'create-character' : '';
 
   // 结果变化时高亮第一项，保证直接回车就能选中
   const [active, setActive] = useState('');
@@ -180,7 +189,7 @@ export function CharacterPickerPanel({
     setActive(firstPickable);
   }, [firstPickable, q]);
 
-  const loading = q ? (search.isPending || typing) && !search.data : top.isPending && recents.length === 0;
+  const loading = text.trim() ? typing || search.isPending || search.isPlaceholderData : top.isPending && recents.length === 0;
   const empty = !loading && !typing && flat.length === 0;
 
   const pick = (c: Character) => {
@@ -233,10 +242,10 @@ export function CharacterPickerPanel({
             >
               {g.rows.map((row) => (
                 <PickerItem
-                  key={row.character.id}
+                  key={rowKey(row)}
                   row={row}
-                  assigned={selected.has(row.character.id)}
-                  onSelect={() => pick(row.character)}
+                  assigned={selected.has(rowKey(row))}
+                  onSelect={() => 'character' in row ? pick(row.character) : onCandidate(row.danbooruTag)}
                 />
               ))}
             </Command.Group>
@@ -270,10 +279,12 @@ export function CharacterPickerPanel({
 }
 
 function PickerItem({ row, assigned, onSelect }: { row: PickerRow; assigned: boolean; onSelect: () => void }) {
-  const c = row.character;
+  const c = 'character' in row ? row.character : null;
+  const name = 'character' in row ? row.character.name : row.name;
+  const matchedName = 'matchedName' in row ? row.matchedName : undefined;
   return (
     <Command.Item
-      value={c.id}
+      value={rowKey(row)}
       disabled={assigned}
       onSelect={onSelect}
       className={cn(
@@ -281,12 +292,12 @@ function PickerItem({ row, assigned, onSelect }: { row: PickerRow; assigned: boo
         'transition-colors duration-100 data-[selected=true]:bg-hover data-[disabled=true]:opacity-55',
       )}
     >
-      <CharacterAvatar character={c} />
+      <CharacterAvatar character={c ?? { name, coverImageId: null, coverFocus: null }} />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[13.5px] leading-tight font-medium">{c.name}</div>
+        <div className="truncate text-[13.5px] leading-tight font-medium">{name}{matchedName && `（${matchedName}）`}</div>
         <div className="mt-0.5 truncate text-[11.5px] text-fg-subtle tabular">
-          {row.workName ?? (c.source === 'custom' ? '自建角色' : '未归属作品')}
-          {row.showCount && ` · ${formatCount(c.imageCount)} 张`}
+          {row.workName ?? (c?.source === 'custom' ? '自建角色' : '未归属作品')}
+          {'character' in row ? row.showCount && ` · ${formatCount(row.character.imageCount)} 张` : ' · 新角色'}
         </div>
       </div>
       {assigned ? (

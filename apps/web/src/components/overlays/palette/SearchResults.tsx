@@ -1,4 +1,4 @@
-import type { Character, SearchHit, Work } from '@emaki/shared';
+import { matchesQuery, type Character, type SearchHit, type Work } from '@emaki/shared';
 import { Command } from 'cmdk';
 import { Search, UsersRound } from 'lucide-react';
 import type { ReactNode } from 'react';
@@ -199,11 +199,11 @@ function CharacterRow({
  * 否则就显示前两个别名。都没有时返回 null，Dotted 据此省掉多余的分隔点。
  */
 function aliasHint(aliases: string[], tag: string | null, name: string, query: string): ReactNode {
-  const q = query.toLowerCase();
-  if (!name.toLowerCase().includes(q)) {
-    const alias = aliases.find((a) => a.toLowerCase().includes(q));
+  // 命中的判断和服务端同一份归一化（matchesQuery，附录 #38）
+  if (!matchesQuery(query, [name])) {
+    const alias = aliases.find((a) => matchesQuery(query, [a]));
     if (alias) return <Highlight text={alias} query={query} />;
-    if (tag?.toLowerCase().includes(q)) {
+    if (tag && matchesQuery(query, [tag])) {
       return (
         <span className="font-mono text-[11.5px]">
           <Highlight text={tag} query={query} />

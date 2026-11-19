@@ -16,7 +16,10 @@ import { seedCollections } from './collections-seed.ts';
 import { hashString, seededRandom } from './placeholder.ts';
 import { ARTISTS, GENERAL_TAGS, LONG_TAIL_WORKS, SEED_WORKS, type SeedWork } from './seed-data.ts';
 
-/** 假数据的行：只存「原始」字段，计数等派生字段由 SQLite 那边算。 */
+/**
+ * 演示数据的行：只存「原始」字段，灌进 SQLite 之后计数等派生字段由真实引擎现算（seed.ts）。
+ * 契约测试的夹具（test/fixtures/contract-db.ts）也用这套类型。
+ */
 export interface WorkRow {
   id: ID;
   name: string;
@@ -74,6 +77,8 @@ export interface ImageRow {
   excludedBy: ID | null;
   /** 被「重复」处理移到回收站 */
   trashed: boolean;
+  /** 帧数（读文件头拿到的）；不写 = 还没读过。多帧的是动图（D5，isAnimated） */
+  frameCount?: number | null;
   /** 内容类型（T27）；不写 = 插画（契约夹具不动，BI-7） */
   kind?: ContentKind;
   /** 规则判出的类型：「恢复自动判断」回到它；不写 = 按 classifyContent 现算 */
@@ -144,7 +149,7 @@ export interface ExclusionRow {
   createdAt: string;
 }
 
-export interface SeedDb {
+export interface DemoDb {
   works: Map<ID, WorkRow>;
   characters: Map<ID, CharacterRow>;
   images: Map<ID, ImageRow>;
@@ -156,10 +161,16 @@ export interface SeedDb {
   artistLinks?: Map<string, string | null>;
 }
 
+/**
+ * 演示用的图库文件夹路径前缀：不可能是真实存在的文件夹（Windows 上 < > 是非法字符），
+ * 万一哪里漏了拦截，也扫不到、动不了用户真实的图片
+ */
+export const DEMO_ROOT_PREFIX = '<演示图库>';
+
+const IMAGE_COUNT = 9000;
 const DAY = 86_400_000;
 
-/** 演示库：真实的作品 / 角色名，随机但固定（同一个 imageCount 每次生成的都一样）的图片、重复组、排除和合集 */
-export function buildDemoDb(now = Date.now(), { imageCount = 9000 }: { imageCount?: number } = {}): SeedDb {
+export function buildDemoDb(now = Date.now()): DemoDb {
   const r = seededRandom(20260927);
   const pick = <T>(arr: readonly T[]): T => arr[Math.floor(r() * arr.length)]!;
 
@@ -221,7 +232,7 @@ export function buildDemoDb(now = Date.now(), { imageCount = 9000 }: { imageCoun
     return 'general';
   };
 
-  for (let i = 1; i <= imageCount; i++) {
+  for (let i = 1; i <= IMAGE_COUNT; i++) {
     const id = `i${i}`;
     // 越新的图越多：用 r()^1.5 把时间往「最近」挤
     const age = Math.pow(r(), 1.5) * 900 * DAY;
@@ -332,16 +343,22 @@ export function buildDemoDb(now = Date.now(), { imageCount = 9000 }: { imageCoun
     });
   }
 
-  // 内容类型（T27）：按 id 哈希分配，约 漫画 12%、截图 8%、表情 4%、文字 3%、照片 2%、动图 2%，其余插画
+  // 内容类型（T27）：按 id 哈希分配，约 漫画 12%、截图 8%、表情 4%、文字 3%、照片 2%，其余插画。
+  // 是否动图（D5）是另一个维度：约 2% 的插画是动的（以前单列成「动图」类型的那一批），表情里约三分之一是动的；都是多帧 GIF
   for (const img of images.values()) {
     const h = hashString(img.id + 'kind') % 100;
-    const kind: ContentKind =
-      h < 12 ? 'comic' : h < 20 ? 'screenshot' : h < 24 ? 'meme' : h < 27 ? 'text' : h < 29 ? 'photo' : h < 31 ? 'animated' : 'illustration';
+    const kind: ContentKind = h < 12 ? 'comic' : h < 20 ? 'screenshot' : h < 24 ? 'meme' : h < 27 ? 'text' : h < 29 ? 'photo' : 'illustration';
+    if ((h >= 29 && h < 31) || (kind === 'meme' && hashString(img.id + 'anim') % 3 === 0)) {
+      img.format = 'gif';
+      img.frameCount = 6 + (hashString(img.id + 'frames') % 42);
+      img.fileName = img.fileName.replace(/\.\w+$/, '.gif');
+      img.relPath = img.relPath.replace(/[^/]+$/, img.fileName);
+    }
     if (kind === 'illustration') continue;
     img.kind = kind;
     img.autoKind = kind;
-    img.kindSource = kind === 'animated' ? 'format' : 'tags';
-    img.kindEvidence = kind === 'animated' ? 'GIF 动图' : `识别标签（演示数据）`;
+    img.kindSource = 'tags';
+    img.kindEvidence = `识别标签（演示数据）`;
   }
 
   // 画师识别（演示）：识别过的图约七成认出了来源里的画师。只用哈希，不打乱随机序列
@@ -411,18 +428,29 @@ export function buildDemoDb(now = Date.now(), { imageCount = 9000 }: { imageCoun
     exclusions.push(row);
     for (const img of images.values()) if (!img.excludedBy && predicate(img)) img.excludedBy = row.id;
   };
-  addExclusion('folder', 'D:/Pictures/twitter/表情包', '文件夹 · 推特/表情包', 40, (img) => img.source?.site === 'twitter' && r() < 0.04);
-  addExclusion('tag', 'comic', '标签 · comic（漫画分镜）', 22, (img) => r() < 0.006);
+  addExclusion('folder', `${DEMO_ROOT_PREFIX}/插画/twitter/表情包`, '文件夹 · 推特/表情包', 40, (img) => img.source?.site === 'twitter' && r() < 0.04);
+  addExclusion('tag', 'comic_strip', '标签 · comic_strip（漫画分镜）', 22, (img) => r() < 0.006);
   addExclusion('tag', 'ai-generated', '标签 · ai-generated', 9, (img) => r() < 0.005);
   const excludedImages = [...images.values()].filter((img) => !img.excludedBy).slice(40, 46);
   for (const img of excludedImages) {
     addExclusion('image', img.id, `单张 · ${img.fileName}`, Math.floor(r() * 20), (x) => x.id === img.id);
   }
+  // 排除结果是派生的（P2：启动时按规则重新判定一遍）：让上面随机挑中的图真的命中规则——
+  // 文件夹规则排除的放进那个文件夹，标签规则排除的带上那个标签。不调用 r()，不打乱后面的随机序列
+  for (const img of images.values()) {
+    const rule = exclusions.find((e) => e.id === img.excludedBy);
+    if (rule?.kind === 'folder') {
+      img.libraryRootId = 'root1';
+      img.relPath = `twitter/表情包/${img.fileName}`;
+    } else if (rule?.kind === 'tag' && !img.tags.some((t) => t.tag === rule.target)) {
+      img.tags.push({ tag: rule.target, category: 'general', score: 0.9 });
+    }
+  }
 
   // 重复组
   const duplicates: DuplicateRow[] = [];
   const candidates = [...images.values()].filter((img) => !img.excludedBy && img.characterIds.length > 0);
-  let nextImage = imageCount + 1;
+  let nextImage = IMAGE_COUNT + 1;
   for (let g = 0; g < 36; g++) {
     const original = candidates[Math.floor(r() * candidates.length)]!;
     const kind: DuplicateKind = r() < 0.35 ? 'exact' : 'similar';
@@ -442,6 +470,8 @@ export function buildDemoDb(now = Date.now(), { imageCount = 9000 }: { imageCoun
         height: Math.round(original.height * scale),
         bytes: Math.round(original.bytes * scale * scale * (fmt === 'webp' ? 0.4 : 0.7)),
         format: fmt,
+        // 画面相同的副本是转成静态图的（动图只认文件完全相同，D5）
+        frameCount: kind === 'exact' ? original.frameCount : null,
         addedAt: new Date(Math.min(now, Date.parse(original.addedAt) + r() * 60 * DAY)).toISOString(),
         favorite: false,
       });
@@ -459,8 +489,8 @@ export function buildDemoDb(now = Date.now(), { imageCount = 9000 }: { imageCoun
 
   const settings: Settings = {
     libraryRoots: [
-      { id: 'root1', path: 'D:/Pictures/插画', enabled: true, imageCount: 0, lastScanAt: new Date(now - 2 * 3600_000).toISOString(), importedAt: new Date(now - 200 * DAY).toISOString(), mode: 'auto', comicRating: 'general', comicFolders: [] },
-      { id: 'root2', path: 'E:/下载/pixiv', enabled: true, imageCount: 0, lastScanAt: new Date(now - 26 * 3600_000).toISOString(), importedAt: new Date(now - 200 * DAY).toISOString(), mode: 'auto', comicRating: 'general', comicFolders: [] },
+      { id: 'root1', path: `${DEMO_ROOT_PREFIX}/插画`, enabled: true, imageCount: 0, lastScanAt: new Date(now - 2 * 3600_000).toISOString(), importedAt: new Date(now - 200 * DAY).toISOString(), mode: 'auto', comicRating: 'general', comicFolders: [] },
+      { id: 'root2', path: `${DEMO_ROOT_PREFIX}/下载/pixiv`, enabled: true, imageCount: 0, lastScanAt: new Date(now - 26 * 3600_000).toISOString(), importedAt: new Date(now - 200 * DAY).toISOString(), mode: 'auto', comicRating: 'general', comicFolders: [] },
     ],
     tagger: {
       model: 'A1yCE/pixai-tagger-v1.0-onnx-fp16',
@@ -481,7 +511,7 @@ export function buildDemoDb(now = Date.now(), { imageCount = 9000 }: { imageCoun
     },
     danbooru: { enabled: true, username: '', hasApiKey: false, lastSyncAt: new Date(now - 5 * DAY).toISOString() },
     dedupe: { hammingThreshold: 8, lastRunAt: new Date(now - 2 * 3600_000).toISOString() },
-    ui: { theme: 'system', blurSensitive: true, density: 'comfortable' },
+    ui: { theme: 'system' },
     browse: { customThemes: [] },
   };
 

@@ -1,3 +1,8 @@
+/**
+ * 契约测试入口：每组用例都在真实引擎（SqliteDataSource + 契约夹具）上跑一遍。
+ * 外层的「sqlite」只是沿用以前的用例名（以前 mock 和 sqlite 各跑一遍），方便和历史结果对照。
+ */
+import { describe } from 'vitest';
 import {
   bulkContract,
   characterMutationsContract,
@@ -16,17 +21,23 @@ import {
 } from './groups.ts';
 import { sqliteFactory } from './harness.ts';
 
-settingsContract(sqliteFactory);
-statsContract(sqliteFactory);
-worksContract(sqliteFactory);
-charactersContract(sqliteFactory);
-characterMutationsContract(sqliteFactory);
-unrecognizedContract(sqliteFactory);
-exclusionsContract(sqliteFactory);
-searchContract(sqliteFactory);
-imagesContract(sqliteFactory);
-duplicatesContract(sqliteFactory);
-bulkContract(sqliteFactory);
-undoContract(sqliteFactory);
-kindsContract(sqliteFactory);
-collectionsContract(sqliteFactory);
+describe('sqlite', () => {
+  for (const group of [
+    settingsContract,
+    statsContract,
+    worksContract,
+    charactersContract,
+    characterMutationsContract,
+    unrecognizedContract,
+    exclusionsContract,
+    searchContract,
+    imagesContract,
+    duplicatesContract,
+    bulkContract,
+    undoContract,
+    kindsContract,
+    collectionsContract,
+  ]) {
+    group(sqliteFactory);
+  }
+});

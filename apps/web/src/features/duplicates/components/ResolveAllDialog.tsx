@@ -8,6 +8,7 @@ import { api } from '@/lib/api';
 import { formatBytes, formatCount } from '@/lib/format';
 import { errorMessage, markCommitted, undo, useMutate } from '@/lib/queries';
 import { useUndoStore } from '@/lib/stores';
+import { uuid } from '@/lib/random';
 
 export interface ResolvePlan {
   id: ID;
@@ -63,7 +64,7 @@ export function ResolveAllDialog({
       const tokens: string[] = [];
       const done: ID[] = [];
       // 这一次点下去的各组共用一个 batch，在「最近 5 次可撤销」里只算一次
-      const batch = crypto.randomUUID();
+      const batch = uuid();
       let trashed = 0;
       setProgress(0);
       stopRef.current = false;
@@ -115,8 +116,8 @@ export function ResolveAllDialog({
       // 各组的 token 在撤销栈里合成一条：Ctrl+Z 一次把这一批倒序撤回
       entry: (res) =>
         res.tokens.length
-          ? { token: `group:${crypto.randomUUID()}`, label: res.message, tokens: res.tokens }
-          : { token: `barrier:${crypto.randomUUID()}`, label: res.message, barrier: true },
+          ? { token: `group:${uuid()}`, label: res.message, tokens: res.tokens }
+          : { token: `barrier:${uuid()}`, label: res.message, barrier: true },
       onSuccess: (res) => {
         const notify = res.failed ? toast.warning : toast.success;
         const entry = useUndoStore.getState().entries.find((e) => e.tokens === res.tokens);

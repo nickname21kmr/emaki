@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../../core/events.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
 import { sharp } from '../../services/image/sharpConfig.ts';
-import { diskCaseRel } from './roots.ts';
-import { SqliteDataSource } from './SqliteDataSource.ts';
+import { diskCaseRel } from '../../domain/library/roots.ts';
+import { SqliteDataSource } from '../../../test/helpers/client.ts';
 
 describe('图库文件夹重新启用时扫描、手动扫描不被吞', () => {
   let dir: string;

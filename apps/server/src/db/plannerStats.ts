@@ -1,7 +1,7 @@
 import type { Db } from './connection.ts';
 
 /** 这几张表的行数最影响查询计划：图片列表、画面筛选 / 搜索、按角色找图、未识别建议 */
-const TABLES = ['images', 'image_tags', 'image_characters', 'character_suggestions'] as const;
+const TABLES = ['images', 'image_tags', 'image_characters', 'character_evidence'] as const;
 /** 实际行数和统计信息里记的差到这个倍数就重新采样 */
 const DRIFT = 1.5;
 

@@ -7,7 +7,7 @@ import type { DanbooruCatalog } from '../danbooru/catalog.ts';
 import { cleanOtherName, humanizeCharacterTag, humanizeCopyrightTag, stripZhQualifier } from './humanize.ts';
 import { hasKana, isHanName, isLatinName, isNeutralHan, isSimplifiedZh, toSimplified } from './script.ts';
 
-export type NameSource = 'dict' | 'wiki-zh' | 'wiki-converted' | 'wiki-ja' | 'tag';
+export type NameSource = 'verified' | 'dict' | 'wiki-zh' | 'wiki-converted' | 'wiki-ja' | 'tag';
 
 export interface LocalizedName {
   name: string;
@@ -71,7 +71,7 @@ export class SqliteLocalizer implements Localizer {
 
   constructor(
     db: Db,
-    private readonly danbooru: Pick<DanbooruCatalog, 'canonicalize'>,
+    private readonly danbooru: Pick<DanbooruCatalog, 'canonicalize' | 'offlineCharacters'> & Partial<Pick<DanbooruCatalog, 'verifications'>>,
   ) {
     this.dictStmt = db.prepare('SELECT zh, aliases FROM tag_i18n WHERE tag = ?');
     this.otherStmt = db.prepare('SELECT other_names FROM danbooru_tags WHERE name = ?').pluck();
@@ -99,6 +99,10 @@ export class SqliteLocalizer implements Localizer {
     }
   }
 
+  private snapshotNames(tag: string): string[] {
+    return this.danbooru.offlineCharacters?.character(tag)?.names.map(cleanOtherName).filter((x): x is string => !!x) ?? [];
+  }
+
   private resolve(rawTag: string, owner: 'character' | 'work'): LocalizedName {
     const key = `${owner}:${rawTag}`;
     const hit = this.names.get(key);
@@ -106,11 +110,15 @@ export class SqliteLocalizer implements Localizer {
     const tag = this.danbooru.canonicalize(rawTag);
     const d = this.dict(tag) ?? this.dict(rawTag);
     let out: LocalizedName;
-    if (d?.zh) {
+    const preferred = owner === 'character' ? this.danbooru.verifications?.preferred(tag) : undefined;
+    if (preferred) {
+      out = { name: preferred.name, source: 'verified' };
+    } else if (d?.zh) {
       // 角色的中文名常带作品后缀「圣园未花（蔚蓝档案）」，去掉；作品名不去
       out = { name: owner === 'character' ? stripZhQualifier(d.zh) : d.zh, source: 'dict' };
     } else {
-      const names = this.otherNames(tag);
+      const stored = this.otherNames(tag);
+      const names = stored.length || owner !== 'character' ? stored : this.snapshotNames(tag);
       const zh = names.find(isSimplifiedZh) ?? names.find(isNeutralHan);
       const han = names.find(isHanName);
       const ja = names.find(hasKana);
@@ -138,8 +146,13 @@ export class SqliteLocalizer implements Localizer {
     const tag = this.danbooru.canonicalize(rawTag);
     const d = this.dict(tag) ?? this.dict(rawTag);
     const others = this.otherNames(tag);
+    const snapshot = owner === 'character' ? this.snapshotNames(tag) : [];
     const human = owner === 'character' ? humanizeCharacterTag(tag) : humanizeCopyrightTag(tag);
     const maxVisible = owner === 'character' ? 4 : 3;
+    const verifications = owner === 'character' ? this.danbooru.verifications : undefined;
+    const identityTag = verifications?.base(tag) ?? tag;
+    const preferred = verifications?.preferred(identityTag);
+    const forms = verifications?.formsOf(identityTag) ?? [];
 
     const seen = new Set([searchKey(displayName)]);
     const out: AutoAlias[] = [];
@@ -164,8 +177,12 @@ export class SqliteLocalizer implements Localizer {
     }
 
     // 隐藏（只用于搜索）：其余 other_names、词库全部别名、词库全称、原始标签、人性化标签
+    for (const name of [preferred?.name, ...(preferred?.aliases ?? []), identityTag,
+      ...forms.flatMap(form => [form.tag, ...form.aliases])]) add(name, 'dict', false);
+    const aliasLimit = out.length + 40;
     const hidden: [string | undefined, AutoAlias['origin']][] = [
       ...others.map((n): [string, AutoAlias['origin']] => [n, 'danbooru']),
+      ...snapshot.map((n): [string, AutoAlias['origin']] => [n, 'dict']),
       ...(d?.aliases ?? []).map((a): [string, AutoAlias['origin']] => [a, 'dict']),
       [d?.zh ?? undefined, 'dict'],
       [rawTag, 'dict'],
@@ -173,7 +190,7 @@ export class SqliteLocalizer implements Localizer {
       [human, 'dict'],
     ];
     for (const [alias, origin] of hidden) {
-      if (out.length >= maxVisible + 40) break;
+      if (out.length >= aliasLimit) break;
       add(alias, origin, false);
     }
     return out;

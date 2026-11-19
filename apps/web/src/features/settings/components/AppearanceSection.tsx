@@ -4,13 +4,11 @@ import { Field, Kbd, Segmented, Switch } from '@/components/ui';
 import type { BlurLevel } from '@/lib/blur';
 import type { CoverCrop } from '@/lib/coverCrop';
 import { cn } from '@/lib/cn';
-import { usePrefs } from '@/lib/stores';
+import { usePrefs, type Density } from '@/lib/stores';
 import { useSaveSettings } from '../hooks';
 import { PalettePicker } from './PalettePicker';
 import { ThemePicker } from './ThemePicker';
 import { BlockRow, SettingsCard, SettingsSection } from './SettingsSection';
-
-type Density = Settings['ui']['density'];
 
 // 密度落到图库的目标行高上（usePrefs.gridRowHeight），图库里的滑块还能再细调
 const ROW_HEIGHT: Record<Density, number> = { comfortable: 240, compact: 176 };
@@ -20,7 +18,8 @@ export function AppearanceSection({ ui }: { ui: Settings['ui'] }) {
   const setBlur = usePrefs((s) => s.setBlurSensitive);
   const setRowHeight = usePrefs((s) => s.setGridRowHeight);
   const prefs = usePrefs();
-  // 以本地偏好为准：顶栏眼睛按钮、B 键改的也是它
+  // 主题是图库设置（服务端）；底色、模糊、密度、封面裁剪是本机偏好（只在这台设备上，附录 #32）。
+  // 模糊以本地偏好为准：顶栏眼睛按钮、B 键改的也是它
   const off = !prefs.blurSensitive;
   const dim = cn(off && 'opacity-60');
 
@@ -40,17 +39,13 @@ export function AppearanceSection({ ui }: { ui: Settings['ui'] }) {
           hint={
             <>
               按自动识别的分级处理：全年龄和「轻微」（泳装、露肩这一类）直接显示，「较敏感」「限制级」先模糊；还没识别完的图暂按全年龄显示。随时按{' '}
-              <Kbd>B</Kbd> 临时切换。下面几项只保存在这台电脑上。
+              <Kbd>B</Kbd> 临时切换。模糊的设置都只保存在这台电脑上。
             </>
           }
         >
           <Switch
             checked={prefs.blurSensitive}
-            onCheckedChange={(blurSensitive) => {
-              // 同步到本地偏好，顶栏的眼睛按钮立刻跟着变
-              setBlur(blurSensitive);
-              save({ ui: { blurSensitive } });
-            }}
+            onCheckedChange={setBlur}
             label="默认模糊敏感图片"
           />
         </Field>
@@ -85,12 +80,12 @@ export function AppearanceSection({ ui }: { ui: Settings['ui'] }) {
           <Switch checked={prefs.revealOnHover} disabled={off} onCheckedChange={prefs.setRevealOnHover} label="悬停时显示" />
         </Field>
 
-        <Field label="网格密度" hint="缩略图的大小。图库里的行高滑块可以再细调。">
+        <Field label="网格密度" hint="缩略图的大小，只保存在这台电脑上。图库里的行高滑块可以再细调。">
           <Segmented<Density>
-            value={ui.density}
+            value={prefs.density}
             onChange={(density) => {
+              prefs.setDensity(density);
               setRowHeight(ROW_HEIGHT[density]);
-              save({ ui: { density } });
             }}
             options={[
               { value: 'comfortable', label: '舒展', icon: <LayoutGrid /> },

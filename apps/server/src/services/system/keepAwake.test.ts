@@ -12,6 +12,7 @@ const job = (id: string, status: Job['status']): Job => ({
   progress: 0,
   total: null,
   message: '',
+  etaSeconds: null,
   startedAt: null,
   finishedAt: null,
 });

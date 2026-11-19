@@ -186,9 +186,10 @@ export function SelectionBar({
               open={charOpen}
               onOpenChange={setCharOpen}
               onPick={(c) => run({ type: 'assign', characterId: c.id })}
+              onCandidate={(danbooruTag) => run({ type: 'assignTag', danbooruTag })}
             >
               {/* 露出的纸窄于 190 时也收进「更多」，sr-only 留着当锚点 */}
-              <BarButton icon={<UserRoundPlus />} pending={pendingType === 'assign'} aria-haspopup="dialog" className="@max-[190px]/bar:sr-only">
+              <BarButton icon={<UserRoundPlus />} pending={pendingType === 'assign' || pendingType === 'assignTag'} aria-haspopup="dialog" className="@max-[190px]/bar:sr-only">
                 归到角色…
               </BarButton>
             </CharacterPicker>

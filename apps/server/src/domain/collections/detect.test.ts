@@ -1,0 +1,185 @@
+import { describe, expect, it } from 'vitest';
+import { autoKind, bookLeaf, decideCollection, dirFeatures, orderPages, type DirPage } from './detect.ts';
+
+interface Opts {
+  names?: string[];
+  w?: number | ((i: number) => number);
+  h?: number | ((i: number) => number);
+  kind?: string | ((i: number) => string);
+  animated?: boolean | ((i: number) => boolean);
+  judged?: boolean;
+}
+function at<T>(v: T | ((i: number) => T), i: number): T {
+  return typeof v === 'function' ? (v as (i: number) => T)(i) : v;
+}
+const pad = (i: number, n = 3) => String(i).padStart(n, '0');
+const hex = (i: number, len: number) => ((i * 2654435761 + 0x9e3779b9) >>> 0).toString(16).padStart(8, '0').repeat(5).slice(0, len);
+const uuid = (i: number) => {
+  const h = hex(i, 32);
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+};
+
+function mk(n: number, o: Opts = {}): DirPage[] {
+  return Array.from({ length: n }, (_, k) => {
+    const i = k + 1;
+    return {
+      id: 1000 + i,
+      fileName: o.names?.[k] ?? `${pad(i)}.jpg`,
+      width: at(o.w ?? 1200, k),
+      height: at(o.h ?? 1700, k),
+      modifiedAt: `2024-01-01T00:${pad(Math.floor(i / 60), 2)}:${pad(i % 60, 2)}.000Z`,
+      kind: at(o.kind ?? 'illustration', k),
+      animated: at(o.animated ?? false, k),
+      judged: o.judged ?? false,
+    };
+  });
+}
+
+const run = (leaf: string, pages: DirPage[]) => {
+  const f = dirFeatures(pages);
+  const d = decideCollection(leaf, f);
+  return d ? { ...d, ...autoKind(leaf, f, d.rule) } : null;
+};
+const names = (n: number, fn: (i: number) => string) => Array.from({ length: n }, (_, i) => fn(i));
+
+describe('decideCollection + autoKind', () => {
+  it('① 页码文件名的漫画本', () => {
+    expect(run('Book', mk(20, { kind: 'comic', judged: true }))).toEqual({ rule: 'A', pageOrder: 'name', kind: 'doujin', source: 'pages' });
+  });
+  it('② uuid 名、统一版心 → B，暂按名字归本子，按修改时间排', () => {
+    const pages = mk(30, { names: names(30, (i) => `${uuid(i)}.jpg`), w: 1280, h: (i) => 1818 + (i % 5) });
+    expect(run('5c4fe8c847fa5e791d2d9189', pages)).toEqual({ rule: 'B', pageOrder: 'mtime', kind: 'doujin', source: 'name' });
+  });
+  it('③ 同上但是横版视频帧 → 不成册', () => {
+    const pages = mk(30, { names: names(30, (i) => `${uuid(i)}.jpg`), w: 1920, h: 1080 });
+    expect(run('5c4fe8c847fa5e791d2d9189', pages)).toBeNull();
+  });
+  it('④ 杂项目录名单', () => {
+    expect(run('QQ_Images', mk(30))).toBeNull();
+  });
+  it('⑤ 截图页超过 20%', () => {
+    const pages = mk(10, { names: names(10, (i) => `${i + 1}.png`), kind: (i) => (i < 3 ? 'screenshot' : 'illustration'), judged: true });
+    expect(run('x', pages)).toBeNull();
+  });
+  it('⑤b 动图页超过 20%（D5：按是否动图数，动的插画也算）', () => {
+    const pages = mk(10, { names: names(10, (i) => `${i + 1}.png`), animated: (i) => i < 3, judged: true });
+    expect(run('x', pages)).toBeNull();
+    // 同样的文件夹，静态的：成册
+    expect(run('x', mk(10, { names: names(10, (i) => `${i + 1}.png`), judged: true }))).not.toBeNull();
+  });
+  it('⑥ 不足 8 页', () => {
+    expect(run('Book', mk(7))).toBeNull();
+  });
+  it('⑦ 识别过的彩色插画本 → 画集', () => {
+    expect(run('某画集', mk(12, { judged: true }))).toMatchObject({ rule: 'A', kind: 'artbook', source: 'pages' });
+  });
+  it('⑧ 同人志命名、未识别 → 暂归本子', () => {
+    const pages = mk(12, { names: names(12, (i) => `${pad(i + 1, 2)}.jpg`) });
+    expect(run('(C99) [社团 (作者)] 标题 (原作)', pages)).toMatchObject({ rule: 'A', kind: 'doujin', source: 'name' });
+  });
+  it('⑨ 下载目录：16 位 hex 名、尺寸各不相同 → 不成册', () => {
+    const pages = mk(40, { names: names(40, (i) => `${hex(i, 16)}.jpg`), w: (i) => 800 + i * 37, h: (i) => 900 + i * 53 });
+    expect(run('Download', pages)).toBeNull();
+  });
+  it('⑩ 含 6 页横向跨页的画集', () => {
+    const pages = mk(14, { w: (i) => (i < 6 ? 3500 : 2480), h: (i) => (i < 6 ? 2470 : 3508), judged: true });
+    expect(run('Book', pages)).toMatchObject({ rule: 'A', kind: 'artbook' });
+  });
+  it('⑪ 连载', () => {
+    const pages = mk(20, { names: names(20, (i) => `${i + 1}.jpg`), kind: 'comic', judged: true });
+    expect(run('某连载 第3话', pages)).toMatchObject({ rule: 'A', kind: 'doujin' });
+  });
+  it('⑫ 书名号里的画集名、随机文件名 → C', () => {
+    const rand = ['abcd', 'efgh', 'ijkl', 'mnop', 'qrst', 'uvwx', 'yzab', 'cdef', 'ghij', 'klmn'];
+    expect(run('《某画集》', mk(10, { names: rand.map((x) => `${x}.jpg`) }))).toEqual({
+      rule: 'C',
+      pageOrder: 'mtime',
+      kind: 'artbook',
+      source: 'name',
+    });
+  });
+  it('⑬ 类型来源是兜底但识别过，也算已判定（RV-C-1）', () => {
+    expect(run('某本', mk(12, { judged: true }))).toMatchObject({ rule: 'A', kind: 'artbook', source: 'pages' });
+  });
+});
+
+describe('orderPages', () => {
+  it('按文件名：自然序，附页落到最后', () => {
+    const input = ['0000-1.jpg', '0000.jpg', '0001.jpg', '10.jpg', '2.jpg', '招募.png', 'ScanImage10.jpg', 'ScanImage02.jpg'];
+    expect(orderPages(mk(input.length, { names: input }), 'name').map((p) => p.fileName)).toEqual([
+      '0000.jpg',
+      '0000-1.jpg',
+      '0001.jpg',
+      '2.jpg',
+      '10.jpg',
+      'ScanImage02.jpg',
+      'ScanImage10.jpg',
+      '招募.png',
+    ]);
+  });
+});
+
+describe('v2：网页另存的画集（书名/xxx_files/images/00002.jpeg）', () => {
+  it('通用的子目录名往上找书名；全是通用名就还用最内层', () => {
+    expect(bookLeaf('うたわれるもの 公式ビジュアルコレクション/lkfafw_files/images')).toBe('うたわれるもの 公式ビジュアルコレクション');
+    expect(bookLeaf('某画集/pages')).toBe('某画集');
+    expect(bookLeaf('images')).toBe('images');
+    expect(bookLeaf('QQ/images')).toBe('QQ');
+    expect(bookLeaf('')).toBe('');
+  });
+  it('补零的 5 位页码算页码，书名代替 images 判定', () => {
+    const pages = mk(308, { names: Array.from({ length: 308 }, (_, k) => `${pad(k + 2, 5)}.jpeg`), w: 1356, h: 1920 });
+    expect(decideCollection('images', dirFeatures(pages))).toBeNull();
+    expect(decideCollection(bookLeaf('某某 公式ビジュアルコレクション/x_files/images'), dirFeatures(pages))?.rule).toBe('A');
+  });
+  it('不补零的 5 位数（按日期编号的 21041a、21042）不算页码', () => {
+    const names = ['21041a', '21041b', '21041c', '21042', '21043', '21044a', '21044b', '21044c', '21044d'].map((s) => `${s}.png`);
+    expect(decideCollection("2021'04", dirFeatures(mk(9, { names, w: 1129, h: 1500 })))).toBeNull();
+  });
+});
+
+describe('v6：相机 / 手机的流水号不算页码', () => {
+  const seqHits = (list: string[]) => dirFeatures(mk(list.length, { names: list })).seqHits;
+  it('手机截图、照片、存图混在一起的 4月 → 不成册', () => {
+    // 截图 1170×2532、照片 3024×4032、存下来的图尺寸各不相同，扩展名大小写混着
+    const ext = ['PNG', 'JPG', 'JPEG', 'PNG'];
+    const pages = mk(40, {
+      names: names(40, (i) => `IMG_${8098 + i}.${ext[i % 4]}`),
+      w: (i) => [1170, 3024, 800 + i * 13, 1080][i % 4]!,
+      h: (i) => [2532, 4032, 1100 + i * 7, 1920][i % 4]!,
+    });
+    expect(dirFeatures(pages).seqHits).toBe(0);
+    expect(run('4月', pages)).toBeNull();
+  });
+  it('各家相机、手机的文件名都不算', () => {
+    const cam = ['IMG_1234', 'IMG_E1234', 'IMG_1234 2', 'IMG_1234(1)', 'DSC_0001', 'DSCN0001', 'DSCF0001', '_DSC0001'];
+    const dated = ['PXL_20240101_123456789', 'MVIMG_20240101_123456', 'IMG_20240101_123456', 'Screenshot_20240101-123456', '微信图片_20240101123456', 'mmexport1690000000000'];
+    expect(seqHits([...cam, ...dated].map((s) => `${s}.jpg`))).toBe(0);
+  });
+  it('扫描仪、下载器起的页码照旧算', () => {
+    const list = ['001', 'p001', 'page_01', 'img001', 'img_001', 'img_0001', 'img_1', 'ScanImage02', 'image05', 'pic_12'];
+    expect(seqHits(list.map((s) => `${s}.jpg`))).toBe(list.length);
+  });
+  it('小写 img_001 命名的本子还是 A', () => {
+    expect(run('Book', mk(20, { names: names(20, (i) => `img_${pad(i + 1)}.jpg`) }))?.rule).toBe('A');
+  });
+  it('扫描仪出的 IMG_0001：版心统一、书页比例的还能按 B 成册', () => {
+    const pages = mk(30, { names: names(30, (i) => `IMG_${pad(i + 1, 4)}.jpg`), w: 2480, h: 3508 });
+    expect(run('Scan', pages)).toMatchObject({ rule: 'B', pageOrder: 'name' });
+  });
+});
+
+describe('v3：名字写明画集 / 作品集的，不要求尺寸统一', () => {
+  // pixiv 作品号命名、尺寸各不相同的画师作品合集
+  const pages = mk(40, { names: Array.from({ length: 40 }, (_, k) => `${52804833 + k * 977}_p0.png`), w: (i) => 700 + (i % 7) * 90, h: 1500 });
+  it('「PIXIV 全投稿作品集」成画集', () => {
+    expect(decideCollection('PIXIV 全投稿作品集 (自整理 703P)', dirFeatures(pages))?.rule).toBe('C');
+  });
+  it('只叫 illustrations 的文件夹不放宽', () => {
+    expect(decideCollection('illustrations', dirFeatures(pages))).toBeNull();
+  });
+  it('横版为主的不算', () => {
+    const wide = mk(40, { names: Array.from({ length: 40 }, (_, k) => `${1000 + k * 7}_p0.png`), w: 1900, h: (i) => 900 + (i % 5) * 40 });
+    expect(decideCollection('某某作品集', dirFeatures(wide))).toBeNull();
+  });
+});

@@ -1,4 +1,13 @@
-import type { CollectionKind, GetCollectionResponse, ID, ImageItem, Rating } from '@emaki/shared';
+import {
+  bookBlurContext,
+  organizeFolderName,
+  type BulkImageAction,
+  type CollectionKind,
+  type GetCollectionResponse,
+  type ID,
+  type ImageItem,
+  type Rating,
+} from '@emaki/shared';
 import {
   ArrowDownAZ,
   BookOpenText,
@@ -61,6 +70,7 @@ import { WorkPicker } from '@/features/characters/detail/WorkPicker';
 import { SelectionBar, type SelectionAction } from '@/features/characters/detail/SelectionBar';
 import { useScopedSelection } from '@/features/characters/detail/useScopedSelection';
 import { CollectionImagePicker } from './components/CollectionImagePicker';
+import { PageBlocks } from '@/blocks/PageBlocks';
 
 const RATINGS: Rating[] = ['general', 'sensitive', 'questionable', 'explicit'];
 
@@ -83,6 +93,7 @@ function Detail({ data }: { data: GetCollectionResponse }) {
   const navigate = useNavigate();
   const [dialog, setDialog] = useState<'rename' | 'series' | 'works' | null>(null);
   const update = useMutate((body: Parameters<typeof api.updateCollection>[1]) => api.updateCollection(c.id, body));
+  const addCandidate = useMutate((danbooruTag: string) => api.bulkCollections({ ids: [c.id], action: { type: 'addCharacterTag', danbooruTag } }));
   const dismiss = useMutate(() => api.deleteCollection(c.id), { onSuccess: () => navigate('/collections') });
   const progress = readProgress.get(c.id);
   const [adding, setAdding] = useState(false);
@@ -160,68 +171,77 @@ function Detail({ data }: { data: GetCollectionResponse }) {
       />
       {adding && <CollectionImagePicker id={c.id} memberIds={data.pages.map((p) => p.imageId)} open={adding} onOpenChange={setAdding} />}
       <PageBody className="flex-1">
-        <section className="mt-2 grid grid-cols-[240px_minmax(0,1fr)] gap-10 max-[900px]:grid-cols-1">
-          <BookPlate collection={c} size="lg" />
-          <Colophon data={data} onReview={(v) => update.mutate({ reviewed: v })} />
-        </section>
-
-        <section className="mt-14">
-          <SectionTitle
-            hint={`${data.cast.length} 位`}
-            actions={
-              <>
-                <CharacterPicker
-                  title="关联角色"
-                  meta="整本"
-                  align="end"
-                  onPick={(ch) => !manualChars.includes(ch.id) && update.mutate({ manualCharacterIds: [...manualChars, ch.id] })}
+        {/* 区块按注册表的顺序（blocks/registry.ts 的 collection） */}
+        <PageBlocks
+          page="collection"
+          render={{
+            'collection.head': () => (
+              <section className="mt-2 grid grid-cols-[240px_minmax(0,1fr)] gap-10 max-[900px]:grid-cols-1">
+                <BookPlate collection={c} size="lg" />
+                <Colophon data={data} onReview={(v) => update.mutate({ reviewed: v })} />
+              </section>
+            ),
+            'collection.cast': () => (
+              <section className="mt-14">
+                <SectionTitle
+                  hint={`${data.cast.length} 位`}
+                  actions={
+                    <>
+                      <CharacterPicker
+                        title="关联角色"
+                        meta="整本"
+                        align="end"
+                        onPick={(ch) => !manualChars.includes(ch.id) && update.mutate({ manualCharacterIds: [...manualChars, ch.id] })}
+                        onCandidate={(tag) => addCandidate.mutate(tag)}
+                      >
+                        <Button variant="ghost" size="sm" icon={<UserRoundPlus className="size-3.5" />}>
+                          关联角色…
+                        </Button>
+                      </CharacterPicker>
+                      <Button variant="ghost" size="sm" onClick={() => setDialog('works')}>
+                        作品…
+                      </Button>
+                    </>
+                  }
                 >
-                  <Button variant="ghost" size="sm" icon={<UserRoundPlus className="size-3.5" />}>
-                    关联角色…
-                  </Button>
-                </CharacterPicker>
-                <Button variant="ghost" size="sm" onClick={() => setDialog('works')}>
-                  作品…
-                </Button>
-              </>
-            }
-          >
-            出场角色
-          </SectionTitle>
-          {data.cast.length ? (
-            <div className="flex flex-wrap gap-5 pt-3.5">
-              {data.cast.map(({ character, pageCount, manual }) => (
-                <div key={character.id} className="group/cast relative">
-                  <AvatarTile
-                    character={character}
-                    badge={
-                      <Badge tone="glass" className="gap-1 tabular">
-                        {manual && <span className="size-1.5 rounded-full bg-shu" />}
-                        {pageCount} 页
-                      </Badge>
-                    }
-                  />
-                  {manual && (
-                    <button
-                      type="button"
-                      aria-label={`取消关联 ${character.name}`}
-                      onClick={() => update.mutate({ manualCharacterIds: manualChars.filter((x) => x !== character.id) })}
-                      className="absolute top-1 right-3 hidden size-6 items-center justify-center rounded-full bg-raised text-fg-muted shadow-lift ring-1 ring-line group-hover/cast:flex hover:text-fg"
-                    >
-                      <X className="size-3.5" />
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-[13px] text-fg-muted">
-              {c.kind === 'doujin' ? '还没有认出出场角色。可以整本关联一位角色，不会改动任何张数。' : '画集里的图还没有归到角色。'}
-            </p>
-          )}
-        </section>
-
-        <TableOfContents data={data} />
+                  出场角色
+                </SectionTitle>
+                {data.cast.length ? (
+                  <div className="flex flex-wrap gap-5 pt-3.5">
+                    {data.cast.map(({ character, pageCount, manual }) => (
+                      <div key={character.id} className="group/cast relative">
+                        <AvatarTile
+                          character={character}
+                          badge={
+                            <Badge tone="glass" className="gap-1 tabular">
+                              {manual && <span className="size-1.5 rounded-full bg-shu" />}
+                              {pageCount} 页
+                            </Badge>
+                          }
+                        />
+                        {manual && (
+                          <button
+                            type="button"
+                            aria-label={`取消关联 ${character.name}`}
+                            onClick={() => update.mutate({ manualCharacterIds: manualChars.filter((x) => x !== character.id) })}
+                            className="absolute top-1 right-3 hidden size-6 items-center justify-center rounded-full bg-raised text-fg-muted shadow-lift ring-1 ring-line group-hover/cast:flex hover:text-fg"
+                          >
+                            <X className="size-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[13px] text-fg-muted">
+                    {c.kind === 'doujin' ? '还没有认出出场角色。可以整本关联一位角色，不会改动任何张数。' : '画集里的图还没有归到角色。'}
+                  </p>
+                )}
+              </section>
+            ),
+            'collection.contents': () => <TableOfContents data={data} />,
+          }}
+        />
       </PageBody>
 
       <RenameDialog open={dialog === 'rename'} onOpenChange={(o) => !o && setDialog(null)} current={c.title} allowAuto={folder} onSave={(title) => update.mutate({ title })} />
@@ -327,25 +347,32 @@ function GroupDetail({ data }: { data: GetCollectionResponse }) {
         }
       />
       <PageBody className="flex-1">
-        <section className="mt-2 grid grid-cols-[300px_minmax(0,1fr)] items-center gap-10 max-[900px]:grid-cols-1">
-          <div className="group/fan mx-auto w-full max-w-[300px]">
-            <CoverFan covers={c.covers} label={displayTitle(c)} bigCenter />
-          </div>
-          <GroupFacts data={data} />
-        </section>
-
-        {data.cast.length > 0 && (
-          <section className="mt-14">
-            <SectionTitle hint={`${data.cast.length} 位 · 按图上认出的角色`}>出场角色</SectionTitle>
-            <div className="flex flex-wrap gap-5 pt-3.5">
-              {data.cast.map(({ character, pageCount }) => (
-                <AvatarTile key={character.id} character={character} badge={<Badge tone="glass">{pageCount} 张</Badge>} />
-              ))}
-            </div>
-          </section>
-        )}
-
-        <TableOfContents data={data} />
+        {/* 区块按注册表的顺序（blocks/registry.ts 的 group） */}
+        <PageBlocks
+          page="group"
+          render={{
+            'group.head': () => (
+              <section className="mt-2 grid grid-cols-[300px_minmax(0,1fr)] items-center gap-10 max-[900px]:grid-cols-1">
+                <div className="group/fan mx-auto w-full max-w-[300px]">
+                  <CoverFan covers={c.covers} label={displayTitle(c)} bigCenter />
+                </div>
+                <GroupFacts data={data} />
+              </section>
+            ),
+            'group.cast': () =>
+              data.cast.length > 0 && (
+                <section className="mt-14">
+                  <SectionTitle hint={`${data.cast.length} 位 · 按图上认出的角色`}>出场角色</SectionTitle>
+                  <div className="flex flex-wrap gap-5 pt-3.5">
+                    {data.cast.map(({ character, pageCount }) => (
+                      <AvatarTile key={character.id} character={character} badge={<Badge tone="glass">{pageCount} 张</Badge>} />
+                    ))}
+                  </div>
+                </section>
+              ),
+            'group.contents': () => <TableOfContents data={data} />,
+          }}
+        />
       </PageBody>
 
       {dialog === 'add' && (
@@ -386,9 +413,6 @@ function GroupDetail({ data }: { data: GetCollectionResponse }) {
   );
 }
 
-/** 和后端 organizeCollection 同一个规则：去掉文件名里不能用的字符，最长 70 个字 */
-const organizeFolderName = (title: string | null) =>
-  (title ?? '组图').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/^[.$ ]+/, '').slice(0, 70) || '组图';
 
 /** 组图的细线表：张数、来历、作品、最近加入；值为空的行不显示 */
 function GroupFacts({ data }: { data: GetCollectionResponse }) {
@@ -525,7 +549,7 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
   const [artistOpen, setArtistOpen] = useState(false);
   const [splitting, setSplitting] = useState(false);
   const selection = useScopedSelection(scope, images, artistOpen || splitting);
-  const assign = useMutate((v: { ids: ID[]; characterId: ID }) => api.bulkImages({ ids: v.ids, action: { type: 'assign', characterId: v.characterId } }), {
+  const assign = useMutate((v: { ids: ID[]; action: BulkImageAction }) => api.bulkImages(v), {
     onSuccess: selection.clear,
   });
   const rating = useMutate((v: { ids: ID[]; value: Rating }) => api.bulkImages({ ids: v.ids, action: { type: 'rating', value: v.value } }), {
@@ -606,15 +630,12 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
           loadingMore={list.isFetchingNextPage}
           onLoadMore={loadMore}
           onOpen={group ? undefined : (img) => navigate(`/collections/${c.id}/read?p=${pageNo.get(img.id) ?? 1}`)}
-          forceBlur={(img) => c.kind === 'doujin' && !tagged.get(img.id)}
-          renderOverlay={
+          rated={(img) => !!tagged.get(img.id)}
+          blurContext={bookBlurContext(c.kind)}
+          renderBadges={
             group
               ? undefined
-              : (img) => (
-                  <span className="pointer-events-none absolute bottom-1.5 left-1.5 rounded-[4px] bg-sheet/90 px-1.5 text-[11px] text-fg-muted numeral tabular">
-                    {pageNo.get(img.id)}
-                  </span>
-                )
+              : (img) => <span className="rounded-[4px] bg-sheet/90 px-1.5 text-[11px] text-fg-muted numeral tabular">{pageNo.get(img.id)}</span>
           }
         />
       )}
@@ -624,7 +645,8 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
         side="top"
         align="center"
         meta={`${selection.count} ${word}`}
-        onPick={(ch) => assign.mutate({ ids: selection.ids, characterId: ch.id })}
+        onPick={(ch) => assign.mutate({ ids: selection.ids, action: { type: 'assign', characterId: ch.id } })}
+        onCandidate={(danbooruTag) => assign.mutate({ ids: selection.ids, action: { type: 'assignTag', danbooruTag } })}
       >
         <span className="pointer-events-none fixed bottom-24 left-1/2" />
       </CharacterPicker>

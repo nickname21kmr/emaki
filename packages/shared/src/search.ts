@@ -26,3 +26,20 @@ export function matchesQuery(query: string, candidates: readonly (string | null 
   if (!q) return true;
   return candidates.some((c) => c != null && searchKey(c).includes(q));
 }
+
+/**
+ * 选择器排序用的命中档位：2 = 某个候选以查询开头，1 = 包含，0 = 没命中（空查询算 2）。
+ * 网页的各个选择器（角色、作品、画师、组图）都用它和 matchesQuery，不各自 toLowerCase（附录 #38）
+ */
+export function searchRank(query: string, candidates: readonly (string | null | undefined)[]): 0 | 1 | 2 {
+  const q = searchKey(query);
+  if (!q) return 2;
+  let best: 0 | 1 | 2 = 0;
+  for (const c of candidates) {
+    if (c == null) continue;
+    const k = searchKey(c);
+    if (k.startsWith(q)) return 2;
+    if (k.includes(q)) best = 1;
+  }
+  return best;
+}

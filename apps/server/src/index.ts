@@ -2,27 +2,30 @@ import { buildApp } from './app.ts';
 import { killAgentTreesSync } from './assistant/rpc.ts';
 import { config } from './config.ts';
 import { EventBus } from './core/events.ts';
-import type { DataSource } from './datasource/DataSource.ts';
-import { SqliteDataSource } from './datasource/sqlite/SqliteDataSource.ts';
+import type { Settings } from '@emaki/shared';
+import type { SqliteDataSource } from './datasource/sqlite/SqliteDataSource.ts';
 import { KeepAwake } from './services/system/keepAwake.ts';
 
-async function createDataSource(bus: EventBus): Promise<DataSource> {
-  if (config.dataSource === 'sqlite') return SqliteDataSource.open(bus, config.dataDir);
-  // 演示图库：每次从头导入假数据；不扫描、不识别、不监听文件夹；移到回收站只改记录，演示图留在磁盘上下次接着用
-  const { prepareDemo } = await import('./demo/demo.ts');
-  const pictures = await prepareDemo({ dataDir: config.dataDir, picsDir: config.demoPicsDir });
-  const ds = await SqliteDataSource.open(bus, config.dataDir, { autoJobs: false, trashImpl: async () => {}, waitForFile: pictures.waitForFile });
-  void pictures.drawInBackground().catch((e) => console.error('[演示] 画图失败', e));
-  return ds;
+/** 演示模式也跑真实引擎（docs/core-architecture.md 第 8 节）：换成演示数据和假部件，数据库在 data/demo（每次启动重建） */
+async function openEngine(bus: EventBus): Promise<SqliteDataSource> {
+  if (config.dataSource === 'demo') {
+    const started = performance.now();
+    const { openDemoEngine } = await import('./demo/engine.ts');
+    const { ds } = await openDemoEngine(bus, { dir: config.libraryDir });
+    console.log(`演示数据已就绪：${config.libraryDir}（${Math.round(performance.now() - started)} ms）`);
+    return ds;
+  }
+  const { SqliteDataSource } = await import('./datasource/sqlite/SqliteDataSource.ts');
+  return SqliteDataSource.open(bus, config.libraryDir);
 }
 
 const bus = new EventBus();
-const ds = await createDataSource(bus);
+const ds = await openEngine(bus);
 const app = await buildApp(ds, bus);
 // 后台任务运行时不让电脑休眠（设置 → 识别里可关）；演示数据不需要
 const awake =
   config.dataSource === 'sqlite'
-    ? new KeepAwake(bus, { enabled: async () => (await ds.getSettings()).tagger.keepAwake, log: (m) => app.log.info(m) })
+    ? new KeepAwake(bus, { enabled: async () => (await ds.registry.query<Settings>('settings.get', {}, { actor: 'system:keepAwake' })).tagger.keepAwake, log: (m) => app.log.info(m) })
     : null;
 
 try {
@@ -36,7 +39,7 @@ try {
       if (sig === 'SIGHUP') killAgentTreesSync();
       awake?.close();
       await app.close();
-      await ds.close?.();
+      await ds.close();
       process.exit(0);
     });
   }

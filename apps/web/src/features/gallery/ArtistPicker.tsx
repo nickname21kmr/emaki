@@ -1,4 +1,4 @@
-import type { Artist, BulkImageAction, ID } from '@emaki/shared';
+import { searchKey, searchRank, type Artist, type BulkImageAction, type ID } from '@emaki/shared';
 import { Command } from 'cmdk';
 import { Check, CornerDownLeft, Plus, Search } from 'lucide-react';
 import { Popover } from 'radix-ui';
@@ -80,9 +80,8 @@ export function ArtistPicker({
   );
 }
 
-/** 不分大小写，下划线和空格算一样 */
-const norm = (s: string) => s.toLowerCase().replace(/[\s_]+/g, ' ').trim();
-const keysOf = (a: Artist) => [a.name, a.tag, ...a.tags, ...a.aliases, a.twitter ?? ''].filter(Boolean).map(norm);
+/** 画师的全部名字（搜索用共用的 searchRank / searchKey：不分大小写，下划线和空格算一样，附录 #38） */
+const namesOf = (a: Artist) => [a.name, a.tag, ...a.tags, ...a.aliases, a.twitter ?? ''].filter(Boolean);
 /** 不选中任何一项（cmdk 的值为空时会自动选第一项，所以用一个不存在的值） */
 const NO_PICK = '__none__';
 /** 没输入时列出的常见画师数；输入后最多列出的条数 */
@@ -107,7 +106,7 @@ export function ArtistPickerPanel({
 }) {
   const { data, isPending } = useArtists();
   const [text, setText] = useState('');
-  const q = norm(text);
+  const q = searchKey(text);
   const selected = useMemo(() => new Set(selectedTags ?? []), [selectedTags]);
 
   const rows = useMemo(() => {
@@ -115,17 +114,16 @@ export function ArtistPickerPanel({
     if (!q) return list.slice(0, TOP);
     // 前缀匹配排前面，同档按张数
     const scored = list.flatMap((a) => {
-      const keys = keysOf(a);
-      const s = keys.some((k) => k.startsWith(q)) ? 2 : keys.some((k) => k.includes(q)) ? 1 : 0;
+      const s = searchRank(text, namesOf(a));
       return s ? [{ a, s }] : [];
     });
     return scored
       .sort((x, y) => y.s - x.s || y.a.imageCount - x.a.imageCount)
       .slice(0, MAX)
       .map((x) => x.a);
-  }, [data, q]);
+  }, [data, q, text]);
   // 输入的名字和哪位画师都对不上：可以当新画师
-  const fresh = allowNew && text.trim() && !(data ?? []).some((a) => keysOf(a).includes(q)) ? text.trim() : null;
+  const fresh = allowNew && text.trim() && !(data ?? []).some((a) => namesOf(a).some((n) => searchKey(n) === q)) ? text.trim() : null;
   const has = (a: Artist) => selected.has(a.tag) || a.tags.some((t) => selected.has(t));
   // 默认高亮第一位能选的画师（没有再是「用这个名字」）
   const firstRow = rows.find((a) => !has(a));

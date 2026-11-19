@@ -12,7 +12,7 @@ import type {
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useScrollContainer } from '@/components/layout/ScrollContainer';
-import { api } from '@/lib/api';
+import { api, withMeta } from '@/lib/api';
 import { useLiveJobs } from '@/lib/events';
 import { qk, useJobs, useMutate, useStartJob as useStartJobBase } from '@/lib/queries';
 import { isActiveJob, JOB_LABEL } from './jobMeta';
@@ -41,14 +41,14 @@ function applyPatch(prev: Settings, body: UpdateSettingsBody): Settings {
 }
 
 /**
- * 保存设置：先改本地缓存，再 PUT；成功 toast「已保存」，失败以服务端为准重新拉取。
+ * 保存设置：先改本地缓存，再 PATCH；成功 toast「已保存」，失败以服务端为准重新拉取。
  *   const save = useSaveSettings();
  *   save({ ui: { theme: 'dark' } });
  */
 export function useSaveSettings() {
   const client = useQueryClient();
-  const { mutate } = useMutate((body: UpdateSettingsBody) => api.updateSettings(body).then(() => done('已保存')), {
-    // 设置改了撤不回：在撤销栈里占一格，Ctrl+Z 不会越过它去撤图库里更早的操作
+  const { mutate } = useMutate((body: UpdateSettingsBody) => api.updateSettings(body).then((saved) => withMeta(done('已保存'), saved)), {
+    // 设置改了撤不回（注册表里 settings.update 不可撤销）：在撤销栈里占一格，Ctrl+Z 不会越过它去撤图库里更早的操作
     label: '改了设置',
   });
   return useCallback(
@@ -99,7 +99,7 @@ export function useStartJob() {
 }
 
 export function useCancelJob() {
-  return useMutate((id: ID) => api.cancelJob(id).then(() => done('已取消任务')));
+  return useMutate((id: ID) => api.cancelJob(id).then((r) => withMeta(done('已取消任务'), r)));
 }
 
 const STATUS_RANK: Record<JobStatus, number> = { queued: 0, running: 1, done: 2, failed: 2, cancelled: 2 };

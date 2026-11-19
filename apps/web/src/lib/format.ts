@@ -56,14 +56,17 @@ export const formatPercent = (v: number, digits = 0) => `${(v * 100).toFixed(dig
 /** Keep confidence below a threshold visibly below it, rather than rounding up. */
 export const formatConfidence = (v: number) => `${Math.floor(Math.max(0, Math.min(1, v)) * 10_000 + 1e-9) / 100}%`;
 
-export const RATING_LABEL = {
-  general: '全年龄',
-  sensitive: '轻微',
-  questionable: '较敏感',
-  explicit: '限制级',
-} as const;
+/**
+ * 一条角色建议的证据怎么显示（P3b：建议 = 证据里还没关联的候选）：来源 + 置信度。
+ * 识别模型给分数；Pixiv 的置信度只有两档：投稿标签明确对上（1，「确认」）和只是候选（0，「候选」）
+ */
+export function suggestionEvidence(s: { source: 'tagger' | 'pixiv'; score: number }): { source: string; value: string | null; bar: number | null } {
+  if (s.source === 'pixiv') return { source: 'Pixiv 标签', value: s.score >= 1 ? '确认' : '候选', bar: null };
+  return { source: '识别模型', value: s.score > 0 ? formatConfidence(s.score) : null, bar: s.score > 0 ? s.score : null };
+}
 
-export const isSensitive = (rating: keyof typeof RATING_LABEL) => rating === 'questionable' || rating === 'explicit';
+/** 分级名、「敏感」的定义在 packages/shared，和服务端同一份 */
+export { isSensitive, RATING_LABEL } from '@emaki/shared';
 
 /** 1920×1080 */
 export const formatDimensions = (w: number, h: number) => `${w}×${h}`;

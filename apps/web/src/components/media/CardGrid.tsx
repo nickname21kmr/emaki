@@ -7,6 +7,7 @@ import { cn } from '@/lib/cn';
 import { formatDate } from '@/lib/format';
 import { MountFrame, SelectCircle, useGridBox, useGridInteractions, useLightboxFeed } from './ImageGrid';
 import { GroupBadge, selectionIds, toggleImageSelection } from './CollectionControls';
+import { TileMarks } from './KindBadge';
 import { Thumb } from './Thumb';
 
 /**
@@ -163,11 +164,12 @@ function Card({
             }
           />
         </button>
-        {variant === 'shot' && ratio >= 2.6 && (
-          <span className="pointer-events-none absolute bottom-1.5 left-1.5 rounded-full bg-black/50 px-1.5 text-[10.5px] text-white/90 tabular">
-            长 {(ratio / 1.78).toFixed(1)} 屏
-          </span>
-        )}
+        {/* 左下角：长截图的屏数、动图标记（D5） */}
+        <TileMarks animated={image.animated}>
+          {variant === 'shot' && ratio >= 2.6 && (
+            <span className="rounded-full bg-black/50 px-1.5 text-[10.5px] text-white/90 tabular">长 {(ratio / 1.78).toFixed(1)} 屏</span>
+          )}
+        </TileMarks>
         {image.favorite && (
           <Heart className="pointer-events-none absolute right-2 bottom-2 size-4 fill-white text-white drop-shadow-[0_1px_2px_rgb(0_0_0/0.5)]" />
         )}

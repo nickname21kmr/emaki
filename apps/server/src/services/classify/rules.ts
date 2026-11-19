@@ -2,17 +2,19 @@
  * 图片内容类型分类器（T27）：纯函数，不做 IO。
  *
  * 规则与阈值照 docs/design/m5/classify-rules.reference.cjs 移植（2026-09-27 在用户真实图库上抽样验证过），
- * 按 TASKS.md T27 第 1a 条修改：删掉「小图文字 → 表情」、GIF 判 animated、camera 按非空字符串判断、来源映射到 ContentKindSource。
- * 判定顺序：先命中先返回——文件名 / 文件夹 / 相机（强信号）→ 格式 → 识别标签 → 手机屏幕尺寸（弱信号）→ 插画。
+ * 按 TASKS.md T27 第 1a 条修改：删掉「小图文字 → 表情」、camera 按非空字符串判断、来源映射到 ContentKindSource。
+ * 判定顺序：先命中先返回——文件名 / 文件夹 / 相机（强信号）→ 识别标签 → 手机屏幕尺寸（弱信号）→ 插画。
+ *
+ * 「是否动图」不是类型（D5，docs/core-architecture.md 第 13 节）：isAnimated 按帧数、格式单独判断，和类型互不影响。
+ * 以前 GIF、多帧图判成类型 animated（排在相机之后、漫画文件夹之前）；现在动图照样按其余规则判类型：动的插画是插画，动的表情是表情。
  *
  * 注意：image_tags 只存 ≥ generalThreshold（默认 0.35）的分数，所以「no_humans < 0.3」实际等于「没有入库」。
- * 改规则（包括 theme.ts 的主题规则）要把 CLASSIFIER_VERSION 加一，启动时会按新规则重算全库（手动改过的类型保留）。
+ * 改规则（包括 theme.ts 的主题规则、isAnimated）要把 CLASSIFIER_VERSION 加一，启动时会按新规则重算全库（手动改过的类型保留）。
  */
 import type { ContentKind, ContentKindSource, ImageFormat } from '@emaki/shared';
 
-// Existing classifications can include stronger evidence from other classifiers.
-// Animation metadata backfill targets confirmed multi-frame files separately.
-export const CLASSIFIER_VERSION = 1;
+// v2（D5）：去掉「GIF / 多帧 → animated」，动图另记 images.animated（isAnimated）
+export const CLASSIFIER_VERSION = 2;
 
 export interface ClassifyInput {
   fileName: string;
@@ -20,7 +22,6 @@ export interface ClassifyInput {
   width: number;
   height: number;
   format: ImageFormat;
-  pages?: number;
   /** 'HUAWEI EML-AL00' = 相机拍摄；'' = 读过但不是；null = 还没读 */
   camera: string | null;
   /** general 标签分数；null = 还没打标签 */
@@ -77,6 +78,31 @@ export const SIGNAL_TAGS: readonly string[] = [
 
 export const COMIC_ROOT_EVIDENCE = '按漫画导入的文件夹';
 
+/** 帧数和格式（读文件头拿到的）：frames 为 null = 还没读过 */
+export interface AnimationFacts {
+  format: ImageFormat;
+  frames: number | null | undefined;
+}
+
+/**
+ * 是否动图（D5）：HTML 逐帧动画一律算；读过帧数的看帧数（多帧的 GIF / WebP / PNG / AVIF 算，单帧的静态 GIF 不算）；
+ * 还没读过帧数的 GIF 先按动图算（缩略图任务读到帧数后按帧数改），其余格式先按静态算。
+ * 迁移 038 里有同一条规则的 SQL（把已有的图一次判好），两边要一致（db/animated.migration.test.ts 逐种核对）。
+ */
+export function isAnimated(x: AnimationFacts): boolean {
+  if (x.format === 'html') return true;
+  if (x.frames == null) return x.format === 'gif';
+  return x.frames > 1;
+}
+
+/** 给人看的「为什么算动图」（ImageDetail.animatedReason）；不是动图为 null */
+export function describeAnimation(x: AnimationFacts): string | null {
+  if (!isAnimated(x)) return null;
+  const frames = x.frames != null && x.frames > 1 ? ` · ${x.frames} 帧` : '';
+  if (x.format === 'html') return `HTML 逐帧动画${frames}`;
+  return x.frames == null ? 'GIF（帧数还没读）' : `${x.format.toUpperCase()}${frames}`;
+}
+
 const fmt = (n: number) => n.toFixed(2).replace(/0$/, '');
 
 export function classifyContent(x: ClassifyInput): ClassifyResult {
@@ -117,8 +143,6 @@ export function classifyContent(x: ClassifyInput): ClassifyResult {
     if (textHeavy || (tags && anyAt(DOC_PHOTO_TAGS, 0.6))) return { kind: 'text', source, evidence: `${evidence}，内容以文字为主` };
     return { kind: 'photo', source, evidence };
   }
-  if (x.format === 'gif') return { kind: 'animated', source: 'format', evidence: 'GIF 动图' };
-  if (x.format === 'html' || (x.pages ?? 1) > 1) return { kind: 'animated', source: 'format', evidence: x.format === 'html' ? 'HTML 逐帧动图' : `${x.format.toUpperCase()} 动图 · ${x.pages} 帧` };
   const comicDir = segs.find((s) => COMIC_DIR.test(s));
   if (comicDir) return { kind: 'comic', source: 'folder', evidence: `文件夹「${comicDir}」` };
 

@@ -155,17 +155,16 @@ function TaggerStep({ settings, onBack, onNext }: { settings: Settings; onBack: 
   const [strictness, setStrictness] = useState<Strictness>(() => strictnessOf(settings));
   // 界面上默认打开；保存时写入 danbooru.enabled
   const [danbooru, setDanbooru] = useState(true);
-  const [blur, setBlur] = useState(settings.ui.blurSensitive);
+  // 模糊是本机偏好（P5，附录 #32），不写进服务端
+  const [blur, setBlur] = useState(() => usePrefs.getState().blurSensitive);
   const save = useMutate(
     () =>
       api
         .updateSettings({
           tagger: { device: gpu ? 'dml' : 'cpu', ...STRICTNESS[strictness] },
           danbooru: { enabled: danbooru },
-          ui: { blurSensitive: blur },
         })
         .then((): MutationResult => {
-          // 模糊实际看的是本地偏好（顶栏眼睛按钮），这里也要同步，否则要去设置里再开关一次才生效
           usePrefs.getState().setBlurSensitive(blur);
           return { ok: true, message: '已保存识别设置', undoToken: null };
         }),

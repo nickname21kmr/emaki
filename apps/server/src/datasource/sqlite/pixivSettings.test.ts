@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../core/events.ts';
 import type { JobContext } from '../../core/jobs.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
-import { SqliteDataSource } from './SqliteDataSource.ts';
+import { SqliteDataSource } from '../../../test/helpers/client.ts';
 
 // 不联网：把 Pixiv 补充换成一直跑到被取消的假任务，待查数量由测试控制
 const fake = vi.hoisted(() => ({ pending: 0, runs: 0, clears: 0 }));
@@ -67,10 +67,10 @@ describe('设置：识别后自动查 Pixiv 标签', () => {
     expect((await ds.getImage(id))?.source).toBeNull();
     await ds.updateSettings({tagger:{pixivFilenameMode:'broad'}});
     expect((await ds.getImage(id))?.source).toMatchObject({site:'pixiv',postId:'104714967'});
-    db.prepare("INSERT INTO character_suggestions(image_id,danbooru_tag,score,source) VALUES (?,'pixiv_role',0,'pixiv'),(?,'model_role',0.7,'tagger')").run(id,id);
+    db.prepare("INSERT INTO character_evidence(image_id,tag,score,provider) VALUES (?,'pixiv_role',0,'pixiv'),(?,'model_role',0.7,'tagger')").run(id,id);
     await ds.updateSettings({tagger:{pixivFilenameMode:'strict'}});
     expect((await ds.getImage(id))?.source).toBeNull();
-    expect(db.prepare('SELECT danbooru_tag FROM character_suggestions WHERE image_id=?').pluck().all(id)).toEqual(['model_role']);
+    expect(db.prepare('SELECT danbooru_tag FROM v_character_suggestions WHERE image_id=?').pluck().all(id)).toEqual(['model_role']);
     expect((await ds.getImage(manualId))?.source?.url).toBe('https://example.com/manual');
     await ds.updateImage(manualId,{source:'auto'});
     expect(await ds.getImage(manualId)).toMatchObject({source:null,sourceManual:false});

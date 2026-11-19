@@ -1,4 +1,4 @@
-import type { LibraryStats } from '@emaki/shared';
+import type { LibrarySummary } from '@emaki/shared';
 import { ArrowRight, Check, CircleHelp, Clock3, Copy, Link2 } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -34,7 +34,7 @@ interface Card {
  * 每张卡有四种状态：有事（active）、在等（waiting：识别或查重还没跑完）、已清空、隐藏（一个自建角色都没有）。
  * 有事的卡变宽，在等和已清空的收成紧凑条；三张都没事时整块只剩一行。
  */
-export function TriageCards({ stats }: { stats: LibraryStats }) {
+export function TriageCards({ summary: s }: { summary: LibrarySummary }) {
   const unrecognized = useUnrecognizedInfinite({ area: 'art', bucket: 'unsure' }, 12);
   const duplicates = useDuplicates(false);
   const custom = useCharactersInfinite({ source: 'custom', sort: 'imageCount' });
@@ -42,9 +42,10 @@ export function TriageCards({ stats }: { stats: LibraryStats }) {
   const dedupeJob = useRunningJob('dedupe');
   const tagJob = useRunningJob('tag');
 
-  const queued = stats.untaggedCount;
-  const review = Math.max(0, stats.unrecognizedCount - queued);
-  const books = stats.pendingCollectionCount;
+  // 待处理的唯一定义在汇总接口（triage）：等你确认的张数、成册待整理的本数、待识别的张数，这里不再自己加减
+  const queued = s.triage.waiting;
+  const review = s.triage.images;
+  const books = s.triage.books;
   const unrecognizedImages = useMemo(() => {
     const items = unrecognized.data?.pages[0]?.items ?? [];
     const tagged = items.filter((it) => it.tagged);
@@ -62,13 +63,13 @@ export function TriageCards({ stats }: { stats: LibraryStats }) {
 
   const lastRun = settings.data?.dedupe.lastRunAt ?? null;
   const dedupeWaiting =
-    !!dedupeJob || (!!settings.data && (lastRun === null || (!!stats.recentImport && lastRun < stats.recentImport.at)));
+    !!dedupeJob || (!!settings.data && (lastRun === null || (!!s.recentImport && lastRun < s.recentImport.at)));
   const customTotal = custom.data?.pages[0]?.total;
 
   const cards: Card[] = [
     {
       key: 'unrecognized',
-      state: review > 0 || books > 0 ? 'active' : queued > 0 ? 'waiting' : 'cleared',
+      state: s.triage.total > 0 ? 'active' : queued > 0 ? 'waiting' : 'cleared',
       to: '/unrecognized',
       icon: <CircleHelp />,
       title: '未识别',
@@ -95,11 +96,11 @@ export function TriageCards({ stats }: { stats: LibraryStats }) {
     },
     {
       key: 'duplicates',
-      state: stats.duplicateGroupCount > 0 ? 'active' : dedupeWaiting ? 'waiting' : 'cleared',
+      state: s.duplicates > 0 ? 'active' : dedupeWaiting ? 'waiting' : 'cleared',
       to: '/duplicates',
       icon: <Copy />,
       title: '重复',
-      count: stats.duplicateGroupCount,
+      count: s.duplicates,
       unit: '组',
       description: reclaimable > 0 ? `处理后可释放 ${formatBytes(reclaimable)}` : '同一张图的多个副本',
       quietText: dedupeWaiting ? (queued > 0 ? '识别完成后会自动查找重复的图' : '稍后会自动开始') : '没有发现重复的图',
@@ -109,11 +110,11 @@ export function TriageCards({ stats }: { stats: LibraryStats }) {
     },
     {
       key: 'custom',
-      state: customTotal === 0 ? 'hidden' : stats.customMatchableCount > 0 ? 'active' : 'cleared',
+      state: customTotal === 0 ? 'hidden' : s.customMatchable > 0 ? 'active' : 'cleared',
       to: '/characters?source=custom',
       icon: <Link2 />,
       title: '自建角色',
-      count: stats.customMatchableCount,
+      count: s.customMatchable,
       unit: '个',
       description: '能对上 Danbooru 标签，可以关联',
       quietText: '自建角色都已对齐',

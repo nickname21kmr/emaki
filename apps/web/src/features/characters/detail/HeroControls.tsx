@@ -3,6 +3,7 @@ import { forwardRef, useEffect, useState, type ButtonHTMLAttributes } from 'reac
 import { toast } from 'sonner';
 import { Tooltip } from '@/components/ui';
 import { cn } from '@/lib/cn';
+import { copyText } from '@/lib/clipboard';
 
 /**
  * 叠在 Hero 图片上的毛玻璃图标按钮。
@@ -48,7 +49,7 @@ export function CopyTag({ tag, tone = 'paper', className }: { tag: string; tone?
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(tag);
+      await copyText(tag);
       setCopied(true);
       toast.success('已复制 Danbooru 标签', { description: tag });
     } catch {

@@ -1,10 +1,11 @@
 import type { ImageSource, Settings, UpdateImageBody } from '@emaki/shared';
-import { sourceEditSchema } from '@emaki/shared/schemas';
+import { SourceEdit } from '@emaki/shared/schemas';
 import { z } from 'zod';
 import { parse } from '../../http/validate.ts';
 import { parseSource } from './parseSource.ts';
 
-export { sourceEditSchema };
+/** 来源的编辑：schema 在 packages/shared（HTTP、MCP 共用） */
+export const sourceEditSchema = SourceEdit;
 
 /** Metadata only: saving a URL never makes a network request. */
 export function editedSource(value: NonNullable<UpdateImageBody['source']> | null, relPath: string,

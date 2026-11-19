@@ -1,4 +1,4 @@
-import type { ContentKind, LibraryStats } from '@emaki/shared';
+import type { ContentKind, LibrarySummary } from '@emaki/shared';
 import { ArrowRight, FolderPlus, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
@@ -6,12 +6,12 @@ import { PageBody, PageHeader } from '@/components/layout/PageHeader';
 import { useScrollContainer } from '@/components/layout/ScrollContainer';
 import { ImageGrid, ImageGridSkeleton } from '@/components/media/ImageGrid';
 import { KindBadge } from '@/components/media/KindBadge';
-import { annexTotal, KIND_LABEL, kindTotal } from '@/lib/kinds';
+import { KIND_LABEL, kindTotal } from '@/lib/kinds';
 import { KindIndex } from '@/features/annex/KindIndex';
 import { Button, EmptyState, ErrorState, Skeleton } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { formatBytes, formatCount } from '@/lib/format';
-import { useArtists, useImagesInfinite, useSettings, useStats } from '@/lib/queries';
+import { useArtists, useImagesInfinite, useSettings, useSummary } from '@/lib/queries';
 import { usePrefs, useSelection } from '@/lib/stores';
 import { ArtistMenu } from './components/ArtistMenu';
 import { GalleryToolbar, GalleryViewControls } from './components/GalleryToolbar';
@@ -37,7 +37,8 @@ export function GalleryPage() {
   useEffect(() => {
     if (owner && !artistsQ.isPlaceholderData) update({ artist: owner.tag });
   }, [owner, artistsQ.isPlaceholderData, update]);
-  const { data: stats } = useStats();
+  // 张数读汇总接口（别册张数由服务端算，附录 #28）
+  const counts = useSummary().data?.images;
   const { data: settings } = useSettings();
   const rowHeight = usePrefs((s) => s.gridRowHeight);
   const list = useImagesInfinite(query);
@@ -66,7 +67,7 @@ export function GalleryPage() {
     if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
-  const libraryEmpty = stats?.imageCount === 0 && !hasFilters;
+  const libraryEmpty = counts?.total === 0 && !hasFilters;
   // 文件夹都在，只是全停用了：别再叫人「添加文件夹」
   const roots = settings?.libraryRoots ?? [];
   const allRootsDisabled = roots.length > 0 && roots.every((r) => !r.enabled);
@@ -109,7 +110,7 @@ export function GalleryPage() {
         description={
           filters.q
             ? '可以搜文件名，或 Danbooru 风格的标签，比如 long_hair、smile。'
-            : '当前的分级、方向或收藏筛选下没有图片，放宽一些条件试试。'
+            : '当前的分级、方向、动图或收藏筛选下没有图片，放宽一些条件试试。'
         }
         action={
           <Button variant="outline" onClick={clearFilters}>
@@ -136,13 +137,13 @@ export function GalleryPage() {
             loadingMore={isFetchingNextPage}
             onLoadMore={loadMore}
             rowHeight={rowHeight}
-            renderOverlay={showKind ? (img) => <KindBadge kind={img.kind} /> : undefined}
+            renderBadges={showKind ? (img) => <KindBadge kind={img.kind} /> : undefined}
           />
         </div>
         <GridFooter loadingMore={isFetchingNextPage} done={!hasNextPage} total={total} />
-        {onlyIllust && !hasNextPage && annexTotal(stats?.kindCounts) > 0 && (
+        {onlyIllust && !hasNextPage && (counts?.annex ?? 0) > 0 && (
           <p className="pb-6 text-center text-[12.5px] text-fg-muted">
-            另有 {formatCount(annexTotal(stats?.kindCounts))} 张截图、漫画等在{' '}
+            另有 {formatCount((counts?.annex ?? 0))} 张截图、漫画等在{' '}
             <Link to="/annex" className="font-medium text-fg hover:underline">
               别册 →
             </Link>
@@ -173,7 +174,7 @@ export function GalleryPage() {
         actions={artist ? <ArtistMenu artist={artist} onMoved={(tag) => update({ artist: tag })} /> : undefined}
         subtitle={
           <Subtitle
-            stats={stats}
+            counts={counts}
             kind={filters.kind}
             filtered={hasFilters}
             total={list.isPlaceholderData || list.isPending ? null : total}
@@ -195,7 +196,7 @@ export function GalleryPage() {
             customThemes={customThemes}
           />
         </div>
-        {onlyIllust && <KindTip annex={annexTotal(stats?.kindCounts)} />}
+        {onlyIllust && <KindTip annex={(counts?.annex ?? 0)} />}
       </PageHeader>
 
       <PageBody className="flex-1 pt-2">{body}</PageBody>
@@ -228,20 +229,20 @@ function KindTip({ annex }: { annex: number }) {
 }
 
 function Subtitle({
-  stats,
+  counts,
   kind,
   filtered,
   total,
 }: {
-  stats: LibraryStats | undefined;
+  counts: LibrarySummary['images'] | undefined;
   kind: ContentKind[] | 'all';
   filtered: boolean;
   /** null = 还在加载 */
   total: number | null;
 }) {
-  if (!stats) return <Skeleton className="mt-1.5 h-3 w-36 rounded-full" />;
+  if (!counts) return <Skeleton className="mt-1.5 h-3 w-36 rounded-full" />;
   // 分母跟着当前看的类型走：只看插画时是插画总数，不是连别册一起的全库
-  const n = kindTotal(stats.kindCounts, stats.imageCount, kind);
+  const n = kindTotal(counts.byKind, counts.total, kind);
   const noun = kind !== 'all' && kind.length === 1 ? KIND_LABEL[kind[0]!] : '';
   if (filtered) {
     return (
@@ -260,11 +261,11 @@ function Subtitle({
   if (kind === 'all') {
     return (
       <span>
-        全部 {formatCount(stats.imageCount)} 张 · {formatBytes(stats.totalBytes)}
+        全部 {formatCount(counts.total)} 张 · {formatBytes(counts.bytes)}
       </span>
     );
   }
-  const annex = annexTotal(stats.kindCounts);
+  const annex = counts.annex;
   const onlyIllust = kind.length === 1 && kind[0] === 'illustration';
   return (
     <span>

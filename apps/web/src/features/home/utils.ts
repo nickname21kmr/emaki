@@ -1,4 +1,4 @@
-import type { JobKind } from '@emaki/shared';
+import { JOB_LABEL as JOB_NAME, type JobKind, type LibrarySummary } from '@emaki/shared';
 import { formatBytes } from '@/lib/format';
 import { EASE_OUT } from '@/lib/motion';
 
@@ -25,15 +25,8 @@ export function dayLabel(back: number, now = new Date()): string {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${WEEKDAY[d.getDay()]}`;
 }
 
-export const JOB_LABEL: Record<JobKind, string> = {
-  scan: '正在扫描图库',
-  thumbnail: '正在生成缩略图',
-  tag: '正在识别角色',
-  'danbooru-sync': '正在同步 Danbooru',
-  dedupe: '正在查找重复',
-  artists: '正在识别画师',
-  'pixiv-tags': '正在补充 Pixiv 角色',
-};
+/** 横幅上的「正在……」：任务名只有一份（packages/shared 的 JOB_LABEL） */
+export const JOB_LABEL = Object.fromEntries(Object.entries(JOB_NAME).map(([k, v]) => [k, `正在${v}`])) as Record<JobKind, string>;
 
 /** 把 formatBytes 的结果拆成「数字 + 单位」，数字用大号衬线、单位用小字 */
 export function splitBytes(bytes: number): { value: number; unit: string; digits: 0 | 1 } {
@@ -41,24 +34,20 @@ export function splitBytes(bytes: number): { value: number; unit: string; digits
   return { value: Number(num), unit, digits: num.includes('.') ? 1 : 0 };
 }
 
-export const sum = (xs: readonly number[]) => xs.reduce((a, b) => a + b, 0);
-
 /** 首次导入进行到哪一步（HO-2）；null = 不是导入态（没有 7 天内的首次导入，或者全都做完了） */
 export type ImportPhase = 'scanning' | 'thumbnails' | 'tagging' | 'paused' | 'deduping' | null;
 
 export function importPhase(
-  stats: import('@emaki/shared').LibraryStats,
+  summary: Pick<LibrarySummary, 'recentImport' | 'triage'>,
   jobs: { scan: unknown; thumbnail: unknown; tag: unknown; dedupe: unknown },
 ): ImportPhase {
-  if (!stats.recentImport) return null;
+  if (!summary.recentImport) return null;
   if (jobs.scan) return 'scanning';
   if (jobs.tag) return 'tagging';
   if (jobs.thumbnail) return 'thumbnails';
   // 只看这次导入的文件夹里还有没有没识别的，库里别处的不算
-  if (stats.recentImport.pending > 0 && stats.untaggedCount > 0) return 'paused';
+  if (summary.recentImport.pending > 0 && summary.triage.waiting > 0) return 'paused';
   if (jobs.dedupe) return 'deduping';
   return null;
 }
 
-/** 从任务消息里取「剩余约 X」 */
-export const parseEta = (msg: string | null | undefined): string | null => /剩余约\s*([^·]+?)\s*(?:·|$)/.exec(msg ?? '')?.[1]?.trim() ?? null;

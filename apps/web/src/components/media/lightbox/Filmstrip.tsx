@@ -63,7 +63,9 @@ export function Filmstrip({ ids, index, onPick, hidden }: { ids: ID[]; index: nu
               image={meta ?? { id, rating: 'general', dominantColor: '#2a2a2a' }}
               width={240}
               blurBadge="none"
-              forceBlur={!meta}
+              // 还没拿到这张的分级：先按不可信打码（共用的 blurReason，cautious）
+              rated={!!meta}
+              blurContext="cautious"
               className="h-[72px] w-full rounded-[3px]"
             />
           </button>

@@ -4,9 +4,9 @@
 
 ## 使用
 
-助手通过 MCP `replace_image` 将下载的高清版替换到原图片，保留图片 ID、角色、来源、画师和收藏，更新尺寸和缩略图，并支持撤销恢复原版本。用户已要求为某张图找高清版或替换时直接执行；新增还是替换不明确时通过 `ask_user` 提供选择。
+助手通过 MCP `library_replace` 将下载的高清版替换到原图片，保留图片 ID、角色、来源、画师和收藏，更新尺寸和缩略图，并支持撤销恢复原版本。用户已要求为某张图找高清版或替换时直接执行；新增还是替换不明确时通过 `ask_user` 提供选择。
 
-新增图片使用 `import_images`；通过 `read_library /api/library-roots` 选择目录，按内容复用完全相同的现有文件。重名返回 `needs_confirm` 和已有图片 ID，只有明确要保留两个版本时才设置 `keepBoth=true`。工具返回可立即查询的图片 ID，无需额外全库扫描。HTTP 接口为 `POST /api/images/import`，参数 `{rootId, dir, files:[{path, fileName?}], keepBoth?}`；替换为 `POST /api/images/:id/replace`，参数 `{path}`。本地普通图片文件每个最多 128 MiB，新增每次 1–20 张。两者均保留原下载；新增的撤销将副本送到系统回收站，替换的撤销恢复原文件内容与媒体字段，之后的元数据修改保留。原版本与恢复记录存放在数据目录 `image-replacements`，服务重启后仍保留备份（撤销按钮沿用现有进程内撤销栈）。
+新增图片使用 `library_import`；通过 `read_library /api/library-roots` 选择目录，按内容复用完全相同的现有文件。重名返回 `needs_confirm` 和已有图片 ID，只有明确要保留两个版本时才设置 `keepBoth=true`。工具返回可立即查询的图片 ID，无需额外全库扫描。HTTP 接口为 `POST /api/images/import`，参数 `{rootId, dir, files:[{path, fileName?}], keepBoth?}`；替换为 `POST /api/images/:id/replace`，参数 `{path}`（命令 `library.import` / `library.replace`）。本地普通图片文件每个最多 128 MiB，新增每次 1–20 张。两者均保留原下载；新增的撤销将副本送到系统回收站，替换的撤销恢复原文件内容与媒体字段，之后的元数据修改保留。原版本与恢复记录存放在数据目录 `image-replacements`，服务重启后仍保留备份（撤销按钮沿用现有进程内撤销栈）。
 
 1. 打开开关，弹窗会列出开启后哪些内容会发出去、助手在本机能做什么，确认后才开启，并检测本机 Agent 应用。检测只检查安装、认证状态和模型列表，不发起推理，也不发送图库内容。
 2. 在设置页选择 Agent 应用：
@@ -15,7 +15,7 @@
    - **DSH**：复用本机 DeepSeek Harness 安装及模型登录，在常见 Windows 桌面安装目录和 PATH 自动查找，也可指定路径。通过 ACP 驱动 Emaki 自己的会话，模型、思考强度和看图能力从运行时读取。
 3. 点右下角气泡，新建对话。气泡和面板标题栏均可拖动，位置记在本机浏览器；缩放窗口或展开面板时会保持在可见范围。模型和思考强度在输入框下方选择；Agent 应用在设置页切换。
 4. 可以选中图库图片、打开一张图片，或直接提问。每条消息记录当时的页面和图片选择，图片由 agent 按需通过 MCP 读取。
-5. 助手可返回图片卡片和表格。勾选卡片图片会更新输入框下方的上下文，再输入任意后续指令发送；“使用页面选择”可切回图库的选择。业务接口返回撤销令牌的修改可直接撤销。令牌遵循应用原有生命周期，重启后可能失效。
+5. 助手可返回图片卡片和表格。勾选卡片图片会更新输入框下方的上下文，再输入任意后续指令发送；“使用页面选择”可切回图库的选择。业务接口返回撤销令牌的修改可直接撤销；这些修改同时出现在网页顶栏的撤销栈里（标「助手：」），Ctrl+Z 也能撤销。令牌遵循应用原有生命周期，重启后失效。
 
 任务中断、出错或手动停止后，可点击“继续处理”或“重试并继续”。恢复沿用原请求的图片范围、会话历史与操作记录，助手先核对已完成部分，再继续剩余工作；也可直接输入新指令。短暂网络断线会自动重连，旁边提供“立即重连”入口。
 
@@ -41,28 +41,39 @@ DSH 启动时优先保留进程环境和原 DSH home `.env` 中的代理配置�
 
 开启实验功能，在设置中点「显示连接配置」，将生成的 Streamable HTTP 配置交给支持 MCP 的客户端。不同客户端的配置字段可能不同；共同需要 URL 和 `Authorization: Bearer …`。没有单独的 MCP 端口。开发模式使用后端端口（默认 5174）；生产模式使用应用实际端口。
 
+图库的工具从命令 / 查询注册表生成（P6，[core-architecture.md](core-architecture.md) 第 9 节）：注册表里权限范围（scope）在 `ASSISTANT_SCOPES` 里的每个命令一个工具，
+名字是命令名换成下划线（`curation.link` → `curation_link`），参数就是命令的 schema 加 `operationId`，枚举（类型、任务种类……）和网页、HTTP 同一份，不再手抄。
+助手能用的范围：读（`read`）、改单张图的决定（`curate`）、编目（`catalog`）、合集（`collections`）、导入替换（`import`）、启动 / 取消任务（`jobs`）；
+不能移动或回收用户的文件、处理重复、改设置和规则、撤销（这些由用户在页面上做）。工具清单和 schema 有一份快照（`apps/server/test/architecture/__snapshots__/mcp-tools.json`），改了测试会失败，要一起更新并说明理由。
+
 | 工具 | 能力 |
 | --- | --- |
-| `import_images` | 新增下载图片，精确查重；重名时给出选择，支持撤销新增副本 |
-| `replace_image` | 将下载的高清版替换到原图片，保留 ID 与元数据，支持撤销恢复 |
-| `describe_database` / `query_database` | 当前表结构、自由只读 SQL；关联、统计、抽样由 agent 自行组织 |
-| `read_library` | 读取应用现有图库、角色、作品、任务、未识别等 API，保留页面口径 |
-| `read_media` | 实际看图，也支持按像素裁剪局部 |
-| `edit_source` | 保存已核实的来源 URL / 来源作者，人工确认优先于扫描；null 清空并保留，auto 恢复文件名解析，支持撤销 |
-| `accept_suggestion` | 复用未识别页面的采纳建议流程，解析或创建角色、关联作品并返回撤销令牌 |
-| `update_images` / `edit_character` | 调用原有业务接口修改图片和角色，保留原有校验、事件和可用的撤销能力 |
-| `manage_job` | 查看、启动、取消应用已有后台任务 |
+| `library_import` | 新增下载图片，精确查重；重名时给出选择，支持撤销新增副本 |
+| `library_replace` | 将下载的高清版替换到原图片，保留 ID 与元数据，支持撤销恢复 |
+| `describe_database` / `query_database` | 当前表结构、自由只读 SQL；关联、统计、抽样由 agent 自行组织（`command_log` 是审计记录） |
+| `read_library` | 按地址读注册表里的查询（图片、角色、作品、合集、统计、汇总、任务、搜索、未识别、审计记录……），保留页面口径；读不到设置 |
+| `read_media` | 实际看图（查询 `images.original`），也支持按像素裁剪局部 |
+| `curation_set_source` | 保存已核实的来源 URL / 来源作者，人工确认优先于扫描；null 清空并保留，auto 恢复文件名解析，支持撤销 |
+| `curation_link` / `curation_unlink` / `curation_replace` | 图 ↔ 角色：按角色 id 或标签关联（找不到时按建议建档）、采纳建议（`accept: true`）、移出、整组替换 |
+| `curation_set_favorite` / `_rating` / `_kind` / `_shelved` / `_original` / `_artists`、`curation_reset_artists`、`visibility_exclude_images` / `_restore_images` | 收藏、分级、类型、放下、原创、画师、排除 / 恢复，单张和批量是同一个工具 |
+| `catalog_create_character` / `_update_character` / `_merge_character` / `_verify_character`、`catalog_link_artists` | 建角色、改角色、合并、保存查证、画师拆合 |
+| `collections_create` / `_update` / `_dissolve` / `_review` / `_set_kind` / `_link` | 合集 |
+| `jobs_start` / `jobs_cancel` | 启动、取消后台任务（任务列表用 `read_library /api/jobs`） |
 | `get_page_context` / `present_result` | 当前消息的页面选择快照、图片集合与表格；外部 MCP 无绑定网页会话时，前者返回 null，后者直接返回结果 |
 | `ask_user` | 在 Emaki 对话中展示选项或输入框，保留提问时的图片范围；仅向绑定网页会话的 agent 提供 |
 
-SQL 在独立子进程中以 SQLite 只读方式执行：单语句、5 秒时限、最多 5,000 行和约 1 MB 结果，超限标记 `truncated`。支持参数绑定；不暴露任意 SQL 写入。修改工具使用 `operationId` 去重；中断后结果不确定的操作要求先查询实际状态，不自动重放。
+和 P6 之前手写的工具比：`update_images` 拆成了上面的归类命令，按标签归类（以前少了的 `assignTag`）和画师改回自动（`artist-auto`）在同一个范围里一起有了；
+`edit_collection` 拆成合集命令，多了「标为已整理」「改类型」「出场角色 / 作品」；多了 `catalog_link_artists`（画师的拆合，和合并角色同一范围）。
+移到回收站（`trash`）仍然没有：它属于 `organize-files`。`manage_job` 的列表改成 `read_library /api/jobs`。
+
+SQL 在独立子进程中以 SQLite 只读方式执行：单语句、5 秒时限、最多 5,000 行和约 1 MB 结果，超限标记 `truncated`。支持参数绑定；不暴露任意 SQL 写入。修改工具使用 `operationId` 去重（命令层统一做，记在图库的审计记录 `command_log` 里，按会话分开；网页的写请求带 `Idempotency-Key` 也一样）；中断后结果不确定的操作要求先查询实际状态，不自动重放。每次修改都记 actor：助手做的是 `assistant`，在 `GET /api/audit?actor=assistant` 里查得到。
 
 ## 实现与扩展
 
 - 后端适配器统一模型目录、发送、取消、交互响应与流事件。Codex 使用 app-server，Pi 使用官方 RPC，DSH 使用 ACP；新增后端不需要改图库工具。Claude Code 尚未实现。
 - 服务端维护 Emaki 自己的会话索引，只接受索引中的 ID。原生会话 ID 不从浏览器接收、不向浏览器暴露。
-- 设置、密钥、会话索引和操作记录位于 `EMAKI_DATA_DIR/assistant`；不进入图库 SQL 数据库，也不进入 Git。凭证文件应按本机账户权限保护。Pi 和 DSH 的原生会话也在其中；Codex 的原生线程在 `CODEX_HOME`。
-- MCP 和网页复用业务接口；统一短 skill 位于 `apps/server/assets/assistant/emaki-library/SKILL.md`。Codex 通过项目 skill 目录加载，Pi 显式加载同一文件，不维护两份 SOP。
+- 设置、密钥和会话索引位于 `EMAKI_DATA_DIR/assistant`；不进入图库 SQL 数据库，也不进入 Git。修改的去重和审计在图库的 `command_log`（P6 起，不再有 `operations.json`）。凭证文件应按本机账户权限保护。Pi 和 DSH 的原生会话也在其中；Codex 的原生线程在 `CODEX_HOME`。
+- MCP 和网页调用同一个命令 / 查询注册表（`apps/server/src/commands/`，工具在 `apps/server/src/assistant/tools.ts` 里生成）；统一短 skill 位于 `apps/server/assets/assistant/emaki-library/SKILL.md`。Codex 通过项目 skill 目录加载，Pi 显式加载同一文件，不维护两份 SOP。
 - 按需审批模式下，Codex 和 DSH 的权限请求以及 Pi 的 shell/文件修改、会话目录以外的读取请求显示在对话里。界面是非模态面板，可以边看图库边与 agent 交互。
 
 ## 验证

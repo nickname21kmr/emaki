@@ -15,6 +15,12 @@ import { animationHtml } from '../../../test/helpers/htmlAnimation.ts';
 import { htmlAnimationCache } from '../image/htmlAnimation.ts';
 import { readFile, readdir } from 'node:fs/promises';
 import { sha256Buffer } from '../fs/hash.ts';
+import { UndoStack } from '../../core/undo.ts';
+import type { JobQueue } from '../../core/jobs.ts';
+import { createContext } from '../../datasource/sqlite/context.ts';
+import { analyzeReaction } from '../../domain/analysis/reactions.ts';
+import { reparseSourceReaction, staleFileEvidenceReaction } from '../../domain/evidence/reactions.ts';
+import type { Change } from '../../propagation/changes.ts';
 
 const ctx = (): JobContext => ({
   signal: new AbortController().signal,
@@ -36,7 +42,16 @@ describe('Scanner', () => {
   let data: string;
   let db: Db;
   let requests: ScanRequests;
-  const scanner = (settleMs = 0) => new Scanner({ db, bus: new EventBus(), dataDir: data, requests, settleMs });
+  /**
+   * 扫描器只看、只读，写库经图库与文件模块并声明变化（P4a）；类型、来源这些由反应算。这里接上和引擎一样的几条事务内反应
+   * （来源重新解析、文件内容变了时识别过期、分析），不接合集、排除这些
+   */
+  const changes = () => {
+    const c = createContext({ db, bus: new EventBus(), dataDir: data, clock: Date.now, undo: new UndoStack(), jobs: { list: () => [] } as unknown as JobQueue });
+    c.propagation.register(reparseSourceReaction, staleFileEvidenceReaction, analyzeReaction);
+    return { apply: <T,>(fn: (emit: (c: Change) => void) => T): T => c.apply(() => fn((x) => c.changed(x))) };
+  };
+  const scanner = (settleMs = 0) => new Scanner({ db, bus: new EventBus(), dataDir: data, requests, settleMs, changes: changes() });
   const scan = (settleMs = 0): Promise<ScanSummary> => scanner(settleMs).scan(ctx());
   const put = async (rel: string, seed: number) => {
     await mkdir(path.join(root, path.dirname(rel)), { recursive: true });
@@ -85,8 +100,8 @@ describe('Scanner', () => {
     await writeFile(path.join(root,'ordinary.html'),'<html><body>普通网页</body></html>');
     expect((await scan()).added).toBe(4);
     const image=row(name)!;
-    expect(db.prepare('SELECT format,frame_count,content_kind FROM images WHERE id=?').get(image.id))
-      .toEqual({format:'html',frame_count:2,content_kind:'animated'});
+    expect(db.prepare('SELECT format,frame_count,animated,content_kind FROM images WHERE id=?').get(image.id))
+      .toEqual({format:'html',frame_count:2,animated:1,content_kind:'illustration'});
     expect(await readFile(path.join(root,name))).toEqual(input);
     expect((await readdir(root)).sort()).toEqual(['104714967_动画.html','a','b','ordinary.html']);
     expect(db.prepare('SELECT count(*) FROM scan_errors').pluck().get()).toBe(0);
@@ -107,15 +122,16 @@ describe('Scanner', () => {
     expect((await sharp(next,{animated:true}).metadata()).delay).toEqual([40,50,70]);
   });
 
-  it('导入动画 WebP 时按帧数分类，重新分类后仍是动图',async()=>{
+  it('导入动画 WebP 时按帧数判成动图（D5：类型照其余规则判），改名重判后仍是动图',async()=>{
     const cache=await htmlAnimationCache(await animationHtml(),data);
     await writeFile(path.join(root,'animated.webp'),await readFile(cache));
     await scan();
-    expect(db.prepare("SELECT format,frame_count,content_kind FROM images WHERE file_name='animated.webp'").get())
-      .toEqual({format:'webp',frame_count:2,content_kind:'animated'});
-    await rename(path.join(root,'animated.webp'),path.join(root,'renamed.webp'));
+    expect(db.prepare("SELECT format,frame_count,animated,content_kind FROM images WHERE file_name='animated.webp'").get())
+      .toEqual({format:'webp',frame_count:2,animated:1,content_kind:'illustration'});
+    await mkdir(path.join(root,'表情包'));
+    await rename(path.join(root,'animated.webp'),path.join(root,'表情包','renamed.webp'));
     await scan();
-    expect(db.prepare("SELECT content_kind FROM images WHERE file_name='renamed.webp'").pluck().get()).toBe('animated');
+    expect(db.prepare("SELECT animated,content_kind FROM images WHERE file_name='renamed.webp'").get()).toEqual({animated:1,content_kind:'meme'});
   });
 
   it('新增和改名都遵循 Pixiv 文件名识别模式', async () => {

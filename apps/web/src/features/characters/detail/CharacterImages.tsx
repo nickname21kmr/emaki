@@ -182,24 +182,21 @@ export function CharacterImages({
           loadingMore={query.isFetchingNextPage}
           onLoadMore={loadMore}
           renderOverlay={
-            newIds || filters.allKinds
-              ? (img) => (
-                  <>
-                    {newIds?.has(img.id) && (
-                      <span
-                        aria-label="新"
-                        className={cn(
-                          'pointer-events-none absolute top-2 size-2 rounded-full bg-shu shadow-[0_0_0_2px_rgb(255_255_255/0.85)]',
-                          // 模糊图的右上角是模糊标记，朱点往左让开
-                          shouldBlur(img, blurPrefs) ? 'right-9' : 'right-2',
-                        )}
-                      />
-                    )}
-                    {filters.allKinds && <KindBadge kind={img.kind} />}
-                  </>
-                )
+            newIds
+              ? (img) =>
+                  newIds.has(img.id) && (
+                    <span
+                      aria-label="新"
+                      className={cn(
+                        'pointer-events-none absolute top-2 size-2 rounded-full bg-shu shadow-[0_0_0_2px_rgb(255_255_255/0.85)]',
+                        // 模糊图的右上角是模糊标记，朱点往左让开
+                        shouldBlur(img, blurPrefs) ? 'right-9' : 'right-2',
+                      )}
+                    />
+                  )
               : undefined
           }
+          renderBadges={filters.allKinds ? (img) => <KindBadge kind={img.kind} /> : undefined}
         />
       </div>
     );

@@ -1,0 +1,329 @@
+/**
+ * 图 ↔ 角色的唯一写入者（docs/core-architecture.md 第 2.4、4.1 节，P3a）。image_characters 和 character_vetoes 只在这个目录里写。
+ *
+ * 命令：
+ * - link / linkEach：加关联，每条带来历（provenance.ts）。已经有关联的不动原来的来历；
+ *   遇到否决：用户手动加的清掉否决（D3），自动的跳过；搬已有决定的（合并、查重合并、撤回移动）一律尊重否决。
+ * - unlink / unlinkEach：去掉关联，可以只去掉满足条件的（按来历精确删除，附录 #6）；用户去掉的记否决。
+ * - replaceCharacters：整组替换（看图器 PATCH characterIds）= 去掉不在列表里的 + 手动加上新的。
+ * - moveCharacterLinks：角色合并时把关联和否决搬到目标角色上。
+ * - carryLinks：查重合并时把副本的关联搬到保留的图上（手动的还是手动，自动的记成 dedupe-merge）。
+ *
+ * 每个命令都：写来历；声明 curation.charactersChanged / vetoesChanged（排除规则、合集、Pixiv 排队、自动决定的重新评估等由反应做）；
+ * 有撤销记录器时记下撤销。建议是派生视图（v_character_suggestions），关联上的角色自然不再是建议，不用另外清。
+ * 调用方在 ctx.mutate / ctx.apply 里调用（tx 就是 ctx）；反应里传 { db, changed: emit }；
+ * 识别写入这种自己开事务的，传一个收集变化的 tx，批后再交给 ctx.apply 声明。
+ */
+import type { Db } from '../../db/connection.ts';
+import type { UndoRecorder } from '../../datasource/sqlite/undo.ts';
+import { dismissPixivCharacterChecks } from '../evidence/pixivChecks.ts';
+import { currentActor } from '../../propagation/actor.ts';
+import { collectingTx, stmt, type DomainTx } from '../tx.ts';
+import { fromRow, RULES, toColumns, type LinkRow, type Provenance } from './provenance.ts';
+
+/** 写归类事实需要的：数据库 + 声明变化 */
+export type CurationTx = DomainTx;
+export { collectingTx, stmt };
+
+type Pair = { imageId: number; characterId: number };
+
+/** json_each 里的 [图, 角色] 对 */
+const PAIRS = '(image_id, character_id) IN (SELECT value ->> 0, value ->> 1 FROM json_each(?))';
+const pairsJson = (xs: Pair[]) => JSON.stringify(xs.map((x) => [x.imageId, x.characterId]));
+const uniqueImages = (xs: { imageId: number }[]) => [...new Set(xs.map((x) => x.imageId))];
+const pairKey = (imageId: number, characterId: number) => `${imageId}:${characterId}`;
+
+/**
+ * 「这些图 × 角色对」的 WHERE 条件。只有一个角色（批量归类、移出、角色合并）或只有一张图（看图器）时走索引列的写法，
+ * 1,000 对时比逐对拆 JSON 快一倍多；其余用行值 IN（也走主键）
+ */
+function pairWhere(pairs: Pair[]): { sql: string; params: unknown[] } {
+  const first = pairs[0]!;
+  if (pairs.every((p) => p.characterId === first.characterId)) {
+    return { sql: 'character_id = ? AND image_id IN (SELECT value FROM json_each(?))', params: [first.characterId, JSON.stringify(pairs.map((p) => p.imageId))] };
+  }
+  if (pairs.every((p) => p.imageId === first.imageId)) {
+    return { sql: 'image_id = ? AND character_id IN (SELECT value FROM json_each(?))', params: [first.imageId, JSON.stringify(pairs.map((p) => p.characterId))] };
+  }
+  return { sql: PAIRS, params: [pairsJson(pairs)] };
+}
+
+/** 这些对里已经在表里的（关联或否决） */
+function present(db: Db, table: 'image_characters' | 'character_vetoes', pairs: Pair[]): Set<string> {
+  if (!pairs.length) return new Set();
+  const w = pairWhere(pairs);
+  const rows = stmt(db, `SELECT image_id, character_id FROM ${table} WHERE ${w.sql}`).raw().all(...w.params) as [number, number][];
+  return new Set(rows.map(([i, c]) => pairKey(i, c)));
+}
+
+export interface LinkItem {
+  imageId: number;
+  characterId: number;
+  provenance: Provenance;
+}
+
+export interface LinkOptions {
+  /**
+   * 遇到否决怎么办：
+   * - 'decision'（默认）：手动的清掉否决再加（D3：用户手动加回），自动的跳过；
+   * - 'respect'：一律跳过（搬已有的决定，不是用户这次对这一对做的决定：角色合并、查重合并、撤回移动）
+   */
+  vetoes?: 'decision' | 'respect';
+}
+
+export interface LinkResult {
+  /** 新加的 */
+  linked: LinkItem[];
+  /** 本来就有关联的（原来的来历不动） */
+  existing: LinkItem[];
+  /** 被否决挡住的 */
+  vetoed: LinkItem[];
+  /** 加的时候清掉了否决的（也在 linked 里） */
+  unvetoed: LinkItem[];
+  /** 角色已经不在了 */
+  missing: LinkItem[];
+}
+
+/** 加关联：同一对只取第一条（调用方按分数从高到低排好） */
+export function linkEach(tx: CurationTx, u: UndoRecorder | null, items: LinkItem[], opts: LinkOptions = {}): LinkResult {
+  const out: LinkResult = { linked: [], existing: [], vetoed: [], unvetoed: [], missing: [] };
+  const seen = new Set<string>();
+  const list = items.filter((x) => {
+    const k = `${x.imageId}:${x.characterId}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  if (!list.length) return out;
+  const db = tx.db;
+  // 角色这期间被删掉、合并掉的（撤回移动时会有）：跳过。图片由外键保证
+  const alive = new Set(
+    stmt(db, 'SELECT id FROM characters WHERE id IN (SELECT value FROM json_each(?))')
+      .pluck()
+      .all(JSON.stringify([...new Set(list.map((x) => x.characterId))])) as number[],
+  );
+  const linked = present(db, 'image_characters', list);
+  const vetoed = present(db, 'character_vetoes', list);
+  for (const it of list) {
+    const k = pairKey(it.imageId, it.characterId);
+    if (!alive.has(it.characterId)) out.missing.push(it);
+    else if (linked.has(k)) out.existing.push(it);
+    else if (vetoed.has(k) && (opts.vetoes === 'respect' || it.provenance.decision === 'auto')) out.vetoed.push(it);
+    else {
+      if (vetoed.has(k)) out.unvetoed.push(it);
+      out.linked.push(it);
+    }
+  }
+  if (out.unvetoed.length) {
+    const w = pairWhere(out.unvetoed);
+    u?.set('character_vetoes', w.sql, w.params);
+    stmt(db, `DELETE FROM character_vetoes WHERE ${w.sql}`).run(...w.params);
+  }
+  if (out.linked.length) {
+    // 同一个来历的一批用一条语句插（批量归类 1,000 张逐行插要多花一倍时间）；零散的逐行插
+    const groups = new Map<string, { c: ReturnType<typeof toColumns>; pairs: [number, number][] }>();
+    for (const x of out.linked) {
+      const c = toColumns(x.provenance);
+      const k = JSON.stringify(c);
+      const g = groups.get(k);
+      if (g) g.pairs.push([x.imageId, x.characterId]);
+      else groups.set(k, { c, pairs: [[x.imageId, x.characterId]] });
+    }
+    const cols = 'image_id, character_id, decision, actor, rule, evidence_provider, evidence_tag, evidence_score, added_at';
+    const many = stmt(db, `INSERT INTO image_characters (${cols}) SELECT value ->> 0, value ->> 1, ?, ?, ?, ?, ?, ?, ? FROM json_each(?)`);
+    const one = stmt(db, `INSERT INTO image_characters (${cols}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const { c, pairs } of groups.values()) {
+      const p = [c.decision, c.actor, c.rule, c.evidence_provider, c.evidence_tag, c.evidence_score, c.added_at];
+      if (pairs.length >= 8) many.run(...p, JSON.stringify(pairs));
+      else for (const [i, ch] of pairs) one.run(i, ch, ...p);
+    }
+    // 撤销只删这次加的（同一对、同一个时间），之后别的入口再加的不动
+    const at = out.linked[0]!.provenance.at;
+    if (out.linked.every((x) => x.provenance.at === at)) {
+      const w = pairWhere(out.linked);
+      u?.sql(`DELETE FROM image_characters WHERE added_at = ? AND ${w.sql}`, [at, ...w.params]);
+    } else {
+      u?.sql('DELETE FROM image_characters WHERE (image_id, character_id, added_at) IN (SELECT value ->> 0, value ->> 1, value ->> 2 FROM json_each(?))', [
+        JSON.stringify(out.linked.map((x) => [x.imageId, x.characterId, x.provenance.at])),
+      ]);
+    }
+  }
+  tx.changed({ type: 'curation.charactersChanged', ids: uniqueImages(out.linked) });
+  tx.changed({ type: 'curation.vetoesChanged', ids: uniqueImages(out.unvetoed) });
+  return out;
+}
+
+/** 加关联：这些图 × 这些角色，同一个来历 */
+export function link(tx: CurationTx, u: UndoRecorder | null, images: number[], characters: number[], provenance: Provenance, opts?: LinkOptions): LinkResult {
+  return linkEach(
+    tx,
+    u,
+    images.flatMap((imageId) => characters.map((characterId) => ({ imageId, characterId, provenance }))),
+    opts,
+  );
+}
+
+export interface UnlinkOptions {
+  /** 记成否决：以后自动规则不再加回，也不再作为建议（用户去掉的、撤回自动改动去掉的） */
+  veto: boolean;
+  /** 同时把 Pixiv 补充标成「用户处理过」：补跑时不再采纳这张图的其他旧建议（用户去掉角色时） */
+  dismissPixiv?: boolean;
+  /** 只去掉满足条件的（按来历精确删除）；不给 = 不论来历 */
+  only?: (row: LinkRow) => boolean;
+  /** 否决和 Pixiv 标记的时间（veto、dismissPixiv 时必须给） */
+  at?: string;
+}
+
+/** 去掉关联；返回去掉的行（去掉之前的样子） */
+export function unlinkEach(tx: CurationTx, u: UndoRecorder | null, pairs: { imageId: number; characterId: number }[], opts: UnlinkOptions): LinkRow[] {
+  if (!pairs.length) return [];
+  const db = tx.db;
+  const where = pairWhere(pairs);
+  const rows = (stmt(db, `SELECT * FROM image_characters WHERE ${where.sql}`).all(...where.params) as LinkRow[]).filter((r) => !opts.only || opts.only(r));
+  if (!rows.length) return [];
+  if ((opts.veto || opts.dismissPixiv) && !opts.at) throw new Error('记否决要给时间');
+  const at = opts.at ?? '';
+  const removed = rows.map((r) => ({ imageId: r.image_id, characterId: r.character_id }));
+  const w = pairWhere(removed);
+  const images = uniqueImages(removed);
+  u?.set('image_characters', w.sql, w.params);
+  if (opts.dismissPixiv) dismissPixivCharacterChecks(db, u, images, at);
+  let vetoed: Pair[] = [];
+  if (opts.veto) {
+    const already = present(db, 'character_vetoes', removed);
+    vetoed = removed.filter((p) => !already.has(pairKey(p.imageId, p.characterId)));
+    if (vetoed.length) {
+      const vw = pairWhere(vetoed);
+      u?.sql(`DELETE FROM character_vetoes WHERE ${vw.sql}`, vw.params);
+      stmt(db, 'INSERT INTO character_vetoes (image_id, character_id, created_at) SELECT value ->> 0, value ->> 1, ? FROM json_each(?)').run(at, pairsJson(vetoed));
+    }
+  }
+  stmt(db, `DELETE FROM image_characters WHERE ${w.sql}`).run(...w.params);
+  tx.changed({ type: 'curation.charactersChanged', ids: images });
+  tx.changed({ type: 'curation.vetoesChanged', ids: uniqueImages(vetoed) });
+  return rows;
+}
+
+/** 去掉关联：这些图 × 这些角色 */
+export function unlink(tx: CurationTx, u: UndoRecorder | null, images: number[], characters: number[], opts: UnlinkOptions): LinkRow[] {
+  return unlinkEach(
+    tx,
+    u,
+    images.flatMap((imageId) => characters.map((characterId) => ({ imageId, characterId }))),
+    opts,
+  );
+}
+
+/** 用户去掉角色（批量移除、整组替换里去掉的）：记否决，Pixiv 补充不再采纳这张图的旧建议 */
+export function unlinkByUser(tx: CurationTx, u: UndoRecorder | null, images: number[], characters: number[], at: string): LinkRow[] {
+  return unlink(tx, u, images, characters, { veto: true, dismissPixiv: true, at });
+}
+
+/**
+ * 整组替换一张图的角色（看图器 PATCH characterIds）：不在列表里的按用户去掉处理（记否决），新的手动加上（清掉否决），
+ * 本来就有的保持原来的来历
+ */
+export function replaceCharacters(tx: CurationTx, u: UndoRecorder | null, imageId: number, characterIds: number[], provenance: Provenance): { added: LinkItem[]; removed: LinkRow[] } {
+  const current = stmt(tx.db, 'SELECT character_id FROM image_characters WHERE image_id = ?').pluck().all(imageId) as number[];
+  const keep = new Set(characterIds);
+  const removed = unlinkByUser(
+    tx,
+    u,
+    [imageId],
+    current.filter((c) => !keep.has(c)),
+    provenance.at,
+  );
+  const added = link(tx, u, [imageId], characterIds.filter((c) => !current.includes(c)), provenance).linked;
+  return { added, removed };
+}
+
+/**
+ * 角色合并：把 from 的关联和否决搬到 to 上，然后去掉 from 的（附录 #39）。
+ * - 关联：to 在这张图上已有关联的保持 to 自己的；否则按原来的来历加给 to，to 在这张图上被否决过就不加（否决是用户对这一对的决定）；
+ * - 否决：to 在这张图上没有关联、也没有否决的搬过去，免得按 to 的名字又被识别加回。
+ * 必须在删掉 from 这个角色、记它的撤销快照之前调用（撤销逆序：先插回角色，再还原这里的快照）。返回涉及的图
+ */
+export function moveCharacterLinks(tx: CurationTx, u: UndoRecorder | null, from: number, to: number): number[] {
+  const db = tx.db;
+  const rows = stmt(db, 'SELECT * FROM image_characters WHERE character_id = ? ORDER BY added_at, image_id').all(from) as LinkRow[];
+  u?.set('image_characters', 'character_id = ?', [from]);
+  u?.set('character_vetoes', 'character_id = ?', [from]);
+  linkEach(
+    tx,
+    u,
+    rows.map((r) => ({ imageId: r.image_id, characterId: to, provenance: fromRow(r) })),
+    { vetoes: 'respect' },
+  );
+  const vetoes = stmt(
+    db,
+    `SELECT v.image_id FROM character_vetoes v WHERE v.character_id = @from
+       AND NOT EXISTS (SELECT 1 FROM character_vetoes t WHERE t.image_id = v.image_id AND t.character_id = @to)
+       AND NOT EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = v.image_id AND ic.character_id = @to)`,
+  )
+    .pluck()
+    .all({ from, to }) as number[];
+  if (vetoes.length) {
+    const vj = JSON.stringify(vetoes);
+    u?.sql('DELETE FROM character_vetoes WHERE character_id = ? AND image_id IN (SELECT value FROM json_each(?))', [to, vj]);
+    stmt(
+      db,
+      `INSERT INTO character_vetoes (image_id, character_id, created_at)
+       SELECT image_id, @to, created_at FROM character_vetoes WHERE character_id = @from AND image_id IN (SELECT value FROM json_each(@ids))`,
+    ).run({ from, to, ids: vj });
+  }
+  stmt(db, 'DELETE FROM image_characters WHERE character_id = ?').run(from);
+  stmt(db, 'DELETE FROM character_vetoes WHERE character_id = ?').run(from);
+  const images = [...new Set(rows.map((r) => r.image_id))];
+  tx.changed({ type: 'curation.charactersChanged', ids: images });
+  tx.changed({ type: 'curation.vetoesChanged', ids: vetoes });
+  return images;
+}
+
+/**
+ * 查重合并（附录 #12）：副本上的关联搬到保留的图上。手动的还是手动（来历照搬）；自动的记成自动、规则 dedupe-merge，
+ * 证据照搬副本的，actor 是做合并的人。保留的图上已有的不动，被否决过的不搬。返回新加的
+ */
+export function carryLinks(tx: CurationTx, u: UndoRecorder | null, keep: number[], gone: number[]): LinkItem[] {
+  if (!keep.length || !gone.length) return [];
+  const rows = stmt(tx.db, 'SELECT * FROM image_characters WHERE image_id IN (SELECT value FROM json_each(?)) ORDER BY added_at, image_id, character_id').all(
+    JSON.stringify(gone),
+  ) as LinkRow[];
+  const actor = currentActor();
+  const items = keep.flatMap((imageId) =>
+    rows.map((r) => {
+      const p = fromRow(r);
+      return { imageId, characterId: r.character_id, provenance: p.decision === 'manual' ? p : { ...p, rule: RULES.dedupeMerge, actor } };
+    }),
+  );
+  return linkEach(tx, u, items, { vetoes: 'respect' }).linked;
+}
+
+/**
+ * 改已有自动关联的来历（reevaluateAuto：依据的来源证据换了，但别的来源仍然支持这个角色）。只改自动的，关联本身不变
+ */
+export function rebaseLinks(tx: CurationTx, u: UndoRecorder | null, items: LinkItem[]): void {
+  if (!items.length) return;
+  const w = pairWhere(items);
+  u?.set('image_characters', `decision = 'auto' AND ${w.sql}`, w.params);
+  const upd = stmt(
+    tx.db,
+    `UPDATE image_characters SET actor = @actor, rule = @rule, evidence_provider = @evidence_provider, evidence_tag = @evidence_tag,
+       evidence_score = @evidence_score WHERE image_id = @image AND character_id = @character AND decision = 'auto'`,
+  );
+  for (const x of items) {
+    const c = toColumns(x.provenance);
+    upd.run({ image: x.imageId, character: x.characterId, actor: c.actor, rule: c.rule, evidence_provider: c.evidence_provider, evidence_tag: c.evidence_tag, evidence_score: c.evidence_score });
+  }
+}
+
+/** 这些图上的自动关联（撤销快照用：漫画区同步会去掉它们） */
+export function snapshotAutoLinks(u: UndoRecorder, imageIds: number[]): void {
+  if (!imageIds.length) return;
+  u.set('image_characters', "decision = 'auto' AND image_id IN (SELECT value FROM json_each(?))", [JSON.stringify(imageIds)]);
+}
+
+/** 这张图上的这个角色被用户去掉过 */
+export function vetoChecker(db: Db): (imageId: number, characterId: number) => boolean {
+  const st = stmt(db, 'SELECT 1 FROM character_vetoes WHERE image_id = ? AND character_id = ?').pluck();
+  return (imageId, characterId) => st.get(imageId, characterId) !== undefined;
+}

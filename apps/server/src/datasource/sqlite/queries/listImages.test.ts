@@ -45,7 +45,7 @@ function insert(n: number) {
   const ins = db.prepare(`INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, rating, favorite,
       added_at, modified_at, excluded_by, missing, trashed_at)
     VALUES (@id, @root, @file, @file, @width, @height, @bytes, 'png', @sha, @rating, @fav, @added, @modified, @ex, @missing, @trashed)`);
-  const ic = db.prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (?, ?, 'tagger', '2026-01-01')");
+  const ic = db.prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, rule, added_at) VALUES (?, ?, 'auto', 'job:tag', 'auto-accept@1', '2026-01-01')");
   const icr = db.prepare('INSERT INTO image_copyrights (image_id, work_id) VALUES (?, ?)');
   const tag = db.prepare('INSERT INTO image_tags (image_id, tag_id, score) VALUES (?, ?, 0.9)');
   db.transaction(() => {
@@ -111,7 +111,7 @@ beforeAll(() => {
   insert(500);
 });
 
-/** 按 mock 的规则在 JS 里过滤 */
+/** 用 JS 写一遍的参照规则（来自以前 mock 的实现）：和 SQL 的结果对照 */
 function expected(q: ListImagesQuery): Ref[] {
   return refs.filter((x) => {
     if (x.missing || x.trashed || x.root !== 1) return false;
@@ -147,7 +147,7 @@ function pageAll(q: ListImagesQuery): number[] {
   throw new Error('分页没有结束');
 }
 
-describe('listImages 筛选与 mock 规则一致', () => {
+describe('listImages 筛选与参照规则一致', () => {
   it.each<[string, ListImagesQuery]>([
     ['默认', {}],
     ['excluded', { status: 'excluded' }],
@@ -239,7 +239,7 @@ describe('按角色翻页', () => {
     ['角色 + 作品', { characterId: '1', workId: '1' }],
     ['角色 + 标签搜索', { characterId: '2', q: 'blue' }],
     ['角色 + 文件名升序', { characterId: '3', sort: 'fileName', order: 'asc' }],
-  ])('%s：翻完所有页和 mock 规则一致', (_name, q) => {
+  ])('%s：翻完所有页和参照规则一致', (_name, q) => {
     const want = expected(q).map((x) => x.id);
     const got = pageAll(q);
     expect([...got].sort((a, b) => a - b)).toEqual([...want].sort((a, b) => a - b));
@@ -254,7 +254,7 @@ describe('按角色翻页', () => {
       INSERT INTO characters (id, name, source, created_at) VALUES (1, 'A', 'custom', 'x'), (2, 'B', 'custom', 'x');`);
     const img = d.prepare(`INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
       VALUES (?, 1, ?, 'a.png', 1, 1, 1, 'png', ?, ?, 'x')`);
-    const ic = d.prepare("INSERT INTO image_characters (image_id, character_id, origin, added_at) VALUES (?, ?, 'tagger', 'x')");
+    const ic = d.prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, rule, added_at) VALUES (?, ?, 'auto', 'job:tag', 'auto-accept@1', 'x')");
     d.transaction(() => {
       for (let id = 1; id <= 20_000; id++) {
         img.run(id, `${id}.png`, `s${id}`, new Date(Date.UTC(2026, 0, 1) + id * 60_000).toISOString());
@@ -276,5 +276,45 @@ describe('按角色翻页', () => {
     const plan = (d.prepare(`EXPLAIN QUERY PLAN ${sql}`).all({ cid: 1, lim: 6 }) as { detail: string }[]).map((r) => r.detail).join('\n');
     expect(plan).toContain('idx_ic_character_image');
     expect(plan).not.toMatch(/SCAN i\b/);
+  });
+});
+
+describe('是否动图（D5）', () => {
+  it('animated=true 只看动图、false 只看静态，和类型组合；按入库时间翻页走只含动图的部分索引', () => {
+    // 两万张、动图 1%：比例接近真实库，计划看统计信息
+    const d = openDatabase(':memory:');
+    migrate(d);
+    d.exec("INSERT INTO library_roots (id, path, enabled) VALUES (1, 'D:/a', 1)");
+    const img = d.prepare(`INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at,
+        content_kind, frame_count, animated)
+      VALUES (?, 1, ?, 'a.gif', 1, 1, 1, 'gif', ?, ?, 'x', ?, ?, ?)`);
+    d.transaction(() => {
+      for (let id = 1; id <= 20_000; id++) {
+        const moving = id % 100 === 0;
+        img.run(id, `${id}.gif`, `s${id}`, new Date(Date.UTC(2026, 0, 1) + id * 60_000).toISOString(), id % 200 === 0 ? 'meme' : 'illustration', moving ? 12 : 1, moving ? 1 : 0);
+      }
+    })();
+    d.exec('ANALYZE');
+    expect(listImages(d, { animated: true, limit: 3 }).items.map((i) => [i.id, i.kind, i.animated])).toEqual([
+      ['20000', 'meme', true],
+      ['19900', 'illustration', true],
+      ['19800', 'meme', true],
+    ]);
+    expect(listImages(d, { animated: true }).total).toBe(200);
+    expect(listImages(d, { animated: true, kind: ['illustration'] }).total).toBe(100);
+    expect(listImages(d, { animated: false }).total).toBe(19_800);
+    expect(listImages(d, { kind: ['meme'] }).total).toBe(100);
+
+    const sqls: string[] = [];
+    const prepare = d.prepare.bind(d);
+    const spy = vi.spyOn(d, 'prepare').mockImplementation(((sql: string) => {
+      sqls.push(sql);
+      return prepare(sql);
+    }) as typeof d.prepare);
+    listImages(d, { animated: true, limit: 5 });
+    spy.mockRestore();
+    const sql = sqls.find((s) => s.includes('LIMIT @lim'))!;
+    const plan = (d.prepare(`EXPLAIN QUERY PLAN ${sql}`).all({ lim: 6 }) as { detail: string }[]).map((r) => r.detail).join('\n');
+    expect(plan).toContain('idx_images_animated_live');
   });
 });

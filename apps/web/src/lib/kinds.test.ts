@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { annexTotal, kindTotal } from './kinds';
+import { kindTotal } from './kinds';
 
-const counts = { illustration: 6147, comic: 1200, screenshot: 900, text: 300, photo: 200, meme: 150, animated: 56 };
+const counts = { illustration: 6147, comic: 1200, screenshot: 900, text: 300, photo: 200, meme: 150 };
 const all = Object.values(counts).reduce((a, b) => a + b, 0);
 
 describe('kindTotal', () => {
@@ -13,8 +13,5 @@ describe('kindTotal', () => {
   });
   it("'all' 用全库总数", () => {
     expect(kindTotal(counts, all, 'all')).toBe(all);
-  });
-  it('插画 + 别册 = 全库', () => {
-    expect(kindTotal(counts, all, ['illustration']) + annexTotal(counts)).toBe(all);
   });
 });

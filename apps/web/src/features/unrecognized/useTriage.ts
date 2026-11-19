@@ -1,10 +1,19 @@
-import type { AcceptSuggestionBody, BulkImageAction, CharacterSuggestion, ContentKind, ID, UnrecognizedArtKind, UnrecognizedItem } from '@emaki/shared';
+import {
+  queueAfterKindChange,
+  type AcceptSuggestionBody,
+  type BulkImageAction,
+  type CharacterSuggestion,
+  type ContentKind,
+  type ID,
+  type UnrecognizedArtKind,
+  type UnrecognizedItem,
+} from '@emaki/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { api, imageUrl } from '@/lib/api';
 import { isSensitive } from '@/lib/format';
 import { KIND_LABEL } from '@/lib/kinds';
-import { useMutate, useUnrecognizedInfinite } from '@/lib/queries';
+import { useMutate, useSettings, useUnrecognizedInfinite } from '@/lib/queries';
 import { useSelection } from '@/lib/stores';
 import { useReconcileSelection } from '@/lib/useReconcileSelection';
 import { pickRevealed } from '@/lib/undoPlace';
@@ -149,9 +158,7 @@ export function useTriage(bucket: 'suggested' | 'untagged', artKind?: Unrecogniz
     const map = new Map<string, AggregatedSuggestion>();
     for (const it of selectedItems) {
       for (const s of it.suggestions) {
-        // 需要新建角色的建议没法批量归入，只在单张模式里提供
         if (!s.characterId) continue;
-        // 按角色分组：同一个自建角色可能有伪标签和 Danbooru 标签两种写法的建议
         const prev = map.get(s.characterId);
         if (prev) {
           prev.hits += 1;
@@ -167,7 +174,7 @@ export function useTriage(bucket: 'suggested' | 'untagged', artKind?: Unrecogniz
   // 队列里首条建议和当前项相同的图（TR-3）：按 A 一次选中，批量面板的「共同建议」第一条就是它
   const sameTop = useMemo(() => {
     const s = current?.suggestions[0];
-    if (!s?.characterId) return []; // 新角色没法批量归入
+    if (!s?.characterId) return [];
     return items.filter((it) => it.suggestions[0]?.characterId === s.characterId);
   }, [items, current]);
   const selectSameTop = () => {
@@ -286,8 +293,9 @@ export function useTriage(bucket: 'suggested' | 'untagged', artKind?: Unrecogniz
     hide(ids);
     if (batch) useSelection.getState().clear();
     stampIt('归', batch ? `${ids.length} 张 · ${t.name}` : t.name);
-    remember(t);
-    bulkMut.mutateAsync({ ids, action: { type: 'assign', characterId: t.id } }).catch(() => unhide(ids));
+    if (!t.candidateTag) remember(t);
+    const action: BulkImageAction = t.candidateTag ? { type: 'assignTag', danbooruTag: t.candidateTag } : { type: 'assign', characterId: t.id };
+    bulkMut.mutateAsync({ ids, action }).catch(() => unhide(ids));
   };
 
   /** 多选时采纳「共同建议」 */
@@ -296,14 +304,18 @@ export function useTriage(bucket: 'suggested' | 'untagged', artKind?: Unrecogniz
     assign({ id: s.characterId, name: s.name, workName: s.workName, coverImageId: null });
   };
 
-  /** 「不是插画」（T32a）：标成别的类型，这张离开队列（漫画除外，漫画仍在队列里） */
+  /**
+   * 「不是插画」（T32a）：标成别的类型。离不离开队列按共用的队列规则算（queueAfterKindChange，和服务端同一条）：
+   * 改成截图等离开；改成漫画时看「未识别里也列出漫画页」；改回自动判断先留着，重拉后以服务端为准
+   */
   const [kindMenuOpen, setKindMenuOpen] = useState(false);
+  const comicInQueue = useSettings().data?.tagger.comicInUnrecognized ?? true;
   const markKind = (kind: ContentKind | 'auto') => {
     const ids = targetIds();
     if (!ids.length) return;
+    const after = kind === 'auto' ? 'art' : queueAfterKindChange('art', kind, comicInQueue);
     // 只看插画 / 只看漫画时，改成另一类也离开这一列
-    const leaves =
-      (kind !== 'comic' && kind !== 'illustration' && kind !== 'auto') || (!!artKind && (kind === 'comic' || kind === 'illustration') && kind !== artKind);
+    const leaves = after !== 'art' || (!!artKind && kind !== 'auto' && kind !== artKind);
     if (leaves) {
       hide(ids);
       if (batch) useSelection.getState().clear();

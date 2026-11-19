@@ -1,4 +1,4 @@
-import type { LibraryStats } from '@emaki/shared';
+import type { LibrarySummary } from '@emaki/shared';
 import { ArrowRight } from 'lucide-react';
 import type { CSSProperties, ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -6,7 +6,7 @@ import { RollingNumber, Skeleton } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { formatBytes, formatCount, formatPercent, formatRelative } from '@/lib/format';
 import { useWorks } from '@/lib/queries';
-import { splitBytes, sum } from '../utils';
+import { splitBytes } from '../utils';
 import { WeekBars } from './WeekBars';
 
 // 第一格要放迷你柱状图，给它多一点宽度
@@ -15,27 +15,22 @@ const NUMERAL = 'numeral text-[52px] text-fg';
 
 /**
  * 统计条：四个大号斜体数字横排，像杂志刊头，上下两道细线，不用卡片。
+ * 数都来自汇总接口（服务端按命名口径算好）：已认出比例、已看过比例、别册张数不在这里算（附录 #28、#29）。
  */
-export function StatsStrip({ stats }: { stats: LibraryStats }) {
+export function StatsStrip({ summary: s }: { summary: LibrarySummary }) {
   const works = useWorks({ sort: 'imageCount' });
   const topWork = works.data?.[0];
 
-  const week = sum(stats.addedLast7Days);
-  const illus = stats.kindCounts.illustration;
-  const annex = stats.imageCount - illus;
-  // 已认出 = 插画和漫画里有角色的比例；放下的不算认出（RV-T-4）
-  const art = stats.kindCounts.illustration + stats.kindCounts.comic;
-  const recognized = art ? Math.max(0, 1 - (stats.unrecognizedCount + stats.shelvedCount) / art) : 0;
-  const seen = stats.imageCount ? 1 - stats.pendingTagCount / stats.imageCount : 0;
+  const week = s.added.week;
   const firstHint = week
     ? `本周新收 ${formatCount(week)}`
-    : stats.recentImport
-      ? `${formatRelative(stats.recentImport.at)}导入`
-      : stats.lastAddedAt
-        ? `上次新收 ${formatRelative(stats.lastAddedAt)}`
+    : s.recentImport
+      ? `${formatRelative(s.recentImport.at)}导入`
+      : s.added.lastAt
+        ? `上次新收 ${formatRelative(s.added.lastAt)}`
         : undefined;
-  const size = splitBytes(stats.totalBytes);
-  const avg = stats.imageCount ? formatBytes(stats.totalBytes / stats.imageCount) : null;
+  const size = splitBytes(s.images.bytes);
+  const avg = s.images.averageBytes !== null ? formatBytes(s.images.averageBytes) : null;
 
   return (
     <section aria-label="图库概况" className={GRID}>
@@ -43,10 +38,10 @@ export function StatsStrip({ stats }: { stats: LibraryStats }) {
         index={0}
         to="/gallery"
         label="张插画"
-        hint={[firstHint, annex > 0 ? `另有 ${formatCount(annex)} 张在别册` : ''].filter(Boolean).join(' · ') || undefined}
-        aside={week > 0 ? <WeekBars days={stats.addedLast7Days} /> : null}
+        hint={[firstHint, s.images.annex > 0 ? `另有 ${formatCount(s.images.annex)} 张在别册` : ''].filter(Boolean).join(' · ') || undefined}
+        aside={week > 0 ? <WeekBars days={s.added.last7Days} /> : null}
       >
-        <RollingNumber id="images" value={illus} size="xl" className={NUMERAL} />
+        <RollingNumber id="images" value={s.images.illustrations} size="xl" className={NUMERAL} />
       </StatCell>
 
       <StatCell
@@ -54,14 +49,14 @@ export function StatsStrip({ stats }: { stats: LibraryStats }) {
         to="/characters"
         label="位角色"
         hint={
-          stats.pendingTagCount > 0
-            ? `识别中 · 已看过 ${formatPercent(seen)}`
-            : art
-              ? `已认出 ${formatPercent(recognized)} 的插画`
+          s.tagging.pending > 0 && s.tagging.seenRatio !== null
+            ? `识别中 · 已看过 ${formatPercent(s.tagging.seenRatio)}`
+            : s.recognition.ratio !== null
+              ? `已认出 ${formatPercent(s.recognition.ratio)} 的插画`
               : undefined
         }
       >
-        <RollingNumber id="characters" value={stats.characterCount} size="xl" className={NUMERAL} />
+        <RollingNumber id="characters" value={s.characters} size="xl" className={NUMERAL} />
       </StatCell>
 
       <StatCell
@@ -70,7 +65,7 @@ export function StatsStrip({ stats }: { stats: LibraryStats }) {
         label="部作品"
         hint={topWork ? `收得最多的是「${topWork.name}」` : undefined}
       >
-        <RollingNumber id="works" value={stats.workCount} size="xl" className={NUMERAL} />
+        <RollingNumber id="works" value={s.works} size="xl" className={NUMERAL} />
       </StatCell>
 
       <StatCell index={3} label="总体积" hint={avg ? `平均每张 ${avg}` : undefined}>

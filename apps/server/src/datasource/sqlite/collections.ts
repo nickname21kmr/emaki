@@ -1,16 +1,22 @@
 import { assertOrganizeReady, organizeCollection } from './organizeCollection.ts';
 import { randomUUID } from 'node:crypto';
 /**
- * 合集的查询与修改（T38c）。摘要统一由 loadSummaries 算（口径在 services/collections/summary.ts）。
+ * 合集的查询与修改（T38c）。摘要统一由 loadAll 算（口径在 domain/collections/summary.ts），列表、统计、详情各自只读要用的（Scope）。
  * 写操作全部走 ctx.mutate，任何写都把合集转成 origin='manual'（自动判定不会再删它）。
  */
 import {
+  COLLECTION_KIND_META,
+  collectionTitle,
   searchKey,
   type BulkCollectionsBody,
   type CreateCollectionBody,
+  type CollectionCountsQuery,
+  type CollectionCountsResponse,
   type CollectionKind,
+  type CollectionMembership,
   type CollectionPage,
   type CollectionSummary,
+  type CollectionTally,
   type ContentKind,
   type GetCollectionResponse,
   type ID,
@@ -20,18 +26,22 @@ import {
   type UpdateCollectionBody,
 } from '@emaki/shared';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
-import type { CollectionRow, CollectionService } from '../../services/collections/CollectionService.ts';
-import { autoKind, bookLeaf, decideCollection, dirFeatures, isJudged, type DirPage } from '../../services/collections/detect.ts';
-import { parseBookDir, parseComicDir } from '../../services/collections/parseName.ts';
+import type { CollectionRow, CollectionService } from '../../domain/collections/CollectionService.ts';
+import { autoKind, bookLeaf, decideCollection, dirFeatures, isJudged, type DirPage } from '../../domain/collections/detect.ts';
+import { parseBookDir, parseComicDir } from '../../domain/collections/parseName.ts';
 import { ComicAreas } from '../../services/classify/comicAreas.ts';
-import { summarize } from '../../services/collections/summary.ts';
+import { summarize } from '../../domain/collections/summary.ts';
 import type { SqliteContext } from './context.ts';
 import type { Derived } from './derived.ts';
 import { toCharacter, toWork } from './library.ts';
-import { DEFAULT_DOMINANT, iso, parseId, toId, VISIBLE } from './sql.ts';
+import { DEFAULT_DOMINANT, iso, parseId, toId } from './sql.ts';
+import { COUNTED, HAS_CHARACTER, imageWorkRows, ROOT_ACTIVE, VISIBLE } from '../../readmodel/terms.ts';
 import type { UndoRecorder } from './undo.ts';
+import type { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
+import { resolveSuggestedCharacter } from './suggestions.ts';
 
-const KIND_LABEL: Record<CollectionKind, string> = { doujin: '本子', artbook: '画集', group: '组图' };
+/** 合集类型名：和网页同一份（packages/shared 的 COLLECTION_KIND_META） */
+const KIND_LABEL = Object.fromEntries(Object.entries(COLLECTION_KIND_META).map(([k, v]) => [k, v.label])) as Record<CollectionKind, string>;
 const isKind = (v: unknown): v is CollectionKind => v === 'doujin' || v === 'artbook' || v === 'group';
 /** 可变列（撤销时整行记下这些） */
 const MUTABLE = [
@@ -54,13 +64,31 @@ interface PageRow {
   has_char: number;
 }
 
+type Ranked = { id: number; pageCount: number; manual: boolean }[];
+
 interface Loaded {
   /** comic：在按漫画导入的范围里的书，不找角色（不算待整理），页面分级可信（不强制模糊） */
   row: CollectionRow & { root_path: string; comic: boolean };
   summary: CollectionSummary;
   pages: PageRow[];
-  cast: { id: number; pageCount: number; manual: boolean }[];
-  works: { id: number; pageCount: number; manual: boolean }[];
+  /** 完整的出场角色、作品：只有 Scope 里要了才算（没要是 undefined） */
+  cast?: Ranked;
+  works?: Ranked;
+}
+
+/**
+ * 读多少（大库上合集有几千本，全读一遍 + 全算角色、作品的命中要两三百毫秒）：
+ * - 摘要（列表、统计）只要页、手动关联，和本子的角色命中（本子有没有出场角色决定待整理）；
+ * - 按角色筛选要全部合集的出场角色，按作品筛选要作品；详情只读这一本和同系列的几本。
+ * 摘要的每个字段和全量算的完全一样（collections.test.ts 逐本比对）。
+ */
+interface Scope {
+  /** 只读这些合集；不给 = 全部 */
+  ids?: number[];
+  /** 完整的出场角色 */
+  cast: boolean;
+  /** 作品 */
+  works: boolean;
 }
 
 const leafOf = (dir: string) => dir.slice(dir.lastIndexOf('/') + 1);
@@ -71,11 +99,30 @@ export const compareSummaries = (a: CollectionSummary, b: CollectionSummary) =>
   collator.compare(a.title ?? '', b.title ?? '') ||
   (a.volumeNo ?? 0) - (b.volumeNo ?? 0) ||
   Number(a.id) - Number(b.id);
+/** sort=recent：最近加图的在前（ISO 时间直接比字符串），同时加的再按 compareSummaries */
+export const compareRecent = (a: CollectionSummary, b: CollectionSummary) => {
+  const x = a.lastAddedAt ?? '';
+  const y = b.lastAddedAt ?? '';
+  return x < y ? 1 : x > y ? -1 : compareSummaries(a, b);
+};
+
+/** 可多选的筛选（kind、membership）：单个值也认；空的等于不筛 */
+const many = <T>(v: T | T[] | undefined): T[] | undefined => {
+  const list = v === undefined ? [] : Array.isArray(v) ? v : [v];
+  return list.length ? list : undefined;
+};
+const KINDS: CollectionKind[] = ['doujin', 'artbook', 'group'];
+const MEMBERSHIPS: CollectionMembership[] = ['folder', 'selection', 'post'];
+
+/** 合集显示出来：按文件夹成册的看所在图库文件夹可见；手动、同投稿的组图在文件夹停用后，只要还有计入统计的页也显示 */
+const COLLECTION_VISIBLE = `((c.membership = 'folder' AND ${ROOT_ACTIVE('r')})
+    OR (c.membership <> 'folder' AND ((${ROOT_ACTIVE('r')}) OR EXISTS (SELECT 1 FROM v_counted_images i WHERE i.collection_id = c.id))))`;
 
 /** RV-C-15：一个目录下的直接成员（不含子目录），不用 LIKE */
-const DIR_MEMBERS = `SELECT i.id, i.file_name, i.width, i.height, i.modified_at, i.content_kind, i.content_kind_source, i.content_kind_manual, i.tagged_at
+const DIR_MEMBERS = `SELECT i.id, i.file_name, i.width, i.height, i.modified_at, i.content_kind, i.content_kind_source, i.content_kind_manual, i.animated,
+    i.tagged_at
   FROM images i JOIN library_roots r ON r.id = i.root_id
-  WHERE ${VISIBLE} AND i.excluded_by IS NULL AND i.root_id = @root
+  WHERE ${COUNTED()} AND i.root_id = @root
     AND (CASE WHEN @dir = '' THEN instr(i.rel_path, '/') = 0
       ELSE substr(i.rel_path, 1, length(@dir) + 1) = @dir || '/' AND instr(substr(i.rel_path, length(@dir) + 2), '/') = 0 END)`;
 
@@ -84,57 +131,62 @@ export class CollectionQueries {
     private readonly ctx: SqliteContext,
     private readonly service: CollectionService,
     private readonly derived: Derived,
+    private readonly catalog: () => CharacterCatalog,
   ) {}
 
-  /** 4.1：全部 active 合集的摘要 */
-  private loadAll(): Map<number, Loaded> {
+  /** 4.1：active 合集的摘要（读多少见 Scope） */
+  private loadAll(scope: Scope): Map<number, Loaded> {
     const db = this.ctx.db;
+    const params = scope.ids ? { ids: JSON.stringify(scope.ids) } : {};
+    // 合集的范围：两种写法都是字面 SQL，合集 id 走绑定参数
+    const inScope = scope.ids ? 'IN (SELECT value FROM json_each(@ids))' : 'IS NOT NULL';
     const rows = db
       .prepare(
         `SELECT c.*, r.path AS root_path FROM collections c JOIN library_roots r ON r.id = c.root_id
-         WHERE c.state = 'active' AND ((c.membership = 'folder' AND r.enabled = 1 AND r.removed_at IS NULL) OR (c.membership <> 'folder' AND ((r.enabled = 1 AND r.removed_at IS NULL) OR EXISTS (SELECT 1 FROM v_counted_images i WHERE i.collection_id = c.id))))`,
+         WHERE c.state = 'active' AND ${COLLECTION_VISIBLE}${scope.ids ? ` AND c.id ${inScope}` : ''}`,
       )
-      .all() as (CollectionRow & { root_path: string; comic: boolean })[];
+      .all(params) as (CollectionRow & { root_path: string; comic: boolean })[];
+    if (!rows.length) return new Map();
     const comics = ComicAreas.load(db);
     for (const r of rows) r.comic = !!comics.of(r.root_id, r.rel_dir);
     const pagesBy = new Map<number, PageRow[]>();
     for (const p of db
       .prepare(
         `SELECT i.id, i.collection_id, i.page_no, i.width, i.height, i.rating, i.content_kind, i.dominant_color, i.tagged_at, i.added_at, i.modified_at,
-                EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id) AS has_char
-         FROM v_counted_images i WHERE i.collection_id IS NOT NULL ORDER BY i.collection_id, i.page_no`,
+                ${HAS_CHARACTER('i')} AS has_char
+         FROM v_counted_images i WHERE i.collection_id ${inScope} ORDER BY i.collection_id, i.page_no`,
       )
-      .all() as PageRow[]) {
+      .all(params) as PageRow[]) {
       const list = pagesBy.get(p.collection_id);
       if (list) list.push(p);
       else pagesBy.set(p.collection_id, [p]);
     }
     const hits = (sql: string) => {
       const m = new Map<number, Map<number, number>>();
-      for (const r of db.prepare(sql).all() as { c: number; x: number; n: number }[]) {
+      for (const r of db.prepare(sql).all(params) as { c: number; x: number; n: number }[]) {
         const inner = m.get(r.c) ?? new Map<number, number>();
         inner.set(r.x, r.n);
         m.set(r.c, inner);
       }
       return m;
     };
+    // 角色命中：只要摘要时只算本子（从本子出发按合集索引找页，几千个组图的页不用碰）
     const charHits = hits(
-      `SELECT i.collection_id AS c, ic.character_id AS x, COUNT(*) AS n FROM v_counted_images i
-       JOIN image_characters ic ON ic.image_id = i.id WHERE i.collection_id IS NOT NULL GROUP BY 1, 2`,
+      scope.cast
+        ? `SELECT i.collection_id AS c, ic.character_id AS x, COUNT(*) AS n FROM v_counted_images i
+           JOIN image_characters ic ON ic.image_id = i.id WHERE i.collection_id ${inScope} GROUP BY 1, 2`
+        : `SELECT i.collection_id AS c, ic.character_id AS x, COUNT(*) AS n FROM collections dc
+           JOIN v_counted_images i ON i.collection_id = dc.id JOIN image_characters ic ON ic.image_id = i.id
+           WHERE dc.kind = 'doujin' AND dc.state = 'active' AND dc.id ${inScope} GROUP BY 1, 2`,
     );
-    // 与 v_image_works 同口径（经角色的作品 ∪ image_copyrights），但直接连底表：
-    // 连视图时 SQLite 会把整个 UNION 视图对每一行重扫一遍，副本上要 11 秒
-    const workHits = hits(
-      `SELECT c, x, COUNT(*) AS n FROM (
-         SELECT i.collection_id AS c, i.id AS iid, cw.work_id AS x FROM v_counted_images i
-           JOIN image_characters ic ON ic.image_id = i.id JOIN character_works cw ON cw.character_id = ic.character_id
-           WHERE i.collection_id IS NOT NULL
-         UNION
-         SELECT i.collection_id, i.id, ico.work_id FROM v_counted_images i
-           JOIN image_copyrights ico ON ico.image_id = i.id
-           WHERE i.collection_id IS NOT NULL)
-       GROUP BY c, x`,
-    );
+    // 图的作品（imageWorkRows：和 v_image_works 同口径，直接连底表——连视图时 SQLite 会把整个 UNION 视图对每一行重扫一遍，副本上要 11 秒）
+    const workHits = scope.works
+      ? hits(
+          `SELECT c, work_id AS x, COUNT(*) AS n
+           FROM (${imageWorkRows('v_counted_images i', `i.collection_id ${inScope}`, 'i.collection_id AS c')})
+           GROUP BY c, x`,
+        )
+      : new Map<number, Map<number, number>>();
     const manual = (table: string, col: string) => {
       const m = new Map<number, number[]>();
       for (const r of db.prepare(`SELECT collection_id AS c, ${col} AS x FROM ${table} ORDER BY added_at, ${col}`).all() as {
@@ -146,17 +198,18 @@ export class CollectionQueries {
     };
     const manualChars = manual('collection_characters', 'character_id');
     const manualWorks = manual('collection_works', 'work_id');
-    // 角色所属作品直接读 character_works（顺序同 Derived 的 workIds）。不用 derived.get()：
+    // 角色所属作品直接读 character_works（顺序同 Derived 的 workIds），只有算作品时要（手动关联的角色的作品也并进来）。不用 derived.get()：
     // 侧栏统计也走这里，用户每点一次收藏 Derived 都会失效，为了这张小表整份重建要 1 秒以上
     const workIdsOf = new Map<number, number[]>();
-    for (const r of db.prepare('SELECT character_id AS c, work_id AS w FROM character_works ORDER BY character_id, position, work_id').all() as {
-      c: number;
-      w: number;
-    }[]) {
-      const list = workIdsOf.get(r.c);
-      if (list) list.push(r.w);
-      else workIdsOf.set(r.c, [r.w]);
+    if (scope.works) {
+      const sql = 'SELECT character_id AS c, work_id AS w FROM character_works ORDER BY character_id, position, work_id';
+      for (const r of db.prepare(sql).all() as { c: number; w: number }[]) {
+        const list = workIdsOf.get(r.c);
+        if (list) list.push(r.w);
+        else workIdsOf.set(r.c, [r.w]);
+      }
     }
+    const none = new Map<number, number>();
 
     const out = new Map<number, Loaded>();
     for (const row of rows) {
@@ -176,9 +229,10 @@ export class CollectionQueries {
           tagged: p.tagged_at !== null || comic,
           addedAt: p.added_at,
           hasChar: p.has_char === 1,
+          modifiedAt: p.modified_at,
         })),
-        charHits: charHits.get(row.id) ?? new Map(),
-        workHits: workHits.get(row.id) ?? new Map(),
+        charHits: charHits.get(row.id) ?? none,
+        workHits: workHits.get(row.id) ?? none,
         manualChars: manualChars.get(row.id) ?? [],
         manualWorks: manualWorks.get(row.id) ?? [],
         worksOfCharacter: (id) => workIdsOf.get(id) ?? [],
@@ -186,8 +240,8 @@ export class CollectionQueries {
       out.set(row.id, {
         row,
         pages,
-        cast: s.cast,
-        works: s.works,
+        cast: scope.cast ? s.cast : undefined,
+        works: scope.works ? s.works : undefined,
         summary: {
           id: toId(row.id),
           kind: row.kind as CollectionKind,
@@ -201,7 +255,13 @@ export class CollectionQueries {
           seriesKey: row.series_key,
           volumeNo: row.volume_no,
           pageCount: s.pageCount,
-          covers: s.covers.map((c) => ({ imageId: toId(c.imageId), rating: c.rating, color: c.color ?? DEFAULT_DOMINANT, focus: null })),
+          covers: s.covers.map((c) => ({
+            imageId: toId(c.imageId),
+            rating: c.rating,
+            color: c.color ?? DEFAULT_DOMINANT,
+            focus: null,
+            modifiedAt: c.modifiedAt,
+          })),
           coverTagged: s.coverTagged,
           origin: row.origin,
           membership: row.membership ?? 'folder',
@@ -218,35 +278,190 @@ export class CollectionQueries {
     const cid = q.characterId !== undefined ? parseId(q.characterId) : null;
     const wid = q.workId !== undefined ? parseId(q.workId) : null;
     if ((q.characterId !== undefined && cid === null) || (q.workId !== undefined && wid === null)) return [];
-    const k = q.q ? searchKey(q.q) : '';
+    // 类型、成员来源、系列、搜索在 candidates 里已经筛准了（都是合集行上的字段）；下面只筛要看摘要的：待整理、角色、作品
+    let ids = this.candidates(q, cid, wid);
+    if (ids && !ids.length) return [];
+    // 最近加图的前 limit 本（「收进组图」弹窗）：不看摘要的筛选时，先按页的入库时间挑出来，不用算几千组同投稿的摘要
+    if (q.sort === 'recent' && q.limit !== undefined && q.pending === undefined && cid === null && wid === null) {
+      ids = this.recentIds(ids, q.limit);
+    }
     const out: CollectionSummary[] = [];
-    for (const l of this.loadAll().values()) {
+    for (const l of this.loadAll({ ids, cast: cid !== null, works: wid !== null }).values()) {
       const s = l.summary;
       if (s.pageCount === 0) continue;
-      if (q.kind && s.kind !== q.kind) continue;
-      if (q.seriesKey !== undefined && s.seriesKey !== q.seriesKey) continue;
       if (q.pending !== undefined && s.pending !== q.pending) continue;
-      if (k && ![s.title ?? '', s.folderName, s.circle, s.artist, s.parody, s.translator].some((x) => x && searchKey(x).includes(k))) continue;
       let match: number | undefined;
       if (cid !== null) {
-        const hit = l.cast.find((c) => c.id === cid);
+        const hit = l.cast!.find((c) => c.id === cid);
         if (!hit) continue;
         match = hit.pageCount;
       }
       if (wid !== null) {
-        const hit = l.works.find((w) => w.id === wid);
+        const hit = l.works!.find((w) => w.id === wid);
         if (!hit) continue;
         match = hit.pageCount;
       }
       out.push(match === undefined ? s : { ...s, matchPageCount: match });
     }
-    return out.sort(compareSummaries);
+    out.sort(q.sort === 'recent' ? compareRecent : compareSummaries);
+    return q.limit !== undefined ? out.slice(0, q.limit) : out;
+  }
+
+  /**
+   * 列表的筛选先缩小到哪些合集（几个一起给时取交集），没有这些筛选时 undefined = 全部：
+   * - 类型、成员来源、系列、搜索是合集行上的字段，在这里就筛准了（合集表只有几千行，按类型、成员来源筛一遍约 1 毫秒，不加索引；
+   *   页才是几万行，按 id 走合集的索引读）；
+   * - 角色、作品、待整理只缩小范围，留下的合集照常按摘要、出场角色、作品判断，结果和全读一遍一样。
+   * 角色和作品从它们的索引出发找页（+i.collection_id：不让查询改走合集的索引把几万页扫一遍）
+   */
+  private candidates(q: ListCollectionsQuery, cid: number | null, wid: number | null): number[] | undefined {
+    const db = this.ctx.db;
+    const sets: number[][] = [];
+    const ids = (sql: string, params: Record<string, unknown> = {}) => db.prepare(sql).pluck().all(params) as number[];
+    const kinds = many(q.kind);
+    if (kinds) {
+      const sql = "SELECT id FROM collections WHERE kind IN (SELECT value FROM json_each(@v)) AND state = 'active'";
+      sets.push(ids(sql, { v: JSON.stringify(kinds) }));
+    }
+    const memberships = many(q.membership);
+    if (memberships) {
+      const sql = "SELECT id FROM collections WHERE membership IN (SELECT value FROM json_each(@v)) AND state = 'active'";
+      sets.push(ids(sql, { v: JSON.stringify(memberships) }));
+    }
+    // 待整理只会是本子、画集（domain/collections/summary.ts：组图没有「没认出的页」，pending 恒为 false）
+    if (q.pending === true) sets.push(ids("SELECT id FROM collections WHERE kind IN ('doujin', 'artbook') AND state = 'active'"));
+    if (q.seriesKey !== undefined) {
+      sets.push(ids("SELECT id FROM collections WHERE series_key = @key AND state = 'active'", { key: q.seriesKey }));
+    }
+    const text = this.searched(q.q);
+    if (text) sets.push(text);
+    // 角色：这本里有它的页（出场的门槛由摘要判断），或者手动关联了它
+    if (cid !== null) {
+      sets.push(
+        ids(
+          `SELECT i.collection_id FROM image_characters ic JOIN v_counted_images i ON i.id = ic.image_id
+             WHERE ic.character_id = @cid AND +i.collection_id IS NOT NULL
+           UNION SELECT collection_id FROM collection_characters WHERE character_id = @cid`,
+          { cid },
+        ),
+      );
+    }
+    // 作品：这本里有图的作品是它的页（imageWorkRows，同 v_image_works 口径），手动关联了它，或者手动关联了它的角色（这些角色的作品也算手动的）
+    if (wid !== null) {
+      sets.push(
+        ids(
+          `SELECT c FROM (${imageWorkRows('v_counted_images i', '+i.collection_id IS NOT NULL', 'i.collection_id AS c')})
+             WHERE work_id = @wid
+           UNION SELECT collection_id FROM collection_works WHERE work_id = @wid
+           UNION SELECT cc.collection_id FROM collection_characters cc JOIN character_works cw ON cw.character_id = cc.character_id
+             WHERE cw.work_id = @wid`,
+          { wid },
+        ),
+      );
+    }
+    if (!sets.length) return undefined;
+    return sets.reduce((a, b) => {
+      const keep = new Set(b);
+      return a.filter((x) => keep.has(x));
+    });
+  }
+
+  /**
+   * 搜索命中的合集：书名、文件夹名、社团、作者、原作、汉化组，searchKey 归一化后包含（都是合集行上的字段，不用读页）。
+   * 没有搜索（或者归一化后是空的）时 undefined = 不筛
+   */
+  private searched(text: string | undefined): number[] | undefined {
+    const k = text ? searchKey(text) : '';
+    if (!k) return undefined;
+    const rows = this.ctx.db
+      .prepare("SELECT id, title, rel_dir, circle, artist, parody, translator FROM collections WHERE state = 'active'")
+      .all() as Pick<CollectionRow, 'id' | 'title' | 'rel_dir' | 'circle' | 'artist' | 'parody' | 'translator'>[];
+    const hit = (r: (typeof rows)[number]) =>
+      [r.title ?? '', leafOf(r.rel_dir), r.circle, r.artist, r.parody, r.translator].some((x) => x && searchKey(x).includes(k));
+    return rows.filter(hit).map((r) => r.id);
+  }
+
+  /**
+   * 最近加图的前 limit 本：按每本可见页里最晚的入库时间（= 摘要的 lastAddedAt）挑，和第 limit 本同时的也留下（最后在摘要上按 compareRecent 排）。
+   * 只读页的入库时间（走合集的索引），不算摘要；显示的范围和 loadAll 一样（state、COLLECTION_VISIBLE），页数为 0 的本来就不在里面
+   */
+  private recentIds(ids: number[] | undefined, limit: number): number[] {
+    const rows = this.ctx.db
+      .prepare(
+        `SELECT p.c, p.at FROM (
+           SELECT i.collection_id AS c, MAX(i.added_at) AS at FROM v_counted_images i
+           WHERE i.collection_id ${ids ? 'IN (SELECT value FROM json_each(@ids))' : 'IS NOT NULL'} GROUP BY i.collection_id
+         ) p JOIN collections c ON c.id = p.c JOIN library_roots r ON r.id = c.root_id
+         WHERE c.state = 'active' AND ${COLLECTION_VISIBLE}
+         ORDER BY p.at DESC`,
+      )
+      .all(ids ? { ids: JSON.stringify(ids) } : {}) as { c: number; at: string }[];
+    const cut = rows[limit - 1]?.at;
+    return (cut === undefined ? rows : rows.filter((x) => x.at >= cut)).map((x) => x.c);
+  }
+
+  /**
+   * 合集的数目（GET /api/collections/counts）：每一类、每种成员来源的本数、书架格数（同系列两本以上算一格）、页数。
+   * 只读合集的行和每本的页数，不算摘要：合集页的副标题、每一类的小字、「另有 N 组同一投稿」不用把几千组的摘要都拉回来。
+   * 口径和 list 一样（只数页数 > 0 的；显示范围同 loadAll；q 同 list 的搜索），collections.test.ts 和列表逐项比对
+   */
+  counts(q: CollectionCountsQuery = {}): CollectionCountsResponse {
+    const tally = (): CollectionTally => ({ count: 0, units: 0, pages: 0 });
+    const out = Object.fromEntries(
+      KINDS.map((k) => [k, { ...tally(), membership: Object.fromEntries(MEMBERSHIPS.map((m) => [m, tally()])) }]),
+    ) as CollectionCountsResponse;
+    const ids = this.searched(q.q);
+    if (ids && !ids.length) return out;
+    const rows = this.ctx.db
+      .prepare(
+        `SELECT c.id, c.kind, c.membership, c.series_key, p.n FROM (
+           SELECT i.collection_id AS c, COUNT(*) AS n FROM v_counted_images i
+           WHERE i.collection_id ${ids ? 'IN (SELECT value FROM json_each(@ids))' : 'IS NOT NULL'} GROUP BY i.collection_id
+         ) p JOIN collections c ON c.id = p.c JOIN library_roots r ON r.id = c.root_id
+         WHERE c.state = 'active' AND ${COLLECTION_VISIBLE}`,
+      )
+      .all(ids ? { ids: JSON.stringify(ids) } : {}) as {
+      id: number;
+      kind: CollectionKind;
+      membership: CollectionMembership | null;
+      series_key: string | null;
+      n: number;
+    }[];
+    // 书架格数：同一系列算一格，不在系列里的一本一格（toShelfUnits 的规则）
+    const units = new Map<CollectionTally, Set<string>>();
+    const add = (t: CollectionTally, unit: string, pages: number) => {
+      const seen = units.get(t) ?? new Set<string>();
+      units.set(t, seen.add(unit));
+      t.count++;
+      t.pages += pages;
+      t.units = seen.size;
+    };
+    for (const r of rows) {
+      const k = out[r.kind];
+      if (!k) continue;
+      const unit = r.series_key ?? `c${r.id}`;
+      add(k, unit, r.n);
+      add(k.membership[r.membership ?? 'folder'], unit, r.n);
+    }
+    return out;
+  }
+
+  /** 一本的摘要（新建之后返回给前端） */
+  private summaryOf(id: number): CollectionSummary {
+    return this.loadAll({ ids: [id], cast: false, works: false }).get(id)!.summary;
   }
 
   get(idStr: ID): GetCollectionResponse | null {
     const id = parseId(idStr);
-    const all = this.loadAll();
-    const l = id === null ? undefined : all.get(id);
+    if (id === null) return null;
+    // 只读这一本和同系列的（系列列表要它们的摘要），不读全部合集
+    const seriesKey = this.ctx.db.prepare('SELECT series_key FROM collections WHERE id = ?').pluck().get(id) as string | null | undefined;
+    if (seriesKey === undefined) return null;
+    const ids = seriesKey
+      ? (this.ctx.db.prepare("SELECT id FROM collections WHERE series_key = ? AND state = 'active'").pluck().all(seriesKey) as number[])
+      : [id];
+    const all = this.loadAll({ ids, cast: true, works: true });
+    const l = all.get(id);
     if (!l) return null;
     const data = this.derived.get();
     const pages: CollectionPage[] = l.pages.map((p, i) => ({
@@ -269,11 +484,11 @@ export class CollectionQueries {
     return {
       collection: l.summary,
       pages,
-      cast: l.cast.flatMap((c) => {
+      cast: l.cast!.flatMap((c) => {
         const rec = data.characters.get(c.id);
         return rec ? [{ character: toCharacter(rec), pageCount: c.pageCount, manual: c.manual }] : [];
       }),
-      works: l.works.flatMap((w) => {
+      works: l.works!.flatMap((w) => {
         const rec = data.works.get(w.id);
         return rec ? [{ work: toWork(rec), pageCount: w.pageCount, manual: w.manual }] : [];
       }),
@@ -285,16 +500,18 @@ export class CollectionQueries {
     };
   }
 
-  /** getStats 用：页数 > 0 的本数，和待整理条目数（同一系列算一条） */
+  /**
+   * getStats 用：页数 > 0 的本数（counts，不算摘要），和待整理条目数（同一系列算一条）。
+   * 待整理只会是本子、画集（见 candidates），只算它们的摘要，几千组同投稿的不用算
+   */
   stats(): { collectionCounts: Record<CollectionKind, number>; pendingCollectionCount: number } {
-    const counts: Record<CollectionKind, number> = { doujin: 0, artbook: 0, group: 0 };
+    const c = this.counts();
     const pending = new Set<string>();
-    for (const { summary: s } of this.loadAll().values()) {
-      if (s.pageCount === 0) continue;
-      counts[s.kind]++;
-      if (s.pending) pending.add(s.seriesKey ?? `c${s.id}`);
-    }
-    return { collectionCounts: counts, pendingCollectionCount: pending.size };
+    for (const s of this.list({ pending: true })) pending.add(s.seriesKey ?? `c${s.id}`);
+    return {
+      collectionCounts: { doujin: c.doujin.count, artbook: c.artbook.count, group: c.group.count },
+      pendingCollectionCount: pending.size,
+    };
   }
 
   // ---------------------------------------------------------------- 修改
@@ -347,23 +564,29 @@ export class CollectionQueries {
       u.columns('images', ['collection_id', 'page_no', 'collection_detached'], members.map((m) => m.page.id));
       db.prepare('UPDATE images SET collection_detached = 0 WHERE id IN (SELECT value FROM json_each(?))').run(JSON.stringify(members.map(m => m.page.id)));
       const n = this.service.assignPages(collectionId).length;
+      this.membersChanged(members.map((m) => m.page.id));
       return { message: `已把「${leafOf(dir)}」做成${KIND_LABEL[body.kind]}（${n} 页）` };
     });
     if (body.organizeFiles) {
       const detached = this.update(String(collectionId), { organizeFiles: true });
       const combined = this.ctx.undo.result(detached.message, async () => { if (detached.undoToken) await this.ctx.undo.run(detached.undoToken); if (result.undoToken) await this.ctx.undo.run(result.undoToken); });
-      return { ...combined, collection: this.loadAll().get(collectionId)!.summary };
+      return { ...combined, collection: this.summaryOf(collectionId) };
     }
-    return { ...result, collection: this.loadAll().get(collectionId)!.summary };
+    return { ...result, collection: this.summaryOf(collectionId) };
   }
 
   private memberCollections(ids: number[]): number[] {
     return this.ctx.db.prepare('SELECT DISTINCT collection_id FROM images WHERE id IN (SELECT value FROM json_each(?)) AND collection_id IS NOT NULL').pluck().all(JSON.stringify(ids)) as number[];
   }
 
-  private reorderWithUndo(u: UndoRecorder, collections: number[]): void {
-    const run = () => { for (const id of collections) this.service.assignPages(id); };
-    run(); u.onUndoLast(run);
+  /** 成员变了的合集（包括成员被挪走的那几本）：声明变化，由反应按页序重新编号；撤销时重放，还原后再编一次 */
+  private renumber(collections: number[]): void {
+    this.ctx.changed({ type: 'collections.changed', ids: [], collectionIds: collections });
+  }
+
+  /** 这些图进出了本子 / 画集、或者所在合集的类型变了：「整本处理」变了，Pixiv 补充资格由反应重新登记（附录 #19） */
+  private membersChanged(ids: number[]): void {
+    this.ctx.changed({ type: 'collections.changed', ids, collectionIds: [] });
   }
 
   private selectedImages(ids: ID[]): number[] {
@@ -392,10 +615,11 @@ export class CollectionQueries {
       u.inserted('collections', id);
       db.prepare('UPDATE images SET collection_id = ?, collection_detached = 1 WHERE id IN (SELECT value FROM json_each(?))').run(id, JSON.stringify(ids));
       this.service.assignPages(id);
-      this.reorderWithUndo(u, donors);
+      this.renumber(donors);
+      this.membersChanged(ids);
       return { message: `已新建${KIND_LABEL[body.kind]}「${body.title?.trim() || '新组图'}」，收进 ${ids.length} 张` };
     });
-    return { ...(body.organizeFiles ? organizeCollection(this.ctx, id, r) : r), collection: this.loadAll().get(id)!.summary };
+    return { ...(body.organizeFiles ? organizeCollection(this.ctx, id, r) : r), collection: this.summaryOf(id) };
   }
 
   update(idStr: ID, body: UpdateCollectionBody): MutationResult {
@@ -509,7 +733,10 @@ export class CollectionQueries {
         u.columns('images', ['collection_id', 'page_no'], db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(c.id) as number[]);
         this.service.assignPages(c.id);
       }
-      if (add.length || remove.length) this.reorderWithUndo(u, [...new Set([...donors, c.id])]);
+      if (add.length || remove.length) this.renumber([...new Set([...donors, c.id])]);
+      if (add.length || remove.length || set.kind !== undefined) {
+        this.membersChanged([...new Set([...(db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(c.id) as number[]), ...add, ...remove])]);
+      }
       return { message: notes.join('，') };
     });
     return body.organizeFiles ? organizeCollection(this.ctx, c.id, result) : result;
@@ -521,11 +748,15 @@ export class CollectionQueries {
     const db = this.ctx.db;
     const now = iso(this.ctx.clock());
     return this.ctx.mutate((u) => {
+      const members = db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(c.id) as number[];
       u.columns('collections', MUTABLE, [c.id]);
-      u.columns('images', ['collection_id', 'page_no', 'collection_detached'], db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(c.id) as number[]);
+      u.columns('images', ['collection_id', 'page_no', 'collection_detached'], members);
       this.write(c.id, { state: 'dismissed', origin: 'manual', updated_at: now });
+      this.membersChanged(members);
       db.prepare('UPDATE images SET collection_id = NULL, page_no = NULL, collection_detached = 1 WHERE collection_id = ?').run(c.id);
-      return { message: c.membership === 'folder' ? `已取消成册：${c.title ?? '无题'}` : `已解散${KIND_LABEL[c.kind as CollectionKind] ?? '组图'}：${c.title ?? '无题'}（图片都还在）` };
+      const title = collectionTitle({ title: c.title, folderName: leafOf(c.rel_dir) });
+      const kind = KIND_LABEL[c.kind as CollectionKind] ?? '组图';
+      return { message: c.membership === 'folder' ? `已取消成册：${title}` : `已解散${kind}：${title}（图片都还在）` };
     });
   }
 
@@ -533,19 +764,23 @@ export class CollectionQueries {
     const rows = [...new Set(body.ids)].map((x) => this.requireActive(x));
     const now = iso(this.ctx.clock());
     const a = body.action;
-    const target =
-      a.type === 'addCharacter'
-        ? { id: this.requireRow('characters', a.characterId, '角色'), table: 'collection_characters', col: 'character_id' }
-        : a.type === 'addWork'
-          ? { id: this.requireRow('works', a.workId, '作品'), table: 'collection_works', col: 'work_id' }
-          : null;
     if (a.type === 'kind' && !isKind(a.value)) throw new BadRequestError('请选择合集类型');
     const ids = rows.map((r) => r.id);
     return this.ctx.mutate((u) => {
+      const characterId = a.type === 'addCharacter' ? this.requireRow('characters', a.characterId, '角色')
+        : a.type === 'addCharacterTag' ? resolveSuggestedCharacter(this.ctx, u, this.catalog(), a.danbooruTag, now) : null;
+      const target = characterId !== null
+        ? { id: characterId, table: 'collection_characters' as const, col: 'character_id' }
+        : a.type === 'addWork'
+          ? { id: this.requireRow('works', a.workId, '作品'), table: 'collection_works' as const, col: 'work_id' }
+          : null;
       u.columns('collections', MUTABLE, ids);
       for (const r of rows) {
         if (a.type === 'review') this.write(r.id, { reviewed_at: now, origin: 'manual', updated_at: now });
-        else if (a.type === 'kind') this.write(r.id, { kind: a.value, kind_source: 'manual', kind_manual: 1, origin: 'manual', updated_at: now });
+        else if (a.type === 'kind') {
+          this.write(r.id, { kind: a.value, kind_source: 'manual', kind_manual: 1, origin: 'manual', updated_at: now });
+          this.membersChanged(this.ctx.db.prepare('SELECT id FROM images WHERE collection_id = ?').pluck().all(r.id) as number[]);
+        }
         else this.write(r.id, { origin: 'manual', updated_at: now });
       }
       if (target) {
@@ -583,6 +818,7 @@ export class CollectionQueries {
       content_kind: string;
       content_kind_source: string | null;
       content_kind_manual: number;
+      animated: number;
       tagged_at: string | null;
     }[];
     return rows.map((r) => ({
@@ -593,6 +829,7 @@ export class CollectionQueries {
         height: r.height,
         modifiedAt: r.modified_at,
         kind: r.content_kind,
+        animated: r.animated === 1,
         judged: isJudged(r),
       },
     }));
@@ -607,7 +844,7 @@ export class CollectionQueries {
         : (this.ctx.db
             .prepare(
               `SELECT c.* FROM collections c JOIN library_roots r ON r.id = c.root_id
-               WHERE c.id = ? AND c.state = 'active' AND ((c.membership = 'folder' AND r.enabled = 1 AND r.removed_at IS NULL) OR (c.membership <> 'folder' AND ((r.enabled = 1 AND r.removed_at IS NULL) OR EXISTS (SELECT 1 FROM v_counted_images i WHERE i.collection_id = c.id))))`,
+               WHERE c.id = ? AND c.state = 'active' AND ${COLLECTION_VISIBLE}`,
             )
             .get(id) as CollectionRow | undefined);
     if (!row) throw new NotFoundError('合集');

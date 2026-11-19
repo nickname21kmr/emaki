@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import { z } from 'zod';
 import { BadRequestError } from './errors.ts';
 
 export function parse<T extends z.ZodType>(schema: T, data: unknown): z.infer<T> {
@@ -9,6 +9,3 @@ export function parse<T extends z.ZodType>(schema: T, data: unknown): z.infer<T>
   }
   return result.data;
 }
-
-// 请求参数的 schema 和查询串工具都在 shared（类型从它们推出来，前后端一份）
-export { idParam, qBool, qNumber } from '@emaki/shared/schemas';

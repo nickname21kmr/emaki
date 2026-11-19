@@ -1,17 +1,25 @@
 import { selectionIds } from '@/components/media/CollectionControls';
-import type { BulkImageAction, ContentKind, ID, ImageItem, Rating } from '@emaki/shared';
+import {
+  queueAfterKindChange,
+  type BulkImageAction,
+  type ContentKind,
+  type ID,
+  type ImageItem,
+  type Rating,
+  type TriageQueue,
+} from '@emaki/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { KIND_LABEL } from '@/lib/kinds';
-import { collapseParam, useMutate, useUnrecognizedInfinite, type UnrecognizedParams } from '@/lib/queries';
+import { collapseParam, useMutate, useSettings, useUnrecognizedInfinite, type UnrecognizedParams } from '@/lib/queries';
 import { usePrefs, useSelection } from '@/lib/stores';
 import { useReconcileSelection } from '@/lib/useReconcileSelection';
 import type { AssignTarget, StampEvent } from './types';
+import { useCollapseMode } from '@/lib/urlPrefs';
 
 const SCOPE = 'unrecognized';
 const EMPTY: ReadonlySet<ID> = new Set();
-const ANNEX: readonly string[] = ['screenshot', 'text', 'photo', 'meme', 'animated'];
 const MAX_SELECT = 2000;
 
 /**
@@ -19,8 +27,9 @@ const MAX_SELECT = 2000;
  * 乐观隐藏照 useTriage：先藏起来，失败再放回；拿到修改后的新数据再放掉隐藏标记。
  */
 export function useSheet(params: UnrecognizedParams, enabled: boolean) {
-  const mode = usePrefs((s) => s.collapseMode);
+  const mode = useCollapseMode();
   const query = useUnrecognizedInfinite({ ...params, collapseCollections: collapseParam(mode) }, 120);
+  const comicInQueue = useSettings().data?.tagger.comicInUnrecognized ?? true;
   const { data, dataUpdatedAt } = query;
 
   const all = useMemo(() => {
@@ -103,8 +112,9 @@ export function useSheet(params: UnrecognizedParams, enabled: boolean) {
 
   const assign = (t: AssignTarget) => {
     const n = selectedCount;
-    setRecent((prev) => [t, ...prev.filter((p) => p.id !== t.id)].slice(0, 5));
-    run({ type: 'assign', characterId: t.id }, { hide: true, stamp: ['归', `${n} 张 · ${t.name}`] });
+    if (!t.candidateTag) setRecent((prev) => [t, ...prev.filter((p) => p.id !== t.id)].slice(0, 5));
+    const action: BulkImageAction = t.candidateTag ? { type: 'assignTag', danbooruTag: t.candidateTag } : { type: 'assign', characterId: t.id };
+    run(action, { hide: true, stamp: ['归', `${n} 张 · ${t.name}`] });
   };
   const shelve = (value: boolean) => {
     const n = selectedCount;
@@ -115,16 +125,18 @@ export function useSheet(params: UnrecognizedParams, enabled: boolean) {
     const n = selectedCount;
     run({ type: 'original', value }, { hide: true, stamp: value ? ['原', `${n} 张 · 原创`] : ['回', `移出原创 ${n} 张`] });
   };
+  /**
+   * 改类型：离不离开当前这一列分两层。队列按共用的规则算（queueAfterKindChange，和服务端同一条：改成截图等离开「插画 · 漫画」，
+   * 改成漫画看「未识别里也列出漫画页」）；再加上这一页的分组（没认出里漫画单独一组）和「只看插画 / 只看漫画」
+   */
   const setKind = (k: ContentKind | 'auto') => {
     const art = params.area === 'art';
-    const comicGroup = params.theme === 'comic';
+    const from: TriageQueue = !art ? 'annex' : params.bucket === 'shelved' ? 'shelved' : 'art';
     const leaves =
-      (art && ANNEX.includes(k)) ||
-      (!art && (k === 'illustration' || k === 'comic')) ||
-      (comicGroup && k === 'illustration') ||
-      (art && !comicGroup && k === 'comic' && params.artKind !== 'comic') ||
-      // 只看插画 / 只看漫画时，改成另一类也离开
-      (art && !!params.artKind && (k === 'illustration' || k === 'comic') && k !== params.artKind);
+      k !== 'auto' &&
+      (queueAfterKindChange(from, k, comicInQueue) !== from ||
+        (art && (params.theme === 'comic' ? k !== 'comic' : k === 'comic' && params.artKind !== 'comic')) ||
+        (art && !!params.artKind && k !== params.artKind));
     run({ type: 'kind', value: k }, { hide: leaves, stamp: ['类', k === 'auto' ? '自动' : KIND_LABEL[k], 'muted'] });
   };
   const setRating = (r: Rating) => run({ type: 'rating', value: r }, { hide: false, stamp: ['级', '已改分级', 'muted'] });

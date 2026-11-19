@@ -10,40 +10,49 @@ try {
   if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
 }
 
-export type DataSourceKind = 'sqlite' | 'demo';
+/** sqlite：真实图库；demo：演示数据（真实引擎 + 演示数据 + 假部件，见 demo/engine.ts） */
+export type DataSourceKind = 'demo' | 'sqlite';
 export type ModelSourceId = 'huggingface' | 'hf-mirror' | 'modelscope';
 
 // 相对路径一律按仓库根目录解析：npm -w 运行时 cwd 是 apps/server，按 cwd 解析会落到 apps/server/data
-const baseDataDir = path.resolve(repoRoot, process.env.EMAKI_DATA_DIR ?? 'data');
-// 演示模式：命令行 --demo > 环境变量 > 默认真实图库。旧的写法 --mock / mock 也认
-const envSource = process.env.EMAKI_DATA_SOURCE;
-const demo = process.argv.includes('--demo') || process.argv.includes('--mock') || envSource === 'demo' || envSource === 'mock';
-// 演示模式用自己的数据库和缩略图，不碰真实图库
-const dataDir = demo ? path.join(baseDataDir, 'demo') : baseDataDir;
+const dataDir = path.resolve(repoRoot, process.env.EMAKI_DATA_DIR ?? 'data');
+
+/** 命令行 --demo（旧写法 --mock 也认）> 环境变量 EMAKI_DATA_SOURCE（demo，旧写法 mock 也认）> 默认 sqlite */
+const demo =
+  process.argv.includes('--mock') || process.argv.includes('--demo') || ['demo', 'mock'].includes(process.env.EMAKI_DATA_SOURCE ?? '');
 
 /**
- * 所有配置都来自环境变量（或仓库根目录的 .env），`npm run dev:demo` 切到演示图库。
+ * 所有配置都来自环境变量（或仓库根目录的 .env），`npm run dev:demo` 切到演示数据。
  * 见 docs/ARCHITECTURE.md「配置」一节。
  */
 export const config = {
   repoRoot,
   host: process.env.EMAKI_HOST ?? '127.0.0.1',
+  /**
+   * 额外允许的 Host（逗号分隔），只影响 app.ts 的 Host 校验，不改变监听地址。
+   * 局域网/手机访问时填本机局域网 IP，例如 192.168.0.100；不填就只认本机。
+   */
+  allowedHosts: (process.env.EMAKI_ALLOWED_HOSTS ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean),
   port: Number(process.env.EMAKI_PORT ?? 5174),
   /**
-   * sqlite：真实图库（默认）。
-   * demo：演示图库，每次启动从头导入假数据（src/demo），图片画在 demoPicsDir，改动不会留到下次。
+   * sqlite：真实图库，读写 dataDir 下的数据库和缩略图缓存（默认）。
+   * demo：演示数据，跑的也是真实引擎，只是换成演示数据和假部件，绝不碰用户的图库文件夹。
+   * 优先级：命令行 --demo / --mock > 环境变量（demo，旧写法 mock）> 默认 sqlite。
    */
   dataSource: (demo ? 'demo' : 'sqlite') as DataSourceKind,
-  /** 数据库、缩略图缓存都放这里；已被 .gitignore 忽略。演示模式是 <EMAKI_DATA_DIR>/demo */
+  /** 数据库、缩略图缓存、模型文件、AI 助手的设置都放这里；已被 .gitignore 忽略 */
   dataDir,
-  /** 演示图库的图片文件（演示模式第一次启动时生成） */
-  demoPicsDir: path.join(baseDataDir, 'demo-pics'),
+  /** 图库数据库所在的目录：演示模式是 <dataDir>/demo（每次启动清空重建），否则就是 dataDir */
+  libraryDir: demo ? path.join(dataDir, 'demo') : dataDir,
   /** 生产模式下由后端直接托管前端构建产物 */
   webDist: path.join(repoRoot, 'apps/web/dist'),
   /** 随仓库分发的数据文件（离线对照表、词库） */
   assetsDir: path.join(repoRoot, 'apps/server/assets'),
   /** 模型文件目录；多个开发库可共用一份 */
-  modelsDir: process.env.EMAKI_MODELS_DIR ? path.resolve(repoRoot, process.env.EMAKI_MODELS_DIR) : path.join(baseDataDir, 'models'),
+  modelsDir: process.env.EMAKI_MODELS_DIR ? path.resolve(repoRoot, process.env.EMAKI_MODELS_DIR) : path.join(dataDir, 'models'),
   /** 模型下载源（逗号分隔），会并行测速，选最快的 */
   modelSources: (process.env.EMAKI_MODEL_SOURCES ?? 'huggingface,hf-mirror,modelscope')
     .split(',')

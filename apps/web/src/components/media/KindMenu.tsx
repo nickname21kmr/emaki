@@ -5,8 +5,9 @@ import { Menu, MenuItem, MenuLabel, MenuSeparator } from '@/components/ui';
 import { KIND_ICON, KIND_LABEL } from '@/lib/kinds';
 
 /**
- * 「归入…」菜单（T32a）：插画加 6 个别册类型共 7 项，数字键 1–7 直接选；最后是「恢复自动判断」。
+ * 「归入…」菜单（T32a）：插画加 5 个别册类型共 6 项，数字键 1–6 直接选；最后是「恢复自动判断」。
  * 图库多选（C）、看图器、未识别页共用。includeIllustration=false 时去掉插画（「不是插画」）。
+ * 没有「动图」：是不是动图按帧数自动判断，不是类型，不能手动选（D5）。
  */
 export function KindMenu({
   trigger,

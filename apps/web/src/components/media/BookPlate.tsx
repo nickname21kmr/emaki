@@ -1,7 +1,7 @@
 import type { CollectionSummary } from '@emaki/shared';
 import { Seal } from '@/components/ui';
 import { cn } from '@/lib/cn';
-import { byline, COLLECTION_META, displayTitle, shouldCloth } from '@/lib/collections';
+import { byline, COLLECTION_META, displayTitle, shouldCloth, showUnderPage } from '@/lib/collections';
 import { useBlurPrefs } from '@/lib/stores';
 import { Thumb } from './Thumb';
 
@@ -27,9 +27,14 @@ export function BookPlate({ collection: c, size = 'md', className }: { collectio
         />
       ))}
       <div className="absolute inset-0 overflow-hidden rounded-[var(--radius-book)] bg-raised">
-        {/* 底页只在布面之外、而且（没开模糊或者它是识别过的全年龄页）时显示 */}
-        {!cloth && under && (!prefs.blurSensitive || (under.rating === 'general' && c.coverTagged)) && (
-          <Thumb image={{ id: under.imageId, rating: under.rating, dominantColor: under.color ?? '#d9d4cc' }} width={240} blurBadge="none" className="size-full" />
+        {/* 底页只在布面之外、而且能无人值守地露出来（没开模糊，或者它是识别过的全年龄页）时显示 */}
+        {!cloth && under && showUnderPage(c, under, prefs) && (
+          <Thumb
+            image={{ id: under.imageId, rating: under.rating, dominantColor: under.color ?? '#d9d4cc', modifiedAt: under.modifiedAt }}
+            width={240}
+            blurBadge="none"
+            className="size-full"
+          />
         )}
       </div>
       <BookFace collection={c} size={size} cloth={cloth} />
@@ -53,7 +58,7 @@ export function BookFace({ collection: c, size = 'md', cloth, className }: { col
         <ClothCover collection={c} small={size === 'sm'} />
       ) : (
         <Thumb
-          image={{ id: cover.imageId, rating: cover.rating, dominantColor: cover.color ?? '#d9d4cc' }}
+          image={{ id: cover.imageId, rating: cover.rating, dominantColor: cover.color ?? '#d9d4cc', modifiedAt: cover.modifiedAt }}
           width={size === 'lg' ? 960 : 480}
           blurBadge="none"
           className="size-full"

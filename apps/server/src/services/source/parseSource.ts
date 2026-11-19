@@ -4,7 +4,7 @@
  */
 import type { ImageSource, Settings } from '@emaki/shared';
 
-export const SOURCE_PARSER_VERSION = 5;
+export const SOURCE_PARSER_VERSION = 6;
 
 const EXT = /\.[^.]+$/; // 包括 .jpg_large
 const COPY_SUFFIX = /(\s*\(\d+\)|\s*-\s*(副本|复制|copy)(\s*\(\d+\))?)$/i;
@@ -25,6 +25,8 @@ const PIXIV_HASHED = /^(\d{4,10})-[0-9a-f]{32}_(?:p\d{1,4}|ugoira\d*)(?!\d)/i;
 // leading ID is needed. Require a readable title, excluding resolution-based
 // export names, bare hashes and malformed original-image page markers.
 const PIXIV_TITLED = /^(?!\d{3,5}_\d{3,5}(?:_|$))(\d{4,10})_((?![0-9a-f]{32}(?:_\d+)?$)(?!p\d|ugoira(?:\d|$))(?=[^/]*\p{L}).+)$/iu;
+// The downloader can replace an unsupported title with "_" in ID_title_page.
+const PIXIV_PLACEHOLDER_TITLE = /^(\d{4,10})___\d{1,4}$/;
 const PIXIV_APP = /^illust_(\d{4,10})(?:_|$)/i;
 const PIXIVUTIL_DIR = /^(.+) \((\d+)\)$/;
 const GDL_PIXIV_DIR = /^(\d+) (.+)$/;
@@ -97,7 +99,7 @@ export function parseSource(relPath: string, pixivFilenameMode: Settings['tagger
 
   // 7 / 8. pixiv 原图名、下载器标题名、手机 App 保存名
   m = PIXIV_HASHED.exec(stem) ?? PIXIV_APP.exec(stem);
-  const titled = m ? null : PIXIV_TITLED.exec(stem);
+  const titled = m ? null : (PIXIV_TITLED.exec(stem) ?? PIXIV_PLACEHOLDER_TITLE.exec(stem));
   // Do not fall through to an ID embedded inside a rejected title (or to the
   // low-confidence Twitter-media heuristic).
   if (titled && pixivFilenameMode === 'strict') return null;

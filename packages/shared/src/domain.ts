@@ -4,8 +4,11 @@
  * 约定：
  * - 所有 ID 都是字符串（后端用 SQLite INTEGER 主键时转成字符串再返回）。
  * - 所有时间都是 ISO 8601 字符串（UTC）。
- * - 「张数」一律指未被排除（status !== 'excluded'）的图片数量。
+ * - 「张数」一律指计入统计（可见、没被排除）的图片数量；口径的唯一定义在服务端 readmodel/terms.ts。
  */
+
+import type { JobKind } from './jobs.ts';
+import type { TriageQueue } from './rules.ts';
 
 export type ID = string;
 export type ISODate = string;
@@ -16,26 +19,27 @@ export type Rating = 'general' | 'sensitive' | 'questionable' | 'explicit';
 /** 标签类别，与 Danbooru 的 category 对应。 */
 export type TagCategory = 'general' | 'character' | 'copyright' | 'artist' | 'meta';
 
-/** 图片在库中的状态。 */
-export type ImageStatus =
-  /** 有角色，或不是插画 / 漫画（别册里的图不用找角色） */
-  | 'recognized'
-  /** 还没有关联任何角色（可能 tagger 还没跑，或者识别置信度不够） */
-  | 'unrecognized'
-  /** 被用户排除，不参与统计和浏览 */
-  | 'excluded';
+/**
+ * 图片列表的旧筛选（ListImagesQuery.status）。图片本身不再带 status（P5，附录 #27），改看三个事实：
+ * tagged（识别过没有）、characterCount（角色数）、queue（在哪个待处理队列），以及 excluded。
+ * - recognized：有角色、归为原创，或不是插画 / 漫画
+ * - unrecognized：插画 / 漫画里没有角色、没归原创的（含放下的、成册的页）
+ * - excluded：被排除的
+ */
+export type ImageStatus = 'recognized' | 'unrecognized' | 'excluded';
 
 export type ImageFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'avif' | 'bmp' | 'html';
 
 /**
  * 图片内容类型（T27）。插画是默认类型；其余统称「别册」：不计入角色张数、不进未识别队列（漫画除外，见 T27 补充）。
+ * 类型互斥；「是否动图」是另一个维度（D5，ImageItem.animated），不是类型：动的插画就是插画，动的表情就是表情。
  */
-export type ContentKind = 'illustration' | 'comic' | 'screenshot' | 'text' | 'photo' | 'meme' | 'animated';
-export const CONTENT_KINDS: readonly ContentKind[] = ['illustration', 'comic', 'screenshot', 'text', 'photo', 'meme', 'animated'];
+export type ContentKind = 'illustration' | 'comic' | 'screenshot' | 'text' | 'photo' | 'meme';
+export const CONTENT_KINDS: readonly ContentKind[] = ['illustration', 'comic', 'screenshot', 'text', 'photo', 'meme'];
 /** 别册里的类型 = 除插画以外的全部 */
 export const ANNEX_KINDS: readonly ContentKind[] = CONTENT_KINDS.filter((k) => k !== 'illustration');
-/** 类型是怎么判出来的 */
-export type ContentKindSource = 'name' | 'folder' | 'camera' | 'format' | 'size' | 'tags' | 'manual' | 'default';
+/** 类型是怎么判出来的（D5 之前动图按格式判，'format' 不再出现） */
+export type ContentKindSource = 'name' | 'folder' | 'camera' | 'size' | 'tags' | 'manual' | 'default';
 
 /** 图片来源站点，从文件名 / EXIF / 侧车文件推断（例如 pixiv 的 `12345678_p0.png`）。 */
 export interface ImageSource {
@@ -78,6 +82,8 @@ export interface CoverRef {
   rating: Rating;
   color: string | null;
   focus: FocusPoint | null;
+  /** 封面图文件的修改时间（版本）：替换了文件、外部改了文件，缩略图地址跟着变，不会看到旧的（合集封面带它） */
+  modifiedAt?: ISODate;
 }
 
 export type CharacterSource = 'danbooru' | 'custom';
@@ -150,9 +156,21 @@ export interface ImageItem {
   /** 文件修改时间 */
   modifiedAt: ISODate;
   rating: Rating;
-  status: ImageStatus;
+  /** 被排除了（「已排除」页才列出来） */
+  excluded: boolean;
+  /** 识别过没有：当前这份文件有没有识别结果（换了文件、外部改了文件之后是 false，等重新识别，P4a） */
+  tagged: boolean;
+  /** 关联的角色数（= characterIds.length） */
+  characterCount: number;
+  /**
+   * 在哪个待处理队列，服务端按命名口径算好（triageQueue 的说明）：art 未识别「插画 · 漫画」、shelved 放下的、
+   * annex「照片 · 文字等」、book 在整本处理的合集里；null = 不在。前端不要自己从类型、角色推
+   */
+  queue: TriageQueue | null;
   /** 内容类型（T27） */
   kind: ContentKind;
+  /** 是动图（D5）：分析模块按帧数、格式判断（多帧的 GIF / WebP / PNG、HTML 逐帧动画），和类型无关，不能手动改 */
+  animated: boolean;
   characterIds: ID[];
   /** 与 characterIds 同序、同长度：网格悬停时显示「这是谁」（T33，BR-5） */
   characterNames: string[];
@@ -174,10 +192,14 @@ export interface ImageDetail extends ImageItem {
   tags: TagScore[];
   /** tagger 给出的、还没被采纳的角色建议 */
   characterSuggestions: CharacterSuggestion[];
+  /** 已关联角色的来历（和 characterIds 同序）：手动还是自动、自动的依据哪个来源（P3a 统一来历） */
+  characterLinks: CharacterLinkProvenance[];
   /** 类型是怎么判出来的；还没判过为 null */
   kindSource: ContentKindSource | null;
   /** 给人看的判定依据，例如「文件夹「表情包2」」「识别标签 comic 0.93」；手动设置时为 null */
   kindReason: string | null;
+  /** 为什么算动图，例如「GIF · 24 帧」「HTML 逐帧动画 · 12 帧」；不是动图为 null（D5） */
+  animatedReason: string | null;
   /** 所在合集（T38c）；pageNo 是可见页里的序号，恒在 1..pageCount 之间（RV-C-8） */
   collection: {
     id: ID;
@@ -194,6 +216,17 @@ export interface ImageDetail extends ImageItem {
   artists: ImageArtist[];
   /** 用户手动改过画师：识别、补跑都不再动 */
   artistsManual: boolean;
+}
+
+/** 一条「图 ↔ 角色」关联的来历（看图器的角色栏用）。完整来历（规则、actor、时间）在库里，见 docs/core-architecture.md 第 2.2 节 */
+export interface CharacterLinkProvenance {
+  characterId: ID;
+  /** manual = 用户归的（包括单张采纳建议）；auto = 规则自动关联的 */
+  decision: 'manual' | 'auto';
+  /** 依据的证据来源：tagger = 识别模型，pixiv = Pixiv 投稿标签；没有证据为 null */
+  source: 'tagger' | 'pixiv' | null;
+  /** 证据的分数（模型的置信度）；没有为 null */
+  score: number | null;
 }
 
 /** 一张图上的一位画师 */
@@ -389,6 +422,8 @@ export interface LibraryStats {
   lastAddedAt: ISODate | null;
   /** 计入张数的图按类型计数（各项之和 = imageCount） */
   kindCounts: Record<ContentKind, number>;
+  /** 计入张数的图里是动图的张数（D5：跨类型，动的插画也算在 kindCounts.illustration 里） */
+  animatedCount: number;
   /** 全部类型里还没跑过识别的计入张数（首页识别进度用） */
   pendingTagCount: number;
   /** 合集本数（页数 > 0 的） */
@@ -431,6 +466,11 @@ export interface Settings {
     characterThreshold: number;
     /** 达到该分数自动采纳角色，低于则进入「未识别」等人工确认 */
     autoAcceptThreshold: number;
+    /**
+     * 按证据来源的自动阈值（tagger 识别模型、pixiv 投稿标签，以后的插件来源是 plugin:<id>）。
+     * 没设的来源用 autoAcceptThreshold。Pixiv 的证据：确认对上的置信度是 1，只是候选的是 0
+     */
+    autoAcceptBySource?: Partial<Record<string, number>>;
     batchSize: number;
     /**
      * 分流（2026-09-27）：文件时间早于 legacyBefore 的图用 legacyModel 识别——旧模型数据截至 2024-02，
@@ -455,8 +495,8 @@ export interface Settings {
     /** Pixiv 文件名解析：严格识别固定格式；宽泛兼容投稿号_标题。默认严格。 */
     pixivFilenameMode: 'strict' | 'broad';
     /**
-     * 「未识别」里也列出漫画页（content_kind = 'comic'，默认开）。关掉后漫画页不进未识别的列表、计数、侧栏和首页待处理，
-     * 也不自动查 Pixiv；识别照常跑，别册 · 漫画里照样能看
+     * 「未识别」里也列出漫画页（content_kind = 'comic'，默认开）。关掉后漫画页不进未识别的列表、计数、侧栏和首页待处理；
+     * 识别、自动关联、Pixiv 补充照常（和模型一样能自动关联的，Pixiv 也会查，附录 #1），别册 · 漫画里照样能看
      */
     comicInUnrecognized: boolean;
   };
@@ -474,12 +514,12 @@ export interface Settings {
     /** 上次查重跑完的时间；从没跑过为 null（只读，客户端不能写） */
     lastRunAt: ISODate | null;
   };
+  /**
+   * 外观里存在图库的部分。设置分「图库设置」（服务端，这里）和「本机偏好」（浏览器 usePrefs）：按「换一台设备、一个浏览器还该不该一样」判断，
+   * 见 docs/core-architecture.md 第 6 节。模糊、密度、底色、行高、视图这些是本机偏好，不在这里（P5，附录 #32）
+   */
   ui: {
     theme: ThemePreference;
-    /** 敏感分级（questionable / explicit）默认模糊 */
-    blurSensitive: boolean;
-    /** 网格密度 */
-    density: 'comfortable' | 'compact';
   };
   browse: {
     /** 自定义画面筛选，最多 30 个，顺序即显示顺序 */
@@ -487,8 +527,8 @@ export interface Settings {
   };
 }
 
-/** artists：给还没识别过画师的图补跑 PixAI，只记画师（2026-10-04） */
-export type JobKind = 'scan' | 'thumbnail' | 'tag' | 'danbooru-sync' | 'dedupe' | 'artists' | 'pixiv-tags';
+/** 任务种类登记在 jobs.ts（JOB_KINDS） */
+export type { JobKind };
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 
 export interface Job {
@@ -500,6 +540,8 @@ export interface Job {
   /** 总量（未知时为 null） */
   total: number | null;
   message: string;
+  /** 预计还要多少秒（识别、画师补跑按当前速度估）；不知道时 null。界面用它，不要从 message 里抠（附录 #38） */
+  etaSeconds: number | null;
   startedAt: ISODate | null;
   finishedAt: ISODate | null;
 }

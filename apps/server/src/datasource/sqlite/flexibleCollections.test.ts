@@ -3,7 +3,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { EventBus } from '../../core/events.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
-import { SqliteDataSource } from './SqliteDataSource.ts';
+import { SqliteDataSource } from '../../../test/helpers/client.ts';
 import { AUTO_COLLAPSE_MIN, type ListImagesQuery } from '@emaki/shared';
 
 let ds: SqliteDataSource, dir: string;
@@ -359,9 +359,13 @@ it('移出过页的文件夹书，同目录再进新页后重启：启动时的�
     db.collections.refreshAll();
     await db.updateCollection((await db.listCollections({}))[0]!.id, { removeImageIds: ['5'] });
     add(21, 30);
+    // 新页是扫描进来的（直接写库模拟），扫描延后的全量重算还没做进程就退出了：pending_work 里留着标记（P4a 起启动时据此补做，
+    // 版本没变、也没有标记时启动不再无条件全量重算）
+    db.ctx.db.prepare("INSERT INTO pending_work (kind, requested_at) VALUES ('collections', '2026-01-02')").run();
     await db.close();
     db = await SqliteDataSource.open(new EventBus(), data, { autoJobs: false, importDict: false });
     expect((await db.listCollections({}))[0]!.pageCount).toBe(29);
+    expect(db.ctx.db.prepare("SELECT COUNT(*) FROM pending_work WHERE kind = 'collections'").pluck().get()).toBe(0);
   } finally {
     await db.close();
     await rm(home, { recursive: true, force: true, maxRetries: 3 });

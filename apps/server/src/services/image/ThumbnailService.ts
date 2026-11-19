@@ -1,6 +1,9 @@
 /**
  * 缩略图服务：HTTP 按需生成（高优先级）+ 后台任务补齐（低优先级）。
- * 缓存按 sha256 存：<dataDir>/thumbs/v1/ab/<sha256>_<w>.webp，完全重复的图共用一份。
+ * 缓存按 sha256 存：<dataDir>/thumbs/v1/ab/<sha256>_<w>.webp，完全重复的图共用一份；文件内容换了 sha 就变了，自然是新的缩略图，
+ * 旧 sha 的缓存没人引用后由缓存回收删掉（domain/analysis/cacheGc.ts）。
+ * 这里只生成文件；算出来的主色、dHash、生成时间、解码错误、帧数、相机都交给分析模块写（domain/analysis/analyze.ts，P4a），
+ * 相机让类型变了时由分析模块声明 image.kindChanged，帧数让是否动图变了时声明 image.animatedChanged（D5：帧数不影响类型）。
  */
 import type { ImageFormat, ThumbWidth } from '@emaki/shared';
 import { existsSync } from 'node:fs';
@@ -11,12 +14,15 @@ import type { JobContext } from '../../core/jobs.ts';
 import type { Db } from '../../db/connection.ts';
 import { writeFileAtomic } from '../fs/atomicWrite.ts';
 import { toAbs } from '../fs/paths.ts';
-import { backfillClassification } from '../classify/backfill.ts';
+import { analyze, markNonJpegCameras, recordCameras, recordDecodeError, recordFrames, recordPixels } from '../../domain/analysis/analyze.ts';
+import { collectingTx } from '../../domain/tx.ts';
+import type { Change } from '../../propagation/changes.ts';
 import { computeDHash } from './dhash.ts';
 import { readCameraFromExif, readJpegExifHead } from './exif.ts';
 import { computeDominantColor, fitBox, openSharp, processPixels, thumbPath, WEBP } from './pixels.ts';
 import { sharp } from './sharpConfig.ts';
 import { probeImage } from './probe.ts';
+import { FILE_LIVE, ROOT_ACTIVE } from '../../readmodel/terms.ts';
 
 export interface ThumbRow {
   id: number;
@@ -31,10 +37,11 @@ export interface ThumbRow {
 const MAX_BUFFERED = 256 * 1024 * 1024;
 const BATCH = 200;
 
-const PENDING_WHERE = `(i.thumb_at IS NULL OR (i.frame_count IS NULL AND i.format IN ('webp','png','avif','gif','html'))) AND i.decode_error IS NULL AND i.missing = 0 AND i.trashed_at IS NULL`;
+const PENDING_WHERE = `(i.thumb_at IS NULL OR (i.frame_count IS NULL AND i.format IN ('webp','png','avif','gif','html')))
+  AND i.decode_error IS NULL AND ${FILE_LIVE('i')}`;
 /** 还没读过 EXIF 相机的 JPEG（T27）：非 JPEG 直接写 ''，不读文件 */
-const CAMERA_WHERE = `i.format = 'jpeg' AND i.camera IS NULL AND i.missing = 0 AND i.trashed_at IS NULL`;
-const ROOT_JOIN = `JOIN library_roots r ON r.id = i.root_id AND r.enabled = 1 AND r.removed_at IS NULL`;
+const CAMERA_WHERE = `i.format = 'jpeg' AND i.camera IS NULL AND ${FILE_LIVE('i')}`;
+const ROOT_JOIN = `JOIN library_roots r ON r.id = i.root_id AND ${ROOT_ACTIVE('r')}`;
 
 export class ThumbnailService {
   /** sharp 跑在 libuv 线程池，和 fs 读写共用；并发保持在 2~4，别让 HTTP 读原图排队 */
@@ -46,12 +53,21 @@ export class ThumbnailService {
       db: Db;
       thumbsRoot: string;
       now?: () => number;
-      /** EXIF 回填每写完一批调用（发 library-changed，RV-T-9） */
-      onCamerasUpdated?: () => void;
-      /** 读原图前先等它准备好（演示库的图在后台画，没画到的先画这一张） */
-      waitForFile?: (absPath: string) => Promise<void>;
+      /**
+       * 变更传播（P2）：帧数、相机让类型或是否动图变了时声明 image.kindChanged / image.animatedChanged（合集、Pixiv 资格、查重由反应处理，附录 #3、#17），
+       * 缓存和 changed 事件由变更传播按 job:thumbnail 弱刷新、节流推送（RV-T-9）。不给时（单元测试）只开事务
+       */
+      changes?: { apply<T>(fn: (emit: (c: Change) => void) => T): T };
     },
   ) {}
+
+  private apply<T>(fn: (emit: (c: Change) => void) => T): T {
+    return this.d.changes ? this.d.changes.apply(fn) : this.d.db.transaction(() => fn(() => {}))();
+  }
+
+  private nowIso(): string {
+    return new Date(this.d.now?.() ?? Date.now()).toISOString();
+  }
 
   /** 按需生成：HTTP 用 priority 10，后台任务用 0。返回缓存文件路径；原图解不了时返回 null */
   ensure(row: ThumbRow, width: ThumbWidth, priority = 10): Promise<string | null> {
@@ -88,7 +104,6 @@ export class ThumbnailService {
     }
 
     const abs = toAbs(row.root_path, row.rel_path);
-    await this.d.waitForFile?.(abs);
     let input: Buffer | string;
     try {
       const st = await stat(abs);
@@ -108,16 +123,12 @@ export class ThumbnailService {
         await writeFileAtomic(file, await openSharp(input, row.format).resize(fitBox(960)).webp({ ...WEBP, quality: 82 }).toBuffer());
       } else {
         const px = await processPixels(input, row.format, row.sha256, this.d.thumbsRoot);
-        // 多行可能共享同一 sha（完全重复）：按 sha 更新
-        this.d.db
-          .prepare('UPDATE images SET dominant_color=@c, dhash=@h, thumb_at=@now, decode_error=NULL WHERE sha256=@sha')
-          .run({ c: px.dominantColor, h: px.dhash, now: new Date(this.d.now?.() ?? Date.now()).toISOString(), sha: row.sha256 });
+        // 多行可能共享同一 sha（完全重复）：分析模块按 sha 写
+        recordPixels(this.d.db, row.sha256, { dominantColor: px.dominantColor, dhash: px.dhash, at: this.nowIso() });
       }
       return file;
     } catch (err) {
-      this.d.db
-        .prepare('UPDATE images SET decode_error=@err WHERE sha256=@sha')
-        .run({ err: `解码失败：${(err as Error).message}`, sha: row.sha256 });
+      recordDecodeError(this.d.db, row.sha256, `解码失败：${(err as Error).message}`);
       return null;
     }
   }
@@ -133,17 +144,14 @@ export class ThumbnailService {
     if (row.frame_count == null && ['webp','png','avif','gif','html'].includes(row.format)) {
       try { await this.frameMetadata(row,toAbs(row.root_path,row.rel_path)); }
       catch (error) {
-        this.d.db.prepare('UPDATE images SET decode_error=? WHERE sha256=?')
-          .run(`读取动画帧信息失败：${(error as Error).message}`,row.sha256);
+        recordDecodeError(this.d.db, row.sha256, `读取动画帧信息失败：${(error as Error).message}`);
         return null;
       }
     }
     // 只有 480 没有 240（写完 480 进程就被打断）：generate(480) 会直接返回，得先从 480 缩出 240
     if (!existsSync(f240)) await this.generate(row, 240);
     const [c, h] = await Promise.all([computeDominantColor(await readFile(f240)), computeDHash(await readFile(f480))]);
-    this.d.db
-      .prepare('UPDATE images SET dominant_color=@c, dhash=@h, thumb_at=@now, decode_error=NULL WHERE sha256=@sha')
-      .run({ c, h, now: new Date(this.d.now?.() ?? Date.now()).toISOString(), sha: row.sha256 });
+    recordPixels(this.d.db, row.sha256, { dominantColor: c, dhash: h, at: this.nowIso() });
     return f480;
   }
 
@@ -151,11 +159,14 @@ export class ThumbnailService {
     const known = this.d.db.prepare('SELECT frame_count FROM images WHERE id=?').pluck().get(row.id);
     if (known != null) return;
     const probe = await probeImage(input);
-    this.d.db.prepare('UPDATE images SET frame_count=? WHERE sha256=?').run(probe.pages,row.sha256);
-    if ((probe.pages > 1 && probe.format !== 'gif') || probe.format === 'html') {
-      const ids = this.d.db.prepare('SELECT id FROM images WHERE sha256=?').pluck().all(row.sha256) as number[];
-      backfillClassification(this.d.db,{ids});
-    }
+    // 看图时（HTTP 生成缩略图）也会走到这里：分析模块写帧数、按帧数判是否动图（D5；帧数不影响类型，类型和判定依据不动），
+    // 是否动图真的变了才声明变化，免得每张新图都让前端整页重新拉取
+    const ids = this.d.db.prepare('SELECT id FROM images WHERE sha256=?').pluck().all(row.sha256) as number[];
+    const tx = collectingTx(this.d.db);
+    this.d.db.transaction(() => {
+      recordFrames(tx, ids.map((id) => ({ id, frames: probe.pages })));
+    })();
+    if (tx.changes.length) this.apply((emit) => tx.changes.forEach(emit));
   }
 
   /** 还没做过像素处理的图数量（Pipeline 用来决定要不要排缩略图任务） */
@@ -173,10 +184,9 @@ export class ThumbnailService {
    */
   private async backfillCameras(ctx: JobContext): Promise<number> {
     const db = this.d.db;
-    db.prepare("UPDATE images SET camera = '' WHERE camera IS NULL AND format <> 'jpeg'").run();
+    markNonJpegCameras(db);
     const batchStmt = db.prepare(`SELECT i.id, i.rel_path, r.path AS root_path FROM images i ${ROOT_JOIN}
       WHERE ${CAMERA_WHERE} AND i.id > @last ORDER BY i.id LIMIT ${BATCH}`);
-    const upd = db.prepare('UPDATE images SET camera = ? WHERE id = ?');
     let last = 0;
     let found = 0;
     for (;;) {
@@ -195,13 +205,13 @@ export class ThumbnailService {
         cams.push([r.id, cam]);
       }
       const hits = cams.filter(([, c]) => c).map(([id]) => id);
-      db.transaction(() => {
-        for (const [id, cam] of cams) upd.run(cam, id);
-        if (hits.length) backfillClassification(db, { ids: hits });
-      })();
+      // 分析模块写相机；读到相机的当场重判类型（类型变了由它声明 image.kindChanged）
+      this.apply((emit) => {
+        recordCameras(db, cams.map(([id, camera]) => ({ id, camera })));
+        analyze({ db, changed: emit }, hits);
+      });
       found += hits.length;
       ctx.advance(rows.length);
-      this.d.onCamerasUpdated?.();
       await new Promise((r) => setImmediate(r));
     }
     return found;
@@ -251,7 +261,8 @@ export class ThumbnailService {
       }
     }
     await this.queue.onIdle();
-    this.d.onCamerasUpdated?.();
+    // 缩略图、主色写完了：让列表和统计刷新（弱刷新）
+    this.apply(() => {});
     const cams = await this.backfillCameras(ctx);
     return `生成缩略图：完成 ${ok} 张，失败 ${failed} 张${cams ? `；认出 ${cams} 张相机照片` : ''}`;
   }

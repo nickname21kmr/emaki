@@ -1,4 +1,11 @@
-import { AUTO_COLLAPSE_MIN, type CollectionSummary, type ID, type ImageItem } from '@emaki/shared';
+import {
+  AUTO_COLLAPSE_MIN,
+  collectionTitle,
+  type CollectionMembership,
+  type CollectionSummary,
+  type ID,
+  type ImageItem,
+} from '@emaki/shared';
 import { Command } from 'cmdk';
 import { CornerDownLeft, Layers, Plus, Search } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -6,13 +13,14 @@ import { Link } from 'react-router';
 import { Dialog, IconButton, Kbd, Menu, MenuLabel, MenuRadioGroup, MenuRadioItem, Skeleton } from '@/components/ui';
 import { useDebounced } from '@/features/gallery/useDebounced';
 import { api } from '@/lib/api';
-import { shouldBlur } from '@/lib/blur';
+import { shouldBlur, type BlurContext } from '@/lib/blur';
 import { cn } from '@/lib/cn';
-import { displayTitle, groupOrigin } from '@/lib/collections';
+import { displayTitle, groupOrigin, PICKER_LIMIT, pickerGroups } from '@/lib/collections';
 import { formatCount } from '@/lib/format';
 import { useCollections, useMutate } from '@/lib/queries';
 import { useBlurPrefs, usePrefs, useSelection, type CollapseMode } from '@/lib/stores';
 import { Thumb } from './Thumb';
+import { useCollapseMode, useMirrorCollapseMode, useSetCollapseMode } from '@/lib/urlPrefs';
 
 /**
  * 组图的共用件：网格里的收拢角标、收拢开关、「收进组图」弹窗。
@@ -39,8 +47,10 @@ export const toggleImageSelection = (image: ImageItem) => {
  * 自动 = 当前筛选超过 AUTO_COLLAPSE_MIN 张才收拢，结果少时逐张展开。按钮着色表示当前列表正收拢着（collapsed 来自接口）。
  */
 export function CollapseGroupsMenu({ collapsed, className }: { collapsed?: boolean; className?: string }) {
-  const mode = usePrefs((s) => s.collapseMode);
-  const set = usePrefs((s) => s.setCollapseMode);
+  // 收拢会改变列表里有哪些格：模式写进 URL（?collapse=），助手看到的地址和用户看到的一致（附录 #32）
+  useMirrorCollapseMode();
+  const mode = useCollapseMode();
+  const set = useSetCollapseMode();
   const on = mode === 'on' || (mode === 'auto' && !!collapsed);
   return (
     <Menu
@@ -69,13 +79,13 @@ export function CollapseGroupsMenu({ collapsed, className }: { collapsed?: boole
  * 收拢格右上角的张数：和模糊角标同一种小圆角（网格里不用 backdrop-filter，原则 6）。
  * 图被模糊时让到模糊角标左边。点它去组图页；点格子本身照常打开看图器。
  */
-export function GroupBadge({ image, forceBlur }: { image: ImageItem; forceBlur?: boolean }) {
+export function GroupBadge({ image, rated, blurContext }: { image: ImageItem; rated?: boolean; blurContext?: BlurContext }) {
   const prefs = useBlurPrefs();
   const g = image.collectionGroup;
   if (!g) return null;
-  const blurred = shouldBlur(image, prefs) || (!!forceBlur && prefs.blurSensitive);
+  const blurred = shouldBlur({ rating: image.rating, kind: image.kind, rated }, prefs, blurContext);
   const partial = g.count < g.total;
-  const title = g.title ?? '无题';
+  const title = collectionTitle(g);
   return (
     <Link
       to={`/collections/${g.id}`}
@@ -136,23 +146,24 @@ export function AddToGroupDialog({
   );
 }
 
+/** 手动收集的组图（同一投稿以外的） */
+const MANUAL: CollectionMembership[] = ['folder', 'selection'];
+
 function GroupPickerPanel({ ids, excludeId, onDone }: { ids: ID[]; excludeId?: ID; onDone: () => void }) {
   const [text, setText] = useState('');
   const q = useDebounced(text.trim(), 120);
-  const list = useCollections({});
+  // 只拉组图、搜索交给服务端（q 用共用的 searchKey，附录 #38）：手动收集的、同一投稿的各要最近加图的几组，
+  // 不再为了 50 行把几千组同投稿都拉回来。多要一组给 excludeId
+  const recent = { kind: 'group', q: q || undefined, sort: 'recent', limit: PICKER_LIMIT + 1 } as const;
+  const manual = useCollections({ ...recent, membership: MANUAL });
+  const posts = useCollections({ ...recent, membership: 'post' });
   const add = useMutate((target: ID) => api.updateCollection(target, { addImageIds: ids }), { onSuccess: onDone });
   const create = useMutate((title: string) => api.createCollection({ imageIds: ids, kind: 'group', title }), { onSuccess: onDone });
   const busy = add.isPending || create.isPending;
+  const pending = manual.isPending || posts.isPending;
 
-  const groups = useMemo(() => {
-    const all = (list.data ?? []).filter((c) => c.kind === 'group' && c.id !== excludeId);
-    const key = q.toLowerCase();
-    const hit = key ? all.filter((c) => displayTitle(c).toLowerCase().includes(key)) : all;
-    // 手动收集的在前，再按最近加图排
-    return hit
-      .sort((a, b) => Number(b.membership !== 'post') - Number(a.membership !== 'post') || (b.lastAddedAt ?? '').localeCompare(a.lastAddedAt ?? ''))
-      .slice(0, 50);
-  }, [list.data, q, excludeId]);
+  // 手动收集的在前，再按最近加图排
+  const groups = useMemo(() => pickerGroups(manual.data ?? [], posts.data ?? [], excludeId), [manual.data, posts.data, excludeId]);
   const canCreate = !!q && !groups.some((c) => displayTitle(c) === q);
 
   const [active, setActive] = useState('');
@@ -174,7 +185,7 @@ function GroupPickerPanel({ ids, excludeId, onDone }: { ids: ID[]; excludeId?: I
       </div>
 
       <Command.List className="max-h-[min(320px,46vh)] overflow-y-auto overscroll-contain border-t border-line px-4 py-1.5 scrollbar-thin">
-        {list.isPending && (
+        {pending && (
           <div className="space-y-1 p-2">
             {[0, 1, 2].map((i) => (
               <Skeleton key={i} className="h-11 rounded-lg" />
@@ -200,7 +211,7 @@ function GroupPickerPanel({ ids, excludeId, onDone }: { ids: ID[]; excludeId?: I
         {groups.map((c) => (
           <GroupRow key={c.id} c={c} disabled={busy} onSelect={() => add.mutate(c.id)} />
         ))}
-        {!list.isPending && !groups.length && !canCreate && (
+        {!pending && !groups.length && !canCreate && (
           <div className="px-4 py-8 text-center text-[13px] text-fg-muted">
             {q ? `没有叫「${q}」的组图` : '还没有组图'}
             <div className="mt-1 text-xs text-fg-subtle">输入名字，回车新建一个</div>

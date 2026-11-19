@@ -3,7 +3,7 @@
  *   scan → thumbnail → tag（模型就绪时）→ dedupe；tag 之后按需 danbooru-sync，设置里打开了再补 pixiv-tags。
  * 各阶段由对应任务注入（register）；没有注入的阶段 runner 抛 NotImplementedError，任务显示 failed 并提示缺哪一项。
  */
-import type { JobKind } from '@emaki/shared';
+import { JOB_KINDS, type JobKind, type PausableJobKind } from '@emaki/shared';
 import type { JobContext, JobQueue, JobRunner } from '../core/jobs.ts';
 import { NotImplementedError } from '../http/errors.ts';
 import type { ThumbnailService } from './image/ThumbnailService.ts';
@@ -53,35 +53,105 @@ export interface PipelineDeps {
   dedupe?: DedupeStage;
   artists?: ArtistStage;
   pixiv?: PixivStage;
+  /**
+   * 「要查重」的标记（P2：持久化在 pending_work 里，可见性和文件内容变化的反应会标记，重启不丢）。
+   * 不给时只在内存里（单元测试）。查重开始时 peek() 记下标记，跑完 done(那个值) 只清掉那之前的标记
+   */
+  dedupeWork?: { pending(): boolean; mark(): void; peek(): string | null; done(seen: string | null): void };
+  /**
+   * 用户的暂停（取消了识别、画师补跑、Pixiv 补充之后不再自动续跑，直到手动开始）。P4a 起持久化在 pending_work 里，重启不丢；
+   * 不给时只在内存里（单元测试）
+   */
+  pauses?: { get(kind: PausableKind): boolean; set(kind: PausableKind, paused: boolean): void };
   /** T20：refreshTagCounts */
   afterTag?: () => void;
   /** 扫描完成（没被取消）后的钩子，例如 T08 重新同步监听 */
   afterScan?: (s: ScanSummary) => void;
 }
 
+/** 取消后记成用户暂停的任务（任务种类注册表里 pausable 的那几种，packages/shared/src/jobs.ts） */
+export type PausableKind = PausableJobKind;
+
 /** 延后的文件（2 秒内刚写入）过多久再扫 */
 const DEFERRED_RETRY_MS = 3000;
 
 export type PipelineStages = Partial<Pick<PipelineDeps, 'tag' | 'danbooru' | 'dedupe' | 'artists' | 'pixiv' | 'afterTag' | 'afterScan'>>;
 
+/** 每种任务的执行体（阶段）：一个阶段只能有一个注册者 */
+const STAGES = ['tag', 'danbooru', 'dedupe', 'artists', 'pixiv'] as const;
+
 export class Pipeline {
-  private dedupeDirty = false;
-  /** 用户取消了识别：之后不再自动续跑，直到用户手动开始（进程内状态，重启后恢复自动） */
-  private tagPaused = false;
+  private memoryDedupe = false;
+  private get dedupeDirty(): boolean {
+    return this.d.dedupeWork ? this.d.dedupeWork.pending() : this.memoryDedupe;
+  }
+  private set dedupeDirty(v: boolean) {
+    if (!v) throw new Error('清掉查重标记用 dedupeDone');
+    if (this.d.dedupeWork) this.d.dedupeWork.mark();
+    else this.memoryDedupe = true;
+  }
+  private dedupeDone(seen: string | null): void {
+    if (this.d.dedupeWork) this.d.dedupeWork.done(seen);
+    else this.memoryDedupe = false;
+  }
+  private readonly memoryPauses = new Set<PausableKind>();
+  private paused(kind: PausableKind): boolean {
+    return this.d.pauses ? this.d.pauses.get(kind) : this.memoryPauses.has(kind);
+  }
+  private setPaused(kind: PausableKind, v: boolean): void {
+    if (this.d.pauses) this.d.pauses.set(kind, v);
+    else if (v) this.memoryPauses.add(kind);
+    else this.memoryPauses.delete(kind);
+  }
+  /** 用户取消了识别：之后不再自动续跑，直到用户手动开始（持久化，重启不丢） */
+  private get tagPaused(): boolean {
+    return this.paused('tag');
+  }
+  private set tagPaused(v: boolean) {
+    this.setPaused('tag', v);
+  }
   /** 用户取消了画师补跑：之后不自动续跑，直到手动点「补跑」或重新打开开关 */
-  private artistsPaused = false;
+  private get artistsPaused(): boolean {
+    return this.paused('artists');
+  }
+  private set artistsPaused(v: boolean) {
+    this.setPaused('artists', v);
+  }
   /** 用户点了「运行识别」：下一次识别可以下载旧图模型（自动排上的不下） */
   private tagManual = false;
-  private pixivPaused = false;
+  private get pixivPaused(): boolean {
+    return this.paused('pixiv-tags');
+  }
+  private set pixivPaused(v: boolean) {
+    this.setPaused('pixiv-tags', v);
+  }
   private pixivFailed = false;
   /** 这一轮 Pixiv 补充是用户点按钮开始的（让出后续跑的也算）：关掉设置时不取消它 */
   private pixivManual = false;
 
-  constructor(private d: PipelineDeps) {}
+  /** 识别、扫描结束后的钩子：可以有多个注册者，按注册顺序都调用 */
+  private readonly afterTagHooks: (() => void)[] = [];
+  private readonly afterScanHooks: ((s: ScanSummary) => void)[] = [];
 
-  /** 让后续任务在 open() 之后注册自己的阶段 */
+  constructor(private d: PipelineDeps) {
+    if (d.afterTag) this.afterTagHooks.push(d.afterTag);
+    if (d.afterScan) this.afterScanHooks.push(d.afterScan);
+  }
+
+  /**
+   * 让后续任务在 open() 之后注册自己的阶段和钩子（附录 #34）。支持多个注册者：
+   * 钩子（afterTag、afterScan）累加、按注册顺序都调用；一个阶段只能有一个执行体，同一阶段注册两次直接报错，
+   * 不再是后注册的悄悄盖掉前面的
+   */
   register(stages: PipelineStages): void {
-    this.d = { ...this.d, ...stages };
+    for (const key of STAGES) {
+      const stage = stages[key];
+      if (!stage) continue;
+      if (this.d[key]) throw new Error(`后台任务阶段 ${key} 已经注册过了`);
+      this.d = { ...this.d, [key]: stage };
+    }
+    if (stages.afterTag) this.afterTagHooks.push(stages.afterTag);
+    if (stages.afterScan) this.afterScanHooks.push(stages.afterScan);
   }
 
   runner =
@@ -93,7 +163,7 @@ export class Pipeline {
           // 取消的扫描不触发后续任务（这时也没做丢失判定）
           if (!ctx.signal.aborted) {
             this.afterScan(s);
-            this.d.afterScan?.(s);
+            for (const hook of this.afterScanHooks) hook(s);
           }
           return formatScanSummary(s);
         }
@@ -109,7 +179,7 @@ export class Pipeline {
           const msg = await this.d.tag.run(ctx, { manual });
           if (ctx.signal.aborted) this.tagPaused = true;
           if (!ctx.signal.aborted && !ctx.yielded) {
-            this.d.afterTag?.();
+            for (const hook of this.afterTagHooks) hook();
             if (this.d.danbooru?.shouldRunAfterTag()) this.d.jobs().enqueue('danbooru-sync');
             if (this.dedupeDirty) this.d.jobs().enqueue('dedupe');
             // 开着画师的：接着补（新图、WD 识别的旧图、重启前没补完的）；用户取消过就等他手动再点
@@ -149,8 +219,9 @@ export class Pipeline {
         }
         case 'dedupe': {
           if (!this.d.dedupe) throw new NotImplementedError('T16', '查重');
+          const seen = this.d.dedupeWork?.peek() ?? null;
           const msg = await this.d.dedupe.run(ctx);
-          if (!ctx.signal.aborted) this.dedupeDirty = false;
+          if (!ctx.signal.aborted) this.dedupeDone(seen);
           return msg;
         }
         case 'danbooru-sync': {
@@ -196,13 +267,16 @@ export class Pipeline {
 
   /** 用户手动开始某个任务（取消识别后再点「运行识别」→ 恢复自动续跑） */
   noteManualStart(kind: JobKind): void {
+    // 暂停按任务种类的注册表（pausable）清掉；下面是各任务自己的「手动开始」标记
+    if (JOB_KINDS[kind].pausable) this.setPaused(kind as PausableKind, false);
     if (kind === 'tag') {
-      this.tagPaused = false;
       this.tagManual = true;
       this.pixivFailed = false;
     }
-    if (kind === 'artists') this.artistsPaused = false;
-    if (kind === 'pixiv-tags') { this.pixivPaused = false; this.pixivFailed = false; this.pixivManual = true; }
+    if (kind === 'pixiv-tags') {
+      this.pixivFailed = false;
+      this.pixivManual = true;
+    }
   }
 
   private afterThumbnail() {
@@ -238,6 +312,14 @@ export class Pipeline {
     this.maybePixiv(false);
   }
 
+  /**
+   * 用户或助手的操作让一些图重新登记了 Pixiv 补充（资格变了）：设置里打开了自动补充、用户没暂停、没失败时排一轮。
+   * 和 requestPixiv 不同，不清用户的暂停
+   */
+  requestPixivAuto(): void {
+    this.maybePixiv(false);
+  }
+
   /** 正在跑或排着的 Pixiv 补充是用户点按钮开始的：关掉设置时只取消自动排上的 */
   isPixivManual(): boolean {
     return this.pixivManual;
@@ -267,11 +349,7 @@ export class Pipeline {
 
   /** 用户取消了排队中的任务（runner 不会执行，收不到 aborted）：同样记暂停 */
   notePaused(kind: JobKind): void {
-    if (kind === 'tag') this.tagPaused = true;
-    if (kind === 'artists') this.artistsPaused = true;
-    if (kind === 'pixiv-tags') {
-      this.pixivPaused = true;
-      this.pixivManual = false;
-    }
+    if (JOB_KINDS[kind].pausable) this.setPaused(kind as PausableKind, true);
+    if (kind === 'pixiv-tags') this.pixivManual = false;
   }
 }

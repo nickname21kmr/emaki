@@ -14,13 +14,13 @@ import { ScrollContainerContext } from '@/components/layout/ScrollContainer';
 import { ImageGrid, ImageGridSkeleton } from '@/components/media/ImageGrid';
 import { Button, EmptyState, ErrorState, Kbd, SectionTitle, Skeleton } from '@/components/ui';
 import { formatCount } from '@/lib/format';
-import { KIND_LABEL } from '@/lib/kinds';
+import { KIND_HINT, KIND_LABEL } from '@/lib/kinds';
 import { useHotkey } from '@/lib/hotkeys';
 import { type UnrecognizedParams } from '@/lib/queries';
 import { NewCharacterDialog } from '@/features/characters/overview/NewCharacterDialog';
 import { usePriorityKeys, useTriageKeysEnabled } from '../hooks';
 import { useSheet } from '../useSheet';
-import { ANNEX_HINT, CJK_NO, ORDER_NOTE, PRECEDENCE_NOTE, THEME_META } from '../themes';
+import { CJK_NO, ORDER_NOTE, PRECEDENCE_NOTE, THEME_META } from '../themes';
 import type { UnrecognizedParamsApi } from '../useUnrecognizedParams';
 import { PanelShell, SessionNote } from './DecisionPanel';
 import { FreshButton } from './FreshButton';
@@ -42,7 +42,7 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
     if (mode === 'unsure')
       return UNRECOGNIZED_THEMES.map((t) => ({ key: t, label: THEME_META[t].label, hint: THEME_META[t].hint, count: summary.art.themes[t] }));
     if (mode === 'annex')
-      return UNRECOGNIZED_ANNEX_KINDS.map((k) => ({ key: k, label: KIND_LABEL[k], hint: ANNEX_HINT[k], count: summary.annex.kinds[k] }));
+      return UNRECOGNIZED_ANNEX_KINDS.map((k) => ({ key: k, label: KIND_LABEL[k], hint: KIND_HINT[k], count: summary.annex.kinds[k] }));
     return null;
   }, [mode, summary]);
   const active = mode === 'unsure' ? p.theme : mode === 'annex' ? p.kind : undefined;

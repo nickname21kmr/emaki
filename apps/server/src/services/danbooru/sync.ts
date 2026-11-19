@@ -10,9 +10,11 @@ import { searchKey } from '@emaki/shared';
 import type { JobRunner } from '../../core/jobs.ts';
 import type { Db } from '../../db/connection.ts';
 import type { FetchLike } from '../../net/http.ts';
-import type { CharacterCatalog } from '../catalog/characterCatalog.ts';
+import type { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
+import { applyToLibrary, type ApplyDeps } from '../../domain/catalog/danbooruApply.ts';
+import { addDanbooruOtherName } from '../../domain/catalog/nameIndex.ts';
+import { putDanbooruArtist } from '../../domain/evidence/danbooru.ts';
 import type { Localizer } from '../i18n/localizer.ts';
-import { applyToLibrary, type ApplyDeps } from './apply.ts';
 import type { DanbooruCatalog } from './catalog.ts';
 import type { DbArtist } from './types.ts';
 import { normName, pickDisplayName, twitterOf } from './artistNames.ts';
@@ -29,6 +31,9 @@ export interface DanbooruSyncDeps {
   setLastSyncAt(iso: string): void;
   associateCustomCharacters?: () => void;
   relocalizeAll?: ApplyDeps['relocalizeAll'];
+  /** 落库收拢时撞上已有角色就合并（用户手动合并同一个函数）；不给就记日志跳过 */
+  mergeCharacters?: ApplyDeps['merge'];
+  log?: (msg: string) => void;
   now?: () => number;
   // 测试注入
   fetchImpl?: FetchLike;
@@ -51,7 +56,15 @@ export function createDanbooruSyncRunner(deps: DanbooruSyncDeps): JobRunner {
   return async (ctx) => {
     const settings = deps.getDanbooru();
     const apply = () => {
-      const r = applyToLibrary({ db, danbooru, getCatalog: deps.getCatalog, localizer: deps.localizer, relocalizeAll: deps.relocalizeAll });
+      const r = applyToLibrary({
+        db,
+        danbooru,
+        getCatalog: deps.getCatalog,
+        localizer: deps.localizer,
+        relocalizeAll: deps.relocalizeAll,
+        merge: deps.mergeCharacters,
+        log: deps.log,
+      });
       deps.associateCustomCharacters?.();
       deps.localizer.invalidate();
       return r;
@@ -124,7 +137,7 @@ export function createDanbooruSyncRunner(deps: DanbooruSyncDeps): JobRunner {
              SELECT danbooru_tag FROM characters WHERE danbooru_tag IS NOT NULL
              UNION SELECT danbooru_tag FROM works WHERE danbooru_tag IS NOT NULL
              -- 自建角色的建议（character_id / emaki: 占位标签）不是 Danbooru 标签，不能发出去
-             UNION SELECT danbooru_tag FROM character_suggestions WHERE character_id IS NULL AND danbooru_tag NOT LIKE 'emaki:%'
+             UNION SELECT tag FROM character_evidence WHERE character_id IS NULL AND tag NOT LIKE 'emaki:%'
              UNION SELECT name FROM tags WHERE category IN ('character', 'copyright')
            )
            SELECT w.name FROM wanted w LEFT JOIN danbooru_tags d ON d.name = w.name
@@ -223,7 +236,6 @@ export function createDanbooruSyncRunner(deps: DanbooruSyncDeps): JobRunner {
         }
 
         // ---- D：自建角色在线匹配
-        const insKey = db.prepare("INSERT OR IGNORE INTO tag_name_keys (search_key, tag, kind, source) VALUES (?, ?, 'other_name', 'danbooru')");
         const aliasOf = db.prepare("SELECT alias FROM aliases WHERE owner_type = 'character' AND owner_id = ? ORDER BY position LIMIT 2").pluck();
         for (const c of customs) {
           if (signal.aborted) break;
@@ -240,7 +252,7 @@ export function createDanbooruSyncRunner(deps: DanbooruSyncDeps): JobRunner {
           const needWiki = tags.filter((t) => !danbooru.get(t)?.wikiFetchedAt);
           if (needWiki.length) await fetchWiki(needWiki);
           db.transaction(() => {
-            for (const [k, t] of found) insKey.run(k, t);
+            for (const [k, t] of found) addDanbooruOtherName(db, k, t);
           })();
           done++;
           ctx.advance(1, `匹配自建角色 ${c.name}`);
@@ -255,12 +267,6 @@ export function createDanbooruSyncRunner(deps: DanbooruSyncDeps): JobRunner {
           .pluck()
           .all(stale) as string[];
         ctx.setTotal(done + Math.ceil(artistNames.length / 100));
-        const putArtist = db.prepare(
-          `INSERT INTO danbooru_artists (name, display, names, twitter, alias_of, not_found, fetched_at)
-           VALUES (@name, @display, @names, @twitter, @alias, @nf, @now)
-           ON CONFLICT(name) DO UPDATE SET display = excluded.display, names = excluded.names, twitter = excluded.twitter,
-             alias_of = excluded.alias_of, not_found = excluded.not_found, fetched_at = excluded.fetched_at`,
-        );
         for (let i = 0; i < artistNames.length && !signal.aborted; i += 100) {
           const batch = artistNames.slice(i, i + 100);
           const got = new Map((await client.artistsByNames(batch, signal)).filter((a) => !a.is_deleted).map((a) => [a.name, a]));
@@ -271,7 +277,7 @@ export function createDanbooruSyncRunner(deps: DanbooruSyncDeps): JobRunner {
           if (targets.length) for (const a of await client.artistsByNames(targets, signal)) if (!a.is_deleted) got.set(a.name, a);
           const now = iso(nowMs());
           const put = (name: string, a: DbArtist | undefined, alias: string | undefined) =>
-            putArtist.run({
+            putDanbooruArtist(db, {
               name,
               display: a ? pickDisplayName(name, a.other_names, a.group_name) : null,
               names: JSON.stringify(a ? [...a.other_names, ...(a.group_name ? [a.group_name] : [])].map(normName) : []),

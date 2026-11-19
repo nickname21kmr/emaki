@@ -1,4 +1,4 @@
-import type { CollectionKind, ImageDetail } from '@emaki/shared';
+import { collectionTitle, type CollectionKind, type ImageDetail } from '@emaki/shared';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { toast } from 'sonner';
@@ -20,7 +20,7 @@ export function PanelCollection({ detail: d, onNavigate }: { detail: ImageDetail
     return (
       <span className="inline-flex flex-wrap items-center gap-1.5">
         <Link to={c.kind === 'group' ? `/collections/${c.id}` : `/collections/${c.id}/read?p=${c.pageNo}`} onClick={onNavigate} className="text-fg transition-colors hover:text-shu">
-          《{c.title ?? '无题'}》第 {c.pageNo} / {c.pageCount} {c.kind === 'group' ? '张' : '页'}
+          《{collectionTitle(c)}》第 {c.pageNo} / {c.pageCount} {c.kind === 'group' ? '张' : '页'}
         </Link>
         <Seal glyph={COLLECTION_META[c.kind].glyph} size={16} />
       </span>

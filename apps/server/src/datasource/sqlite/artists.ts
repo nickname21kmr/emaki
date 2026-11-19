@@ -90,8 +90,7 @@ export function listArtists(db: Db): Artist[] {
   const rows = db
     .prepare(
       `SELECT ia.artist, ia.score, i.id, i.dominant_color, i.rating, i.width, i.height
-       FROM image_artists ia JOIN v_counted_images i ON i.id = ia.image_id
-       WHERE i.content_kind = 'illustration'`,
+       FROM image_artists ia JOIN v_illust_images i ON i.id = ia.image_id`,
     )
     .all() as { artist: string; score: number; id: number; dominant_color: string | null; rating: Rating; width: number; height: number }[];
 

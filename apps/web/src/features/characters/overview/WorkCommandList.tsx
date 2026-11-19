@@ -6,6 +6,7 @@ import { ChipAvatar } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { formatCompact } from '@/lib/format';
 import { workAvatar } from './works';
+import { searchRank } from '@emaki/shared';
 
 /**
  * 可搜索的作品列表（cmdk）。「全部作品」弹出框和新建角色里的作品选择器共用。
@@ -68,14 +69,7 @@ export function WorkCommandList({
   );
 }
 
+/** cmdk 的打分：以查询开头 1、包含 0.5（共用的 searchRank，归一化和服务端同一份） */
 function filterWorks(_value: string, search: string, keywords?: string[]): number {
-  const s = search.trim().toLowerCase();
-  if (!s) return 1;
-  let best = 0;
-  for (const k of keywords ?? []) {
-    const kw = k.toLowerCase();
-    if (kw.startsWith(s)) return 1;
-    if (kw.includes(s)) best = 0.5;
-  }
-  return best;
+  return searchRank(search, keywords ?? []) / 2;
 }

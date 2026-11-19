@@ -1,25 +1,28 @@
 import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import Database from 'better-sqlite3';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createServer } from 'node:http';
 import type { FastifyInstance } from 'fastify';
+import type { CommandDef, QueryDef } from '../commands/registry.ts';
 
-// 业务数据走导入了契约夹具的 SQLite（内存库），SQL 工具读这里自带的 emaki.sqlite
+// 业务数据走真实引擎（演示部件 + 契约夹具，文件数据库），SQL 工具读的就是这个引擎的库文件
 const state = vi.hoisted(() => ({ dir: '' }));
 vi.mock('../config.ts', async importOriginal => {
   const { config } = await importOriginal<typeof import('../config.ts')>();
-  return { config: { ...config, get dataDir() { return state.dir; }, webDist: '/nonexistent' } };
+  return { config: { ...config, get dataDir() { return state.dir; }, get libraryDir() { return path.join(state.dir, 'library'); }, webDist: '/nonexistent' } };
 });
 import { buildApp } from '../app.ts';
-import type { SqliteDataSource } from '../datasource/sqlite/SqliteDataSource.ts';
+import { EventBus } from '../core/events.ts';
+import type { SqliteDataSource } from '../../test/helpers/client.ts';
+import { openDemoEngine } from '../../test/helpers/client.ts';
 import { sharp } from '../services/image/sharpConfig.ts';
-import { sqliteFactory, type ContractEnv } from '../../test/contract/harness.ts';
+import { buildContractDb } from '../../test/fixtures/contract-db.ts';
 
-let app: FastifyInstance, base: string, token: string, imageId: string, ds: SqliteDataSource, env: ContractEnv;
+const NOW = Date.parse('2026-09-27T12:00:00.000Z');
+let app: FastifyInstance, base: string, token: string, imageId: string, ds: SqliteDataSource;
 let piSession: string, holdResponse = false;
 const providerRequests: any[] = [];
 const provider = createServer(async (req, res) => {
@@ -46,19 +49,13 @@ const call = async (method: any, url: string, payload?: unknown) => app.inject({
 const del = (url: string) => app.inject({ method: 'DELETE', url: '/api/assistant' + url, headers: { host: 'localhost' } });
 beforeAll(async () => {
   state.dir = mkdtempSync(path.join(tmpdir(), 'emaki-route-test-'));
-  const db = new Database(path.join(state.dir, 'emaki.sqlite')); db.exec('CREATE TABLE images(id INTEGER PRIMARY KEY); INSERT INTO images VALUES(1),(2);'); db.close();
-  env = await sqliteFactory(); ds = env.ds; imageId = env.id('image', 'i1');
-  // read_media 要读原图：图库文件夹指到临时目录，给这张图放一张真图
-  const pics = path.join(state.dir, 'pics');
-  ds.ctx.db.prepare('UPDATE library_roots SET path = ? WHERE id = ?').run(pics.split(path.sep).join('/'), Number(env.id('root', 'root1')));
-  ds.ctx.invalidate();
-  const file = path.join(pics, ...(await ds.getImage(imageId))!.relPath.split('/'));
-  mkdirSync(path.dirname(file), { recursive: true });
-  await sharp({ create: { width: 40, height: 60, channels: 3, background: '#89a' } }).png().toFile(file);
-  app = await buildApp(ds, env.bus); base = await app.listen({ host: '127.0.0.1', port: 0 });
+  const bus = new EventBus();
+  ({ ds } = await openDemoEngine(bus, { dir: path.join(state.dir, 'library'), data: buildContractDb(NOW), now: NOW, clock: () => NOW }));
+  imageId = (await ds.listImages({ limit: 1 })).items[0]!.id;
+  app = await buildApp(ds, bus); base = await app.listen({ host: '127.0.0.1', port: 0 });
   await new Promise<void>(resolve => provider.listen(0, '127.0.0.1', resolve));
 });
-afterAll(async () => { await app.close(); await env.close(); await new Promise<void>(resolve => provider.close(() => resolve())); rmSync(state.dir, { recursive: true, force: true, maxRetries: 4 }); });
+afterAll(async () => { await app.close(); await ds.close(); await new Promise<void>(resolve => provider.close(() => resolve())); rmSync(state.dir, { recursive: true, force: true, maxRetries: 4 }); });
 describe('assistant HTTP and MCP', () => {
   it('does not expose sessions or tools while disabled', async () => {
     expect((await call('GET', '/settings')).json().enabled).toBe(false);
@@ -83,14 +80,18 @@ describe('assistant HTTP and MCP', () => {
     expect((await client.listTools()).tools.map(t => t.name)).toContain('query_database');
     expect((await client.listTools()).tools.map(t => t.name)).not.toContain('ask_user');
     const result: any = await client.callTool({ name: 'query_database', arguments: { sql: 'SELECT count(*) AS n FROM images' } });
-    expect(JSON.parse(result.content[0].text).rows).toEqual([{ n: 2 }]);
+    // 契约夹具有 41 张图（i1–i41）
+    expect(JSON.parse(result.content[0].text).rows).toEqual([{ n: 41 }]);
     const media: any = await client.callTool({ name: 'read_media', arguments: { imageId } });
     expect(media.content[0].type).toBe('image');
     expect(Buffer.from(media.content[0].data, 'base64').subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));
-    const body = { operationId: 'test-favorite', ids: [imageId], action: { type: 'favorite', value: true } };
-    const changed: any = await client.callTool({ name: 'update_images', arguments: body });
+    // 写工具从命令注册表生成：curation.setFavorite → curation_set_favorite，参数就是命令的 schema 加 operationId
+    const body = { operationId: 'test-favorite', ids: [imageId], value: true };
+    const changed: any = await client.callTool({ name: 'curation_set_favorite', arguments: body });
     expect(changed.isError).not.toBe(true);
-    expect(await client.callTool({ name: 'update_images', arguments: body })).toEqual(changed);
+    expect(await client.callTool({ name: 'curation_set_favorite', arguments: body })).toEqual(changed);
+    // 审计记录里是助手做的
+    expect((await ds.ask<{ items: { command: string; actor: string }[] }>('audit.list', { limit: 1 })).items[0]).toMatchObject({ command: 'curation.setFavorite', actor: 'assistant' });
     const img = (await app.inject({ url: `/api/images/${imageId}`, headers: { host: 'localhost' } })).json(); expect(img.favorite).toBe(true);
     await client.close();
   });
@@ -103,27 +104,28 @@ describe('assistant HTTP and MCP', () => {
     const client = await connect();
     const file=path.join(state.dir,'download.png');
     const result={ok:true as const,message:'已入库 1 张',undoToken:'import-test-undo',items:[{path:file,status:'imported' as const,imageId,absPath:file}]};
-    const spy=vi.spyOn(ds,'importImages').mockResolvedValue(result);
+    // 演示部件拒绝导入：替掉命令的执行函数，只测 MCP → 注册表这一段
+    const spy=vi.spyOn(ds.registry.get('library.import') as CommandDef,'run').mockResolvedValue(result);
     try {
-      expect((await client.listTools()).tools.map(t=>t.name)).toContain('import_images');
+      expect((await client.listTools()).tools.map(t=>t.name)).toContain('library_import');
       const roots:any=await client.callTool({name:'read_library',arguments:{path:'/api/library-roots'}});
       const targets=JSON.parse(roots.content[0].text);
       expect(targets).toEqual((await ds.getSettings()).libraryRoots);
       const args={operationId:'import-files-contract',rootId:targets[0].id,dir:'下载图片',files:[{path:file}]};
-      const imported:any=await client.callTool({name:'import_images',arguments:args});
+      const imported:any=await client.callTool({name:'library_import',arguments:args});
       expect(imported.isError).not.toBe(true);
       expect(JSON.parse(imported.content[0].text)).toEqual(result);
-      expect(await client.callTool({name:'import_images',arguments:args})).toEqual(imported);
+      expect(await client.callTool({name:'library_import',arguments:args})).toEqual(imported);
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy).toHaveBeenCalledWith({rootId:targets[0].id,dir:'下载图片',files:[{path:file}]});
-      const changed:any=await client.callTool({name:'import_images',arguments:{...args,dir:'other'}});
+      expect(spy).toHaveBeenCalledWith(expect.anything(),{rootId:targets[0].id,dir:'下载图片',files:[{path:file}]});
+      const changed:any=await client.callTool({name:'library_import',arguments:{...args,dir:'other'}});
       expect(changed.isError).toBe(true);
       spy.mockResolvedValueOnce({ok:true,message:'已入库 0 张，1 张失败',undoToken:null,items:[{path:file,status:'failed',error:'not an image'}]});
-      const failed:any=await client.callTool({name:'import_images',arguments:{...args,operationId:'import-invalid-file'}});
+      const failed:any=await client.callTool({name:'library_import',arguments:{...args,operationId:'import-invalid-file'}});
       expect(failed.isError).toBe(true);
       expect(JSON.parse(failed.content[0].text).items[0].error).toBe('not an image');
       spy.mockResolvedValueOnce({ok:true,message:'1 张待选择保存方式',undoToken:null,items:[{path:file,status:'failed',code:'needs_confirm',existingImageId:imageId,error:'替换还是保留两个版本？'}]});
-      const pending:any=await client.callTool({name:'import_images',arguments:{...args,operationId:'import-name-conflict'}});
+      const pending:any=await client.callTool({name:'library_import',arguments:{...args,operationId:'import-name-conflict'}});
       expect(pending.isError).not.toBe(true);
       expect(JSON.parse(pending.content[0].text).items[0]).toMatchObject({code:'needs_confirm',existingImageId:imageId});
     } finally {spy.mockRestore();await client.close();}
@@ -132,16 +134,22 @@ describe('assistant HTTP and MCP', () => {
     const client = await connect();
     try {
       const sample = (await ds.listImages({ limit: 2 })).items.map(i => i.id);
-      const args = { action: 'create', imageIds: sample, title: 'MCP collection test', operationId: 'collection-create' };
-      const one: any = await client.callTool({ name: 'edit_collection', arguments: args });
+      const args = { imageIds: sample, title: 'MCP collection test', operationId: 'collection-create' };
+      const one: any = await client.callTool({ name: 'collections_create', arguments: args });
       expect(one.isError).not.toBe(true);
       const result = JSON.parse(one.content[0].text);
       expect(result.collection).toMatchObject({ kind: 'group', title: 'MCP collection test', pageCount: 2 });
-      const again: any = await client.callTool({ name: 'edit_collection', arguments: args });
+      const again: any = await client.callTool({ name: 'collections_create', arguments: args });
       expect(JSON.parse(again.content[0].text)).toEqual(result);
       const read: any = await client.callTool({ name: 'read_library', arguments: { path: '/api/collections/' + result.collection.id } });
       expect(JSON.parse(read.content[0].text).pages).toHaveLength(2);
-      const removed: any = await client.callTool({ name: 'edit_collection', arguments: { action: 'update', id: result.collection.id, removeImageIds: [sample[0]], operationId: 'collection-remove' } });
+      // 数目、按成员来源筛选：/api/collections/counts 不会被当成 /api/collections/:id
+      const counts: any = await client.callTool({ name: 'read_library', arguments: { path: '/api/collections/counts' } });
+      expect(JSON.parse(counts.content[0].text).group.membership.selection).toEqual({ count: 1, units: 1, pages: 2 });
+      const manualGroups = '/api/collections?kind=group&membership=folder,selection';
+      const manual: any = await client.callTool({ name: 'read_library', arguments: { path: manualGroups } });
+      expect(JSON.parse(manual.content[0].text).map((c: { id: string }) => c.id)).toEqual([result.collection.id]);
+      const removed: any = await client.callTool({ name: 'collections_update', arguments: { id: result.collection.id, removeImageIds: [sample[0]], operationId: 'collection-remove' } });
       expect(removed.isError).not.toBe(true);
       expect((await ds.getCollection(result.collection.id))!.pages).toHaveLength(1);
     } finally { await client.close(); }
@@ -149,15 +157,15 @@ describe('assistant HTTP and MCP', () => {
   it('replaces existing media through the idempotent business API',async()=>{
     const client=await connect(),file=path.join(state.dir,'high-resolution.png');
     const result={ok:true as const,message:'已替换图片',undoToken:'replace-test-undo',imageId,absPath:file};
-    const spy=vi.spyOn(ds,'replaceImage').mockResolvedValue(result);
+    const spy=vi.spyOn(ds.registry.get('library.replace') as CommandDef,'run').mockResolvedValue(result);
     try {
-      expect((await client.listTools()).tools.map(t=>t.name)).toContain('replace_image');
-      const args={operationId:'replace-image-contract',imageId,path:file};
-      const replaced:any=await client.callTool({name:'replace_image',arguments:args});
+      expect((await client.listTools()).tools.map(t=>t.name)).toContain('library_replace');
+      const args={operationId:'replace-image-contract',id:imageId,path:file};
+      const replaced:any=await client.callTool({name:'library_replace',arguments:args});
       expect(replaced.isError).not.toBe(true);expect(JSON.parse(replaced.content[0].text)).toEqual(result);
-      expect(await client.callTool({name:'replace_image',arguments:args})).toEqual(replaced);
-      expect(spy).toHaveBeenCalledExactlyOnceWith(imageId,{path:file});
-      const conflict:any=await client.callTool({name:'replace_image',arguments:{...args,path:file+'-other'}});
+      expect(await client.callTool({name:'library_replace',arguments:args})).toEqual(replaced);
+      expect(spy).toHaveBeenCalledExactlyOnceWith(expect.anything(),{id:imageId,path:file});
+      const conflict:any=await client.callTool({name:'library_replace',arguments:{...args,path:file+'-other'}});
       expect(conflict.isError).toBe(true);
     } finally {spy.mockRestore();await client.close();}
   });
@@ -195,7 +203,8 @@ describe('assistant HTTP and MCP', () => {
     bmp.write('BM'); bmp.writeUInt32LE(bmp.length, 2); bmp.writeUInt32LE(54, 10);
     bmp.writeUInt32LE(40, 14); bmp.writeInt32LE(2, 18); bmp.writeInt32LE(2, 22); bmp.writeUInt16LE(1, 26); bmp.writeUInt16LE(24, 28); bmp.writeUInt32LE(16, 34);
     bmp.fill(0x80, 54);
-    const spy = vi.spyOn(ds, 'getOriginal')
+    // read_media 走查询 images.original（不再绕过注册表）：替掉查询的执行函数
+    const spy = vi.spyOn(ds.registry.get('images.original') as QueryDef, 'run')
       .mockResolvedValueOnce({ kind: 'buffer', contentType: 'image/jpeg', body: broken })
       .mockResolvedValueOnce({ kind: 'buffer', contentType: 'image/bmp', body: bmp });
     const client = await connect();
@@ -207,16 +216,34 @@ describe('assistant HTTP and MCP', () => {
       }
     } finally { spy.mockRestore(); await client.close(); }
   });
+  it('SQL tools read the database file the engine is using (the demo database in demo mode)', async () => {
+    expect(ds.databaseFile).toBe(path.join(state.dir, 'library', 'emaki.sqlite'));
+    const client = await connect();
+    try {
+      const names = (await client.listTools()).tools.map(t => t.name);
+      expect(names).toContain('query_database'); expect(names).toContain('describe_database');
+      const favorites = async () => {
+        const r: any = await client.callTool({ name: 'query_database', arguments: { sql: 'SELECT count(*) AS n FROM images WHERE favorite = 1' } });
+        return JSON.parse(r.content[0].text).rows[0].n as number;
+      };
+      const before = await favorites();
+      const other = (await ds.listImages({ limit: 3 })).items.find(i => !i.favorite)!;
+      const r = await ds.updateImage(other.id, { favorite: true });
+      expect(await favorites()).toBe(before + 1);
+      await ds.undo(r.undoToken!);
+      expect(await favorites()).toBe(before);
+    } finally { await client.close(); }
+  });
   it('edits sources through MCP with validation, retry deduplication and undo', async () => {
     const client = new Client({ name: 'source-test', version: '1' });
     await client.connect(new StreamableHTTPClientTransport(new URL(base + '/api/assistant/mcp'), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
     const read = async () => (await app.inject({ url: `/api/images/${imageId}`, headers: { host: 'localhost' } })).json();
     const before = await read();
     try {
-      const args = { operationId: 'source-fixture', imageId, source: { url: 'https://www.pixiv.net/artworks/98785437', artist: 'Killy' } };
-      const result: any = await client.callTool({ name: 'edit_source', arguments: args });
+      const args = { operationId: 'source-fixture', id: imageId, source: { url: 'https://www.pixiv.net/artworks/98785437', artist: 'Killy' } };
+      const result: any = await client.callTool({ name: 'curation_set_source', arguments: args });
       expect(result.isError).not.toBe(true);
-      expect(await client.callTool({ name: 'edit_source', arguments: args })).toEqual(result);
+      expect(await client.callTool({ name: 'curation_set_source', arguments: args })).toEqual(result);
       expect(await read()).toMatchObject({ sourceManual: true, source: { postId: '98785437' } });
       const invalid = await app.inject({ method: 'PATCH', url: `/api/images/${imageId}`, headers: { host: 'localhost', 'content-type': 'application/json' }, payload: { source: { url: 'file:///C:/test' } } });
       expect(invalid.statusCode).toBe(400);
@@ -236,13 +263,16 @@ describe('assistant HTTP and MCP', () => {
     const client = new Client({ name: 'accept-test', version: '1' });
     await client.connect(new StreamableHTTPClientTransport(new URL(base + '/api/assistant/mcp'), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
     try {
-      const args = { operationId: 'accept-fixture', imageId: pending.image.id, danbooruTag: suggestion.danbooruTag };
-      const result: any = await client.callTool({ name: 'accept_suggestion', arguments: args });
+      // 采纳建议就是 curation.link（accept：按这张图的证据记来历）
+      const args = { operationId: 'accept-fixture', ids: [pending.image.id], tags: [suggestion.danbooruTag], accept: true };
+      const result: any = await client.callTool({ name: 'curation_link', arguments: args });
       expect(result.isError).not.toBe(true);
-      expect(await client.callTool({ name: 'accept_suggestion', arguments: args })).toEqual(result);
+      expect(await client.callTool({ name: 'curation_link', arguments: args })).toEqual(result);
       const after = (await app.inject({ url: imagePath, headers: { host: 'localhost' } })).json();
       expect(after.characterIds).toContain(suggestion.characterId);
-      expect(after.status).toBe('recognized');
+      // 图片不再有 status（P5）：有了角色就不在任何待处理队列
+      expect(after.characterCount).toBeGreaterThan(0);
+      expect(after.queue).toBeNull();
       const { undoToken } = JSON.parse(result.content[0].text);
       expect(undoToken).toBeTruthy();
       expect((await app.inject({ method: 'POST', url: `/api/undo/${undoToken}`, headers: { host: 'localhost', 'content-type': 'application/json' }, payload: {} })).statusCode).toBe(200);
@@ -280,7 +310,7 @@ describe('assistant HTTP and MCP', () => {
     const query = finished.messages.find((m: any) => m.tool && m.text.endsWith('query_database'));
     expect(query.tool).toMatchObject({ status: 'succeeded', input: expect.stringContaining('SELECT count(*)') });
     expect(query.tool.output).toContain('n'); expect(query.tool.finishedAt).toBeGreaterThanOrEqual(query.tool.startedAt);
-    expect(providerRequests.some(r => r.messages.some((m: any) => m.role === 'tool' && String(m.content).includes('"n":2')))).toBe(true);
+    expect(providerRequests.some(r => r.messages.some((m: any) => m.role === 'tool' && String(m.content).includes('"n":41')))).toBe(true);
     const system = providerRequests.flatMap(r => r.messages).filter((m: any) => m.role === 'system').map((m: any) => JSON.stringify(m.content)).join('\n');
     // The real Pi process must advertise both skills without eagerly loading their bodies.
     expect(system).toContain('<name>emaki-library</name>');

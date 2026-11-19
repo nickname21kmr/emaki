@@ -1,4 +1,4 @@
-import type { Exclusion, ExclusionKind } from '@emaki/shared';
+import { normalizeExclusionTag, type Exclusion, type ExclusionKind } from '@emaki/shared';
 import { Folder, Image as ImageIcon, Tag, UserRound, type LucideIcon } from 'lucide-react';
 
 export const KIND_META: Record<ExclusionKind, { label: string; icon: LucideIcon }> = {
@@ -29,10 +29,14 @@ export function ruleDetail(e: Exclusion): string | null {
   return ruleTitle(e).startsWith(e.target) ? null : e.target;
 }
 
-/** 规则目标的规范化：标签用下划线代替空格（Danbooru 标签不含空格）；路径统一正斜杠、去掉结尾斜杠 */
+/**
+ * 规则目标的预览（「将按 … 精确匹配」、查重复）。归一化在服务端做（附录 #38）：表单把原样输入交上去，
+ * 网页、HTTP、助手进来的同样处理。标签用和服务端同一个函数（normalizeExclusionTag）；路径只预览正斜杠、去掉结尾斜杠，
+ * 盘符大小写、相对段这些由服务端的 normalizeRootPath 定
+ */
 export function normalizeTarget(kind: ExclusionKind, raw: string): string {
   const v = raw.trim();
-  if (kind === 'tag') return v.toLowerCase().replace(/\s+/g, '_');
+  if (kind === 'tag') return normalizeExclusionTag(v);
   if (kind === 'folder') return v.replace(/\\/g, '/').replace(/\/+$/, '');
   return v;
 }

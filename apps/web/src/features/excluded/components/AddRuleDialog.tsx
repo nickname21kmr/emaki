@@ -53,7 +53,8 @@ function AddRuleForm({ existing, onClose }: { existing: Exclusion[]; onClose: ()
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!target || duplicate || create.isPending) return;
-    create.mutate({ kind, target });
+    // 交原样输入，服务端归一化（附录 #38）；target 只用来预览和查重复
+    create.mutate({ kind, target: kind === 'tag' ? tag.trim() : kind === 'folder' ? folder.trim() : target });
   };
 
   // Segmented 的按钮没写 type，放在 form 里会被当成提交按钮，所以放在 form 外面

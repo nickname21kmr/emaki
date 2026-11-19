@@ -3,7 +3,8 @@ import { Undo2 } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { api } from '@/lib/api';
+import { api, metaOf } from '@/lib/api';
+import { settleRefresh } from '@/lib/events';
 import { cn } from '@/lib/cn';
 import { modKeyLabel } from '@/lib/hotkeys';
 import { useUndoStore, type UndoEntry } from '@/lib/stores';
@@ -57,13 +58,14 @@ function ResultToast({ id, message, undoToken, client }: { id: string | number; 
     setPhase('undoing');
     try {
       const entry = useUndoStore.getState().entries.find((e) => e.token === undoToken);
-      await api.undo(undoToken);
+      const undone = await api.undo(undoToken);
       useUndoStore.getState().remove(undoToken);
       // 本页做的：交给页面指出撤回来的东西；别的页面做的：胶囊上给个「去看看」，多停一会儿
       const elsewhere = afterUndone(entry) === 'elsewhere';
       if (elsewhere && entry) setGoTo(entry);
       setPhase('undone');
-      void client.invalidateQueries();
+      // 撤销的重放推 changed 事件：等它那次刷新（只刷新一遍）
+      void settleRefresh(client, metaOf(undone));
       window.setTimeout(() => toast.dismiss(id), elsewhere ? 4000 : 1400);
     } catch (err) {
       forgetFailedUndo(undoToken, err);

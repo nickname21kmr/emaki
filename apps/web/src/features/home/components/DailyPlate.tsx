@@ -1,4 +1,4 @@
-import { inferCoverFocus, type ImageItem, type ListImagesQuery } from '@emaki/shared';
+import { inferCoverFocus, showcaseQuery, type ImageItem, type ListImagesQuery } from '@emaki/shared';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Play, RotateCw } from 'lucide-react';
 import { Link } from 'react-router';
@@ -18,7 +18,7 @@ const SITE: Record<string, string> = { pixiv: 'pixiv', twitter: 'X', danbooru: '
 /**
  * 今日一枚（SEL-9）：每天从收藏里抽一张插画当作「本期图版」大幅陈列，旁边竖排题名，配一张奥付小表。
  * 先从收藏里抽，没有收藏就从认出角色的插画里抽，再没有就从全部插画里抽。
- * 开着模糊时只抽识别过、分级是全年龄的图：还没识别的图分级默认是全年龄，可能其实是限制级。
+ * 开着模糊时只抽识别过、分级是全年龄的图（showcase 场合，共用的 showcaseQuery）：还没识别的图分级默认是全年龄，可能其实是限制级。
  */
 /** 抽图的先后：收藏 → 认出角色的 → 全部 */
 const TIERS: ListImagesQuery[] = [{ favorite: true }, { status: 'recognized' }, {}];
@@ -28,7 +28,7 @@ function useDailyPlate(seed: number) {
   return useQuery({
     queryKey: ['images', 'daily', seed, blur],
     queryFn: async (): Promise<ImageItem | null> => {
-      const base: ListImagesQuery = { kind: ['illustration'], sort: 'random', seed, limit: 1, ...(blur ? { rating: ['general'], rated: true } : {}) };
+      const base: ListImagesQuery = { kind: ['illustration'], sort: 'random', seed, limit: 1, ...showcaseQuery(blur) };
       for (const extra of TIERS) {
         const page = await api.images({ ...base, ...extra });
         if (page.items[0]) return page.items[0];

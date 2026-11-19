@@ -1,5 +1,5 @@
 /**
- * ⌘K 搜索（T20）：角色、作品、标签三类，searchKey 子串匹配，每类有名额。标签也按中文名和别名搜。
+ * ⌘K 搜索（T20）：角色、作品、标签三类，规则：searchKey 子串匹配，每类有名额。标签也按中文名和别名搜。
  * 角色 / 作品来自 Derived 缓存；标签用 tags.image_count 缓存（图库有变化只标记过期，下次搜索时再刷新）。
  */
 import {
@@ -14,44 +14,13 @@ import {
 import { stripZhQualifier } from '../../services/i18n/humanize.ts';
 import { buildPhraseDict, parseTagPhrase, type PhraseDict } from '../../services/search/tagPhrase.ts';
 import type { Db } from '../../db/connection.ts';
+import type { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import type { Derived } from './derived.ts';
 import { toCharacter, toWork } from './library.ts';
 
-/**
- * tags.image_count = 每个标签在计入张数的图（v_counted_images）里出现几次。
- * 不从图出发联 image_tags 再分组（330 万行进临时 B 树，真实库 3.5–6 秒）：
- * 先沿 idx_image_tags_tag_score 按 tag_id 顺序数总数，再减去不计数的图（排除、回收站、丢失、文件夹停用，几千张）的标签。
- * 只写张数变了的行。真实库约 0.6–1 秒，结果和原来逐个一致
- */
-export function refreshTagCounts(db: Db): void {
-  db.transaction(() => {
-    const n = new Map<number, number>();
-    for (const [id, c] of db.prepare('SELECT tag_id, COUNT(*) FROM image_tags INDEXED BY idx_image_tags_tag_score GROUP BY tag_id').raw().all() as [
-      number,
-      number,
-    ][]) {
-      n.set(id, c);
-    }
-    // 条件是 v_images + excluded_by IS NULL 的反面；LEFT JOIN 是为了文件夹行不在的图也算不计数（视图里是内连接）
-    for (const [id, c] of db
-      .prepare(
-        `SELECT it.tag_id, COUNT(*) FROM images i LEFT JOIN library_roots r ON r.id = i.root_id
-         CROSS JOIN image_tags it ON it.image_id = i.id
-         WHERE NOT (r.id IS NOT NULL AND r.enabled = 1 AND r.removed_at IS NULL
-                    AND i.trashed_at IS NULL AND i.missing = 0 AND i.excluded_by IS NULL)
-         GROUP BY it.tag_id`,
-      )
-      .raw()
-      .all() as [number, number][]) {
-      n.set(id, (n.get(id) ?? 0) - c);
-    }
-    const update = db.prepare('UPDATE tags SET image_count = ? WHERE id = ?');
-    for (const [id, cur] of db.prepare('SELECT id, image_count FROM tags').raw().all() as [number, number][]) {
-      const v = n.get(id) ?? 0;
-      if (v !== cur) update.run(v, id);
-    }
-  })();
-}
+import { refreshTagCounts } from '../../domain/evidence/tagCounts.ts';
+
+export { refreshTagCounts };
 
 export class SearchQueries {
   /** 标签联想用：库里有的一般标签 + 中文名 / 别名的搜索键 */
@@ -164,12 +133,53 @@ export class SearchQueries {
     };
   }
 
-  search(query: SearchQuery): SearchHit[] {
+  search(query: SearchQuery, catalog?: CharacterCatalog): SearchHit[] {
     const limit = query.limit ?? 20;
     const k = searchKey(query.q.trim());
     if (!k) return [];
     const d = this.derived.get();
     const byCount = <T extends { imageCount: number; id: number }>(a: T, b: T) => b.imageCount - a.imageCount || a.id - b.id;
+    if (query.forAssignment && catalog) {
+      const rankKey = (key: string) => {
+        return key === k ? 0 : key.startsWith(k) ? 1 : key.includes(k) ? 2 : 3;
+      };
+      const rank = (name: string) => rankKey(searchKey(name));
+      type Match = { hit: SearchHit; rank: number; count: number };
+      const rows: Match[] = [];
+      for (const c of d.characters.values()) {
+        const nameRank = Math.min(...c.nameKeys.map(rankKey));
+        const workName = d.works.get(c.workIds[0] ?? -1)?.name ?? null;
+        if (nameRank < 3 || c.keys.some(key => key.includes(k))) rows.push({
+          hit: { type: 'character', character: toCharacter(c), workName }, rank: nameRank, count: c.imageCount,
+        });
+      }
+      const tags = this.db.prepare(`
+        SELECT s.danbooru_tag AS tag, COUNT(*) AS count
+        FROM v_character_suggestions s JOIN v_counted_images i ON i.id=s.image_id
+        WHERE s.character_id IS NULL AND s.danbooru_tag NOT LIKE 'emaki:%'
+        GROUP BY s.danbooru_tag
+      `).all() as { tag: string; count: number }[];
+      const candidates = new Map<string, Match>();
+      for (const { tag, count } of tags) {
+        if (catalog.resolveCharacterId(tag) !== null) continue;
+        const canonical = catalog.normalizeTag(tag);
+        const { name, workName } = catalog.describeTag(tag);
+        const names = catalog.namesForTag(canonical, name);
+        if (canonical !== tag) names.push(tag);
+        const best = Math.min(...names.map(rank));
+        if (best === 3 && (!workName || rank(workName) === 3)) continue;
+        const matchedName = names.filter(n => n !== name && rank(n) < 3).sort((a, b) => rank(a) - rank(b))[0];
+        const prev = candidates.get(canonical);
+        if (prev && prev.rank <= best) { prev.count += count; continue; }
+        candidates.set(canonical, {
+          hit: { type: 'characterCandidate', danbooruTag: tag, name, workName, ...(matchedName ? { matchedName } : {}) },
+          rank: best, count: count + (prev?.count ?? 0),
+        });
+      }
+      rows.push(...candidates.values());
+      return rows.sort((a, b) => a.rank - b.rank || Number(b.hit.type === 'character') - Number(a.hit.type === 'character') || b.count - a.count)
+        .slice(0, limit).map(row => row.hit);
+    }
     // 给作品和标签各留名额，角色很多时它们也不会整组消失
     const chars: SearchHit[] = [...d.characters.values()]
       .filter((c) => c.keys.some((x) => x.includes(k)))
