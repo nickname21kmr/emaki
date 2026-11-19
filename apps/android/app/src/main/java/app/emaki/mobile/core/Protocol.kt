@@ -110,6 +110,44 @@ object Json {
         }.toString()
 
     fun revealBody(nonceHex: String): String = JSONObject().put("nonce", nonceHex).toString()
+
+    // ---------------------------------------------------------------- 传图（docs/mobile.md 5.4）
+
+    fun uploadCheckBody(files: List<Pair<String, Long>>): String =
+        JSONObject().put("files", org.json.JSONArray(files.map { (sha, size) -> JSONObject().put("sha256", sha).put("size", size) })).toString()
+
+    fun uploadCheck(text: String): Map<String, String?> = parse("检查结果", text) { o ->
+        val results = o.getJSONArray("results")
+        (0 until results.length()).associate { i ->
+            val r = results.getJSONObject(i)
+            r.getString("sha256") to (if (r.isNull("imageId")) null else r.getString("imageId"))
+        }
+    }
+
+    fun uploadBeginBody(r: BeginRequest): String = JSONObject().apply {
+        put("batchId", r.batchId)
+        put("sha256", r.sha256)
+        put("size", r.size)
+        put("fileName", r.fileName)
+        if (r.modifiedAt != null) put("modifiedAt", r.modifiedAt)
+        if (r.album != null) put("album", r.album)
+        if (r.clientKey != null) put("clientKey", r.clientKey)
+    }.toString()
+
+    fun uploadBegin(text: String): BeginResult = parse("开始上传的结果", text) { o ->
+        BeginResult(
+            uploadId = o.getString("uploadId"),
+            received = o.getLong("received"),
+            status = o.getString("status"),
+            imageId = if (o.isNull("imageId")) null else o.optString("imageId"),
+        )
+    }
+
+    fun uploadReceived(text: String): Long = parse("上传进度", text) { o -> o.getLong("received") }
+
+    fun uploadComplete(text: String): CompleteResult = parse("上传结果", text) { o ->
+        CompleteResult(status = o.getString("status"), imageId = o.getString("imageId"))
+    }
 }
 
 /** 版本号比较：按点分的数字逐段比（「0.1.0」<「0.2.0」<「0.10.0」），不是数字的部分当 0 */

@@ -1,4 +1,4 @@
-# 依赖尽量少（docs/mobile.md 3.2）：Compose、OkHttp、扫码；不要 Firebase、统计、广告、Google Play 服务。
+# 依赖尽量少（docs/mobile.md 3.2）：Compose、OkHttp、扫码、WorkManager（传图）；不要 Firebase、统计、广告、Google Play 服务。
 # 版本选的是支持 compileSdk 35 的（x99e 上装的是 SDK 35、build-tools 35）。
 [versions]
 agp = "8.7.3"
@@ -10,6 +10,8 @@ composeBom = "2024.12.01"
 coroutines = "1.9.0"
 okhttp = "4.12.0"
 zxingEmbedded = "4.3.0"
+# 传图的后台任务（docs/mobile.md 5.4）：断网重试、App 在后台也接着传；以后同步相册（B2）的定时任务也用它
+work = "2.10.0"
 junit = "4.13.2"
 orgJson = "20240303"
 
@@ -27,6 +29,7 @@ compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 zxing-embedded = { module = "com.journeyapps:zxing-android-embedded", version.ref = "zxingEmbedded" }
+androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 # 只在单元测试里用：假电脑（MockWebServer）、现场签发测试证书（okhttp-tls）、JVM 上的 org.json（安卓自带，JVM 测试里没有）
 junit = { module = "junit:junit", version.ref = "junit" }
 okhttp-mockwebserver = { module = "com.squareup.okhttp3:mockwebserver", version.ref = "okhttp" }

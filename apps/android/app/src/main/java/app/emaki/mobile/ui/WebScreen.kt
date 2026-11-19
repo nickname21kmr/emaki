@@ -51,9 +51,14 @@ import app.emaki.mobile.core.SavedServer
 import app.emaki.mobile.core.fingerprintOf
 import app.emaki.mobile.core.sameFingerprint
 
-/** 网页里的选文件（B1 用）交给 Activity 打开系统的选择器 */
+/** 网页里的选文件交给 Activity 打开系统的选择器 */
 fun interface FileChooser {
     fun choose(callback: ValueCallback<Array<Uri>>, params: WebChromeClient.FileChooserParams): Boolean
+}
+
+/** 网页上点「从手机添加」（window.EmakiApp.pickImages，B1）：Activity 打开系统的选图界面，选完排进后台上传（platform/UploadWork.kt） */
+fun interface ImagePicker {
+    fun pick()
 }
 
 /**
@@ -64,7 +69,8 @@ fun interface FileChooser {
  * - 外部链接（不是电脑的地址）用系统浏览器打开；返回键先在网页里后退；支持选文件；
  * - 注入 `window.EmakiApp`：网页遇到 401（设备被移除）时调 `unpaired(code)`，App 回到原生页面，不显示网页自己的配对页；
  *   网页连不上电脑时调 `connectionLost()`（apps/web/src/lib/connection.ts），App 核实后换到「电脑不在线」；
- *   `paper(color)` 是 App 自己注入的脚本用的，把网页的纸色报上来，状态栏、导航栏跟着换颜色。
+ *   `paper(color)` 是 App 自己注入的脚本用的，把网页的纸色报上来，状态栏、导航栏跟着换颜色；
+ *   `pickImages()`：网页上的「从手机添加」，打开系统的选图界面，选完在后台传给电脑（docs/mobile.md 5.4）。
  */
 @Composable
 fun WebScreen(
@@ -73,6 +79,7 @@ fun WebScreen(
     generation: Int,
     path: String,
     fileChooser: FileChooser,
+    imagePicker: ImagePicker,
     onPaper: (Color) -> Unit,
     onPath: (String) -> Unit,
     onUnpaired: (String) -> Unit,
@@ -99,6 +106,7 @@ fun WebScreen(
             address,
             server.fingerprintBytes,
             fileChooser,
+            imagePicker,
             object : WebEvents {
                 override fun history(view: WebView, path: String?) {
                     canGoBack = view.canGoBack()
@@ -216,6 +224,7 @@ private fun createWebView(
     address: HostPort,
     fingerprint: ByteArray,
     fileChooser: FileChooser,
+    imagePicker: ImagePicker,
     events: WebEvents,
 ): WebView {
     WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
@@ -251,6 +260,11 @@ private fun createWebView(
             @JavascriptInterface
             fun connectionLost() {
                 main.post { events.connectionLost() }
+            }
+
+            @JavascriptInterface
+            fun pickImages() {
+                main.post { imagePicker.pick() }
             }
 
             @JavascriptInterface

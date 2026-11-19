@@ -4,6 +4,10 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 传图（docs/mobile.md 5.4）：后台任务在前台服务里跑，通知栏显示进度；通知权限（Android 13+）第一次传图时才问，不给也照样传 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 扫码用相机（zxing-android-embedded 自己申请权限）；没有相机的设备也能装，只是不能扫码 -->
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
@@ -43,5 +47,11 @@
         <activity
             android:name="com.journeyapps.barcodescanner.CaptureActivity"
             tools:remove="android:screenOrientation" />
+        <!-- WorkManager 的前台服务：传图属于「数据同步」（Android 14 起要声明类型） -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+
     </application>
 </manifest>

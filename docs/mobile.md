@@ -151,7 +151,8 @@
   - `unpaired(code)`：网页遇到 401 `unauthorized` / `device_revoked` 时调（`apps/web/src/lib/deviceAuth.ts`：有 `window.EmakiApp` 时交给 App，不显示网页自己的「连接到电脑」页）。
     App 收到后自己再问一次 `/api/v1/me`：确实不认了才换到「已被电脑移除」；凭证其实还有效（比如 Cookie 丢了）就重新写 Cookie、重新加载一次；
   - `connectionLost()`：网页连不上电脑时调（`apps/web/src/lib/connection.ts`，每次探不通都调）。App 自己核实后才换页面，见 3.6；
-  - `paper(color)`：App 自己注入的脚本用（读网页 `<html>` 上的 `--c-canvas`，主题、底色变了再报），状态栏、导航栏跟着网页的纸色换深浅图标。网页不用调它。
+  - `paper(color)`：App 自己注入的脚本用（读网页 `<html>` 上的 `--c-canvas`，主题、底色变了再报），状态栏、导航栏跟着网页的纸色换深浅图标。网页不用调它；
+  - `pickImages()`（0.2.0 起）：图库页头的「从手机添加」调。App 打开系统的选图界面，选完在后台传给电脑（`platform/UploadWork.kt`，见 5.4）。
 - **无感重连**（和 2.4 的区别）：2.4 说的是「依次试」。实际是上次的地址和 NSD（最多 3 秒）同时开始，NSD 找到的新地址立即试；
   上次的地址不通、或者 1.5 秒还没连上，再同时试 `hello` 给过的其他地址；哪个先对得上（`serverId` 和证书都对）就用哪个。
   对得上的都是同一台电脑，所以先后没有安全上的区别，只是不让每次打开都多等 3 秒（AP 隔离时 NSD 永远找不到）。模拟器上从打开到连上约 1.5 秒。

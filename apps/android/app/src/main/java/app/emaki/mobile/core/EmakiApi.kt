@@ -61,6 +61,28 @@ class EmakiApi(
     suspend fun me(token: String): Me =
         Json.me(call(get("/api/v1/me").newBuilder().header("Authorization", "Bearer $token").build()))
 
+    /** 传图的接口（docs/mobile.md 5.4）：每个请求带设备凭证；一段最多 8 MiB，写超时放宽 */
+    fun uploads(token: String): UploadApi = object : UploadApi {
+        private val slow: OkHttpClient = client.newBuilder().writeTimeout(120, TimeUnit.SECONDS).readTimeout(120, TimeUnit.SECONDS).build()
+
+        private fun auth(r: Request): Request = r.newBuilder().header("Authorization", "Bearer $token").build()
+
+        override suspend fun check(files: List<Pair<String, Long>>): Map<String, String?> =
+            Json.uploadCheck(call(auth(post("/api/uploads/check", Json.uploadCheckBody(files)))))
+
+        override suspend fun begin(request: BeginRequest): BeginResult =
+            Json.uploadBegin(call(auth(post("/api/uploads", Json.uploadBeginBody(request)))))
+
+        override suspend fun put(uploadId: String, offset: Long, bytes: ByteArray, length: Int): Long {
+            val body = bytes.toRequestBody(OCTETS, 0, length)
+            val r = Request.Builder().url(address.url("/api/uploads/${encode(uploadId)}?offset=$offset")).header("Accept", "application/json").put(body).build()
+            return Json.uploadReceived(call(auth(r), slow))
+        }
+
+        override suspend fun complete(uploadId: String): CompleteResult =
+            Json.uploadComplete(call(auth(post("/api/uploads/${encode(uploadId)}/complete", "{}")), slow))
+    }
+
     private fun get(path: String): Request =
         Request.Builder().url(address.url(path)).header("Accept", "application/json").get().build()
 
@@ -84,6 +106,7 @@ class EmakiApi(
         const val CONNECT_TIMEOUT_MS = 4_000L
         const val MAX_WAIT_S = 25
         private val JSON = "application/json; charset=utf-8".toMediaType()
+        private val OCTETS = "application/octet-stream".toMediaType()
 
         val defaultClient: OkHttpClient by lazy {
             OkHttpClient.Builder()

@@ -17,9 +17,12 @@
 | `.../ui/` | 原生页面（Compose）和 WebView 主界面（`WebScreen.kt`） |
 | `.../AppModel.kt` | 页面之间怎么走（找电脑 → 请求 → 等批准 → 主界面；电脑不在线、已被电脑移除、需要更新、证书不对） |
 | `.../ConnectionWatch.kt` | 断线处理（docs/mobile.md 3.6）：主界面上核实连接（`core/Liveness.kt` 的 `LinkCheck`），「电脑不在线」页面上自动重连 |
+| `.../core/Uploads.kt` | 传图（docs/mobile.md 5.4）：算 sha256、先问电脑有没有、分段传、断点续传（`Uploader`），照 `apps/server/scripts/lan-client.ts` 的 upload 写 |
+| `.../platform/UploadWork.kt` | 「从手机添加」选的图排成后台任务（WorkManager）：前台服务通知进度，连不上电脑过一会儿重试，传完通知结果 |
 
 网页那边两处配合：`apps/web/src/lib/deviceAuth.ts` 在有 `window.EmakiApp` 时，遇到 401 调 `EmakiApp.unpaired(code)`，
-不显示网页自己的「连接到电脑」页；`apps/web/src/lib/connection.ts` 连不上电脑时调 `EmakiApp.connectionLost()`，不显示网页自己的提示条。
+不显示网页自己的「连接到电脑」页；`apps/web/src/lib/connection.ts` 连不上电脑时调 `EmakiApp.connectionLost()`，不显示网页自己的提示条；
+图库页头的「从手机添加」（`features/gallery/components/AddFromPhone.tsx`）在有 `EmakiApp.pickImages` 时显示，点了调它。
 
 ## 在哪构建
 

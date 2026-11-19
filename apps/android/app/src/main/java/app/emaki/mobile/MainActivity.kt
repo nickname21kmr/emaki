@@ -1,19 +1,24 @@
 package app.emaki.mobile
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
@@ -33,6 +38,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.emaki.mobile.platform.FoundServer
+import app.emaki.mobile.platform.UploadQueue
 import app.emaki.mobile.ui.AddressDialog
 import app.emaki.mobile.ui.BusyScreen
 import app.emaki.mobile.ui.CertWrongScreen
@@ -41,6 +47,7 @@ import app.emaki.mobile.ui.EmakiTheme
 import app.emaki.mobile.ui.FailedScreen
 import app.emaki.mobile.ui.FileChooser
 import app.emaki.mobile.ui.FindScreen
+import app.emaki.mobile.ui.ImagePicker
 import app.emaki.mobile.ui.ForgetDialog
 import app.emaki.mobile.ui.LocalPaper
 import app.emaki.mobile.ui.OfflineScreen
@@ -69,6 +76,31 @@ class MainActivity : ComponentActivity() {
         pendingFiles = null
     }
 
+    /** 「从手机添加」：系统的选图界面（Android Photo Picker，可多选，不用存储权限），选完排进后台上传 */
+    private val pickImages = registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
+        if (uris.isEmpty()) return@registerForActivityResult
+        UploadQueue.enqueue(this, uris)
+        Toast.makeText(this, "开始传 ${uris.size} 张，进度在通知栏", Toast.LENGTH_SHORT).show()
+    }
+
+    /** 第一次传图前问一下通知权限（Android 13+）：给不给都照样传，只是看不到进度 */
+    private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { launchPicker() }
+
+    private fun launchPicker() = pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+
+    private val imagePicker = ImagePicker {
+        val prefs = getSharedPreferences("ui", MODE_PRIVATE)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+            !prefs.getBoolean("askedNotifications", false)
+        ) {
+            prefs.edit().putBoolean("askedNotifications", true).apply()
+            askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            launchPicker()
+        }
+    }
+
     private val fileChooser = FileChooser { callback, params ->
         pendingFiles?.onReceiveValue(null)
         pendingFiles = callback
@@ -90,7 +122,7 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) handlePairLink(intent)
         setContent {
             EmakiTheme {
-                App(model, fileChooser, ::setBarIcons)
+                App(model, fileChooser, imagePicker, ::setBarIcons)
             }
         }
     }
@@ -165,7 +197,7 @@ private sealed interface Dialog {
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun App(model: AppModel, fileChooser: FileChooser, setBarIcons: (Boolean) -> Unit) {
+private fun App(model: AppModel, fileChooser: FileChooser, imagePicker: ImagePicker, setBarIcons: (Boolean) -> Unit) {
     val screen by model.screen.collectAsStateWithLifecycle()
     val deviceName by model.deviceName.collectAsStateWithLifecycle()
     var dialog by remember { mutableStateOf<Dialog?>(null) }
@@ -229,6 +261,7 @@ private fun App(model: AppModel, fileChooser: FileChooser, setBarIcons: (Boolean
                 generation = s.generation,
                 path = s.path,
                 fileChooser = fileChooser,
+                imagePicker = imagePicker,
                 onPaper = { webPaper = it },
                 onPath = { model.onWebPath(s, it) },
                 onUnpaired = { code -> model.onWebUnpaired(s, code) },

@@ -31,6 +31,8 @@ interface EmakiAppBridge {
   unpaired(code: DeviceAuthLost): void;
   /** 连不上电脑了（lib/connection.ts）：App 核实后切到原生的「电脑不在线」。老版本的 App 没有 */
   connectionLost?(): void;
+  /** 「从手机添加」：App 打开系统的选图界面，选完在后台传给电脑（docs/mobile.md 5.4）。0.2.0 起才有 */
+  pickImages?(): void;
 }
 
 export const appBridge = (): EmakiAppBridge | undefined => (globalThis as { EmakiApp?: EmakiAppBridge }).EmakiApp;
