@@ -31,7 +31,7 @@ export function decodeCursor<T>(s: string | undefined, isValid: (x: unknown) => 
   throw new BadRequestError('分页游标无效，请刷新页面');
 }
 
-/** 与 mock 相同的偏移分页，只用于已在内存里排好序的小列表（角色） */
+/** 偏移分页，只用于已在内存里排好序的小列表（角色） */
 export function paginateOffset<T>(all: T[], cursor: string | undefined, limit: number | undefined): Page<T> {
   const start = cursor ? Number(cursor) || 0 : 0;
   const size = Math.min(Math.max(limit ?? 60, 1), 200);

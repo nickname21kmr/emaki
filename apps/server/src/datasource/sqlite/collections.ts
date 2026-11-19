@@ -1,7 +1,7 @@
 import { assertOrganizeReady, organizeCollection } from './organizeCollection.ts';
 import { randomUUID } from 'node:crypto';
 /**
- * 合集的查询与修改（T38c）。摘要统一由 loadSummaries 算（口径在 services/collections/summary.ts，和 mock 共用）。
+ * 合集的查询与修改（T38c）。摘要统一由 loadSummaries 算（口径在 services/collections/summary.ts）。
  * 写操作全部走 ctx.mutate，任何写都把合集转成 origin='manual'（自动判定不会再删它）。
  */
 import {

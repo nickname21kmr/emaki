@@ -15,7 +15,7 @@ export function openDatabase(file: string): Db {
   db.pragma('temp_store = MEMORY');
   db.pragma('cache_size = -65536'); // 64 MB
   db.pragma('mmap_size = 268435456'); // 256 MB
-  // 供 SQL 里做和 mock 一致的搜索匹配（T05 listImages 的 q 用它）
+  // 供 SQL 里做和前端一致的搜索匹配（T05 listImages 的 q 用它）
   db.function('search_key', { deterministic: true }, (s: unknown) => (s == null ? null : searchKey(String(s))));
   // 不分大小写比较用：SQLite 的 NOCASE 只认 ASCII，Ä/ä、Ｐ/ｐ 要靠 JS 的 toLowerCase
   db.function('fold_case', { deterministic: true }, (s: unknown) => (s == null ? null : String(s).toLowerCase()));

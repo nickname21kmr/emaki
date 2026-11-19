@@ -1,18 +1,9 @@
-# DataSource 契约测试
+# DataSource 行为测试
 
-同一套用例分别跑在 `MockDataSource` 和 `SqliteDataSource` 上（`contract.test.ts`），`cross.test.ts` 再把两边的只读查询结果换回 mock id 后逐字段比较。夹具与每个预期数字的推算见 `../fixtures/contract-db.ts`。
+用例跑在内存 SQLite 上，开头导入同一份契约夹具（`../fixtures/contract-db.ts`，每个预期数字怎么算的写在它顶部）。夹具里的 id 是 `i1` / `c1` / `w1` 这种，`env.id()` 换成 sqlite 的整数 id，`env.back()` / `canon()` 换回来。
 
-- sqlite 这边只有任务编号在 `ready.ts` 的 `SQLITE_READY` 里才会跑。**每完成一个任务就把编号加进去**，并把 `groups.ts` 里对应的 `it.todo` 换成真实用例。
+- `groups.ts`：按任务编号分组的用例，`contract.test.ts` 把它们跑一遍。
+- `readonly.test.ts`、`changes.test.ts`：整体结果存成快照（`__snapshots__/`）。快照最早是去掉 mock 之前两边逐字段一致时的结果；行为有意改了，看过 diff 再用 `npx vitest run contract -u` 更新。
 - 运行：仓库根目录 `npx vitest run contract`。
 
-## 有意差异（契约里不断言）
-
-- `newCount` 的绝对值（sqlite 用 `last_seen_at` 计算，种子只能近似还原）。
-- 角色的兜底封面（没设封面时两边挑的图不同，`coverRating` 随之不同）；作品 `covers` 具体是哪几张、封面主色 `coverColor`。
-- 删除一条排除规则后，是否重新应用其余规则。
-- 采纳建议后是否删除该建议；采纳时新建角色可能顺带新建作品。
-- 文件名排序（sqlite 用 NOCASE，mock 用 localeCompare）；`random` 排序。
-- 合并角色后的 `newCount`。
-- `listExclusions` 预览图的顺序。
-- `customMatchableCount`（依赖名字索引数据）。
-- `listImages` 的游标格式（sqlite 是不透明的 base64url，mock 是数字字符串）——只能原样回传，不能解析。
+夹具里的 `D:/Pics` 不一定存在，所以这里不碰真实文件：回收站换成什么也不做的假实现，也不检查盘符。要真的移动、删除文件的用例写在 `src/datasource/sqlite/*.test.ts` 里，用临时目录。

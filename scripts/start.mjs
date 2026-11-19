@@ -1,6 +1,6 @@
 // 一键启动（T23）：检查 Node → 按需安装依赖 → 按需构建前端 → 启动后端（同时托管前端）→ 就绪后打开浏览器。
 // 已在运行时只打开浏览器。只用 Node 内置模块，不需要 tsx。
-// 用法：node scripts/start.mjs [--rebuild] [--mock] [--no-open] [--app]；Windows 上双击仓库根目录的 start.bat。
+// 用法：node scripts/start.mjs [--rebuild] [--demo] [--no-open] [--app]；Windows 上双击仓库根目录的 start.bat。
 // --app：用 Edge / Chrome 的应用窗口打开（像桌面程序，没有地址栏），关掉这个窗口后端也跟着退出。桌面快捷方式用的就是它。
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -159,7 +159,7 @@ const server = spawn(process.execPath, ['--import', 'tsx', path.join('apps', 'se
   stdio: 'inherit',
   env: {
     ...process.env,
-    EMAKI_DATA_SOURCE: args.has('--mock') ? 'mock' : (process.env.EMAKI_DATA_SOURCE ?? 'sqlite'),
+    EMAKI_DATA_SOURCE: args.has('--demo') || args.has('--mock') ? 'demo' : (process.env.EMAKI_DATA_SOURCE ?? 'sqlite'),
     // sharp 和文件读写共用 libuv 线程池（见 T04）
     UV_THREADPOOL_SIZE: process.env.UV_THREADPOOL_SIZE ?? '8',
   },

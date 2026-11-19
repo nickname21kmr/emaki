@@ -1,5 +1,5 @@
 /**
- * T13：统计、作品、角色的查询。排序 / 过滤 / 分页逐行对照 MockDataSource。
+ * T13：统计、作品、角色的查询。
  */
 import {
   CONTENT_KINDS,
@@ -128,7 +128,7 @@ export class LibraryQueries {
     const kindCounts = Object.fromEntries(CONTENT_KINDS.map((k) => [k, 0])) as Record<ContentKind, number>;
     for (const k of CONTENT_KINDS) kindCounts[k] = row[`k_${k}`];
 
-    // 近 7 天（本地时区，与 mock 相同：下标 6 = 今天）
+    // 近 7 天（本地时区，下标 6 = 今天）
     const now = this.ctx.clock();
     const today = new Date(now);
     today.setHours(0, 0, 0, 0);

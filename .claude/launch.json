@@ -11,11 +11,11 @@
       "port": 5173
     },
     {
-      "name": "emaki-mock",
+      "name": "emaki-demo",
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "run",
-        "dev:mock"
+        "dev:demo"
       ],
       "port": 5173
     }

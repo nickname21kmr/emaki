@@ -1,6 +1,6 @@
 import { performance } from 'node:perf_hooks';
 /**
- * 派生缓存（与 mock 的 idx 同一思路）：每个角色 / 作品的张数、封面等聚合结果缓存在内存，数据变化时失效重建。
+ * 派生缓存：每个角色 / 作品的张数、封面等聚合结果缓存在内存，数据变化时失效重建。
  * 口径见 TASKS.md「全局约定 → 数据口径」：张数、+N、最近在收只数插画（v_illust_images，D3），其余类型记在 otherCount。
  */
 import { searchKey, type CharacterSource, type FocusPoint, type Rating } from '@emaki/shared';

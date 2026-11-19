@@ -1,5 +1,5 @@
 /**
- * 「没认出」的画面主题与「像插画的程度」（T27 补充）：纯函数，mock、sqlite、seed 共用。
+ * 「没认出」的画面主题与「像插画的程度」（T27 补充）：纯函数，sqlite 和演示库的种子共用。
  *
  * 一图一组，按固定先后取第一条命中的：不像插画 > 多人 > 泳装 > 兽耳 > 女仆·和服 > 腿·足 > 胸 > 其他。
  * 存进 images.theme；「漫画」「不像插画」「敏感」在查询时由 resolveTheme / THEME_EXPR 叠加，改分级、改类型后当场换组。
@@ -38,7 +38,7 @@ export const THEME_TAG_NAMES: readonly string[] = [
 
 /**
  * 浏览筛选（多归属）：任一组标签达到阈值就算。阈值和 classifyTheme 一致，但不排先后、不排除半身像。
- * sqlite 的 listImages 和 mock 都用这张表。
+ * sqlite 的 listImages 用这张表。
  */
 export const THEME_FILTERS: Record<BrowseTheme, [readonly string[], number][]> = {
   legs: [

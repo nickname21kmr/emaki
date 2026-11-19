@@ -2,7 +2,7 @@
  * 角色编辑、合并、自建角色（T14）。所有写操作都在 ctx.mutate 里（一个事务 + 撤销记录）；
  * 编辑之后重算「自建角色能对上 Danbooru」（recomputeCustomMatches 自己开事务，放在 mutate 之后）。
  */
-import { searchKey, type Character, type CreateCharacterBody, type ID, type MutationResult, type UpdateCharacterBody } from '@emaki/shared';
+import { searchKey, type Character, type CreateCharacterBody, type CustomCharacterMatch, type ID, type MutationResult, type UpdateCharacterBody } from '@emaki/shared';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
 import { CharacterCatalog } from '../../services/catalog/characterCatalog.ts';
 import type { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
@@ -54,6 +54,21 @@ export class CharacterMutations {
     private readonly danbooru: () => DanbooruCatalog,
     private readonly catalog: () => CharacterCatalog,
   ) {}
+
+  /** 自建角色还没确认的 Danbooru 关联建议（角色页「Danbooru 关联」弹窗） */
+  customMatches(): CustomCharacterMatch[] {
+    const rows = this.ctx.db.prepare(`SELECT c.id, c.name, m.danbooru_tag AS tag
+      FROM custom_character_matches m JOIN characters c ON c.id = m.character_id
+      WHERE c.source = 'custom' AND c.danbooru_tag IS NULL AND m.dismissed = 0 ORDER BY c.name, c.id`).all() as { id: number; name: string; tag: string }[];
+    const catalog = this.catalog();
+    return rows.map((r) => {
+      const tag = this.danbooru().normalizeTag(r.tag);
+      const described = catalog.describeTag(tag);
+      return { characterId: String(r.id), characterName: r.name, danbooruTag: tag, matchName: described.name,
+        workName: described.workName, existingCharacterId: described.characterId === null ? null : String(described.characterId),
+        existingCharacterName: described.characterId === null ? null : described.name };
+    });
+  }
 
   private get db() {
     return this.ctx.db;
@@ -230,7 +245,7 @@ export class CharacterMutations {
 
   markSeen(idStr: ID): void {
     const { id } = this.requireCharacter(idStr);
-    if ((this.derived.get().characters.get(id)?.newCount ?? 0) === 0) return; // mock 不发事件
+    if ((this.derived.get().characters.get(id)?.newCount ?? 0) === 0) return; // 没有新图就不发事件
     this.db.prepare('UPDATE characters SET last_seen_at = ? WHERE id = ?').run(iso(this.ctx.clock()), id);
     this.ctx.touch();
   }

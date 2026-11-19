@@ -16,7 +16,7 @@ import { seedCollections } from './collections-seed.ts';
 import { hashString, seededRandom } from './placeholder.ts';
 import { ARTISTS, GENERAL_TAGS, LONG_TAIL_WORKS, SEED_WORKS, type SeedWork } from './seed-data.ts';
 
-/** mock 数据库里的行：只存「原始」字段，计数等派生字段由 MockDataSource 现算。 */
+/** 假数据的行：只存「原始」字段，计数等派生字段由 SQLite 那边算。 */
 export interface WorkRow {
   id: ID;
   name: string;
@@ -144,7 +144,7 @@ export interface ExclusionRow {
   createdAt: string;
 }
 
-export interface MockDb {
+export interface SeedDb {
   works: Map<ID, WorkRow>;
   characters: Map<ID, CharacterRow>;
   images: Map<ID, ImageRow>;
@@ -156,10 +156,10 @@ export interface MockDb {
   artistLinks?: Map<string, string | null>;
 }
 
-const IMAGE_COUNT = 9000;
 const DAY = 86_400_000;
 
-export function buildMockDb(now = Date.now()): MockDb {
+/** 演示库：真实的作品 / 角色名，随机但固定（同一个 imageCount 每次生成的都一样）的图片、重复组、排除和合集 */
+export function buildDemoDb(now = Date.now(), { imageCount = 9000 }: { imageCount?: number } = {}): SeedDb {
   const r = seededRandom(20260927);
   const pick = <T>(arr: readonly T[]): T => arr[Math.floor(r() * arr.length)]!;
 
@@ -221,7 +221,7 @@ export function buildMockDb(now = Date.now()): MockDb {
     return 'general';
   };
 
-  for (let i = 1; i <= IMAGE_COUNT; i++) {
+  for (let i = 1; i <= imageCount; i++) {
     const id = `i${i}`;
     // 越新的图越多：用 r()^1.5 把时间往「最近」挤
     const age = Math.pow(r(), 1.5) * 900 * DAY;
@@ -422,7 +422,7 @@ export function buildMockDb(now = Date.now()): MockDb {
   // 重复组
   const duplicates: DuplicateRow[] = [];
   const candidates = [...images.values()].filter((img) => !img.excludedBy && img.characterIds.length > 0);
-  let nextImage = IMAGE_COUNT + 1;
+  let nextImage = imageCount + 1;
   for (let g = 0; g < 36; g++) {
     const original = candidates[Math.floor(r() * candidates.length)]!;
     const kind: DuplicateKind = r() < 0.35 ? 'exact' : 'similar';
