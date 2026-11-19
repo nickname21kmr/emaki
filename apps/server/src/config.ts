@@ -10,14 +10,19 @@ try {
   if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
 }
 
-export type DataSourceKind = 'mock' | 'sqlite';
+export type DataSourceKind = 'sqlite' | 'demo';
 export type ModelSourceId = 'huggingface' | 'hf-mirror' | 'modelscope';
 
 // 相对路径一律按仓库根目录解析：npm -w 运行时 cwd 是 apps/server，按 cwd 解析会落到 apps/server/data
-const dataDir = path.resolve(repoRoot, process.env.EMAKI_DATA_DIR ?? 'data');
+const baseDataDir = path.resolve(repoRoot, process.env.EMAKI_DATA_DIR ?? 'data');
+// 演示模式：命令行 --demo > 环境变量 > 默认真实图库。旧的写法 --mock / mock 也认
+const envSource = process.env.EMAKI_DATA_SOURCE;
+const demo = process.argv.includes('--demo') || process.argv.includes('--mock') || envSource === 'demo' || envSource === 'mock';
+// 演示模式用自己的数据库和缩略图，不碰真实图库
+const dataDir = demo ? path.join(baseDataDir, 'demo') : baseDataDir;
 
 /**
- * 所有配置都来自环境变量（或仓库根目录的 .env），`npm run dev:mock` 切到演示数据。
+ * 所有配置都来自环境变量（或仓库根目录的 .env），`npm run dev:demo` 切到演示图库。
  * 见 docs/ARCHITECTURE.md「配置」一节。
  */
 export const config = {
@@ -25,18 +30,20 @@ export const config = {
   host: process.env.EMAKI_HOST ?? '127.0.0.1',
   port: Number(process.env.EMAKI_PORT ?? 5174),
   /**
-   * sqlite：真实实现，读写 dataDir 下的数据库和缩略图缓存（默认）。
-   * mock：内存假数据 + SVG 占位图，前端开发用。优先级：命令行 --mock > 环境变量 > 默认 sqlite。
+   * sqlite：真实图库（默认）。
+   * demo：演示图库，每次启动从头导入假数据（src/demo），图片画在 demoPicsDir，改动不会留到下次。
    */
-  dataSource: (process.argv.includes('--mock') ? 'mock' : (process.env.EMAKI_DATA_SOURCE ?? 'sqlite')) as DataSourceKind,
-  /** 数据库、缩略图缓存、模型文件都放这里；已被 .gitignore 忽略 */
+  dataSource: (demo ? 'demo' : 'sqlite') as DataSourceKind,
+  /** 数据库、缩略图缓存都放这里；已被 .gitignore 忽略。演示模式是 <EMAKI_DATA_DIR>/demo */
   dataDir,
+  /** 演示图库的图片文件（演示模式第一次启动时生成） */
+  demoPicsDir: path.join(baseDataDir, 'demo-pics'),
   /** 生产模式下由后端直接托管前端构建产物 */
   webDist: path.join(repoRoot, 'apps/web/dist'),
   /** 随仓库分发的数据文件（离线对照表、词库） */
   assetsDir: path.join(repoRoot, 'apps/server/assets'),
   /** 模型文件目录；多个开发库可共用一份 */
-  modelsDir: process.env.EMAKI_MODELS_DIR ? path.resolve(repoRoot, process.env.EMAKI_MODELS_DIR) : path.join(dataDir, 'models'),
+  modelsDir: process.env.EMAKI_MODELS_DIR ? path.resolve(repoRoot, process.env.EMAKI_MODELS_DIR) : path.join(baseDataDir, 'models'),
   /** 模型下载源（逗号分隔），会并行测速，选最快的 */
   modelSources: (process.env.EMAKI_MODEL_SOURCES ?? 'huggingface,hf-mirror,modelscope')
     .split(',')

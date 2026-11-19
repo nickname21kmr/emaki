@@ -754,7 +754,7 @@ export interface KeepAwakeStatus {
 /** GET /api/health */
 export interface HealthResponse {
   ok: true;
-  dataSource: 'mock' | 'sqlite';
+  dataSource: 'sqlite' | 'demo';
   /** 根 package.json 的 version */
   version: string;
   /** 数据目录的绝对路径（只监听本机，返回路径没有问题） */

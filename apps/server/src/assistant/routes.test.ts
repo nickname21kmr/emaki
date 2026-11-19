@@ -8,18 +8,18 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { createServer } from 'node:http';
 import type { FastifyInstance } from 'fastify';
 
-// 业务数据走 MockDataSource，SQL 工具读这里自带的 emaki.sqlite；source 可切成 'mock' 检查演示模式
-const state = vi.hoisted(() => ({ dir: '', source: 'sqlite' }));
+// 业务数据走导入了契约夹具的 SQLite（内存库），SQL 工具读这里自带的 emaki.sqlite
+const state = vi.hoisted(() => ({ dir: '' }));
 vi.mock('../config.ts', async importOriginal => {
   const { config } = await importOriginal<typeof import('../config.ts')>();
-  return { config: { ...config, get dataDir() { return state.dir; }, get dataSource() { return state.source; }, webDist: '/nonexistent' } };
+  return { config: { ...config, get dataDir() { return state.dir; }, webDist: '/nonexistent' } };
 });
 import { buildApp } from '../app.ts';
-import { EventBus } from '../core/events.ts';
-import { MockDataSource } from '../datasource/mock/MockDataSource.ts';
+import type { SqliteDataSource } from '../datasource/sqlite/SqliteDataSource.ts';
 import { sharp } from '../services/image/sharpConfig.ts';
+import { sqliteFactory, type ContractEnv } from '../../test/contract/harness.ts';
 
-let app: FastifyInstance, base: string, token: string, imageId: string, ds: MockDataSource;
+let app: FastifyInstance, base: string, token: string, imageId: string, ds: SqliteDataSource, env: ContractEnv;
 let piSession: string, holdResponse = false;
 const providerRequests: any[] = [];
 const provider = createServer(async (req, res) => {
@@ -47,11 +47,18 @@ const del = (url: string) => app.inject({ method: 'DELETE', url: '/api/assistant
 beforeAll(async () => {
   state.dir = mkdtempSync(path.join(tmpdir(), 'emaki-route-test-'));
   const db = new Database(path.join(state.dir, 'emaki.sqlite')); db.exec('CREATE TABLE images(id INTEGER PRIMARY KEY); INSERT INTO images VALUES(1),(2);'); db.close();
-  const bus = new EventBus(); ds = new MockDataSource(bus); imageId = (await ds.listImages({ limit: 1 })).items[0]!.id;
-  app = await buildApp(ds, bus); base = await app.listen({ host: '127.0.0.1', port: 0 });
+  env = await sqliteFactory(); ds = env.ds; imageId = env.id('image', 'i1');
+  // read_media 要读原图：图库文件夹指到临时目录，给这张图放一张真图
+  const pics = path.join(state.dir, 'pics');
+  ds.ctx.db.prepare('UPDATE library_roots SET path = ? WHERE id = ?').run(pics.split(path.sep).join('/'), Number(env.id('root', 'root1')));
+  ds.ctx.invalidate();
+  const file = path.join(pics, ...(await ds.getImage(imageId))!.relPath.split('/'));
+  mkdirSync(path.dirname(file), { recursive: true });
+  await sharp({ create: { width: 40, height: 60, channels: 3, background: '#89a' } }).png().toFile(file);
+  app = await buildApp(ds, env.bus); base = await app.listen({ host: '127.0.0.1', port: 0 });
   await new Promise<void>(resolve => provider.listen(0, '127.0.0.1', resolve));
 });
-afterAll(async () => { await app.close(); await new Promise<void>(resolve => provider.close(() => resolve())); rmSync(state.dir, { recursive: true, force: true, maxRetries: 4 }); });
+afterAll(async () => { await app.close(); await env.close(); await new Promise<void>(resolve => provider.close(() => resolve())); rmSync(state.dir, { recursive: true, force: true, maxRetries: 4 }); });
 describe('assistant HTTP and MCP', () => {
   it('does not expose sessions or tools while disabled', async () => {
     expect((await call('GET', '/settings')).json().enabled).toBe(false);
@@ -199,17 +206,6 @@ describe('assistant HTTP and MCP', () => {
         expect(Buffer.from(media.content[0].data, 'base64').subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));
       }
     } finally { spy.mockRestore(); await client.close(); }
-  });
-  it('offers no SQL tools on mock data instead of reading a library file', async () => {
-    state.source = 'mock';
-    const client = await connect();
-    try {
-      const names = (await client.listTools()).tools.map(t => t.name);
-      expect(names).not.toContain('query_database'); expect(names).not.toContain('describe_database');
-      expect(client.getInstructions()).toContain('read_library');
-      const stats: any = await client.callTool({ name: 'read_library', arguments: { path: '/api/stats' } });
-      expect(stats.isError).not.toBe(true);
-    } finally { state.source = 'sqlite'; await client.close(); }
   });
   it('edits sources through MCP with validation, retry deduplication and undo', async () => {
     const client = new Client({ name: 'source-test', version: '1' });

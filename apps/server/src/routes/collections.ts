@@ -1,14 +1,14 @@
 import type { ListArtistsResponse } from '@emaki/shared';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import type { DataSource } from '../datasource/DataSource.ts';
+import type { ArtistData, CollectionData } from '../datasource/DataSource.ts';
 import { NotFoundError } from '../http/errors.ts';
 import { idParam, parse } from '../http/validate.ts';
 
 const kindSchema = z.enum(['doujin', 'artbook', 'group']);
 
 /** 合集（T38c） */
-export function collectionRoutes(app: FastifyInstance, ds: DataSource): void {
+export function collectionRoutes(app: FastifyInstance, ds: CollectionData & ArtistData): void {
   app.get('/api/collections', (req) => {
     const q = parse(
       z.object({

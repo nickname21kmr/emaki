@@ -2,25 +2,22 @@ import type { ServerEvent } from '@emaki/shared';
 import { rmSync } from 'node:fs';
 import { describe } from 'vitest';
 import { EventBus } from '../../src/core/events.ts';
-import type { DataSource } from '../../src/datasource/DataSource.ts';
-import { MockDataSource } from '../../src/datasource/mock/MockDataSource.ts';
-import { seedFromMockDb, type IdMap } from '../../src/datasource/sqlite/seed.ts';
+import { seedDatabase, type IdMap } from '../../src/demo/seed.ts';
 import { SqliteDataSource } from '../../src/datasource/sqlite/SqliteDataSource.ts';
 import { buildContractDb } from '../fixtures/contract-db.ts';
 import { makeTmpDir } from '../helpers/tmp.ts';
-import { SQLITE_READY } from './ready.ts';
 
 export type Kind = 'root' | 'work' | 'character' | 'image' | 'exclusion' | 'duplicate';
 
 export interface ContractEnv {
-  name: 'mock' | 'sqlite';
-  ds: DataSource;
+  ds: SqliteDataSource;
+  bus: EventBus;
   /** 订阅 bus 收集的事件 */
   events: ServerEvent[];
   now: number;
-  /** 夹具 mock id → 本实现 id */
-  id(kind: Kind, mockId: string): string;
-  /** 反向，用于比较输出 */
+  /** 夹具 id（i1 / c1 …）→ sqlite id */
+  id(kind: Kind, fixtureId: string): string;
+  /** 反向，断言时把输出换回夹具 id */
   back(kind: Kind, id: string): string;
   close(): Promise<void>;
 }
@@ -34,13 +31,6 @@ function collect(bus: EventBus): ServerEvent[] {
   bus.subscribe((e) => events.push(e));
   return events;
 }
-
-export const mockFactory: ContractFactory = async () => {
-  const bus = new EventBus();
-  const events = collect(bus);
-  const ds = new MockDataSource(bus, { db: buildContractDb(NOW), now: NOW });
-  return { name: 'mock', ds, events, now: NOW, id: (_k, x) => x, back: (_k, x) => x, close: async () => {} };
-};
 
 const KIND_KEYS: Record<Kind, keyof IdMap> = {
   root: 'roots',
@@ -64,20 +54,20 @@ export const sqliteFactory: ContractFactory = async () => {
     checkRecyclable: async () => {},
     trashImpl: async () => {},
   });
-  const map = seedFromMockDb(ds.ctx.db, buildContractDb(NOW), { now: NOW });
+  const map = seedDatabase(ds.ctx.db, buildContractDb(NOW), { now: NOW });
   ds.ctx.invalidate();
   const reverse = new Map<string, Map<string, string>>();
   for (const [kind, key] of Object.entries(KIND_KEYS)) {
-    reverse.set(kind, new Map([...map[key]].map(([mockId, n]) => [String(n), mockId])));
+    reverse.set(kind, new Map([...map[key]].map(([fixtureId, n]) => [String(n), fixtureId])));
   }
   return {
-    name: 'sqlite',
     ds,
+    bus,
     events,
     now: NOW,
-    id: (kind, mockId) => {
-      const n = map[KIND_KEYS[kind]].get(mockId);
-      if (n === undefined) throw new Error(`夹具里没有 ${kind} ${mockId}`);
+    id: (kind, fixtureId) => {
+      const n = map[KIND_KEYS[kind]].get(fixtureId);
+      if (n === undefined) throw new Error(`夹具里没有 ${kind} ${fixtureId}`);
       return String(n);
     },
     // 新建的实体（夹具里没有）原样返回，断言时自己处理
@@ -104,7 +94,7 @@ function idFields(o: Obj): Partial<Record<string, Kind>> {
   return {};
 }
 
-/** 把输出里的所有 id 换回 mock id，便于两边 deep equal */
+/** 把输出里的所有 id 换回夹具 id，便于断言和快照 */
 export function canon<T>(env: ContractEnv, value: T): T {
   const walk = (v: unknown): unknown => {
     if (Array.isArray(v)) return v.map(walk);
@@ -127,8 +117,7 @@ export function canon<T>(env: ContractEnv, value: T): T {
   return walk(value) as T;
 }
 
-/** 契约分组：sqlite 这边只有 task 在 SQLITE_READY 里时才跑，否则 skip（mock 永远跑） */
-export function contract(task: string, title: string, name: 'mock' | 'sqlite', body: () => void): void {
-  const run = name === 'mock' || SQLITE_READY.has(task);
-  (run ? describe : describe.skip)(`${title}（${task}）`, body);
+/** 一组用例，标题带任务编号 */
+export function contract(task: string, title: string, body: () => void): void {
+  describe(`${title}（${task}）`, body);
 }

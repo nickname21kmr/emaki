@@ -10,7 +10,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.ts';
 import type { EventBus } from '../core/events.ts';
-import type { DataSource } from '../datasource/DataSource.ts';
+import type { JobData, SettingsData } from '../datasource/DataSource.ts';
 import { BadRequestError } from '../http/errors.ts';
 import { checkNetwork } from '../net/check.ts';
 import { idParam, parse, ratingSchema } from '../http/validate.ts';
@@ -24,13 +24,13 @@ const rootMode = z.enum(['auto', 'comic']);
 const themeTags = z.array(z.string().trim().min(1).max(100)).max(CUSTOM_THEME_LIMITS.tags);
 
 /** 设置、图库文件夹、后台任务、SSE、撤销 */
-export function systemRoutes(app: FastifyInstance, ds: DataSource, bus: EventBus): void {
+export function systemRoutes(app: FastifyInstance, ds: SettingsData & JobData, bus: EventBus): void {
   // ---------------------------------------------------------- 设置
 
-  // 不经过 DataSource，mock 与 sqlite 通用
+  // 不经过数据层
   app.post('/api/system/pick-folder', async (): Promise<PickFolderResponse> => ({ path: await pickFolder() }));
 
-  // 真的会联网（mock 下也是），用来排查连不上 Danbooru
+  // 真的会联网（演示模式下也是），用来排查连不上 Danbooru
   app.post('/api/system/network-check', (): Promise<NetworkCheckResponse> => checkNetwork());
 
   app.get('/api/settings', () => ds.getSettings());

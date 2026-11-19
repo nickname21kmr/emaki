@@ -1,11 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import type { DataSource } from '../datasource/DataSource.ts';
+import type { CharacterData, LibraryData } from '../datasource/DataSource.ts';
 import { NotFoundError } from '../http/errors.ts';
 import { idParam, parse, qBool, qNumber } from '../http/validate.ts';
 
 /** 统计、作品、角色、搜索 */
-export function libraryRoutes(app: FastifyInstance, ds: DataSource): void {
+export function libraryRoutes(app: FastifyInstance, ds: LibraryData & CharacterData): void {
   app.get('/api/stats', () => ds.getStats());
   app.get('/api/content-kinds', () => ds.listContentKinds());
 

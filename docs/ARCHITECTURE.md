@@ -19,9 +19,8 @@
 │  routes/{library,images,system}.ts   ← 只做参数校验 + 调用 DataSource                           │
 │              │                                                                               │
 │              ▼                                                                               │
-│  DataSource 接口 (datasource/DataSource.ts)  ◀── 架构的核心接缝                                 │
-│      ├── MockDataSource   内存假数据 + SVG 占位图（已完成，默认）                                  │
-│      └── SqliteDataSource SQLite + 文件系统（待实现，见 TASKS.md）                               │
+│  DataSource 接口 (datasource/DataSource.ts)                                                   │
+│      └── SqliteDataSource SQLite + 文件系统（演示模式也用它，换成 src/demo 导入的演示库）         │
 │              │                                                                               │
 │              ├── core/  JobQueue（串行后台任务） UndoStack（撤销） EventBus（→ SSE）              │
 │              └── services/  scanner · thumbnails · tagger(WD14/ONNX) · danbooru · dedupe       │
@@ -43,11 +42,12 @@ emaki/
 │  ├─ config.ts        环境变量
 │  ├─ routes/          HTTP 路由（zod 校验）
 │  ├─ http/            错误类型（NotImplementedError 带任务编号）、校验工具
-│  ├─ core/            JobQueue / UndoStack / EventBus（mock 与真实实现共用）
+│  ├─ core/            JobQueue / UndoStack / EventBus
 │  ├─ datasource/
-│  │  ├─ DataSource.ts          接口
-│  │  ├─ mock/                  参考实现（行为基准）
-│  │  └─ sqlite/                真实实现（桩，按 TASKS.md 填）
+│  │  ├─ DataSource.ts          接口：按领域拆成 LibraryData / CharacterData / ImageData / SettingsData 等，DataSource 是它们的合集
+│  │  └─ sqlite/                实现：SqliteDataSource 只创建模块、转发请求；open.ts 管启动和后台任务组装，
+│  │                            libraryRoots / settingsOps / imageOps / moveOps 等各管一块
+│  ├─ demo/            演示图库：假数据、占位图、导入（--demo）
 │  └─ db/schema.sql    完整表结构（v1）
 └─ apps/web/src/
    ├─ main.tsx / router.tsx
@@ -66,8 +66,12 @@ emaki/
 ### 1. 本地 Web 应用，而不是桌面壳
 Node 后端 + 浏览器前端，`npm run dev` 就能用。以后要做成桌面程序，套一个 Electron / Tauri 壳即可（T23），前后端代码不用改。
 
-### 2. DataSource 接口 = 前后端解耦点
-路由层只认 `DataSource` 接口。`MockDataSource` 完整实现了所有行为（过滤、排序、分页、撤销、后台任务进度、SSE），所以**前端可以完全独立开发**；后端逐个方法把 `SqliteDataSource` 填完，行为对齐 mock，然后 `EMAKI_DATA_SOURCE=sqlite` 一切换，前端零改动。T24 会写一套契约测试同时跑两个实现。
+### 2. DataSource 接口，一个实现
+路由层只认数据层接口，实现是 `SqliteDataSource`。接口按领域拆成几个小接口，每个路由文件只依赖自己用到的（例如 `routes/system.ts` 只要 `SettingsData & JobData`），改一块不会牵连别的路由。早期还有一个内存版的 `MockDataSource`，让前端在 SQLite 版写完之前就能开发；SQLite 版完成后两份要同步改，后来去掉了。
+
+`SqliteDataSource` 本身只创建各模块、把请求转过去；启动顺序（迁移、回填、收拢角色）和后台任务链的组装在 `sqlite/open.ts`，图库文件夹、设置、单张图片、移动各有自己的文件。加功能时改对应的模块，门面加一行转发。
+
+演示模式（`npm run dev:demo`）也走 SQLite：启动时把 `src/demo` 的假数据导入一个单独的演示库，图片画成真文件放在 `data/demo-pics`（第一次约一分钟，之后复用），所以演示的就是真实代码。行为测试在 `apps/server/test/contract`，跑在导入了契约夹具的内存库上。
 
 ### 3. 契约放在 packages/shared
 类型只写一遍。改接口的顺序：`shared/api.ts` → 后端 `routes/` → 前端 `lib/api.ts`。TypeScript 会把漏改的地方全部标红。
@@ -102,7 +106,7 @@ WD14 tagger（ONNX，`onnxruntime-node`，Windows 上用 DirectML 走显卡）�
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `EMAKI_DATA_SOURCE` | `sqlite` | `sqlite` 真实数据 / `mock` 演示数据（也可以 `npm run dev:mock`，即命令行 `--mock`，优先级最高） |
+| `EMAKI_DATA_SOURCE` | `sqlite` | `sqlite` 真实图库 / `demo` 演示图库（也可以 `npm run dev:demo`，即命令行 `--demo`，优先级最高）。演示图库的数据在 `<dataDir>/demo`，图片在 `<dataDir>/demo-pics` |
 | `EMAKI_DATA_DIR` | `./data` | 数据库、缩略图缓存、模型文件 |
 | `EMAKI_PORT` | `5174` | 后端端口（前端 dev server 固定 5173，代理 `/api`） |
 | `EMAKI_HOST` | `127.0.0.1` | 只监听本机 |

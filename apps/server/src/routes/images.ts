@@ -3,14 +3,14 @@ import { BROWSE_THEMES, CUSTOM_THEME_LIMITS, THUMB_WIDTHS, UNRECOGNIZED_ANNEX_KI
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { z } from 'zod';
-import type { DataSource, FileResponse } from '../datasource/DataSource.ts';
+import type { DuplicateData, ExclusionData, FileResponse, ImageData, UnrecognizedData } from '../datasource/DataSource.ts';
 import { NotFoundError } from '../http/errors.ts';
 import { idParam, kindSchema, parse, qBool, qKinds, qList, qNumber, ratingSchema } from '../http/validate.ts';
 
 const tagList = qList(z.string().min(1).max(100)).refine((a) => a.length <= CUSTOM_THEME_LIMITS.tags, '标签太多');
 
 /** 图片、未识别、重复、排除 */
-export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
+export function imageRoutes(app: FastifyInstance, ds: ImageData & UnrecognizedData & DuplicateData & ExclusionData): void {
   app.post('/api/images/import', (req) => ds.importImages(parse(z.object({
     rootId: z.string().min(1).max(100), dir: z.string().max(200).default(''),
     keepBoth: z.boolean().optional(),
@@ -233,7 +233,7 @@ function nearestThumbWidth(w: number): ThumbWidth {
   return THUMB_WIDTHS.find((t) => t >= w) ?? THUMB_WIDTHS[THUMB_WIDTHS.length - 1]!;
 }
 
-/** 数据源可以给 etag（sqlite：内容 sha）和自己的缓存策略；mock 不带 etag，走默认的 immutable */
+/** 数据源可以给 etag（内容 sha）和自己的缓存策略；不给就走默认的缓存策略 */
 function sendFile(req: FastifyRequest, reply: FastifyReply, file: FileResponse, defaultCache: string) {
   reply.header('Cache-Control', file.cacheControl ?? defaultCache);
   if (file.etag) {

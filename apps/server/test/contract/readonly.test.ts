@@ -1,13 +1,11 @@
 /**
- * 交叉比对：mock 和 sqlite 跑同一组只读查询，把 id 换回 mock id 后应当完全相同。
- * 只比较两边都 ready 的接口；忽略有意差异的字段（见 README.md）。
+ * 只读查询的整体结果，存成快照：id 换回夹具 id，去掉封面、主色这类按选图规则会变的字段。
+ * 快照最早是 mock 和 sqlite 两边逐字段一致时的结果（mock 去掉前的交叉比对）。改了行为就看 diff 确认后更新快照。
  */
 import { describe, expect, it } from 'vitest';
 import type { DataSource } from '../../src/datasource/DataSource.ts';
-import { canon, mockFactory, sqliteFactory, type ContractEnv } from './harness.ts';
-import { SQLITE_READY } from './ready.ts';
+import { canon, sqliteFactory, type ContractEnv } from './harness.ts';
 
-// covers / coverColor：作品封面具体是哪几张、封面主色，两边的兜底选图本来就不同（有意差异，见 README）
 const IGNORED = new Set(['newCount', 'coverImageId', 'coverRating', 'dominantColor', 'color', 'customMatchableCount', 'covers', 'coverColor']);
 
 function strip(v: unknown): unknown {
@@ -26,17 +24,14 @@ const QUERIES: { task: string; title: string; run: (ds: DataSource, e: ContractE
   { task: 'T34a', title: 'unrecognizedSummary', run: (ds) => ds.unrecognizedSummary() },
 ];
 
-describe('mock 与 sqlite 结果一致', () => {
+describe('只读查询', () => {
   for (const q of QUERIES) {
-    (SQLITE_READY.has(q.task) ? it : it.skip)(`${q.title}（${q.task}）`, async () => {
-      const [m, s] = await Promise.all([mockFactory(), sqliteFactory()]);
+    it(`${q.title}（${q.task}）`, async () => {
+      const env = await sqliteFactory();
       try {
-        const a = strip(canon(m, await q.run(m.ds, m)));
-        const b = strip(canon(s, await q.run(s.ds, s)));
-        expect(b).toEqual(a);
+        expect(strip(canon(env, await q.run(env.ds, env)))).toMatchSnapshot();
       } finally {
-        await m.close();
-        await s.close();
+        await env.close();
       }
     });
   }

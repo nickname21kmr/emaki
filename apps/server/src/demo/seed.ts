@@ -1,13 +1,14 @@
 /**
- * 把 mock 的假数据导入 SQLite：开发、演示和契约测试共用。
- * 一个事务里按依赖顺序插入，返回 mock id → sqlite 整数 id 的映射。
+ * 把假数据（fixtures.ts 的演示库、test/fixtures 的契约夹具）导入 SQLite：演示模式和测试共用。
+ * 一个事务里按依赖顺序插入，返回夹具 id（i1 / c1 …）→ sqlite 整数 id 的映射。
  */
 import { searchKey } from '@emaki/shared';
-import type { Db } from '../../db/connection.ts';
-import { mockDominantColor, workColorFromHue } from '../../util/color.ts';
-import { CLASSIFIER_VERSION } from '../../services/classify/rules.ts';
-import { artScore, classifyTheme } from '../../services/classify/theme.ts';
-import type { MockDb } from '../mock/fixtures.ts';
+import { createHash } from 'node:crypto';
+import type { Db } from '../db/connection.ts';
+import { seedDominantColor, workColorFromHue } from '../util/color.ts';
+import { CLASSIFIER_VERSION } from '../services/classify/rules.ts';
+import { artScore, classifyTheme } from '../services/classify/theme.ts';
+import type { SeedDb } from './fixtures.ts';
 
 export interface IdMap {
   roots: Map<string, number>;
@@ -22,7 +23,7 @@ const EPOCH = '1970-01-01T00:00:00.000Z';
 /** 种子实体的创建时间放在很早，保证不影响「+N」计算 */
 const SEED_CREATED = '2000-01-01T00:00:00.000Z';
 
-export function seedFromMockDb(db: Db, mock: MockDb, opts: { now: number }): IdMap {
+export function seedDatabase(db: Db, src: SeedDb, opts: { now: number }): IdMap {
   const nowIso = new Date(opts.now).toISOString();
   const map: IdMap = {
     roots: new Map(),
@@ -47,13 +48,13 @@ export function seedFromMockDb(db: Db, mock: MockDb, opts: { now: number }): IdM
   db.transaction(() => {
     // 图库文件夹
     const insRoot = db.prepare('INSERT INTO library_roots (path, enabled, last_scan_at) VALUES (?, ?, ?)');
-    for (const r of mock.settings.libraryRoots) {
+    for (const r of src.settings.libraryRoots) {
       map.roots.set(r.id, Number(insRoot.run(r.path, r.enabled ? 1 : 0, r.lastScanAt).lastInsertRowid));
     }
 
     // 作品
     const insWork = db.prepare('INSERT INTO works (name, danbooru_tag, color, created_at) VALUES (?, ?, ?, ?)');
-    for (const w of mock.works.values()) {
+    for (const w of src.works.values()) {
       const id = Number(insWork.run(w.name, w.danbooruTag, workColorFromHue(w.hue), SEED_CREATED).lastInsertRowid);
       map.works.set(w.id, id);
       addAliases('work', id, w.aliases);
@@ -64,7 +65,7 @@ export function seedFromMockDb(db: Db, mock: MockDb, opts: { now: number }): IdM
       'INSERT INTO characters (name, danbooru_tag, source, pinned, cover_focus_x, cover_focus_y, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     );
     const insCw = db.prepare('INSERT INTO character_works (character_id, work_id, position) VALUES (?, ?, ?)');
-    for (const c of mock.characters.values()) {
+    for (const c of src.characters.values()) {
       const id = Number(
         insChar.run(c.name, c.danbooruTag, c.source, c.pinned ? 1 : 0, c.coverFocus?.x ?? null, c.coverFocus?.y ?? null, SEED_CREATED)
           .lastInsertRowid,
@@ -76,7 +77,7 @@ export function seedFromMockDb(db: Db, mock: MockDb, opts: { now: number }): IdM
 
     // 排除规则（image 类的 target 等图片插入后再改）
     const insEx = db.prepare('INSERT INTO exclusions (kind, target, label, created_at) VALUES (?, ?, ?, ?)');
-    for (const e of mock.exclusions) {
+    for (const e of src.exclusions) {
       const target = e.kind === 'character' ? String(need(map.characters, e.target, '角色')) : e.target;
       map.exclusions.set(e.id, Number(insEx.run(e.kind, target, e.label, e.createdAt).lastInsertRowid));
     }
@@ -88,7 +89,7 @@ export function seedFromMockDb(db: Db, mock: MockDb, opts: { now: number }): IdM
       VALUES (@root, @relPath, @fileName, @width, @height, @bytes, @format, @sha256, @dominant, @rating, @favorite,
         @site, @postId, @artist, @url, @addedAt, @modifiedAt, @taggedAt, @excludedBy, @trashedAt,
         @kind, @kindSource, @kindEvidence, @kindManual, @kindVersion, '', @shelvedAt)`);
-    for (const img of mock.images.values()) {
+    for (const img of src.images.values()) {
       const id = Number(
         insImg.run({
           root: need(map.roots, img.libraryRootId, '图库文件夹'),
@@ -98,8 +99,9 @@ export function seedFromMockDb(db: Db, mock: MockDb, opts: { now: number }): IdM
           height: img.height,
           bytes: img.bytes,
           format: img.format,
-          sha256: `seed:${img.id}`,
-          dominant: mockDominantColor(img.hue, img.id),
+          // 确定的十六进制值：缩略图按它命名（文件名里不能有冒号），演示库重启后缓存还能用
+          sha256: createHash('sha256').update(`emaki-seed:${img.id}`).digest('hex'),
+          dominant: seedDominantColor(img.hue, img.id),
           rating: img.rating,
           favorite: img.favorite ? 1 : 0,
           site: img.source?.site ?? null,
@@ -111,7 +113,7 @@ export function seedFromMockDb(db: Db, mock: MockDb, opts: { now: number }): IdM
           taggedAt: img.tagged ? img.addedAt : null,
           excludedBy: img.excludedBy ? need(map.exclusions, img.excludedBy, '排除规则') : null,
           trashedAt: img.trashed ? nowIso : null,
-          // 内容类型照 mock 导入（BI-7），版本写成当前值，启动回填不会改它
+          // 内容类型照夹具导入（BI-7），版本写成当前值，启动回填不会改它
           kind: img.kind ?? 'illustration',
           kindSource: img.kindManual ? 'manual' : (img.kindSource ?? 'default'),
           kindEvidence: img.kindEvidence ?? null,
@@ -123,7 +125,7 @@ export function seedFromMockDb(db: Db, mock: MockDb, opts: { now: number }): IdM
       map.images.set(img.id, id);
     }
     const fixEx = db.prepare("UPDATE exclusions SET target = ? WHERE id = ? AND kind = 'image'");
-    for (const e of mock.exclusions) {
+    for (const e of src.exclusions) {
       if (e.kind === 'image') fixEx.run(String(need(map.images, e.target, '图片')), need(map.exclusions, e.id, '排除规则'));
     }
 
@@ -139,12 +141,12 @@ export function seedFromMockDb(db: Db, mock: MockDb, opts: { now: number }): IdM
     const setTheme = db.prepare('UPDATE images SET theme = ?, art_score = ? WHERE id = ?');
     const insArtist = db.prepare('INSERT OR IGNORE INTO image_artists (image_id, artist, score) VALUES (?, ?, ?)');
     const setArtist = db.prepare('UPDATE images SET artist_checked_at = ?, artist_manual = ? WHERE id = ?');
-    for (const img of mock.images.values()) {
+    for (const img of src.images.values()) {
       const iid = map.images.get(img.id)!;
       const viaChars = new Set<string>();
       for (const cid of img.characterIds) {
         insIc.run(iid, need(map.characters, cid, '角色'), img.addedAt);
-        for (const w of mock.characters.get(cid)?.workIds ?? []) viaChars.add(w);
+        for (const w of src.characters.get(cid)?.workIds ?? []) viaChars.add(w);
       }
       // 不经角色得到的作品（只有 copyright 没角色的图）
       for (const wid of img.copyrightWorkIds) if (!viaChars.has(wid)) insIcr.run(iid, need(map.works, wid, '作品'));
@@ -155,7 +157,7 @@ export function seedFromMockDb(db: Db, mock: MockDb, opts: { now: number }): IdM
       for (const [tag, score] of img.suggestions) insSug.run(iid, tag, score);
       for (const a of img.artists ?? []) insArtist.run(iid, a.tag, a.score);
       if (img.artists || img.artistsManual) setArtist.run(img.addedAt, img.artistsManual ? 1 : 0, iid);
-      // 主题和质量分：与 mock 现算一致（T27 补充第 8 条）
+      // 主题和质量分：按夹具里的标签算好（T27 补充第 8 条）
       if (img.tagged) {
         const general = img.tags.filter((t) => t.category === 'general').map((t) => [t.tag, t.score] as [string, number]);
         const score = artScore({ w: img.width, h: img.height, fileName: img.fileName }, general);
@@ -168,7 +170,7 @@ export function seedFromMockDb(db: Db, mock: MockDb, opts: { now: number }): IdM
       'INSERT INTO duplicate_groups (kind, similarity, suggested_keep_id, resolved_at, ignored, created_at) VALUES (?, ?, ?, ?, 0, ?)',
     );
     const insMember = db.prepare('INSERT INTO duplicate_members (group_id, image_id) VALUES (?, ?)');
-    for (const d of mock.duplicates) {
+    for (const d of src.duplicates) {
       const gid = Number(
         insGroup.run(d.kind, d.similarity, need(map.images, d.suggestedKeepId, '图片'), d.resolved ? nowIso : null, nowIso)
           .lastInsertRowid,
@@ -180,8 +182,8 @@ export function seedFromMockDb(db: Db, mock: MockDb, opts: { now: number }): IdM
     // 封面 + 「+N」还原：把 last_seen_at 设在第 N+1 新的关联上
     // 种子里写明的封面都是「用户设的」（T25.5 cover_manual），其余交给自动选图
     const setChar = db.prepare('UPDATE characters SET cover_image_id = ?, cover_manual = ?, last_seen_at = ? WHERE id = ?');
-    for (const c of mock.characters.values()) {
-      const counted = [...mock.images.values()]
+    for (const c of src.characters.values()) {
+      const counted = [...src.images.values()]
         .filter((img) => img.characterIds.includes(c.id) && !img.excludedBy && !img.trashed)
         .map((img) => img.addedAt)
         .sort()

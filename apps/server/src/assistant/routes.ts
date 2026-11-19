@@ -71,8 +71,8 @@ export function assistantRoutes(app: FastifyInstance, ds: DataSource) {
     const auth = service.authorize(token);
     // MCP SDK 和 sharp 用到时才加载，助手没开时启动不付这份开销
     const [{ StreamableHTTPServerTransport }, { createLibraryMcp }] = await Promise.all([import('@modelcontextprotocol/sdk/server/streamableHttp.js'), import('./tools.ts')]);
-    // SQL 工具直接读库文件，只有真实 SQLite 数据源才提供；--mock 下不能去读开发机上的真实图库
-    const file = config.dataSource === 'sqlite' ? path.join(config.dataDir, 'emaki.sqlite') : null;
+    // SQL 工具直接读库文件；演示模式下 dataDir 是演示库自己的目录
+    const file = path.join(config.dataDir, 'emaki.sqlite');
     const server = createLibraryMcp(app, ds, file, service, auth.scope, auth.sessionId);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport); reply.hijack();

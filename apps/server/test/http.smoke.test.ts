@@ -1,17 +1,18 @@
 /**
- * T24 第 9 步：HTTP 冒烟。buildApp(MockDataSource) + app.inject，每个路由请求一次，断言状态码与 JSON 结构，
- * 确认路由、zod 校验、错误处理接线正确。数据用契约夹具（固定 NOW，id 是 i1 / c1 / w1 这种 mock id）。
+ * T24 第 9 步：HTTP 冒烟。buildApp(SqliteDataSource) + app.inject，每个路由请求一次，断言状态码与 JSON 结构，
+ * 确认路由、zod 校验、错误处理接线正确。数据用契约夹具（固定 NOW），夹具 id（i1 / c1 / w1 …）用 fx() 换成 sqlite 的 id。
+ * 只有 i1 在磁盘上有真实文件（临时目录），缩略图和原图接口拿它测。
  * 最后一条用例从 src/app.ts、src/routes/*.ts 里扫出全部路由，确保这里每个都测到了（新增路由忘了补冒烟会失败）。
  */
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
+import sharp from 'sharp';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.ts';
-import { EventBus } from '../src/core/events.ts';
-import { MockDataSource } from '../src/datasource/mock/MockDataSource.ts';
-import { NOW } from './contract/harness.ts';
-import { buildContractDb } from './fixtures/contract-db.ts';
+import type { SqliteDataSource } from '../src/datasource/sqlite/SqliteDataSource.ts';
+import { sqliteFactory, type ContractEnv, type Kind } from './contract/harness.ts';
+import { makeTmpDir } from './helpers/tmp.ts';
 
 // 真实实现会弹出 Windows 的选择文件夹对话框，测试里换成固定返回值
 vi.mock('../src/system/pickFolder.ts', () => ({ pickFolder: async () => 'D:/Picked' }));
@@ -40,18 +41,38 @@ afterAll(() => {
 });
 
 let app: FastifyInstance;
-let ds: MockDataSource;
-let bus: EventBus;
+let env: ContractEnv;
+let ds: SqliteDataSource;
+let pics: string;
 beforeEach(async () => {
-  bus = new EventBus();
-  ds = new MockDataSource(bus, { db: buildContractDb(NOW), now: NOW });
-  app = await buildApp(ds, bus);
+  env = await sqliteFactory();
+  ds = env.ds;
+  // root1 指到临时目录，给 i1 放一张真图
+  pics = makeTmpDir('smoke-pics');
+  ds.ctx.db.prepare('UPDATE library_roots SET path = ? WHERE id = ?').run(pics.split(path.sep).join('/'), Number(fx('root1')));
+  ds.ctx.invalidate();
+  const i1 = (await ds.getImage(fx('i1')))!;
+  const file = path.join(pics, ...i1.relPath.split('/'));
+  mkdirSync(path.dirname(file), { recursive: true });
+  await sharp({ create: { width: 60, height: 90, channels: 3, background: '#c8a2c8' } }).toFormat(i1.format === 'png' ? 'png' : 'jpeg').toFile(file);
+  app = await buildApp(ds, env.bus);
 });
 afterEach(async () => {
-  // 别让模拟的后台任务在用例之间继续跑
+  // 别让后台任务在用例之间继续跑
   for (const job of await ds.listJobs()) if (job.status === 'queued' || job.status === 'running') await ds.cancelJob(job.id);
   await app.close();
+  await env.close();
+  rmSync(pics, { recursive: true, force: true, maxRetries: 4 });
 });
+
+const KINDS: [RegExp, Kind][] = [[/^root\d+$/, 'root'], [/^i\d+$/, 'image'], [/^c\d+$/, 'character'], [/^w\d+$/, 'work'], [/^x\d+$/, 'exclusion'], [/^d\d+$/, 'duplicate']];
+/** 夹具 id → sqlite id；以 999 结尾的是故意不存在的 id */
+function fx(id: string): string {
+  if (id.endsWith('999')) return '999999';
+  const kind = KINDS.find(([re]) => re.test(id))?.[1];
+  if (!kind) throw new Error(`不是夹具 id：${id}`);
+  return env.id(kind, id);
+}
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 async function call(method: Method, url: string, payload?: unknown) {
@@ -77,14 +98,14 @@ function route(key: string, body: () => Promise<void>) {
 describe('统计、作品、角色、搜索（routes/library.ts）', () => {
   route('POST /api/images/:id/replace', async () => {
     expect((await call('POST','/api/images/img1/replace',{})).status).toBe(400);
-    const response=await call('POST','/api/images/img1/replace',{path:'D:/download.png'});
-    expect(response.status).toBe(400);expect(response.json.error).toContain('演示图库');
+    const response=await call('POST',`/api/images/${fx('i1')}/replace`,{path:path.join(pics,'no-such.png')});
+    expect(response.status).toBe(400);expect(response.json.error).toContain('找不到这个文件');
   });
   route('POST /api/images/import', async () => {
-    expect((await call('POST','/api/images/import',{rootId:'root1',files:[]})).status).toBe(400);
-    const response=await call('POST','/api/images/import',{rootId:'root1',files:[{path:'D:/download.png'}]});
-    expect(response.status).toBe(400);
-    expect(response.json.error).toContain('演示图库');
+    expect((await call('POST','/api/images/import',{rootId:fx('root1'),files:[]})).status).toBe(400);
+    const response=await call('POST','/api/images/import',{rootId:fx('root1'),files:[{path:path.join(pics,'no-such.png')}]});
+    expect(response.status).toBe(200);
+    expect(response.json.items).toEqual([expect.objectContaining({ status: 'failed', error: expect.stringContaining('找不到这个文件') })]);
   });
 
   route('GET /api/library-roots', async () => {
@@ -106,14 +127,14 @@ describe('统计、作品、角色、搜索（routes/library.ts）', () => {
   route('GET /api/works', async () => {
     const { status, json } = await call('GET', '/api/works?sort=imageCount');
     expect(status).toBe(200);
-    expect(json.map((w: { id: string }) => w.id)).toEqual(['w1', 'w2', 'w3']);
+    expect(json.map((w: { id: string }) => w.id)).toEqual([fx('w1'), fx('w2'), fx('w3')]);
     expect((await call('GET', '/api/works?sort=bogus')).status).toBe(400);
   });
 
   route('GET /api/works/:id', async () => {
-    const ok = await call('GET', '/api/works/w1');
-    expect([ok.status, ok.json.id, ok.json.name]).toEqual([200, 'w1', '蔚蓝档案']);
-    const missing = await call('GET', '/api/works/w999');
+    const ok = await call('GET', `/api/works/${fx('w1')}`);
+    expect([ok.status, ok.json.id, ok.json.name]).toEqual([200, fx('w1'), '蔚蓝档案']);
+    const missing = await call('GET', `/api/works/${fx('w999')}`);
     expect([missing.status, missing.json]).toEqual([404, apiError('not_found')]);
   });
 
@@ -130,7 +151,7 @@ describe('统计、作品、角色、搜索（routes/library.ts）', () => {
   route('GET /api/characters/top', async () => {
     const { status, json } = await call('GET', '/api/characters/top?limit=3');
     expect(status).toBe(200);
-    expect(json.map((c: { id: string }) => c.id)).toEqual(['c1', 'c4', 'c2']);
+    expect(json.map((c: { id: string }) => c.id)).toEqual([fx('c1'), fx('c4'), fx('c2')]);
   });
 
   route('GET /api/characters/danbooru-matches', async () => {
@@ -140,50 +161,50 @@ describe('统计、作品、角色、搜索（routes/library.ts）', () => {
   });
 
   route('GET /api/characters/:id', async () => {
-    const { status, json } = await call('GET', '/api/characters/c1');
+    const { status, json } = await call('GET', `/api/characters/${fx('c1')}`);
     expect(status).toBe(200);
-    expect(json).toMatchObject({ character: { id: 'c1', name: '圣园未花' }, works: [{ id: 'w1' }], related: expect.any(Array) });
-    expect((await call('GET', '/api/characters/c999')).status).toBe(404);
+    expect(json).toMatchObject({ character: { id: fx('c1'), name: '圣园未花' }, works: [{ id: fx('w1') }], related: expect.any(Array) });
+    expect((await call('GET', `/api/characters/${fx('c999')}`)).status).toBe(404);
   });
 
   route('GET /api/characters/:id/cover-candidates', async () => {
-    const { status, json } = await call('GET', '/api/characters/c1/cover-candidates?limit=3');
+    const { status, json } = await call('GET', `/api/characters/${fx('c1')}/cover-candidates?limit=3`);
     expect(status).toBe(200);
-    expect(json.items.map((x: { id: string }) => x.id)).toEqual(['i1', 'i2', 'i5']);
-    expect(json.items[0]).toMatchObject({ id: 'i1', coverScore: expect.any(Number), characterIds: ['c1'] });
-    expect((await call('GET', '/api/characters/c1/cover-candidates')).json.items).toHaveLength(8);
-    expect((await call('GET', '/api/characters/c1/cover-candidates?limit=0')).status).toBe(400);
-    expect((await call('GET', '/api/characters/c999/cover-candidates')).status).toBe(404);
+    expect(json.items.map((x: { id: string }) => x.id)).toEqual([fx('i1'), fx('i2'), fx('i5')]);
+    expect(json.items[0]).toMatchObject({ id: fx('i1'), coverScore: expect.any(Number), characterIds: [fx('c1')] });
+    expect((await call('GET', `/api/characters/${fx('c1')}/cover-candidates`)).json.items).toHaveLength(8);
+    expect((await call('GET', `/api/characters/${fx('c1')}/cover-candidates?limit=0`)).status).toBe(400);
+    expect((await call('GET', `/api/characters/${fx('c999')}/cover-candidates`)).status).toBe(404);
   });
 
   route('POST /api/characters', async () => {
-    const { status, json } = await call('POST', '/api/characters', { name: '新角色', workIds: ['w3'] });
+    const { status, json } = await call('POST', '/api/characters', { name: '新角色', workIds: [fx('w3')] });
     expect(status).toBe(200);
     expect(json).toMatchObject({ ...withUndo, character: { name: '新角色', source: 'custom' } });
     expect((await call('POST', '/api/characters', { name: '' })).status).toBe(400);
   });
 
   route('PATCH /api/characters/:id', async () => {
-    const { status, json } = await call('PATCH', '/api/characters/c2', { pinned: true, coverFocus: { x: 0.5, y: 0.5 } });
+    const { status, json } = await call('PATCH', `/api/characters/${fx('c2')}`, { pinned: true, coverFocus: { x: 0.5, y: 0.5 } });
     expect([status, json]).toEqual([200, withUndo]);
-    expect((await call('PATCH', '/api/characters/c2', { coverFocus: { x: 2, y: 0 } })).status).toBe(400);
+    expect((await call('PATCH', `/api/characters/${fx('c2')}`, { coverFocus: { x: 2, y: 0 } })).status).toBe(400);
   });
 
   route('POST /api/characters/:id/seen', async () => {
-    const { status, json } = await call('POST', '/api/characters/c1/seen');
+    const { status, json } = await call('POST', `/api/characters/${fx('c1')}/seen`);
     expect([status, json]).toEqual([200, { ok: true }]);
   });
 
   route('POST /api/characters/:id/merge', async () => {
-    const { status, json } = await call('POST', '/api/characters/c5/merge', { targetId: 'c4' });
+    const { status, json } = await call('POST', `/api/characters/${fx('c5')}/merge`, { targetId: fx('c4') });
     expect([status, json]).toEqual([200, withUndo]);
-    expect((await call('POST', '/api/characters/c1/merge', {})).status).toBe(400);
+    expect((await call('POST', `/api/characters/${fx('c1')}/merge`, {})).status).toBe(400);
   });
 
   route('GET /api/search', async () => {
     const { status, json } = await call('GET', '/api/search?q=ミカ&limit=5');
     expect(status).toBe(200);
-    expect(json).toEqual([{ type: 'character', character: expect.objectContaining({ id: 'c1' }), workName: '蔚蓝档案' }]);
+    expect(json).toEqual([{ type: 'character', character: expect.objectContaining({ id: fx('c1') }), workName: '蔚蓝档案' }]);
     expect((await call('GET', '/api/search?limit=99')).status).toBe(400);
   });
 
@@ -197,7 +218,7 @@ describe('统计、作品、角色、搜索（routes/library.ts）', () => {
 });
 
 describe('合集（routes/collections.ts）', () => {
-  const create = async () => (await call('POST', '/api/collections', { fromImageId: 'i1', kind: 'artbook' })).json.collection.id as string;
+  const create = async () => (await call('POST', '/api/collections', { fromImageId: fx('i1'), kind: 'artbook' })).json.collection.id as string;
 
   route('GET /api/collections', async () => {
     const { status, json } = await call('GET', '/api/collections?pending=true');
@@ -206,10 +227,10 @@ describe('合集（routes/collections.ts）', () => {
   });
 
   route('POST /api/collections', async () => {
-    const { status, json } = await call('POST', '/api/collections', { fromImageId: 'i1', kind: 'artbook' });
+    const { status, json } = await call('POST', '/api/collections', { fromImageId: fx('i1'), kind: 'artbook' });
     expect(status).toBe(200);
     expect(json).toMatchObject({ ...withUndo, collection: { id: expect.any(String), kind: 'artbook', pageCount: 25 } });
-    expect((await call('POST', '/api/collections', { fromImageId: 'i1', kind: 'artbook' })).status).toBe(409);
+    expect((await call('POST', '/api/collections', { fromImageId: fx('i1'), kind: 'artbook' })).status).toBe(409);
   });
 
   route('GET /api/collections/:id', async () => {
@@ -235,7 +256,7 @@ describe('合集（routes/collections.ts）', () => {
 
   route('POST /api/collections/bulk', async () => {
     const id = await create();
-    const { status, json } = await call('POST', '/api/collections/bulk', { ids: [id], action: { type: 'addCharacter', characterId: 'c7' } });
+    const { status, json } = await call('POST', '/api/collections/bulk', { ids: [id], action: { type: 'addCharacter', characterId: fx('c7') } });
     expect([status, json]).toEqual([200, withUndo]);
     expect((await call('POST', '/api/collections/bulk', { ids: [], action: { type: 'review' } })).status).toBe(400);
   });
@@ -255,66 +276,68 @@ describe('图片、未识别、重复、排除（routes/images.ts）', () => {
   });
 
   route('POST /api/images/bulk', async () => {
-    const { status, json } = await call('POST', '/api/images/bulk', { ids: ['i1', 'i2'], action: { type: 'rating', value: 'sensitive' } });
+    const { status, json } = await call('POST', '/api/images/bulk', { ids: [fx('i1'), fx('i2')], action: { type: 'rating', value: 'sensitive' } });
     expect([status, json]).toEqual([200, withUndo]);
-    expect((await call('POST', '/api/images/bulk', { ids: ['i1'], action: { type: 'explode' } })).status).toBe(400);
-    const artist = await call('POST', '/api/images/bulk', { ids: ['i1'], action: { type: 'artist', mode: 'set', artists: ['kantoku'] } });
+    expect((await call('POST', '/api/images/bulk', { ids: [fx('i1')], action: { type: 'explode' } })).status).toBe(400);
+    const artist = await call('POST', '/api/images/bulk', { ids: [fx('i1')], action: { type: 'artist', mode: 'set', artists: ['kantoku'] } });
     expect([artist.status, artist.json]).toEqual([200, withUndo]);
-    expect((await call('GET', '/api/images/i1')).json).toMatchObject({ artists: [{ tag: 'kantoku', name: 'kantoku', tags: ['kantoku'] }], artistsManual: true });
-    expect((await call('POST', '/api/images/bulk', { ids: ['i1'], action: { type: 'artist', mode: 'bogus', artists: [] } })).status).toBe(400);
-    expect((await call('POST', '/api/images/bulk', { ids: ['i1'], action: { type: 'artist-auto' } })).status).toBe(200);
+    expect((await call('GET', `/api/images/${fx('i1')}`)).json).toMatchObject({ artists: [{ tag: 'kantoku', name: 'kantoku', tags: ['kantoku'] }], artistsManual: true });
+    expect((await call('POST', '/api/images/bulk', { ids: [fx('i1')], action: { type: 'artist', mode: 'bogus', artists: [] } })).status).toBe(400);
+    expect((await call('POST', '/api/images/bulk', { ids: [fx('i1')], action: { type: 'artist-auto' } })).status).toBe(200);
   });
 
   route('POST /api/images/move', async () => {
-    // mock 只改记录，不碰文件
-    const { status, json } = await call('POST', '/api/images/move', { characterId: 'c1', rootId: 'root1', dir: '角色/未花' });
+    // 只有 i1 有真实文件，其余的图磁盘上不在
+    const { status, json } = await call('POST', '/api/images/move', { characterId: fx('c1'), rootId: fx('root1'), dir: '角色/未花' });
     expect([status, json]).toEqual([200, withUndo]);
-    expect(json.message).toMatch(/^已移动 \d+ 张到 D:\/Pics\/角色\/未花/);
-    expect((await call('POST', '/api/images/move', { ids: ['i1'], characterId: 'c1', rootId: 'root1', dir: '' })).status).toBe(400);
-    expect((await call('POST', '/api/images/move', { ids: ['i1'], rootId: 'root1', dir: 'a:b' })).status).toBe(400);
+    expect(json.message).toMatch(/^已移动 1 张到 .+\/角色\/未花/);
+    expect((await call('GET', `/api/images/${fx('i1')}`)).json.relPath).toMatch(/^角色\/未花\//);
+    expect((await call('POST', '/api/images/move', { ids: [fx('i1')], characterId: fx('c1'), rootId: fx('root1'), dir: '' })).status).toBe(400);
+    expect((await call('POST', '/api/images/move', { ids: [fx('i1')], rootId: fx('root1'), dir: 'a:b' })).status).toBe(400);
   });
 
   route('POST /api/images/move/preview', async () => {
-    const { status, json } = await call('POST', '/api/images/move/preview', { characterId: 'c1', rootId: 'root1', dir: '角色/未花' });
+    const { status, json } = await call('POST', '/api/images/move/preview', { characterId: fx('c1'), rootId: fx('root1'), dir: '角色/未花' });
     expect(status).toBe(200);
     expect(json).toEqual({ ids: expect.any(Array), alreadyThere: expect.any(Number), inCollection: expect.any(Number), otherCharacters: expect.any(Number) });
     expect(json.ids.length).toBeGreaterThan(0);
     // 预览可以 ids + characterId 一起给（选中的图里有几张还属于别的角色）
-    expect((await call('POST', '/api/images/move/preview', { ids: ['i1'], characterId: 'c1', rootId: 'root1', dir: '' })).status).toBe(200);
-    expect((await call('POST', '/api/images/move/preview', { rootId: 'root1', dir: '' })).status).toBe(400);
+    expect((await call('POST', '/api/images/move/preview', { ids: [fx('i1')], characterId: fx('c1'), rootId: fx('root1'), dir: '' })).status).toBe(200);
+    expect((await call('POST', '/api/images/move/preview', { rootId: fx('root1'), dir: '' })).status).toBe(400);
   });
 
   route('GET /api/images/:id', async () => {
-    const { status, json } = await call('GET', '/api/images/i1');
+    const { status, json } = await call('GET', `/api/images/${fx('i1')}`);
     expect(status).toBe(200);
-    expect(json).toMatchObject({ id: 'i1', favorite: true, characterIds: ['c1'], tags: expect.any(Array), characterSuggestions: [] });
-    expect((await call('GET', '/api/images/i999')).status).toBe(404);
+    expect(json).toMatchObject({ id: fx('i1'), favorite: true, characterIds: [fx('c1')], tags: expect.any(Array), characterSuggestions: [] });
+    expect((await call('GET', `/api/images/${fx('i999')}`)).status).toBe(404);
   });
 
   route('PATCH /api/images/:id', async () => {
-    const { status, json } = await call('PATCH', '/api/images/i2', { favorite: true, rating: 'general' });
+    const { status, json } = await call('PATCH', `/api/images/${fx('i2')}`, { favorite: true, rating: 'general' });
     expect([status, json]).toEqual([200, withUndo]);
-    expect((await call('PATCH', '/api/images/i2', { rating: 'nsfw' })).status).toBe(400);
+    expect((await call('PATCH', `/api/images/${fx('i2')}`, { rating: 'nsfw' })).status).toBe(400);
   });
 
   route('GET /api/images/:id/thumb', async () => {
-    const { status, res } = await call('GET', '/api/images/i1/thumb?w=300');
+    const { status, res } = await call('GET', `/api/images/${fx('i1')}/thumb?w=300`);
     expect(status).toBe(200);
-    expect(res.headers['content-type']).toContain('image/svg+xml');
-    expect(res.headers['cache-control']).toBe('public, max-age=31536000, immutable');
-    expect(res.body).toContain('<svg');
-    expect((await call('GET', '/api/images/i999/thumb')).status).toBe(404);
+    expect(res.headers['content-type']).toBe('image/webp');
+    expect(res.headers['cache-control']).toBe('private, no-cache');
+    expect(res.headers.etag).toEqual(expect.any(String));
+    expect((await call('GET', `/api/images/${fx('i999')}/thumb`)).status).toBe(404);
   });
 
   route('GET /api/images/:id/file', async () => {
-    const { status, res } = await call('GET', '/api/images/i1/file');
+    const { status, res } = await call('GET', `/api/images/${fx('i1')}/file`);
     expect(status).toBe(200);
-    expect(res.headers['content-type']).toContain('image/svg+xml');
-    expect(res.headers['cache-control']).toBe('private, max-age=3600');
+    expect(res.headers['content-type']).toBe((await ds.getImage(fx('i1')))!.format === 'png' ? 'image/png' : 'image/jpeg');
+    expect(res.headers['cache-control']).toBe('private, no-cache');
+    expect((await call('GET', `/api/images/${fx('i2')}/file`)).status).toBe(404); // 磁盘上没有这个文件
   });
 
   route('POST /api/images/:id/reveal', async () => {
-    const { status, json } = await call('POST', '/api/images/i1/reveal');
+    const { status, json } = await call('POST', `/api/images/${fx('i1')}/reveal`);
     expect([status, json]).toEqual([200, { ok: true }]);
   });
 
@@ -344,32 +367,32 @@ describe('图片、未识别、重复、排除（routes/images.ts）', () => {
   });
 
   route('POST /api/unrecognized/:id/accept', async () => {
-    const { status, json } = await call('POST', '/api/unrecognized/i26/accept', { danbooruTag: 'mika_(blue_archive)' });
+    const { status, json } = await call('POST', `/api/unrecognized/${fx('i26')}/accept`, { danbooruTag: 'mika_(blue_archive)' });
     expect([status, json]).toEqual([200, withUndo]);
-    expect((await call('POST', '/api/unrecognized/i26/accept', { danbooruTag: '' })).status).toBe(400);
+    expect((await call('POST', `/api/unrecognized/${fx('i26')}/accept`, { danbooruTag: '' })).status).toBe(400);
     // 一次采纳多条
-    const many = await call('POST', '/api/unrecognized/i24/accept', { danbooruTags: ['mika_(blue_archive)', 'yuuka_(blue_archive)'] });
+    const many = await call('POST', `/api/unrecognized/${fx('i24')}/accept`, { danbooruTags: ['mika_(blue_archive)', 'yuuka_(blue_archive)'] });
     expect([many.status, many.json]).toEqual([200, withUndo]);
-    expect((await call('POST', '/api/unrecognized/i24/accept', { danbooruTags: [] })).status).toBe(400);
+    expect((await call('POST', `/api/unrecognized/${fx('i24')}/accept`, { danbooruTags: [] })).status).toBe(400);
   });
 
   route('GET /api/duplicates', async () => {
     const open = await call('GET', '/api/duplicates');
     expect(open.status).toBe(200);
-    expect(open.json).toEqual([expect.objectContaining({ id: 'd1', kind: 'similar', suggestedKeepId: 'i15', images: expect.any(Array) })]);
-    expect((await call('GET', '/api/duplicates?resolved=true')).json.map((g: { id: string }) => g.id)).toContain('d2');
+    expect(open.json).toEqual([expect.objectContaining({ id: fx('d1'), kind: 'similar', suggestedKeepId: fx('i15'), images: expect.any(Array) })]);
+    expect((await call('GET', '/api/duplicates?resolved=true')).json.map((g: { id: string }) => g.id)).toContain(fx('d2'));
   });
 
   route('POST /api/duplicates/:id/resolve', async () => {
-    const { status, json } = await call('POST', '/api/duplicates/d1/resolve', { keepIds: ['i15'] });
+    const { status, json } = await call('POST', `/api/duplicates/${fx('d1')}/resolve`, { keepIds: [fx('i15')] });
     expect([status, json]).toEqual([200, withUndo]);
-    expect((await call('POST', '/api/duplicates/d1/resolve', { keepIds: [] })).status).toBe(400);
+    expect((await call('POST', `/api/duplicates/${fx('d1')}/resolve`, { keepIds: [] })).status).toBe(400);
   });
 
   route('POST /api/duplicates/:id/ignore', async () => {
-    const { status, json } = await call('POST', '/api/duplicates/d1/ignore');
+    const { status, json } = await call('POST', `/api/duplicates/${fx('d1')}/ignore`);
     expect([status, json]).toEqual([200, withUndo]);
-    expect((await call('POST', '/api/duplicates/d999/ignore')).status).toBe(404);
+    expect((await call('POST', `/api/duplicates/${fx('d999')}/ignore`)).status).toBe(404);
   });
 
   route('GET /api/exclusions', async () => {
@@ -377,8 +400,8 @@ describe('图片、未识别、重复、排除（routes/images.ts）', () => {
     expect(status).toBe(200);
     expect(json.map((x: { id: string; kind: string }) => [x.id, x.kind])).toEqual(
       expect.arrayContaining([
-        ['x1', 'folder'],
-        ['x2', 'tag'],
+        [fx('x1'), 'folder'],
+        [fx('x2'), 'tag'],
       ]),
     );
   });
@@ -390,9 +413,9 @@ describe('图片、未识别、重复、排除（routes/images.ts）', () => {
   });
 
   route('DELETE /api/exclusions/:id', async () => {
-    const { status, json } = await call('DELETE', '/api/exclusions/x1');
+    const { status, json } = await call('DELETE', `/api/exclusions/${fx('x1')}`);
     expect([status, json]).toEqual([200, withUndo]);
-    expect((await call('DELETE', '/api/exclusions/x999')).status).toBe(404);
+    expect((await call('DELETE', `/api/exclusions/${fx('x999')}`)).status).toBe(404);
   });
 });
 
@@ -430,7 +453,7 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
 
   route('GET /api/changes', async () => {
     expect(await call('GET', '/api/changes?group=auto')).toMatchObject({ status: 200, json: [] });
-    await call('POST', '/api/images/move', { ids: ['i1'], rootId: 'root1', dir: '别处' });
+    await call('POST', '/api/images/move', { ids: [fx('i1')], rootId: fx('root1'), dir: '别处' });
     const { status, json } = await call('GET', '/api/changes?group=move');
     expect(status).toBe(200);
     expect(json).toEqual([expect.objectContaining({ kind: 'move', count: 1, revertable: true })]);
@@ -438,7 +461,7 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
   });
 
   route('POST /api/changes/:id/revert', async () => {
-    await call('POST', '/api/images/move', { ids: ['i1'], rootId: 'root1', dir: '别处' });
+    await call('POST', '/api/images/move', { ids: [fx('i1')], rootId: fx('root1'), dir: '别处' });
     const [entry] = (await call('GET', '/api/changes?group=move')).json;
     const r = await call('POST', `/api/changes/${entry.id}/revert`);
     expect([r.status, r.json]).toEqual([200, { ok: true, message: '已把 1 张移回原处', undoToken: null }]);
@@ -489,7 +512,7 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
   route('GET /api/settings', async () => {
     const { status, json } = await call('GET', '/api/settings');
     expect(status).toBe(200);
-    expect(json).toMatchObject({ libraryRoots: [{ id: 'root1' }, { id: 'root2' }], tagger: expect.any(Object), ui: { theme: 'system' } });
+    expect(json).toMatchObject({ libraryRoots: [{ id: fx('root1') }, { id: fx('root2') }], tagger: expect.any(Object), ui: { theme: 'system' } });
   });
 
   route('PUT /api/settings', async () => {
@@ -501,7 +524,7 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
     // 未识别里也列出漫画页：默认开；关掉后漫画页离开未识别的列表、汇总和统计
     expect((await call('GET', '/api/settings')).json.tagger.comicInUnrecognized).toBe(true);
     expect((await call('PUT', '/api/settings', { tagger: { comicInUnrecognized: 'no' } })).status).toBe(400);
-    await call('POST', '/api/images/bulk', { ids: ['i25'], action: { type: 'kind', value: 'comic' } });
+    await call('POST', '/api/images/bulk', { ids: [fx('i25')], action: { type: 'kind', value: 'comic' } });
     expect((await call('GET', '/api/unrecognized/summary')).json.art.kinds.comic.total).toBe(1);
     expect((await call('PUT', '/api/settings', { tagger: { comicInUnrecognized: false } })).json.tagger.comicInUnrecognized).toBe(false);
     expect((await call('GET', '/api/unrecognized/summary')).json.art).toMatchObject({ total: 6, kinds: { comic: { total: 0 } } });
@@ -520,32 +543,39 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
   });
 
   route('POST /api/library-roots', async () => {
-    const { status, json } = await call('POST', '/api/library-roots', { path: 'F:/NewPics' });
-    expect([status, json]).toMatchObject([200, mutation]);
-    expect((await call('POST', '/api/library-roots', { path: '' })).status).toBe(400);
-    const comic = await call('POST', '/api/library-roots', { path: 'F:/Manga', mode: 'comic', comicRating: 'questionable' });
-    expect(comic.status).toBe(200);
-    expect((await call('GET', '/api/settings')).json.libraryRoots.find((r: { path: string }) => r.path === 'F:/Manga')).toMatchObject({ mode: 'comic', comicRating: 'questionable' });
-    expect((await call('POST', '/api/library-roots', { path: 'F:/Manga2', mode: 'manga' })).status).toBe(400);
+    const dirs = [makeTmpDir('smoke-new'), makeTmpDir('smoke-manga')];
+    try {
+      const [fresh, manga] = dirs.map((d) => d.split(path.sep).join('/')) as [string, string];
+      const { status, json } = await call('POST', '/api/library-roots', { path: fresh });
+      expect([status, json]).toMatchObject([200, mutation]);
+      expect((await call('POST', '/api/library-roots', { path: '' })).status).toBe(400);
+      expect((await call('POST', '/api/library-roots', { path: path.join(pics, 'no-such') })).status).toBe(400);
+      const comic = await call('POST', '/api/library-roots', { path: manga, mode: 'comic', comicRating: 'questionable' });
+      expect(comic.status).toBe(200);
+      expect((await call('GET', '/api/settings')).json.libraryRoots.find((r: { path: string }) => r.path.toLowerCase() === manga.toLowerCase())).toMatchObject({ mode: 'comic', comicRating: 'questionable' });
+      expect((await call('POST', '/api/library-roots', { path: manga, mode: 'manga' })).status).toBe(400);
+    } finally {
+      for (const d of dirs) rmSync(d, { recursive: true, force: true, maxRetries: 4 });
+    }
   });
 
   route('PATCH /api/library-roots/:id', async () => {
-    const { status, json } = await call('PATCH', '/api/library-roots/root2', { enabled: true });
+    const { status, json } = await call('PATCH', `/api/library-roots/${fx('root2')}`, { enabled: true });
     expect([status, json]).toEqual([200, withUndo]);
-    expect((await call('PATCH', '/api/library-roots/root2', { enabled: 'yes' })).status).toBe(400);
-    const comic = await call('PATCH', '/api/library-roots/root1', { mode: 'comic', comicRating: 'sensitive' });
+    expect((await call('PATCH', `/api/library-roots/${fx('root2')}`, { enabled: 'yes' })).status).toBe(400);
+    const comic = await call('PATCH', `/api/library-roots/${fx('root1')}`, { mode: 'comic', comicRating: 'sensitive' });
     expect([comic.status, comic.json]).toEqual([200, withUndo]);
-    expect((await call('PATCH', '/api/library-roots/root1', { mode: 'auto' })).status).toBe(200);
-    expect((await call('PATCH', '/api/library-roots/root1', {})).status).toBe(400);
-    const sub = await call('PATCH', '/api/library-roots/root1', { comicFolder: { relDir: 'Manga', comicRating: 'sensitive' } });
+    expect((await call('PATCH', `/api/library-roots/${fx('root1')}`, { mode: 'auto' })).status).toBe(200);
+    expect((await call('PATCH', `/api/library-roots/${fx('root1')}`, {})).status).toBe(400);
+    const sub = await call('PATCH', `/api/library-roots/${fx('root1')}`, { comicFolder: { relDir: 'Manga', comicRating: 'sensitive' } });
     expect([sub.status, sub.json]).toEqual([200, withUndo]);
-    expect((await call('PATCH', '/api/library-roots/root1', { removeComicFolder: 'Manga' })).status).toBe(200);
-    expect((await call('PATCH', '/api/library-roots/root1', { removeComicFolder: 'Manga' })).status).toBe(404);
-    expect((await call('PATCH', '/api/library-roots/root1', { comicRating: 'nsfw' })).status).toBe(400);
+    expect((await call('PATCH', `/api/library-roots/${fx('root1')}`, { removeComicFolder: 'Manga' })).status).toBe(200);
+    expect((await call('PATCH', `/api/library-roots/${fx('root1')}`, { removeComicFolder: 'Manga' })).status).toBe(404);
+    expect((await call('PATCH', `/api/library-roots/${fx('root1')}`, { comicRating: 'nsfw' })).status).toBe(400);
   });
 
   route('DELETE /api/library-roots/:id', async () => {
-    const { status, json } = await call('DELETE', '/api/library-roots/root2');
+    const { status, json } = await call('DELETE', `/api/library-roots/${fx('root2')}`);
     expect([status, json]).toEqual([200, withUndo]);
   });
 
@@ -573,16 +603,16 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
   });
 
   route('POST /api/undo/:id', async () => {
-    const token = (await call('POST', '/api/images/bulk', { ids: ['i3'], action: { type: 'favorite', value: true } })).json.undoToken as string;
+    const token = (await call('POST', '/api/images/bulk', { ids: [fx('i3')], action: { type: 'favorite', value: true } })).json.undoToken as string;
     const { status, json } = await call('POST', `/api/undo/${token}`);
     expect([status, json]).toMatchObject([200, mutation]);
-    expect((await call('GET', '/api/images/i3')).json.favorite).toBe(false);
+    expect((await call('GET', `/api/images/${fx('i3')}`)).json.favorite).toBe(false);
     const again = await call('POST', `/api/undo/${token}`);
     expect([again.status, again.json]).toEqual([404, apiError('not_found')]);
   });
 
   route('POST /api/undo/status', async () => {
-    const token = (await call('POST', '/api/images/bulk', { ids: ['i4'], action: { type: 'favorite', value: true } })).json.undoToken as string;
+    const token = (await call('POST', '/api/images/bulk', { ids: [fx('i4')], action: { type: 'favorite', value: true } })).json.undoToken as string;
     const live = await call('POST', '/api/undo/status', { tokens: [token, 'nope'] });
     expect([live.status, live.json]).toEqual([200, { status: { [token]: 'live', nope: 'expired' } }]);
     await call('POST', `/api/undo/${token}`);
@@ -603,7 +633,7 @@ describe('设置、文件夹、任务、SSE、撤销（routes/system.ts、app.ts
       let text = '';
       // 先读到 retry 行，确认订阅已建立，再发一个事件
       while (!text.includes('retry:')) text += decoder.decode((await reader.read()).value);
-      await ds.updateImage('i4', { favorite: true });
+      await ds.updateImage(fx('i4'), { favorite: true });
       while (!text.includes('"type":"library-changed"')) text += decoder.decode((await reader.read()).value);
       expect(text).toMatch(/^retry: 3000\n\n/);
     } finally {
@@ -626,12 +656,12 @@ describe('本机安全（T23）', () => {
   });
 
   it('POST 不是 JSON → 415（防跨站表单 / text/plain）', async () => {
-    const bare = await app.inject({ method: 'POST', url: '/api/characters/c1/seen' });
+    const bare = await app.inject({ method: 'POST', url: `/api/characters/${fx('c1')}/seen` });
     expect([bare.statusCode, bare.json()]).toEqual([415, apiError('bad_request')]);
     const text = await app.inject({ method: 'POST', url: '/api/undo/x', headers: { 'content-type': 'text/plain' }, payload: 'x' });
     expect(text.statusCode).toBe(415);
     // 百分号编码的路径路由时会解码，照样命中 /api/...，也要拦
-    for (const url of ['/%61pi/characters/c1/seen', '/a%70i/system/network-check', '/%61pi/duplicates/d1/ignore']) {
+    for (const url of [`/%61pi/characters/${fx('c1')}/seen`, '/a%70i/system/network-check', `/%61pi/duplicates/${fx('d1')}/ignore`]) {
       const res = await app.inject({ method: 'POST', url, headers: { 'content-type': 'text/plain' }, payload: 'x' });
       expect([url, res.statusCode]).toEqual([url, 415]);
     }
@@ -647,7 +677,7 @@ describe('本机安全（T23）', () => {
   it('自己的页面：Origin 和 Host 一致 → 放行', async () => {
     for (const { host, origin } of own) {
       const headers = { host, origin, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' };
-      const res = await app.inject({ method: 'POST', url: '/api/characters/c1/seen', headers, payload: '{}' });
+      const res = await app.inject({ method: 'POST', url: `/api/characters/${fx('c1')}/seen`, headers, payload: '{}' });
       expect([host, res.statusCode]).toEqual([host, 200]);
       const get = await app.inject({ method: 'GET', url: '/api/health', headers: { host, 'sec-fetch-site': 'same-origin' } });
       expect(get.statusCode).toBe(200);
@@ -660,7 +690,7 @@ describe('本机安全（T23）', () => {
       method: 'POST',
       url: '/api/images/bulk',
       headers: { ...evil, 'sec-fetch-site': 'same-site', 'content-type': 'application/json' },
-      payload: { ids: ['i1'], action: { type: 'trash' } },
+      payload: { ids: [fx('i1')], action: { type: 'trash' } },
     });
     expect([bulk.statusCode, bulk.json()]).toEqual([403, apiError('bad_request')]);
     expect(bulk.headers['access-control-allow-origin']).toBeUndefined();
@@ -677,7 +707,7 @@ describe('本机安全（T23）', () => {
     // 不带 Origin、只有 sec-fetch-site 的写请求也拦
     const noOrigin = await app.inject({
       method: 'POST',
-      url: '/api/characters/c1/seen',
+      url: `/api/characters/${fx('c1')}/seen`,
       headers: { host: '127.0.0.1:5174', 'sec-fetch-site': 'cross-site', 'content-type': 'application/json' },
       payload: '{}',
     });
@@ -685,7 +715,7 @@ describe('本机安全（T23）', () => {
   });
 
   it('跨站的图片 GET（<img>、CSS 背景，不带 Origin）照常放行', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/images/i1/thumb?w=300', headers: { host: '127.0.0.1:5174', 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'no-cors' } });
+    const res = await app.inject({ method: 'GET', url: `/api/images/${fx('i1')}/thumb?w=300`, headers: { host: '127.0.0.1:5174', 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'no-cors' } });
     expect(res.statusCode).toBe(200);
     expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
