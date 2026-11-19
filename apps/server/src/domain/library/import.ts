@@ -59,7 +59,12 @@ export function destination(ctx: SqliteContext, rootId: string, dir: string) {
 /** Bounded reads of regular files only: not a URL downloader or a directory importer. */
 export async function imageBytes(file: string) {
   if (!path.isAbsolute(file)) throw new BadRequestError('请提供下载图片在服务器上的绝对路径');
-  if (!(await stat(file)).isFile()) throw new BadRequestError('请选择普通图片文件');
+  // 文件不在（路径写错、已经被移走）是请求的问题，返回 400 而不是 500（上游 4231568）
+  const st = await stat(file).catch((e: NodeJS.ErrnoException) => {
+    if (e.code === 'ENOENT' || e.code === 'ENOTDIR') throw new BadRequestError(`找不到这个文件：${file}`);
+    throw e;
+  });
+  if (!st.isFile()) throw new BadRequestError('请选择普通图片文件');
   const handle = await open(file, 'r');
   try {
     const before = await handle.stat();

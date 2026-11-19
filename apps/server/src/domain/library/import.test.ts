@@ -71,6 +71,14 @@ it('asks about unindexed same-name files and reports per-file validation failure
   expect(ds.ctx.db.prepare('SELECT COUNT(*) FROM images').pluck().get()).toBe(1);
 });
 
+it('a download that is not there is a bad request (400), not a server error',async()=>{
+  const missing=path.join(downloads,'gone.png'),notDir=path.join(await source(),'child.png');
+  const result=await run([{path:missing},{path:notDir}],'');
+  expect(result.items).toMatchObject([{status:'failed',error:`找不到这个文件：${missing}`},{status:'failed',error:`找不到这个文件：${notDir}`}]);
+  const original=item(await run([{path:await source()}]));
+  await expect(ds.replaceImage(original.imageId,{path:missing})).rejects.toMatchObject({statusCode:400,message:`找不到这个文件：${missing}`});
+});
+
 it('respects comic import mode and supports the same HTML animation adapter',async()=>{
   ds.ctx.db.prepare("UPDATE library_roots SET content_mode='comic',comic_rating='explicit' WHERE id=?").run(rootId);
   const file=await source(), row=item(await run([{path:file}],'comic'));
