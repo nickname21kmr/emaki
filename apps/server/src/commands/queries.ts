@@ -18,6 +18,7 @@ import {
   ListUnrecognizedInput,
   ListWorksInput,
   SearchInput,
+  TagPhraseInput,
   TagSuggestionsInput,
   ThumbInput,
   TopCharactersInput,
@@ -316,6 +317,16 @@ export const queries = [
     scope: 'read',
     http: [{ method: 'GET', path: '/api/tags' }],
     run: (e, q) => e.searchQueries.tagSuggestions(q),
+  }),
+  defineQuery({
+    name: 'search.phrase',
+    summary: '一句话拆成标签（图库搜索框的「按标签」）：「两个黑色长发女孩」→ 2girls + black_hair + long_hair，只给库里有的标签，带同时有这些标签的图数',
+    input: TagPhraseInput,
+    scope: 'read',
+    http: [{ method: 'GET', path: '/api/search/phrase' }],
+    // 张数和图库「必含」（tagsAll）是同一个查询，也共用总数缓存
+    run: (e, q) =>
+      e.searchQueries.tagPhrase(q.q, (tags) => listImages(e.ctx.db, { tagsAll: tags, limit: 1 }, (key, compute) => e.results.get('count:' + key, compute) as number).total),
   }),
 
   // ---------------------------------------------------------------- 合集

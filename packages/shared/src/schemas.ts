@@ -429,6 +429,8 @@ export const SearchInput = z.object({
   forAssignment: qBool.optional(),
 });
 export const TagSuggestionsInput = z.object({ q: z.string().max(100).default(''), limit: qNumber.min(1).max(50).optional() });
+/** GET /api/search/phrase?q= —— 把一句话拆成标签（图库搜索框的「按标签」） */
+export const TagPhraseInput = z.object({ q: z.string().max(100).default('') });
 /** 合集列表：kind、membership 可多选（逗号分隔）；sort=recent&limit=50 是最近加图的 50 本 */
 export const ListCollectionsInput = z.object({
   kind: qList(CollectionKindSchema).optional(),

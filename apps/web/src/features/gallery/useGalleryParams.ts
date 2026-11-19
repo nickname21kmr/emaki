@@ -1,4 +1,13 @@
-import { BROWSE_THEMES, CONTENT_KINDS, type BrowseTheme, type ContentKind, type ImageSort, type ListImagesQuery, type Rating } from '@emaki/shared';
+import {
+  BROWSE_THEMES,
+  CONTENT_KINDS,
+  CUSTOM_THEME_LIMITS,
+  type BrowseTheme,
+  type ContentKind,
+  type ImageSort,
+  type ListImagesQuery,
+  type Rating,
+} from '@emaki/shared';
 import { useCallback, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 import { themeQuery } from '@/lib/customTheme';
@@ -7,7 +16,7 @@ import { usePrefs } from '@/lib/stores';
 import { withParam } from '@/lib/urlPrefs';
 
 /**
- * 图库的筛选状态全部放在 URL 里（?q= &kind= &anim= &rating= &orient= &fav= &sort= &order=），
+ * 图库的筛选状态全部放在 URL 里（?q= &tags= &kind= &anim= &rating= &orient= &fav= &sort= &order=），
  * 刷新 / 前进后退 / 从看图器点标签跳过来都能还原。
  * 看哪些类型是本机偏好（usePrefs.galleryKinds），但它决定列表里有哪些图，所以也一直写在 URL 里：URL 没写时把偏好补进去，
  * 助手拿到的页面上下文和用户看到的一致（P5，附录 #32）。
@@ -23,6 +32,8 @@ export const SORTS: GallerySort[] = ['addedAt', 'modifiedAt', 'fileName', 'bytes
 
 export interface GalleryFilters {
   q: string;
+  /** 必含的一般标签（?tags=a,b），搜索框「按标签」和 ⌘K 的标签加进来；和自定义画面的必含合在一起查 */
+  tags: string[];
   /** 内容类型；URL 没写时用偏好（默认只看插画，D2）。不算「筛选」，清除筛选也不动它 */
   kind: ContentKind[] | 'all';
   /** 只看动图（?anim=1，D5）：和类型是两个维度，在当前类型里再筛 */
@@ -38,6 +49,12 @@ export interface GalleryFilters {
   artist: string | undefined;
   sort: GallerySort;
   order: SortOrder;
+}
+
+/** 自定义画面的必含 + URL 里的标签，去重；接口一组最多 CUSTOM_THEME_LIMITS.tags 个 */
+export function mergeTags(...lists: (readonly string[] | undefined)[]): string[] | undefined {
+  const all = [...new Set(lists.flatMap((l) => l ?? []))].slice(0, CUSTOM_THEME_LIMITS.tags);
+  return all.length ? all : undefined;
 }
 
 /** 每种排序「自然」的方向：文件名 A→Z，其余新 / 大的在前 */
@@ -68,6 +85,7 @@ function parse(params: URLSearchParams, kindFallback: ContentKind[] | 'all'): Ga
   const orderParam = params.get('order');
   return {
     q: params.get('q') ?? '',
+    tags: [...new Set((params.get('tags') ?? '').split(',').filter(Boolean))],
     kind: parseKind(params.get('kind'), kindFallback),
     animated: params.get('anim') === '1',
     // 按固定顺序输出，保证 query key 稳定
@@ -105,6 +123,7 @@ export function useGalleryParams({ ownsKind = true }: { ownsKind?: boolean } = {
             else next.delete(key);
           };
           set('q', merged.q.trim() || undefined);
+          set('tags', merged.tags.length ? [...new Set(merged.tags)].slice(0, CUSTOM_THEME_LIMITS.tags).join(',') : undefined);
           // 类型：一直写在 URL 里；用户换了类型就记成新偏好
           if (patch.kind !== undefined) setKindPref(merged.kind);
           if (ownsKind || patch.kind !== undefined) set('kind', kindParam(merged.kind));
@@ -148,6 +167,7 @@ export function useGalleryParams({ ownsKind = true }: { ownsKind?: boolean } = {
       orientation: filters.orientation,
       theme: filters.theme,
       ...customTags,
+      tagsAll: mergeTags(customTags.tagsAll, filters.tags),
       favorite: filters.favorite || undefined,
       artist: filters.artist,
       sort: filters.sort,
@@ -158,6 +178,7 @@ export function useGalleryParams({ ownsKind = true }: { ownsKind?: boolean } = {
 
   const hasFilters = !!(
     filters.q ||
+    filters.tags.length ||
     filters.animated ||
     filters.rating.length ||
     filters.orientation ||
@@ -169,7 +190,17 @@ export function useGalleryParams({ ownsKind = true }: { ownsKind?: boolean } = {
 
   const clearFilters = useCallback(
     () =>
-      update({ q: '', animated: false, rating: [], orientation: undefined, theme: undefined, custom: undefined, favorite: false, artist: undefined }),
+      update({
+        q: '',
+        tags: [],
+        animated: false,
+        rating: [],
+        orientation: undefined,
+        theme: undefined,
+        custom: undefined,
+        favorite: false,
+        artist: undefined,
+      }),
     [update],
   );
 

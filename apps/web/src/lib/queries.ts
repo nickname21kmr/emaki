@@ -68,6 +68,7 @@ export const qk = {
   exclusions: ['exclusions'] as const,
   search: (q: string) => ['search', q] as const,
   tags: (q: string) => ['tags', q] as const,
+  tagPhrase: (q: string) => ['tag-phrase', q] as const,
   settings: ['settings'] as const,
   taggerModels: ['tagger-models'] as const,
   jobs: ['jobs'] as const,
@@ -237,6 +238,16 @@ export const useTagSuggestions = (q: string, enabled = true) =>
     queryKey: qk.tags(q.trim()),
     queryFn: () => api.tags(q.trim()),
     enabled,
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+  });
+
+/** 一句话拆成标签（图库搜索框的下拉）；空串不发 */
+export const useTagPhrase = (q: string) =>
+  useQuery({
+    queryKey: qk.tagPhrase(q.trim()),
+    queryFn: () => api.tagPhrase(q.trim()),
+    enabled: q.trim().length > 0,
     placeholderData: keepPreviousData,
     staleTime: 30_000,
   });
