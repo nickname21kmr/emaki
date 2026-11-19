@@ -16,10 +16,12 @@ import { readerSpreadFits, useViewport } from '@/lib/viewport';
 import { previousPath } from './previousPath';
 import { useSwipePager } from '@/lib/useSwipePager';
 import { buildSpreads, spreadIndexOf } from './spreads';
+import { useReaderZoom } from './useReaderZoom';
 
 /**
  * 阅读器（T38e）：本子默认双页右开，画集单页左开（按类型记住）；竖屏和窄窗口一律单页（横屏而且宽度 ≥ 840 才双页，A1）。
  * 键盘：← → / 空格 / PageUp PageDown 翻页，Home End 首末页，D 单双页，R 方向，I 看图器，B 模糊，Esc 回扉页。
+ * 触屏：左右滑、点两侧翻页，点中间切换顶栏；双指捏合放大（放大后单指拖动是平移，双击还原，useReaderZoom）。
  * 读到最后一开再往后，出现结尾卡；同系列有下一话时可以直接接着读。
  */
 /** 助手附页并排或覆盖时，阅读器右边让出它的宽度（和 toast 一样） */
@@ -165,15 +167,23 @@ function Reader({ data }: { data: GetCollectionResponse }) {
   }, { enabled: on, preventDefault: false });
 
   // 触屏（A1）：左右滑翻页（跟手，过阈值翻、没过弹回），点两侧三分之一翻页（热区按钮），点中间切换顶栏和胶片条
+  const toggleChrome = () => {
+    window.clearTimeout(idle.current);
+    setChrome((v) => !v);
+  };
   const swipe = useSwipePager({
     hasPrev: cur > 0 || ended,
     rtl,
     onForward: next,
     onBack: prev,
-    onCenterTap: () => {
-      window.clearTimeout(idle.current);
-      setChrome((v) => !v);
-    },
+    onCenterTap: toggleChrome,
+  });
+  // 双指捏合放大（真机走查）：放大时一根手指的拖动、点按归它，翻页的滑动和两侧热区让开；换一开自动还原
+  const stageRef = useRef<HTMLElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const zoom = useReaderZoom(`${cur}:${ended}`, stageRef, boxRef, {
+    onTap: toggleChrome,
+    onPinchStart: () => swipe.handlers.onPointerCancel(),
   });
   // 刚触摸过：浏览器补发的 mousemove 不算「鼠标动了」（不然每点一下顶栏都亮 2.5 秒）
   const onMouseMove = () => {
@@ -229,7 +239,11 @@ function Reader({ data }: { data: GetCollectionResponse }) {
       </header>
 
       <main
-        {...swipe.handlers}
+        ref={stageRef}
+        onPointerDown={(e) => zoom.handlers.onPointerDown(e) || swipe.handlers.onPointerDown(e)}
+        onPointerMove={(e) => zoom.handlers.onPointerMove(e) || swipe.handlers.onPointerMove(e)}
+        onPointerUp={(e) => zoom.handlers.onPointerUp(e) || swipe.handlers.onPointerUp(e)}
+        onPointerCancel={(e) => zoom.handlers.onPointerCancel(e) || swipe.handlers.onPointerCancel()}
         className={cn('relative flex min-h-0 flex-1 touch-none items-center justify-center px-6 compact:px-2', rtl && 'flex-row-reverse')}
       >
         <AnimatePresence mode="wait" initial={false}>
@@ -256,51 +270,80 @@ function Reader({ data }: { data: GetCollectionResponse }) {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ duration: 0.18 }}
-              className={cn('flex items-center justify-center', rtl && 'flex-row-reverse')}
             >
-              {group.map((no) => {
-                const pg = pages[no - 1];
-                if (!pg) return null;
-                // 高度扣掉顶栏 48 和底部进度条 + 胶片条 98，不盖住它们；宽度扣掉助手附页让出的那块
-                const size = 'object-contain max-h-[var(--reader-page-h)]';
-                const maxWidth = group.length > 1 ? 'calc(50vw - 24px - var(--assistant-right, 0px) / 2)' : 'calc(92vw - var(--assistant-right, 0px))';
-                return blurred(pg) ? (
-                  <button
-                    key={pg.imageId}
-                    type="button"
-                    aria-label="显示这一页"
-                    onClick={() => setRevealed((s) => new Set(s).add(pg.imageId))}
-                    className="overflow-hidden"
-                    style={{ aspectRatio: `${pg.width} / ${pg.height}`, height: 'var(--reader-page-h)', maxWidth }}
-                  >
-                    <Thumb
-                      image={pageThumb(pg)}
-                      rated={pg.tagged}
-                      blurContext={context}
-                      width={960}
-                      blurBadge="center"
-                      className="size-full"
+              {/* 缩放的盒子：适应窗口时的大小就是这一开的大小，放大是在它上面 translate + scale */}
+              <div ref={boxRef} style={zoom.style} className={cn('flex items-center justify-center', rtl && 'flex-row-reverse')}>
+                {group.map((no) => {
+                  const pg = pages[no - 1];
+                  if (!pg) return null;
+                  // 高度扣掉顶栏 48 和底部进度条 + 胶片条 98，不盖住它们；宽度扣掉助手附页让出的那块
+                  const size = 'object-contain max-h-[var(--reader-page-h)]';
+                  const maxWidth = group.length > 1 ? 'calc(50vw - 24px - var(--assistant-right, 0px) / 2)' : 'calc(92vw - var(--assistant-right, 0px))';
+                  return blurred(pg) ? (
+                    <button
+                      key={pg.imageId}
+                      type="button"
+                      aria-label="显示这一页"
+                      onClick={() => setRevealed((s) => new Set(s).add(pg.imageId))}
+                      className="overflow-hidden"
+                      style={{ aspectRatio: `${pg.width} / ${pg.height}`, height: 'var(--reader-page-h)', maxWidth }}
+                    >
+                      <Thumb
+                        image={pageThumb(pg)}
+                        rated={pg.tagged}
+                        blurContext={context}
+                        width={960}
+                        blurBadge="center"
+                        className="size-full"
+                      />
+                    </button>
+                  ) : (
+                    <img
+                      key={pg.imageId}
+                      src={imageUrl.file(pg.imageId, pg.modifiedAt)}
+                      alt=""
+                      draggable={false}
+                      decoding="async"
+                      className={size}
+                      style={{ backgroundColor: pg.dominantColor, maxWidth }}
                     />
-                  </button>
-                ) : (
-                  <img
-                    key={pg.imageId}
-                    src={imageUrl.file(pg.imageId, pg.modifiedAt)}
-                    alt=""
-                    draggable={false}
-                    decoding="async"
-                    className={size}
-                    style={{ backgroundColor: pg.dominantColor, maxWidth }}
-                  />
-                );
-              })}
+                  );
+                })}
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
         {/* 点击区：两侧翻页，中间切换顶栏 */}
-        {/* 触屏上正好三分之一（中间那块点了切换顶栏） */}
-        <button type="button" aria-label={rtl ? '下一页' : '上一页'} className="absolute inset-y-0 left-0 w-[30%] cursor-w-resize touch:w-1/3" onClick={() => (rtl ? next() : prev())} />
-        <button type="button" aria-label={rtl ? '上一页' : '下一页'} className="absolute inset-y-0 right-0 w-[30%] cursor-e-resize touch:w-1/3" onClick={() => (rtl ? prev() : next())} />
+        {/* 触屏上正好三分之一（中间那块点了切换顶栏）；放大时让开，点按、拖动归缩放 */}
+        <button
+          type="button"
+          aria-label={rtl ? '下一页' : '上一页'}
+          className={cn('absolute inset-y-0 left-0 w-[30%] cursor-w-resize touch:w-1/3', zoom.zoomed && 'pointer-events-none')}
+          onClick={() => (rtl ? next() : prev())}
+        />
+        <button
+          type="button"
+          aria-label={rtl ? '上一页' : '下一页'}
+          className={cn('absolute inset-y-0 right-0 w-[30%] cursor-e-resize touch:w-1/3', zoom.zoomed && 'pointer-events-none')}
+          onClick={() => (rtl ? prev() : next())}
+        />
+        <AnimatePresence>
+          {zoom.zoomed && (
+            <motion.button
+              key="zoom"
+              type="button"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
+              onClick={zoom.reset}
+              className="absolute top-[calc(env(safe-area-inset-top)+60px)] left-1/2 z-10 flex h-8 -translate-x-1/2 items-center gap-2 rounded-full bg-black/45 px-3.5 text-xs whitespace-nowrap text-white/85 ring-1 ring-white/10 backdrop-blur-md touch-hit"
+            >
+              <span className="font-medium tabular">{Math.round(zoom.zoom.scale * 100)}%</span>
+              <span className="text-white/45">点这里或双击还原</span>
+            </motion.button>
+          )}
+        </AnimatePresence>
       </main>
 
       {/* 触屏：浮在页面底边，顶栏亮着时胶片条一起展开（没有悬停） */}
