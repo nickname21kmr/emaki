@@ -913,7 +913,7 @@ export function searchContract(make: ContractFactory) {
 
     it('标签联想：只要一般标签，按张数；空查询 = 最常见的；被排除的不算', async () => {
       const e = env();
-      const tags = async (q?: string, limit?: number) => (await e.ds.tagSuggestions({ q, limit })).map((t) => `${t.tag}=${t.count}`);
+      const tags = async (q?: string, limit?: number) => (await e.ds.tagSuggestions({ q: q ?? '', limit })).map((t) => `${t.tag}=${t.count}`);
       expect(await tags('thigh')).toEqual(['thighhighs=1']);
       expect(await tags('')).toEqual(['1girl=32', 'thighhighs=1']);
       expect(await tags(undefined, 1)).toEqual(['1girl=32']);

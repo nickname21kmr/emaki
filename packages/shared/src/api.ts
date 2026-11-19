@@ -3,8 +3,11 @@
  *
  * 所有接口都在 `/api` 前缀下，JSON 进 JSON 出。
  * 前端只通过 `apps/web/src/lib/api.ts` 调用；后端路由在 `apps/server/src/routes/`。
- * 改接口时三处一起改：这里 → 后端路由 → 前端 api.ts。
+ * 请求参数（*Query / *Body）的类型从 schemas.ts 的 zod schema 推出来，后端用同一个 schema 校验；响应类型写在这里。
+ * 改请求参数时改 schemas.ts，前端 api.ts 和后端路由的类型会一起跟着变。
  */
+import type { z } from 'zod';
+import type * as S from './schemas.ts';
 import type {
   Character,
   CharacterSource,
@@ -70,21 +73,14 @@ export interface MutationResult {
 }
 
 /** POST /api/images/import: copy downloaded local files into an existing library root. */
-export interface ImportImagesBody {
-  rootId: ID;
-  /** Relative destination folder; empty string means the root itself. */
-  dir: string;
-  files: { path: string; fileName?: string }[];
-  /** Only set when the user wants to keep both versions of a same-named file. */
-  keepBoth?: boolean;
-}
+export type ImportImagesBody = z.infer<typeof S.importImagesBody>;
 export interface ImportImagesResult extends MutationResult {
   items: ({ path: string; status: 'imported' | 'existing'; imageId: ID; absPath: string }
     | { path: string; status: 'failed'; error: string; code?: 'needs_confirm'; existingImageId?: ID })[];
 }
 
 /** POST /api/images/:id/replace: upgrade an existing image, retaining its identity and metadata. */
-export interface ReplaceImageBody { path: string }
+export type ReplaceImageBody = z.infer<typeof S.replaceImageBody>;
 export interface ReplaceImageResult extends MutationResult { imageId: ID; absPath: string }
 
 export interface ApiError {
@@ -102,12 +98,10 @@ export type GetStatsResponse = LibraryStats;
 
 // ---------------------------------------------------------------- 作品
 
-export type WorkSort = 'imageCount' | 'recent' | 'name';
+export type WorkSort = NonNullable<ListWorksQuery['sort']>;
 
 /** GET /api/works?sort= */
-export interface ListWorksQuery {
-  sort?: WorkSort;
-}
+export type ListWorksQuery = z.infer<typeof S.listWorksQuery>;
 export type ListWorksResponse = Work[];
 
 /** GET /api/works/:id */
@@ -115,29 +109,17 @@ export type GetWorkResponse = Work;
 
 // ---------------------------------------------------------------- 角色
 
-export type CharacterSort = 'imageCount' | 'recent' | 'name' | 'newCount';
+export type CharacterSort = NonNullable<ListCharactersQuery['sort']>;
 
 /** GET /api/characters */
-export interface ListCharactersQuery extends PageQuery {
-  /** 作品筛选；特殊值 `recent` = 最近 30 天有新增的 */
-  workId?: ID | 'recent';
-  /** 按名字 / 别名 / Danbooru 标签 / 作品名模糊搜索 */
-  q?: string;
-  sort?: CharacterSort;
-  source?: CharacterSource;
-  /** 也列出「只出现在非插画里」的角色（默认隐藏） */
-  includeOther?: boolean;
-}
+export type ListCharactersQuery = z.infer<typeof S.listCharactersQuery>;
 export type ListCharactersResponse = Page<Character> & {
   /** 当前筛选下被隐藏的「插画 0 张、但有其他类型」的角色数 */
   otherOnlyCount: number;
 };
 
 /** GET /api/characters/top?limit=9 —— 「你最常看的」，按收藏张数排序 */
-export interface TopCharactersQuery {
-  limit?: number;
-  workId?: ID | 'recent';
-}
+export type TopCharactersQuery = z.infer<typeof S.topCharactersQuery>;
 export type TopCharactersResponse = Character[];
 
 /** GET /api/characters/:id */
@@ -149,36 +131,18 @@ export interface GetCharacterResponse {
 }
 
 /** POST /api/characters —— 新建自建角色 */
-export interface CreateCharacterBody {
-  name: string;
-  workIds: ID[];
-  aliases?: string[];
-  danbooruTag?: string | null;
-}
+export type CreateCharacterBody = z.infer<typeof S.createCharacterBody>;
 
 /** PATCH /api/characters/:id */
-export interface UpdateCharacterBody {
-  name?: string;
-  aliases?: string[];
-  danbooruTag?: string | null;
-  workIds?: ID[];
-  coverImageId?: ID | null;
-  coverFocus?: Pick<FocusPoint, 'x' | 'y'> | null;
-  pinned?: boolean;
-}
+export type UpdateCharacterBody = z.infer<typeof S.updateCharacterBody>;
 
 /** POST /api/characters/:id/seen —— 清掉「+N」角标，无 undo */
 
 /** POST /api/characters/:id/merge —— 把 :id 合并进 targetId */
-export interface MergeCharacterBody {
-  targetId: ID;
-}
+export type MergeCharacterBody = z.infer<typeof S.mergeCharacterBody>;
 
 /** GET /api/characters/:id/cover-candidates?limit=12 —— 「换封面」面板（CB-7） */
-export interface CoverCandidatesQuery {
-  /** 默认 12，最多 48 */
-  limit?: number;
-}
+export type CoverCandidatesQuery = z.infer<typeof S.coverCandidatesQuery>;
 
 /** 候选封面：和自动封面同一套排序（漫画页最后 → 分级档位 → 画面质量分）；封面不是手动设的时，第一张就是当前自动封面 */
 export type CoverCandidate = ImageItem & { coverScore: number };
@@ -190,106 +154,28 @@ export interface CoverCandidatesResponse {
 // ---------------------------------------------------------------- 图片
 
 /** page = 合集里的页序，只在 collectionId 是具体 id 时有效，否则当 addedAt */
-export type ImageSort = 'addedAt' | 'modifiedAt' | 'fileName' | 'bytes' | 'random' | 'page';
+export type ImageSort = NonNullable<ListImagesQuery['sort']>;
 
 /** GET /api/images */
-export interface ListImagesQuery extends PageQuery {
-  characterId?: ID;
-  workId?: ID;
-  status?: ImageStatus;
-  rating?: Rating[];
-  /** 文件名 / 标签搜索 */
-  q?: string;
-  orientation?: 'portrait' | 'landscape' | 'square';
-  /** 画面（多归属，只看识别过的图的标签） */
-  theme?: BrowseTheme;
-  /** 自定义画面：有其中任一一般标签（分数达到 TAG_FILTER_MIN_SCORE）的图 */
-  tags?: string[];
-  /** 自定义画面：必含，这些标签每个都要有 */
-  tagsAll?: string[];
-  /** 自定义画面：这些标签一个都不能有 */
-  tagsNone?: string[];
-  favorite?: boolean;
-  /** true = 用户归为原创的图；false = 没归为原创的 */
-  original?: boolean;
-  /** 内容类型；不传或 'all' = 全部类型 */
-  kind?: ContentKind[] | 'all';
-  /** true = 分级可信（识别过，或手动设过分级） */
-  rated?: boolean;
-  /** 随机排序的种子（0–1073741823），只在 sort='random' 时生效：同一个种子结果相同 */
-  seed?: number;
-  /** 合集：具体 id = 这一本的页；'none' = 不在任何合集里的图（T38c） */
-  collectionId?: ID | 'none';
-  /** 只看这些图（组图详情从筛选结果点进来时用） */
-  imageIds?: ID[];
-  /** 收拢组图：同一组只占一格。'auto' = 结果超过 AUTO_COLLAPSE_MIN 张才收拢 */
-  collapseCollections?: boolean | 'auto';
-  /** 收拢时 memberIds 给整组可见成员，而不是只给命中筛选的（首页「最新入库」） */
-  includeWholeCollections?: boolean;
-  /** 构图相近的候选（给组图手动加图用，复用查重的 dHash 范围） */
-  similarTo?: ID;
-  /** 画师（合集页「画师」里的 tag）：识别出这位画师的图，同一个人的不同标签一起算 */
-  artist?: string;
-  sort?: ImageSort;
-  order?: 'asc' | 'desc';
-}
+export type ListImagesQuery = z.infer<typeof S.listImagesQuery>;
 export type ListImagesResponse = Page<ImageItem>;
 
 /** GET /api/images/:id */
 export type GetImageResponse = ImageDetail;
 
 /** PATCH /api/images/:id */
-export interface UpdateImageBody {
-  /** Confirm a source URL; null deliberately clears it; 'auto' restores filename parsing. */
-  source?: { url: string; artist?: string } | null | 'auto';
-  characterIds?: ID[];
-  rating?: Rating;
-  favorite?: boolean;
-  /** 'auto' = 清掉手动设置，按规则重判 */
-  kind?: ContentKind | 'auto';
-}
+export type UpdateImageBody = z.infer<typeof S.updateImageBody>;
 
-export type BulkImageAction =
-  | { type: 'assign'; characterId: ID }
-  | { type: 'unassign'; characterId: ID }
-  | { type: 'exclude' }
-  | { type: 'restore' }
-  | { type: 'favorite'; value: boolean }
-  | { type: 'rating'; value: Rating }
-  /** 改内容类型；'auto' = 恢复自动判断 */
-  | { type: 'kind'; value: ContentKind | 'auto' }
-  /** 移到系统回收站（不是永久删除） */
-  | { type: 'trash' }
-  /** 放下：不找角色了，不再出现在未识别（T34a）；false = 放回 */
-  | { type: 'shelve'; value: boolean }
-  /** 归为原创（true）/ 移出原创（false）：挂到「原创」作品、离开未识别 */
-  | { type: 'original'; value: boolean }
-  /**
-   * 手动改画师：add 加上、remove 去掉、set 换成这几位（空 = 没有画师）。artists 是标签（Artist.tag / ImageArtist.tags）
-   * 或新名字（服务端规范成小写、空格换下划线）。改过的图之后识别不再动它
-   */
-  | { type: 'artist'; mode: 'add' | 'remove' | 'set'; artists: string[] }
-  /** 画师改回自动识别：清掉手动改的，交给「识别画师」重新认 */
-  | { type: 'artist-auto' };
+export type BulkImageAction = BulkImagesBody['action'];
 
 /** POST /api/images/bulk */
-export interface BulkImagesBody {
-  ids: ID[];
-  action: BulkImageAction;
-}
+export type BulkImagesBody = z.infer<typeof S.bulkImagesBody>;
 
 /**
  * POST /api/images/move —— 把图移到图库里的某个文件夹（磁盘上真的移动），识别和整理结果都保留，可撤销。
  * 合集（本子、画集）里的页不移动；重名的自动改成「a (1).jpg」。
  */
-export interface MoveImagesBody {
-  /** 二选一：选中的图，或某个角色的全部图 */
-  ids?: ID[];
-  characterId?: ID;
-  /** 目标：图库文件夹 + 里面的子目录（'' = 图库文件夹本身），不存在会新建 */
-  rootId: ID;
-  dir: string;
-}
+export type MoveImagesBody = z.infer<typeof S.moveImagesBody>;
 
 /**
  * POST /api/images/move/preview —— 移动前先数：服务端实际会移哪些图（按角色移动时以这里返回的 ids 为准再提交）。
@@ -390,12 +276,7 @@ export type ListArtistsResponse = Artist[];
  * POST /api/artists/links —— 自动合并猜错了时手动改：
  * split = 这些标签各自单独算一个人；merge = 这些标签并到 into 所在的人；auto = 去掉这些标签的手动设置
  */
-export interface UpdateArtistLinksBody {
-  tags: string[];
-  mode: 'split' | 'merge' | 'auto';
-  /** merge 时：并到哪位画师（他的标签） */
-  into?: string;
-}
+export type UpdateArtistLinksBody = z.infer<typeof S.updateArtistLinksBody>;
 
 // ---------------------------------------------------------------- 合集（T38）
 
@@ -407,14 +288,7 @@ export interface UpdateArtistLinksBody {
  * DELETE /api/collections/:id        不成册（留一行 dismissed，自动判定不会再建）
  * POST   /api/collections/bulk       批量：标为已整理、关联角色 / 作品、改类型
  */
-export interface ListCollectionsQuery {
-  kind?: CollectionKind;
-  characterId?: ID;
-  workId?: ID;
-  seriesKey?: string;
-  pending?: boolean;
-  q?: string;
-}
+export type ListCollectionsQuery = z.infer<typeof S.listCollectionsQuery>;
 export type ListCollectionsResponse = CollectionSummary[];
 
 export interface GetCollectionResponse {
@@ -430,41 +304,12 @@ export interface GetCollectionResponse {
   series: CollectionSummary[];
 }
 
-export interface CreateCollectionBody {
-  /** 这张图所在的文件夹做成合集 */
-  fromImageId?: ID;
-  imageIds?: ID[];
-  organizeFiles?: boolean;
-  title?: string;
-  kind: CollectionKind;
-}
+export type CreateCollectionBody = z.infer<typeof S.createCollectionBody>;
 
-export interface UpdateCollectionBody {
-  organizeFiles?: boolean;
-  addImageIds?: ID[];
-  removeImageIds?: ID[];
-  /** null = 恢复自动名 */
-  title?: string | null;
-  kind?: CollectionKind | 'auto';
-  coverImageId?: ID | null;
-  pageOrder?: 'name' | 'mtime';
-  /** null = 恢复自动 */
-  seriesKey?: string | null;
-  volumeNo?: number | null;
-  reviewed?: boolean;
-  manualCharacterIds?: ID[];
-  manualWorkIds?: ID[];
-}
+export type UpdateCollectionBody = z.infer<typeof S.updateCollectionBody>;
 
-export type BulkCollectionAction =
-  | { type: 'review' }
-  | { type: 'addCharacter'; characterId: ID }
-  | { type: 'addWork'; workId: ID }
-  | { type: 'kind'; value: CollectionKind };
-export interface BulkCollectionsBody {
-  ids: ID[];
-  action: BulkCollectionAction;
-}
+export type BulkCollectionAction = BulkCollectionsBody['action'];
+export type BulkCollectionsBody = z.infer<typeof S.bulkCollectionsBody>;
 
 // ---------------------------------------------------------------- 未识别
 
@@ -482,26 +327,10 @@ export const UNRECOGNIZED_ART_KINDS = ['illustration', 'comic'] as const;
 export type UnrecognizedArtKind = (typeof UNRECOGNIZED_ART_KINDS)[number];
 
 /** GET /api/unrecognized —— 参数和大类不匹配时一律忽略，不报错 */
-export interface ListUnrecognizedQuery extends PageQuery {
-  /** 同 ListImagesQuery.collapseCollections */
-  collapseCollections?: boolean | 'auto';
-  /** 默认 'art' */
-  area?: UnrecognizedArea;
-  /** 只对 art 有效；不传 = 有建议 + 没认出 + 待识别，不含放下的。total 是所请求分段的数量 */
-  bucket?: UnrecognizedBucket;
-  /** 只在 art + bucket='unsure' 时有效 */
-  theme?: UnrecognizedTheme;
-  /** 只对 annex 有效；不传 = 五类合起来 */
-  kind?: UnrecognizedAnnexKind;
-  /** 只对 art 有效：只看插画或只看漫画，total 和三个分段计数也只算这一类。不传 = 两种都要 */
-  artKind?: UnrecognizedArtKind;
-}
+export type ListUnrecognizedQuery = z.infer<typeof S.listUnrecognizedQuery>;
 
 /** GET /api/unrecognized/summary 的参数 */
-export interface UnrecognizedSummaryQuery {
-  /** 传了以后 art 的 total / 分段 / themes 只算这一类；retaggable、art.kinds、annex 不变 */
-  artKind?: UnrecognizedArtKind;
-}
+export type UnrecognizedSummaryQuery = z.infer<typeof S.unrecognizedSummaryQuery>;
 
 /** 「插画 · 漫画」里一类图的分段张数（total 不含放下的） */
 export interface UnrecognizedArtCounts {
@@ -565,22 +394,16 @@ export type ListContentKindsResponse = ContentKindSummary[];
  * POST /api/unrecognized/:imageId/accept —— 采纳一个建议（可能会新建角色）；
  * 传 danbooruTags 时一次采纳这张图的多个建议，只有一条撤销
  */
-export type AcceptSuggestionBody = { danbooruTag: string } | { danbooruTags: string[] };
+export type AcceptSuggestionBody = z.infer<typeof S.acceptSuggestionBody>;
 
 // ---------------------------------------------------------------- 重复
 
 /** GET /api/duplicates?resolved=false */
-export interface ListDuplicatesQuery {
-  resolved?: boolean;
-}
+export type ListDuplicatesQuery = z.infer<typeof S.listDuplicatesQuery>;
 export type ListDuplicatesResponse = DuplicateGroup[];
 
 /** POST /api/duplicates/:id/resolve —— 保留 keepIds，其余移入回收站 */
-export interface ResolveDuplicateBody {
-  keepIds: ID[];
-  /** 「全部处理」一次点下去的各组传同一个值：在「最近 5 次可撤销」里只算一次 */
-  batch?: string;
-}
+export type ResolveDuplicateBody = z.infer<typeof S.resolveDuplicateBody>;
 
 /** POST /api/duplicates/:id/ignore —— 标记为「不是重复」 */
 
@@ -590,10 +413,7 @@ export interface ResolveDuplicateBody {
 export type ListExclusionsResponse = Exclusion[];
 
 /** POST /api/exclusions */
-export interface CreateExclusionBody {
-  kind: ExclusionKind;
-  target: string;
-}
+export type CreateExclusionBody = z.infer<typeof S.createExclusionBody>;
 
 /** DELETE /api/exclusions/:id —— 恢复 */
 
@@ -605,19 +425,13 @@ export type SearchHit =
   | { type: 'tag'; tag: string; imageCount: number };
 
 /** GET /api/search?q=&limit=20 */
-export interface SearchQuery {
-  q: string;
-  limit?: number;
-}
+export type SearchQuery = z.infer<typeof S.searchQuery>;
 export type SearchResponse = SearchHit[];
 
 // ---------------------------------------------------------------- 标签
 
 /** GET /api/tags?q=&limit=20 —— 一般标签联想（自定义画面用）；q 为空 = 最常见的 */
-export interface TagSuggestionsQuery {
-  q?: string;
-  limit?: number;
-}
+export type TagSuggestionsQuery = z.infer<typeof S.tagSuggestionsQuery>;
 export interface TagSuggestion {
   /** 原始标签名，如 `white_hair` */
   tag: string;
@@ -651,10 +465,7 @@ export interface PromotableSuggestions {
 export type GetSettingsResponse = Settings;
 
 /** PUT /api/settings —— 深合并；libraryRoots 用下面单独的接口改 */
-export type UpdateSettingsBody = DeepPartial<Omit<Settings, 'libraryRoots'>> & {
-  /** 只在设置时传，读取时永远不回显 */
-  danbooruApiKey?: string;
-};
+export type UpdateSettingsBody = z.infer<typeof S.updateSettingsBody>;
 
 /** GET /api/tagger/models —— 可选的识别模型，给设置页的下拉框用 */
 export interface TaggerModelInfo {
@@ -678,26 +489,10 @@ export interface TaggerModelInfo {
 export type ListTaggerModelsResponse = TaggerModelInfo[];
 
 /** POST /api/library-roots { path } / DELETE /api/library-roots/:id / PATCH { enabled } */
-export interface AddLibraryRootBody {
-  path: string;
-  /** 新文件夹包含图库里已有的文件夹时，确认合并成一个（不传则返回 needs_confirm） */
-  merge?: boolean;
-  /** comic = 按漫画导入（跳过识别）；不传 = auto */
-  mode?: LibraryRootMode;
-  /** 按漫画导入时页面的分级；不传 = general */
-  comicRating?: Rating;
-}
+export type AddLibraryRootBody = z.infer<typeof S.addLibraryRootBody>;
 
 /** PATCH /api/library-roots/:id */
-export interface UpdateLibraryRootBody {
-  enabled?: boolean;
-  mode?: LibraryRootMode;
-  comicRating?: Rating;
-  /** 把里面的一个子文件夹按漫画导入（已经是的话改分级） */
-  comicFolder?: { relDir: string; comicRating?: Rating };
-  /** 子文件夹不再按漫画导入 */
-  removeComicFolder?: string;
-}
+export type UpdateLibraryRootBody = z.infer<typeof S.updateLibraryRootBody>;
 
 // ---------------------------------------------------------------- 后台任务
 
@@ -705,11 +500,7 @@ export interface UpdateLibraryRootBody {
 export type ListJobsResponse = Job[];
 
 /** POST /api/jobs */
-export interface StartJobBody {
-  kind: JobKind;
-  /** 仅 pixiv-tags：重新获取待补投稿的标签；默认复用缓存。 */
-  refreshPixiv?: boolean;
-}
+export type StartJobBody = z.infer<typeof S.startJobBody>;
 
 /**
  * GET /api/events —— Server-Sent Events
@@ -794,9 +585,7 @@ export type UndoResponse = MutationResult;
 export type UndoTokenStatus = 'live' | 'undone' | 'expired';
 
 /** POST /api/undo/status：问一批 token 现在还能不能撤销（助手勘误条用） */
-export interface UndoStatusBody {
-  tokens: string[];
-}
+export type UndoStatusBody = z.infer<typeof S.undoStatusBody>;
 export interface UndoStatusResponse {
   status: Record<string, UndoTokenStatus>;
 }

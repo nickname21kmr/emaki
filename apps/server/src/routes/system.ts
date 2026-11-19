@@ -1,27 +1,15 @@
-import {
-  CUSTOM_THEME_LIMITS,
-  type ListTaggerModelsResponse,
-  type NetworkCheckResponse,
-  type PickFolderResponse,
-  type ServerEvent,
-  type UndoStatusResponse,
-} from '@emaki/shared';
+import type { ListTaggerModelsResponse, NetworkCheckResponse, PickFolderResponse, ServerEvent, UndoStatusResponse } from '@emaki/shared';
+import * as S from '@emaki/shared/schemas';
 import type { FastifyInstance } from 'fastify';
-import { z } from 'zod';
 import { config } from '../config.ts';
 import type { EventBus } from '../core/events.ts';
 import type { JobData, SettingsData } from '../datasource/DataSource.ts';
 import { BadRequestError } from '../http/errors.ts';
 import { checkNetwork } from '../net/check.ts';
-import { idParam, parse, ratingSchema } from '../http/validate.ts';
+import { idParam, parse } from '../http/validate.ts';
 import { isModelReady } from '../services/tagger/download.ts';
 import { DEFAULT_TAGGER_MODEL, findModel, MODEL_NOTES, modelDownloadSize, TAGGER_MODELS } from '../services/tagger/models.ts';
 import { pickFolder } from '../system/pickFolder.ts';
-
-// 一次最多问 500 个，一个会话的勘误条够用了
-const undoStatusBody = z.object({ tokens: z.array(z.string().min(1).max(100)).max(500) });
-const rootMode = z.enum(['auto', 'comic']);
-const themeTags = z.array(z.string().trim().min(1).max(100)).max(CUSTOM_THEME_LIMITS.tags);
 
 /** 设置、图库文件夹、后台任务、SSE、撤销 */
 export function systemRoutes(app: FastifyInstance, ds: SettingsData & JobData, bus: EventBus): void {
@@ -52,61 +40,7 @@ export function systemRoutes(app: FastifyInstance, ds: SettingsData & JobData, b
   );
 
   app.put('/api/settings', (req) => {
-    const body = parse(
-      z.object({
-        tagger: z
-          .object({
-            model: z.string(),
-            device: z.enum(['cpu', 'dml']),
-            generalThreshold: z.number().min(0).max(1),
-            characterThreshold: z.number().min(0).max(1),
-            autoAcceptThreshold: z.number().min(0).max(1),
-            batchSize: z.number().int().min(1).max(64),
-            legacyModel: z.string().nullable(),
-            legacyBefore: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
-            skipCameraPhotos: z.boolean(),
-            retryOld: z.boolean(),
-            keepAwake: z.boolean(),
-            artists: z.boolean(),
-            pixiv: z.boolean(),
-            pixivFilenameMode: z.enum(['strict', 'broad']),
-            comicInUnrecognized: z.boolean(),
-          })
-          .partial()
-          .optional(),
-        danbooru: z.object({ enabled: z.boolean(), username: z.string() }).partial().optional(),
-        dedupe: z.object({ hammingThreshold: z.number().int().min(0).max(64) }).partial().optional(),
-        ui: z
-          .object({
-            theme: z.enum(['system', 'light', 'dark']),
-            blurSensitive: z.boolean(),
-            density: z.enum(['comfortable', 'compact']),
-          })
-          .partial()
-          .optional(),
-        browse: z
-          .object({
-            customThemes: z
-              .array(
-                z
-                  .object({
-                    id: z.string().min(1).max(64),
-                    name: z.string().trim().min(1).max(CUSTOM_THEME_LIMITS.name),
-                    tags: themeTags,
-                    all: themeTags.optional(),
-                    none: themeTags.optional(),
-                  })
-                  .refine((t) => t.tags.length + (t.all?.length ?? 0) > 0, '至少要有一个「必含」或「任一」标签')
-                  .refine((t) => t.tags.length + (t.all?.length ?? 0) + (t.none?.length ?? 0) <= CUSTOM_THEME_LIMITS.tags, '标签太多'),
-              )
-              .max(CUSTOM_THEME_LIMITS.themes),
-          })
-          .partial()
-          .optional(),
-        danbooruApiKey: z.string().optional(),
-      }),
-      req.body,
-    );
+    const body = parse(S.updateSettingsBody, req.body);
     // 模型名必须是注册表里有的，否则要到识别时才报错
     for (const repo of [body.tagger?.model, body.tagger?.legacyModel]) {
       if (repo && !findModel(repo)) throw new BadRequestError(`不认识的识别模型：${repo}`);
@@ -119,33 +53,14 @@ export function systemRoutes(app: FastifyInstance, ds: SettingsData & JobData, b
   app.post('/api/tagger/promote', () => ds.promoteSuggestions());
 
   app.post('/api/library-roots', (req) => {
-    const body = parse(
-      z.object({ path: z.string().min(1), merge: z.boolean().optional(), mode: rootMode.optional(), comicRating: ratingSchema.optional() }),
-      req.body,
-    );
-    return ds.addLibraryRoot(body);
+    return ds.addLibraryRoot(parse(S.addLibraryRootBody, req.body));
   });
 
   app.get('/api/library-roots', async () => (await ds.getSettings()).libraryRoots);
 
   app.patch('/api/library-roots/:id', (req) => {
     const { id } = parse(idParam, req.params);
-    const body = parse(
-      z
-        .object({
-          enabled: z.boolean().optional(),
-          mode: rootMode.optional(),
-          comicRating: ratingSchema.optional(),
-          comicFolder: z.object({ relDir: z.string().min(1).max(1000), comicRating: ratingSchema.optional() }).optional(),
-          removeComicFolder: z.string().min(1).max(1000).optional(),
-        })
-        .refine(
-          (b) => b.enabled !== undefined || b.mode !== undefined || b.comicRating !== undefined || b.comicFolder !== undefined || b.removeComicFolder !== undefined,
-          '没有要改的',
-        ),
-      req.body,
-    );
-    return ds.updateLibraryRoot(id, body);
+    return ds.updateLibraryRoot(id, parse(S.updateLibraryRootBody, req.body));
   });
 
   app.delete('/api/library-roots/:id', (req) => {
@@ -158,10 +73,7 @@ export function systemRoutes(app: FastifyInstance, ds: SettingsData & JobData, b
   app.get('/api/jobs', () => ds.listJobs());
 
   app.post('/api/jobs', (req) => {
-    const { kind, refreshPixiv } = parse(
-      z.object({ kind: z.enum(['scan', 'thumbnail', 'tag', 'danbooru-sync', 'dedupe', 'artists', 'pixiv-tags']), refreshPixiv: z.boolean().optional() }),
-      req.body,
-    );
+    const { kind, refreshPixiv } = parse(S.startJobBody, req.body);
     if (refreshPixiv && kind !== 'pixiv-tags') throw new BadRequestError('刷新 Pixiv 标签只用于补充 Pixiv 角色');
     return ds.startJob(kind, { refreshPixiv });
   });
@@ -196,13 +108,12 @@ export function systemRoutes(app: FastifyInstance, ds: SettingsData & JobData, b
 
   // ---------------------------------------------------------- 切换 Pixiv 投稿号识别方式
 
-  const sourceMode = z.object({ mode: z.enum(['strict', 'broad']) });
-  app.get('/api/settings/source-mode', (req) => ds.previewSourceMode(parse(sourceMode, req.query).mode));
-  app.post('/api/settings/source-mode', (req) => ds.setSourceMode(parse(sourceMode, req.body).mode));
+  app.get('/api/settings/source-mode', (req) => ds.previewSourceMode(parse(S.sourceModeParams, req.query).mode));
+  app.post('/api/settings/source-mode', (req) => ds.setSourceMode(parse(S.sourceModeParams, req.body).mode));
 
   // ---------------------------------------------------------- 最近的改动（重启后也能撤回）
 
-  app.get('/api/changes', (req) => ds.listChanges(parse(z.object({ group: z.enum(['auto', 'move']) }), req.query).group));
+  app.get('/api/changes', (req) => ds.listChanges(parse(S.listChangesQuery, req.query).group));
   app.post('/api/changes/:id/revert', (req) => {
     const { id } = parse(idParam, req.params);
     return ds.revertChange(id);
@@ -212,7 +123,7 @@ export function systemRoutes(app: FastifyInstance, ds: SettingsData & JobData, b
 
   // 静态路由优先于 /api/undo/:id，不会被当成 token
   app.post('/api/undo/status', async (req): Promise<UndoStatusResponse> => {
-    const { tokens } = parse(undoStatusBody, req.body);
+    const { tokens } = parse(S.undoStatusBody, req.body);
     return { status: await ds.undoStatus(tokens) };
   });
 

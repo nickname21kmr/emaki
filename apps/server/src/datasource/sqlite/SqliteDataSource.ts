@@ -121,6 +121,8 @@ export interface SqliteOpenOptions {
   trashImpl?: TrashImpl;
   /** 替换「这个盘有没有回收站」的检查（测试用：夹具里的 D:/Pics 不一定存在） */
   checkRecyclable?: (rootPath: string) => Promise<void>;
+  /** 读原图前先等它准备好（演示模式：图在后台画，没画到的先画这一张） */
+  waitForFile?: (absPath: string) => Promise<void>;
 }
 
 /**
@@ -221,6 +223,7 @@ export class SqliteDataSource implements DataSource {
         this.ctx.invalidate('all');
         bus.emit({ type: 'library-changed', reason: 'scan' });
       },
+      waitForFile: opts.waitForFile,
     });
     this.scanner = new Scanner({
       db,
@@ -258,7 +261,7 @@ export class SqliteDataSource implements DataSource {
     this.settings = new SettingsOps(this.ctx, this.pipeline, this.roots, this.kindDeps, this.collectionsHook, () => this.makeCatalog);
     this.moves = new MoveOps(this.ctx, this.roots, this.changes);
     this.jobControls = new JobControls(this.ctx, this.requests, this.pipeline);
-    this.images = new ImageOps(this.ctx, this.thumbs, this.kindDeps, this.collectionsHook, this.collections, () => this.makeCatalog);
+    this.images = new ImageOps(this.ctx, this.thumbs, this.kindDeps, this.collectionsHook, this.collections, () => this.makeCatalog, opts.waitForFile);
     this.duplicates = new DuplicateQueries(this.ctx, this.pendingTrash, this.collectionsHook);
     this.searchQueries = new SearchQueries(db, this.derived);
     this.dedupe = new DedupeService({

@@ -34,7 +34,8 @@
 emaki/
 ├─ packages/shared/src/
 │  ├─ domain.ts        领域模型：Work / Character / ImageItem / DuplicateGroup / Exclusion / Settings / Job …
-│  ├─ api.ts           HTTP 契约：每个接口的路径、查询参数、请求体、响应类型
+│  ├─ api.ts           HTTP 契约：每个接口的路径、响应类型；请求类型从 schemas.ts 推出
+│  ├─ schemas.ts       请求参数的 zod schema（后端校验用，@emaki/shared/schemas）
 │  └─ search.ts        searchKey()：「未花 / ミカ / mika / Mika_(Blue_Archive)」归一化，前后端一致
 ├─ apps/server/src/
 │  ├─ index.ts         启动：选数据源 → buildApp → listen
@@ -74,7 +75,7 @@ Node 后端 + 浏览器前端，`npm run dev` 就能用。以后要做成桌面�
 演示模式（`npm run dev:demo`）也走 SQLite：启动时把 `src/demo` 的假数据导入一个单独的演示库，图片画成真文件放在 `data/demo-pics`（第一次约一分钟，之后复用），所以演示的就是真实代码。行为测试在 `apps/server/test/contract`，跑在导入了契约夹具的内存库上。
 
 ### 3. 契约放在 packages/shared
-类型只写一遍。改接口的顺序：`shared/api.ts` → 后端 `routes/` → 前端 `lib/api.ts`。TypeScript 会把漏改的地方全部标红。
+类型只写一遍。请求参数（查询串、请求体）写成 zod schema 放在 `shared/schemas.ts`，后端路由用它校验，`api.ts` 里的请求类型用 `z.infer` 从它推出来，所以校验规则和类型不会对不上；响应类型直接写在 `api.ts`。`schemas.ts` 是单独的入口 `@emaki/shared/schemas`，前端只引用类型，打包不带 zod。改接口的顺序：`shared/schemas.ts` 或 `api.ts` → 后端 `routes/` → 前端 `lib/api.ts`。TypeScript 会把漏改的地方全部标红。
 
 ### 4. 服务端数据走 TanStack Query，UI 状态走 zustand
 - 服务端数据只存在 Query 缓存里，失效策略极简：**任何修改成功 / 收到 SSE `library-changed` → 全部 invalidate**。本地后端请求很快，不值得做精细失效。

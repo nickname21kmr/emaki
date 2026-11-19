@@ -10,8 +10,10 @@ async function createDataSource(bus: EventBus): Promise<DataSource> {
   if (config.dataSource === 'sqlite') return SqliteDataSource.open(bus, config.dataDir);
   // 演示图库：每次从头导入假数据；不扫描、不识别、不监听文件夹；移到回收站只改记录，演示图留在磁盘上下次接着用
   const { prepareDemo } = await import('./demo/demo.ts');
-  await prepareDemo({ dataDir: config.dataDir, picsDir: config.demoPicsDir });
-  return SqliteDataSource.open(bus, config.dataDir, { autoJobs: false, trashImpl: async () => {} });
+  const pictures = await prepareDemo({ dataDir: config.dataDir, picsDir: config.demoPicsDir });
+  const ds = await SqliteDataSource.open(bus, config.dataDir, { autoJobs: false, trashImpl: async () => {}, waitForFile: pictures.waitForFile });
+  void pictures.drawInBackground().catch((e) => console.error('[演示] 画图失败', e));
+  return ds;
 }
 
 const bus = new EventBus();

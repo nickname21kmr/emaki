@@ -1,108 +1,22 @@
-import { sourceEditSchema } from '../services/source/editSource.ts';
-import { BROWSE_THEMES, CUSTOM_THEME_LIMITS, THUMB_WIDTHS, UNRECOGNIZED_ANNEX_KINDS, UNRECOGNIZED_AREAS, UNRECOGNIZED_ART_KINDS, UNRECOGNIZED_BUCKETS, UNRECOGNIZED_THEMES, type ThumbWidth } from '@emaki/shared';
+import { THUMB_WIDTHS, type ThumbWidth } from '@emaki/shared';
+import * as S from '@emaki/shared/schemas';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { z } from 'zod';
 import type { DuplicateData, ExclusionData, FileResponse, ImageData, UnrecognizedData } from '../datasource/DataSource.ts';
 import { NotFoundError } from '../http/errors.ts';
-import { idParam, kindSchema, parse, qBool, qKinds, qList, qNumber, ratingSchema } from '../http/validate.ts';
-
-const tagList = qList(z.string().min(1).max(100)).refine((a) => a.length <= CUSTOM_THEME_LIMITS.tags, '标签太多');
+import { idParam, parse, qNumber } from '../http/validate.ts';
 
 /** 图片、未识别、重复、排除 */
 export function imageRoutes(app: FastifyInstance, ds: ImageData & UnrecognizedData & DuplicateData & ExclusionData): void {
-  app.post('/api/images/import', (req) => ds.importImages(parse(z.object({
-    rootId: z.string().min(1).max(100), dir: z.string().max(200).default(''),
-    keepBoth: z.boolean().optional(),
-    files: z.array(z.object({path:z.string().min(1).max(4000),fileName:z.string().min(1).max(200).optional()})).min(1).max(20),
-  }),req.body)));
-  app.post('/api/images/:id/replace', (req) => ds.replaceImage(parse(idParam,req.params).id, parse(z.object({path:z.string().min(1).max(4000)}),req.body)));
-  app.get('/api/images', (req) => {
-    const q = parse(
-      z.object({
-        characterId: z.string().optional(),
-        workId: z.string().optional(),
-        status: z.enum(['recognized', 'unrecognized', 'excluded']).optional(),
-        rating: qList(ratingSchema).optional(),
-        q: z.string().optional(),
-        orientation: z.enum(['portrait', 'landscape', 'square']).optional(),
-        theme: z.enum(BROWSE_THEMES).optional(),
-        tags: tagList.optional(),
-        tagsAll: tagList.optional(),
-        tagsNone: tagList.optional(),
-        favorite: qBool.optional(),
-        original: qBool.optional(),
-        kind: qKinds.optional(),
-        rated: qBool.optional(),
-        seed: qNumber.min(0).max(1073741823).optional(),
-        sort: z.enum(['addedAt', 'modifiedAt', 'fileName', 'bytes', 'random', 'page']).optional(),
-        collectionId: z.string().min(1).optional(),
-        collapseCollections: z.union([z.literal('auto'), qBool]).optional(),
-        includeWholeCollections: qBool.optional(),
-        imageIds: qList(z.string()).optional(),
-        similarTo: z.string().optional(),
-        artist: z.string().min(1).max(200).optional(),
-        order: z.enum(['asc', 'desc']).optional(),
-        cursor: z.string().optional(),
-        limit: qNumber.min(1).max(200).optional(),
-      }),
-      req.query,
-    );
-    return ds.listImages(q);
-  });
-
-  app.post('/api/images/bulk', (req) => {
-    const body = parse(
-      z.object({
-        ids: z.array(z.string()).min(1).max(5000),
-        action: z.discriminatedUnion('type', [
-          z.object({ type: z.literal('assign'), characterId: z.string() }),
-          z.object({ type: z.literal('unassign'), characterId: z.string() }),
-          z.object({ type: z.literal('exclude') }),
-          z.object({ type: z.literal('restore') }),
-          z.object({ type: z.literal('favorite'), value: z.boolean() }),
-          z.object({ type: z.literal('shelve'), value: z.boolean() }),
-          z.object({ type: z.literal('original'), value: z.boolean() }),
-          z.object({ type: z.literal('rating'), value: ratingSchema }),
-          z.object({ type: z.literal('kind'), value: z.union([kindSchema, z.literal('auto')]) }),
-          z.object({ type: z.literal('trash') }),
-          z.object({
-            type: z.literal('artist'),
-            mode: z.enum(['add', 'remove', 'set']),
-            artists: z.array(z.string().trim().min(1).max(200)).max(10),
-          }),
-          z.object({ type: z.literal('artist-auto') }),
-        ]),
-      }),
-      req.body,
-    );
-    return ds.bulkImages(body);
-  });
+  app.post('/api/images/import', (req) => ds.importImages(parse(S.importImagesBody, req.body)));
+  app.post('/api/images/:id/replace', (req) => ds.replaceImage(parse(idParam, req.params).id, parse(S.replaceImageBody, req.body)));
+  app.get('/api/images', (req) => ds.listImages(parse(S.listImagesQuery, req.query)));
+  app.post('/api/images/bulk', (req) => ds.bulkImages(parse(S.bulkImagesBody, req.body)));
 
   // 按角色移动时前端先拿 preview 的 ids 再提交，服务端只移确认过的这些
-  const moveBody = z
-    .object({
-      ids: z.array(z.string()).min(1).max(50000).optional(),
-      characterId: z.string().optional(),
-      rootId: z.string().min(1),
-      dir: z.string().max(400),
-    })
-    .refine((b) => (b.ids === undefined) !== (b.characterId === undefined), '要么给 ids，要么给 characterId');
-  app.post('/api/images/move/preview', (req) => {
-    const body = parse(
-      z
-        .object({
-          ids: z.array(z.string()).min(1).max(50000).optional(),
-          characterId: z.string().optional(),
-          rootId: z.string().min(1),
-          dir: z.string().max(400),
-        })
-        .refine((b) => b.ids !== undefined || b.characterId !== undefined, '要么给 ids，要么给 characterId'),
-      req.body,
-    );
-    return ds.previewMove(body);
-  });
-  app.post('/api/images/move', (req) => ds.moveImages(parse(moveBody, req.body)));
+  app.post('/api/images/move/preview', (req) => ds.previewMove(parse(S.movePreviewBody, req.body)));
+  app.post('/api/images/move', (req) => ds.moveImages(parse(S.moveImagesBody, req.body)));
 
   app.get('/api/images/:id', async (req) => {
     const { id } = parse(idParam, req.params);
@@ -113,17 +27,7 @@ export function imageRoutes(app: FastifyInstance, ds: ImageData & UnrecognizedDa
 
   app.patch('/api/images/:id', (req) => {
     const { id } = parse(idParam, req.params);
-    const body = parse(
-      z.object({
-        source: sourceEditSchema.optional(),
-        characterIds: z.array(z.string()).optional(),
-        rating: ratingSchema.optional(),
-        favorite: z.boolean().optional(),
-        kind: z.union([kindSchema, z.literal('auto')]).optional(),
-      }),
-      req.body,
-    );
-    return ds.updateImage(id, body);
+    return ds.updateImage(id, parse(S.updateImageBody, req.body));
   });
 
   app.get('/api/images/:id/thumb', async (req, reply) => {
@@ -151,37 +55,16 @@ export function imageRoutes(app: FastifyInstance, ds: ImageData & UnrecognizedDa
 
   // ---------------------------------------------------------- 未识别
 
-  app.get('/api/unrecognized', (req) => {
-    const q = parse(
-      z.object({
-        cursor: z.string().optional(),
-        limit: qNumber.min(1).max(200).optional(),
-        area: z.enum(UNRECOGNIZED_AREAS).optional(),
-        bucket: z.enum(UNRECOGNIZED_BUCKETS).optional(),
-        theme: z.enum(UNRECOGNIZED_THEMES).optional(),
-        kind: z.enum(UNRECOGNIZED_ANNEX_KINDS).optional(),
-        artKind: z.enum(UNRECOGNIZED_ART_KINDS).optional(),
-        collapseCollections: z.union([z.literal('auto'), qBool]).optional(),
-      }),
-      req.query,
-    );
-    return ds.listUnrecognized(q);
-  });
+  app.get('/api/unrecognized', (req) => ds.listUnrecognized(parse(S.listUnrecognizedQuery, req.query)));
 
-  app.get('/api/unrecognized/summary', (req) => {
-    const q = parse(z.object({ artKind: z.enum(UNRECOGNIZED_ART_KINDS).optional() }), req.query);
-    return ds.unrecognizedSummary(q);
-  });
+  app.get('/api/unrecognized/summary', (req) => ds.unrecognizedSummary(parse(S.unrecognizedSummaryQuery, req.query)));
 
   app.post('/api/unrecognized/retag', () => ds.retagUnrecognized());
 
   app.post('/api/unrecognized/:id/accept', (req) => {
     const { id } = parse(idParam, req.params);
     // danbooruTags：同一张图一次采纳多条，一条撤销
-    const body = parse(
-      z.union([z.object({ danbooruTag: z.string().min(1) }), z.object({ danbooruTags: z.array(z.string().min(1)).min(1).max(20) })]),
-      req.body,
-    );
+    const body = parse(S.acceptSuggestionBody, req.body);
     return 'danbooruTags' in body ? ds.acceptSuggestions(id, body.danbooruTags) : ds.acceptSuggestion(id, body.danbooruTag);
   });
 
@@ -190,7 +73,7 @@ export function imageRoutes(app: FastifyInstance, ds: ImageData & UnrecognizedDa
   // 重复组一次返回全部（真实库 5000 多组、约 6 MB）：数据源缓存命中时返回同一个对象，序列化结果也跟着复用（T22）
   const serialized = new WeakMap<object, string>();
   app.get('/api/duplicates', async (req, reply) => {
-    const q = parse(z.object({ resolved: qBool.optional() }), req.query);
+    const q = parse(S.listDuplicatesQuery, req.query);
     const groups = await ds.listDuplicates(q);
     let body = serialized.get(groups);
     if (body === undefined) {
@@ -202,7 +85,7 @@ export function imageRoutes(app: FastifyInstance, ds: ImageData & UnrecognizedDa
 
   app.post('/api/duplicates/:id/resolve', (req) => {
     const { id } = parse(idParam, req.params);
-    const { keepIds, batch } = parse(z.object({ keepIds: z.array(z.string()).min(1), batch: z.string().min(1).max(100).optional() }), req.body);
+    const { keepIds, batch } = parse(S.resolveDuplicateBody, req.body);
     return ds.resolveDuplicate(id, keepIds, batch);
   });
 
@@ -215,13 +98,7 @@ export function imageRoutes(app: FastifyInstance, ds: ImageData & UnrecognizedDa
 
   app.get('/api/exclusions', () => ds.listExclusions());
 
-  app.post('/api/exclusions', (req) => {
-    const body = parse(
-      z.object({ kind: z.enum(['image', 'folder', 'tag', 'character']), target: z.string().min(1) }),
-      req.body,
-    );
-    return ds.createExclusion(body);
-  });
+  app.post('/api/exclusions', (req) => ds.createExclusion(parse(S.createExclusionBody, req.body)));
 
   app.delete('/api/exclusions/:id', (req) => {
     const { id } = parse(idParam, req.params);

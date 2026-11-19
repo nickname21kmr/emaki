@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import type { z } from 'zod';
 import { BadRequestError } from './errors.ts';
 
 export function parse<T extends z.ZodType>(schema: T, data: unknown): z.infer<T> {
@@ -10,23 +10,5 @@ export function parse<T extends z.ZodType>(schema: T, data: unknown): z.infer<T>
   return result.data;
 }
 
-/** 查询串里的数字 */
-export const qNumber = z.coerce.number().int();
-/** 查询串里的布尔值：true/false/1/0 */
-export const qBool = z
-  .enum(['true', 'false', '1', '0'])
-  .transform((v) => v === 'true' || v === '1');
-/** 查询串里逗号分隔的列表：rating=general,sensitive */
-export const qList = <T extends z.ZodType<unknown, string>>(item: T) =>
-  z
-    .string()
-    .transform((s) => s.split(',').filter(Boolean))
-    .pipe(z.array(item));
-
-export const idParam = z.object({ id: z.string().min(1) });
-
-export const ratingSchema = z.enum(['general', 'sensitive', 'questionable', 'explicit']);
-
-export const kindSchema = z.enum(['illustration', 'comic', 'screenshot', 'text', 'photo', 'meme', 'animated']);
-/** 查询串里的类型：kind=all 或 kind=comic,screenshot；有未知值返回 400 */
-export const qKinds = z.union([z.literal('all'), qList(kindSchema)]);
+// 请求参数的 schema 和查询串工具都在 shared（类型从它们推出来，前后端一份）
+export { idParam, qBool, qNumber } from '@emaki/shared/schemas';

@@ -48,6 +48,8 @@ export class ThumbnailService {
       now?: () => number;
       /** EXIF 回填每写完一批调用（发 library-changed，RV-T-9） */
       onCamerasUpdated?: () => void;
+      /** 读原图前先等它准备好（演示库的图在后台画，没画到的先画这一张） */
+      waitForFile?: (absPath: string) => Promise<void>;
     },
   ) {}
 
@@ -86,6 +88,7 @@ export class ThumbnailService {
     }
 
     const abs = toAbs(row.root_path, row.rel_path);
+    await this.d.waitForFile?.(abs);
     let input: Buffer | string;
     try {
       const st = await stat(abs);

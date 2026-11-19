@@ -35,6 +35,7 @@ export class ImageOps {
     /** 改来源后按同一投稿重算组图 */
     private readonly collections: CollectionService,
     private readonly getMakeCatalog: () => MakeCatalog,
+    private readonly waitForFile?: (absPath: string) => Promise<void>,
   ) {}
 
   private makeCatalog() {
@@ -188,6 +189,7 @@ export class ImageOps {
       .get(n) as { sha256: string; format: ImageFormat; rel_path: string; root_path: string } | undefined;
     if (!row) return null;
     const abs = toAbs(row.root_path, row.rel_path);
+    await this.waitForFile?.(abs);
     try {
       await access(abs);
     } catch {
