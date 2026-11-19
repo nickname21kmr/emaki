@@ -75,7 +75,9 @@ export async function buildApp(engine: SqliteDataSource, bus: EventBus) {
 
   // 生产模式：托管前端构建产物，前端路由全部回落到 index.html
   if (existsSync(config.webDist)) {
-    await app.register(fastifyStatic, { root: config.webDist, wildcard: false });
+    // wildcard：按请求去磁盘找文件，不在启动时把文件列表定死。否则服务开着的时候重新构建了网页（带哈希的新文件名），
+    // 新文件一律 404，要重启服务才好（2026-11-19 在真实部署里遇到）
+    await app.register(fastifyStatic, { root: config.webDist, wildcard: true });
     app.setNotFoundHandler((req, reply) => {
       if (req.url.startsWith('/api/')) {
         return reply.status(404).send({ ok: false, error: `没有这个接口：${req.method} ${req.url}`, code: 'not_found' });
