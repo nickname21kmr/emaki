@@ -5,6 +5,7 @@ import { useSearchParams } from 'react-router';
 import { PageBody, PageHeader } from '@/components/layout/PageHeader';
 import { Button, EmptyState, ErrorState, SearchInput, SectionTitle, Segmented, Skeleton } from '@/components/ui';
 import { api } from '@/lib/api';
+import { cn } from '@/lib/cn';
 import { COLLECTION_META, unitWord } from '@/lib/collections';
 import { formatCount } from '@/lib/format';
 import { useArtists, useCollections, useMutate } from '@/lib/queries';
@@ -13,9 +14,13 @@ import { useDebounced } from '@/features/gallery/useDebounced';
 import { ArtistShelf } from './components/ArtistShelf';
 import { CollectionShelf, unitCount } from './components/Shelf';
 
+/** 「全部」里同一投稿的组图不超过这么多就直接摆出来，多了收成一行（和图库「自动收拢」一个思路：多就收，少就摊开） */
+const POSTS_INLINE = 12;
+
 /**
- * 合集书架（T38d）：01 本子 · 02 画集 · 03 画师；?kind 只看一类，?q 搜书名 / 社团 / 作者 / 画师，?series 看一个系列。
- * 按文件夹自动成册，不移动文件。
+ * 合集书架（T38d）：01 本子 · 02 画集 · 03 组图 · 04 画师；?kind 只看一类，?q 搜书名 / 社团 / 作者 / 画师，?series 看一个系列。
+ * 本子、画集按文件夹自动成册；组图是收在一起的散图。都不移动文件。
+ * 同一投稿自动收拢的组图可能有几千组：「全部」里超过 POSTS_INLINE 组时先只摆手动收集的，同投稿的收成一行，点开或切到「组图」再看。
  */
 export function CollectionsPage() {
   const [params, setParams] = useSearchParams();
@@ -25,7 +30,7 @@ export function CollectionsPage() {
 
 function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: ReturnType<typeof useSearchParams>[1] }) {
   const kindParam = params.get('kind');
-  const kind: CollectionKind | 'artist' | null = kindParam === 'doujin' || kindParam === 'artbook' || kindParam === 'artist' ? kindParam : null;
+  const kind: CollectionKind | 'artist' | null = kindParam === 'group' || kindParam === 'doujin' || kindParam === 'artbook' || kindParam === 'artist' ? kindParam : null;
   const [q, setQ] = useState(params.get('q') ?? '');
   const debounced = useDebounced(q.trim(), 200);
   const list = useCollections({ q: debounced || undefined });
@@ -37,6 +42,7 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
     (a) => !needle || [a.name, a.tag, a.twitter ?? '', ...a.tags, ...a.aliases].some((n) => n.toLowerCase().replace(/_/g, ' ').includes(needle.replace(/_/g, ' '))),
   );
   const by = (k: CollectionKind) => all.filter((c) => c.kind === k);
+  const [showPosts, setShowPosts] = useState(false);
   const pages = (xs: CollectionSummary[]) => xs.reduce((n, c) => n + c.pageCount, 0);
   const set = (key: string, v: string | null) =>
     setParams(
@@ -71,8 +77,8 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
     ) : (
       <EmptyState
         glyph="册"
-        title="还没有成册的文件夹"
-        description="文件名是页码（001.jpg…），或一组同尺寸的扫描页，扫描后会自动成册；也可以在看图器的信息面板里点「成册」。"
+        title="还没有合集"
+        description="文件夹里的本子、画集扫描后会自动成册；散图可以在图库里选中后按 G 收进组图，同一投稿的多张也会自动收拢。"
       />
     );
   // 只看一类时这一类是空的（搜索只命中了别的类，或这一类本来就没有）：不能留一片空白
@@ -92,16 +98,36 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
   else
     body = (
       <div className="space-y-14">
-        {(['doujin', 'artbook'] as const)
+        {(['doujin', 'artbook', 'group'] as const)
           .filter((k) => !kind || kind === k)
           .map((k) => {
             const xs = by(k);
             if (!xs.length) return null;
             const m = COLLECTION_META[k];
+            const word = k === 'group' ? '张' : '页';
+            // 组图：手动收集的先摆；同一投稿的在「全部」里收成一行
+            const posts = k === 'group' ? xs.filter((c) => c.membership === 'post') : [];
+            const folded = !kind && !showPosts && posts.length > POSTS_INLINE;
+            const shown = (folded ? xs.filter((c) => c.membership !== 'post') : xs).sort(
+              (a, b) =>
+                k !== 'group' ? 0 : Number(b.membership !== 'post') - Number(a.membership !== 'post') || (b.lastAddedAt ?? '').localeCompare(a.lastAddedAt ?? ''),
+            );
             return (
               <section key={k}>
-                <SectionTitle hint={`${formatCount(unitCount(xs))} ${m.unit} · ${formatCount(pages(xs))} 页 · ${m.hint}`}>{m.label}</SectionTitle>
-                <CollectionShelf list={xs} />
+                <SectionTitle hint={`${formatCount(unitCount(xs))} ${m.unit} · ${formatCount(pages(xs))} ${word} · ${m.hint}`}>{m.label}</SectionTitle>
+                {shown.length > 0 && <CollectionShelf list={shown} keepOrder={k === 'group'} />}
+                {folded && (
+                  <button
+                    type="button"
+                    onClick={() => setShowPosts(true)}
+                    className={cn(
+                      'flex w-full items-center justify-center gap-2 rounded-lg py-3 text-[13px] text-fg-muted transition-colors hover:bg-hover hover:text-fg',
+                      shown.length > 0 && 'mt-8',
+                    )}
+                  >
+                    另有 {formatCount(posts.length)} 组是同一投稿自动收拢的 · 显示
+                  </button>
+                )}
               </section>
             );
           })}
@@ -122,7 +148,7 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
         subtitle={
           list.data ? (
             <span>
-              {formatCount(unitCount(by('doujin')))} 本本子 · {formatCount(unitCount(by('artbook')))} 册画集 · 按文件夹自动成册，不移动文件
+              {formatCount(unitCount(by('doujin')))} 本本子 · {formatCount(unitCount(by('artbook')))} 册画集 · {formatCount(by('group').length)} 组组图
             </span>
           ) : (
             <Skeleton className="h-3 w-56 rounded-full" />
@@ -139,6 +165,7 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
               { value: 'all', label: '全部' },
               { value: 'doujin', label: '本子' },
               { value: 'artbook', label: '画集' },
+              { value: 'group', label: '组图' },
               { value: 'artist', label: '画师' },
             ]}
           />

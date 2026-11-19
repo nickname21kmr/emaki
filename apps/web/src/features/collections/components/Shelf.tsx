@@ -2,9 +2,10 @@ import type { CollectionSummary } from '@emaki/shared';
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { BookFace, BookPlate } from '@/components/media/BookPlate';
+import { CoverFan } from '@/components/media/CoverFan';
 import { Button } from '@/components/ui';
 import { cn } from '@/lib/cn';
-import { byline, COLLECTION_META, displayTitle, shouldCloth, toShelfUnits, unitWord } from '@/lib/collections';
+import { byline, COLLECTION_META, displayTitle, groupOrigin, shouldCloth, toShelfUnits, unitWord } from '@/lib/collections';
 import { formatCount } from '@/lib/format';
 import { useBlurPrefs } from '@/lib/stores';
 
@@ -22,6 +23,7 @@ export function BookCard({
   size?: 'sm' | 'md';
 }) {
   const m = COLLECTION_META[c.kind];
+  if (c.kind === 'group') return <GroupCard c={c} index={index} meta={meta} size={size} />;
   return (
     <Link
       to={`/collections/${c.id}`}
@@ -36,6 +38,28 @@ export function BookCard({
             {formatCount(c.pageCount)} 页{c.translator ? ` · ${c.translator}` : ''}
           </>
         )}
+      </Caption>
+    </Link>
+  );
+}
+
+/**
+ * 组图卡：散图不装订，用全站唯一的扇形叠放（CoverFan）表示「一叠照片」，和书的造型区分开。
+ * 图注和书卡同一套：小字写来历，名字无衬线，下面是张数。
+ */
+function GroupCard({ c, index, meta, size }: { c: CollectionSummary; index: number; meta?: ReactNode; size: 'sm' | 'md' }) {
+  return (
+    <Link
+      to={`/collections/${c.id}`}
+      className="group/fan block animate-rise rounded-[18px] outline-none focus-visible:ring-2 focus-visible:ring-shu focus-visible:ring-offset-4 focus-visible:ring-offset-sheet"
+      style={{ animationDelay: `${Math.min(index, 11) * 30}ms` }}
+      aria-label={`组图《${displayTitle(c)}》，${c.pageCount} 张`}
+    >
+      <div className={cn('mx-auto', size === 'sm' ? 'w-[150px]' : 'w-[92%] max-w-[300px]')}>
+        <CoverFan covers={c.covers} label={displayTitle(c)} />
+      </div>
+      <Caption kicker={groupOrigin(c)} name={displayTitle(c)}>
+        {meta ?? `${formatCount(c.pageCount)} 张`}
       </Caption>
     </Link>
   );
@@ -100,8 +124,8 @@ export function CollectionShelf({
   keepOrder?: boolean;
 }) {
   const units = toShelfUnits(list, { keepOrder });
-  const [all, setAll] = useState(false);
-  const shown = all ? units : units.slice(0, PAGE);
+  const [limit, setLimit] = useState(PAGE);
+  const shown = units.slice(0, limit);
   return (
     <>
       <div className="grid grid-cols-2 gap-x-8 gap-y-10 sm:grid-cols-3 lg:grid-cols-4">
@@ -115,8 +139,8 @@ export function CollectionShelf({
       </div>
       {units.length > shown.length && (
         <div className="mt-10 flex justify-center">
-          <Button variant="outline" onClick={() => setAll(true)}>
-            显示全部 {formatCount(units.length)} 本
+          <Button variant="outline" onClick={() => setLimit((n) => n + PAGE)}>
+            显示更多 · 还有 {formatCount(units.length - shown.length)} 个
           </Button>
         </div>
       )}

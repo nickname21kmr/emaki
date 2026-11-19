@@ -9,7 +9,8 @@ import { BookCard } from '@/features/collections/components/Shelf';
  * 没有时整章不渲染，后面的章节编号自动前移。
  */
 export function CollectionsStrip({ characterId, workId }: { characterId?: ID; workId?: ID }) {
-  const { data } = useCollections(characterId ? { characterId } : { workId });
+  const { data: all } = useCollections(characterId ? { characterId } : { workId });
+  const data = all?.filter(c => c.kind !== 'group');
   if (!data || data.length === 0) return null;
   return (
     <section aria-label="收录于">

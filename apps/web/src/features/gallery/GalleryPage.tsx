@@ -183,7 +183,7 @@ export function GalleryPage() {
         <KindIndex
           current={filters.kind === 'all' ? 'all' : onlyIllust ? 'illustration' : null}
           onGallery={(k) => update({ kind: k === 'all' ? 'all' : ['illustration'] })}
-          trailing={<GalleryViewControls filters={filters} update={update} />}
+          trailing={<GalleryViewControls filters={filters} update={update} collapsed={list.data?.pages[0]?.collapsed} />}
         />
         <div className="mt-3">
           <GalleryToolbar

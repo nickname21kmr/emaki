@@ -81,7 +81,7 @@ export interface MoveOutcome {
   failed: string[];
 }
 
-export function moveImageFiles(db: Db, rows: MoveRow[], dest: { rootId: number; rootPath: string; dir: string }): MoveOutcome {
+export function moveImageFiles(db: Db, rows: MoveRow[], dest: { rootId: number; rootPath: string; dir: string }, allowCollection = false): MoveOutcome {
   const out: MoveOutcome = { moved: [], inCollection: 0, alreadyThere: 0, failed: [] };
   const destAbs = toAbs(dest.rootPath, dest.dir);
   const occupiedInDb = db.prepare('SELECT 1 FROM images WHERE root_id = ? AND rel_path = ?');
@@ -91,7 +91,7 @@ export function moveImageFiles(db: Db, rows: MoveRow[], dest: { rootId: number; 
 
   let made = false;
   for (const r of rows) {
-    if (r.collection_id !== null) {
+    if (r.collection_id !== null && !allowCollection) {
       out.inCollection++;
       continue;
     }

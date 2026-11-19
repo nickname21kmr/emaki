@@ -5,7 +5,7 @@ import type { DataSource } from '../datasource/DataSource.ts';
 import { NotFoundError } from '../http/errors.ts';
 import { idParam, parse } from '../http/validate.ts';
 
-const kindSchema = z.enum(['doujin', 'artbook']);
+const kindSchema = z.enum(['doujin', 'artbook', 'group']);
 
 /** 合集（T38c） */
 export function collectionRoutes(app: FastifyInstance, ds: DataSource): void {
@@ -64,7 +64,7 @@ export function collectionRoutes(app: FastifyInstance, ds: DataSource): void {
   });
 
   app.post('/api/collections', (req) => {
-    const body = parse(z.object({ fromImageId: z.string(), kind: kindSchema }), req.body);
+    const body = parse(z.object({ fromImageId: z.string().optional(), imageIds: z.array(z.string()).min(1).max(5000).optional(), organizeFiles: z.boolean().optional(), title: z.string().trim().min(1).max(200).optional(), kind: kindSchema }).refine(b => !!b.fromImageId || !!b.imageIds?.length, '请选择图片'), req.body);
     return ds.createCollection(body);
   });
 
@@ -72,6 +72,9 @@ export function collectionRoutes(app: FastifyInstance, ds: DataSource): void {
     const { id } = parse(idParam, req.params);
     const body = parse(
       z.object({
+        organizeFiles: z.boolean().optional(),
+        addImageIds: z.array(z.string()).min(1).max(5000).optional(),
+        removeImageIds: z.array(z.string()).min(1).max(5000).optional(),
         title: z.string().trim().min(1).max(200).nullable().optional(),
         kind: z.union([kindSchema, z.literal('auto')]).optional(),
         coverImageId: z.string().nullable().optional(),

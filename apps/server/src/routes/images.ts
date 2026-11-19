@@ -37,6 +37,10 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
         seed: qNumber.min(0).max(1073741823).optional(),
         sort: z.enum(['addedAt', 'modifiedAt', 'fileName', 'bytes', 'random', 'page']).optional(),
         collectionId: z.string().min(1).optional(),
+        collapseCollections: z.union([z.literal('auto'), qBool]).optional(),
+        includeWholeCollections: qBool.optional(),
+        imageIds: qList(z.string()).optional(),
+        similarTo: z.string().optional(),
         artist: z.string().min(1).max(200).optional(),
         order: z.enum(['asc', 'desc']).optional(),
         cursor: z.string().optional(),
@@ -157,6 +161,7 @@ export function imageRoutes(app: FastifyInstance, ds: DataSource): void {
         theme: z.enum(UNRECOGNIZED_THEMES).optional(),
         kind: z.enum(UNRECOGNIZED_ANNEX_KINDS).optional(),
         artKind: z.enum(UNRECOGNIZED_ART_KINDS).optional(),
+        collapseCollections: z.union([z.literal('auto'), qBool]).optional(),
       }),
       req.query,
     );

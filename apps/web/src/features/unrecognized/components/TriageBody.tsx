@@ -1,7 +1,8 @@
 import type { UnrecognizedArtKind, UnrecognizedSummary } from '@emaki/shared';
 import { ArrowRight } from 'lucide-react';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
+import { AddToGroupDialog } from '@/components/media/CollectionControls';
 import { Button, EmptyState, ErrorState } from '@/components/ui';
 import { formatCount } from '@/lib/format';
 import { useHotkey } from '@/lib/hotkeys';
@@ -45,7 +46,8 @@ export function TriageBody({
   const keysEnabled = useTriageKeysEnabled();
   const ready = items.length > 0;
   // 「不是插画」菜单打开时，数字键和字母键都归菜单
-  const on = keysEnabled && ready && !triage.kindMenuOpen;
+  const [grouping, setGrouping] = useState(false);
+  const on = keysEnabled && ready && !triage.kindMenuOpen && !grouping;
 
   // ---------------------------------------------------------------- 看图器
   // 从这里打开的看图器关掉时，把当前项同步到看图器最后停留的那张
@@ -81,6 +83,7 @@ export function TriageBody({
   useHotkey('e', (e) => !e.repeat && triage.exclude(), { enabled: on });
   useHotkey('o', (e) => !e.repeat && triage.markOriginal(), { enabled: on });
   useHotkey('n', (e) => !e.repeat && triage.setKindMenuOpen(true), { enabled: on });
+  useHotkey('g', (e) => !e.repeat && setGrouping(true), { enabled: on && batch });
   useHotkey('x', (e) => !e.repeat && triage.toggleCurrent(), { enabled: on });
   useHotkey('a', (e) => !e.repeat && triage.selectSameTop(), { enabled: on && !batch });
   useHotkey('space', (e) => !e.repeat && openLightbox(), { enabled: on });
@@ -161,7 +164,15 @@ export function TriageBody({
           <StampOverlay stamp={triage.stamp} />
         </div>
         {batch ? (
-          <BatchPanel triage={triage} searchRef={searchRef} />
+          <>
+            <BatchPanel triage={triage} searchRef={searchRef} onGroup={() => setGrouping(true)} />
+            <AddToGroupDialog
+              open={grouping}
+              onOpenChange={setGrouping}
+              ids={triage.selectedItems.map((it) => it.image.id)}
+              onDone={triage.clearSelection}
+            />
+          </>
         ) : (
           current && <DecisionPanel triage={triage} item={current} searchRef={searchRef} />
         )}

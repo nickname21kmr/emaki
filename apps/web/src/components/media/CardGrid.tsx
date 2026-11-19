@@ -6,6 +6,7 @@ import { useReducedMotion } from 'motion/react';
 import { cn } from '@/lib/cn';
 import { formatDate } from '@/lib/format';
 import { MountFrame, SelectCircle, useGridBox, useGridInteractions, useLightboxFeed } from './ImageGrid';
+import { GroupBadge, selectionIds, toggleImageSelection } from './CollectionControls';
 import { Thumb } from './Thumb';
 
 /**
@@ -87,7 +88,7 @@ export function CardGrid({
           >
             {row.map((image, k) => {
               const index = start + k;
-              const selected = selecting && selection.ids.has(image.id);
+              const selected = selecting && selectionIds(image).every(id => selection.ids.has(id));
               return (
                 <Card
                   key={image.id}
@@ -99,7 +100,7 @@ export function CardGrid({
                   selectable={!!selectionScope}
                   selecting={selecting}
                   onClick={(e) => handleClick(e, image, index)}
-                  onToggle={() => selection.toggle(image.id)}
+                  onToggle={() => toggleImageSelection(image)}
                 />
               );
             })}
@@ -171,6 +172,7 @@ function Card({
           <Heart className="pointer-events-none absolute right-2 bottom-2 size-4 fill-white text-white drop-shadow-[0_1px_2px_rgb(0_0_0/0.5)]" />
         )}
         <MountFrame selected={selected} />
+        <GroupBadge image={image} />
         {selectable && <SelectCircle selected={selected} selecting={selecting} onToggle={onToggle} />}
       </div>
       {variant === 'shot' && <figcaption className="mt-1.5 truncate text-[11px] text-fg-subtle tabular">{formatDate(image.modifiedAt)}</figcaption>}

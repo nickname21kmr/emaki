@@ -88,7 +88,8 @@ export const IN_COMIC_I = IN_COMIC('i');
 export const COMIC_IN_QUEUE = `COALESCE((SELECT json_extract(s.value, '$.comicInUnrecognized') FROM settings s WHERE s.key = 'tagger'), 1)`;
 /** 未识别「插画 · 漫画」要找角色的类型：插画，加上设置开着时的漫画页 */
 export const QUEUE_KINDS_SQL = `(i.content_kind = 'illustration' OR (i.content_kind = 'comic' AND ${COMIC_IN_QUEUE}))`;
-export const QUEUE = `${QUEUE_KINDS_SQL} AND i.shelved_at IS NULL AND ${UNRECOGNIZED} AND i.collection_id IS NULL AND NOT ${IN_COMIC_I}`;
+export const NOT_IN_BOOK = `NOT EXISTS (SELECT 1 FROM collections bc WHERE bc.id = i.collection_id AND bc.kind <> 'group' AND bc.state = 'active')`;
+export const QUEUE = `${QUEUE_KINDS_SQL} AND i.shelved_at IS NULL AND ${UNRECOGNIZED} AND ${NOT_IN_BOOK} AND NOT ${IN_COMIC_I}`;
 /** 「待识别」：队列里还没跑过识别的；漫画不算（它按本处理，RV-T-1 ③） */
 export const UNTAGGED_UNRECOGNIZED = `i.tagged_at IS NULL AND i.content_kind <> 'comic' AND ${QUEUE}`;
 /** 图片所在目录（带末尾的 /） */

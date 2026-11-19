@@ -121,6 +121,24 @@ describe('assistant HTTP and MCP', () => {
       expect(JSON.parse(pending.content[0].text).items[0]).toMatchObject({code:'needs_confirm',existingImageId:imageId});
     } finally {spy.mockRestore();await client.close();}
   });
+  it('creates, reads and edits collections through an idempotent MCP business tool', async () => {
+    const client = await connect();
+    try {
+      const sample = (await ds.listImages({ limit: 2 })).items.map(i => i.id);
+      const args = { action: 'create', imageIds: sample, title: 'MCP collection test', operationId: 'collection-create' };
+      const one: any = await client.callTool({ name: 'edit_collection', arguments: args });
+      expect(one.isError).not.toBe(true);
+      const result = JSON.parse(one.content[0].text);
+      expect(result.collection).toMatchObject({ kind: 'group', title: 'MCP collection test', pageCount: 2 });
+      const again: any = await client.callTool({ name: 'edit_collection', arguments: args });
+      expect(JSON.parse(again.content[0].text)).toEqual(result);
+      const read: any = await client.callTool({ name: 'read_library', arguments: { path: '/api/collections/' + result.collection.id } });
+      expect(JSON.parse(read.content[0].text).pages).toHaveLength(2);
+      const removed: any = await client.callTool({ name: 'edit_collection', arguments: { action: 'update', id: result.collection.id, removeImageIds: [sample[0]], operationId: 'collection-remove' } });
+      expect(removed.isError).not.toBe(true);
+      expect((await ds.getCollection(result.collection.id))!.pages).toHaveLength(1);
+    } finally { await client.close(); }
+  });
   it('replaces existing media through the idempotent business API',async()=>{
     const client=await connect(),file=path.join(state.dir,'high-resolution.png');
     const result={ok:true as const,message:'已替换图片',undoToken:'replace-test-undo',imageId,absPath:file};

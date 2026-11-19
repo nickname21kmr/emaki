@@ -8,6 +8,7 @@ import { api } from '@/lib/api';
 import { useMutate } from '@/lib/queries';
 import { useLightbox, useSelection } from '@/lib/stores';
 import { pickRevealed } from '@/lib/undoPlace';
+import { GroupBadge, selectionIds, toggleImageSelection } from './CollectionControls';
 import { useUndoRevealTarget } from '@/lib/useUndoReveal';
 import { justify } from './justify';
 
@@ -72,10 +73,10 @@ export function ImageGrid({
   }, [rows, virtualizer]);
 
   const { selection, selecting, handleClick, gridId, ids } = useGridInteractions(images, selectionScope, onOpen);
-  const favorite = useMutate(({ id, value }: { id: ID; value: boolean }) => api.bulkImages({ ids: [id], action: { type: 'favorite', value } }));
+  const favorite = useMutate(({ ids, value }: { ids: ID[]; value: boolean }) => api.bulkImages({ ids, action: { type: 'favorite', value } }));
 
   useLightboxFeed(gridId, ids, { total, hasMore, loadingMore, onLoadMore }, (id) => {
-    const at = images.findIndex((i) => i.id === id);
+    const at = images.findIndex((i) => selectionIds(i).includes(id));
     const row = rows.findIndex((r) => at >= r.start && at < r.start + r.widths.length);
     if (row >= 0) virtualizer.scrollToIndex(row, { align: 'center' });
   });
@@ -117,7 +118,7 @@ export function ImageGrid({
             {row.widths.map((w, k) => {
               const index = row.start + k;
               const image = images[index]!;
-              const selected = selecting && selection.ids.has(image.id);
+              const selected = selecting && selectionIds(image).every(id => selection.ids.has(id));
               return (
                 <Tile
                   key={image.id}
@@ -129,8 +130,8 @@ export function ImageGrid({
                   selectable={!!selectionScope}
                   selecting={selecting}
                   onClick={(e) => handleClick(e, image, index)}
-                  onToggle={() => selection.toggle(image.id)}
-                  onFavorite={() => favorite.mutate({ id: image.id, value: !image.favorite })}
+                  onToggle={() => toggleImageSelection(image)}
+                  onFavorite={() => favorite.mutate({ ids: selectionIds(image), value: !(image.collectionGroup?.allFavorite ?? image.favorite) })}
                   overlay={renderOverlay?.(image)}
                   forceBlur={forceBlur?.(image)}
                 />
@@ -214,7 +215,8 @@ export function useLightboxFeed(
  * 看图器打开时，网格加载了更多就同步过去（只同步打开看图器的那个网格）。
  */
 export function useGridInteractions(images: ImageItem[], selectionScope?: string, onOpen?: (image: ImageItem, index: number) => void) {
-  const ids = useMemo(() => images.map((i) => i.id), [images]);
+  // 收拢的组图在看图器里展开当前范围内的成员，勾选也按这些成员算
+  const ids = useMemo(() => images.flatMap(selectionIds), [images]);
   const gridId = useId();
   const syncLightbox = useLightbox((s) => s.syncIds);
   useEffect(() => syncLightbox(ids, gridId), [ids, gridId, syncLightbox]);
@@ -229,14 +231,23 @@ export function useGridInteractions(images: ImageItem[], selectionScope?: string
 
   const handleClick = (e: React.MouseEvent, image: ImageItem, index: number) => {
     if (selectionScope) {
-      if (e.shiftKey) return selection.selectRange(ids, image.id);
-      if (e.ctrlKey || e.metaKey || selecting) return selection.toggle(image.id);
+      if (e.shiftKey) {
+        // 区间选到的格子里有组图：补齐整组
+        selection.selectRange(ids, image.id);
+        const selected = useSelection.getState().ids;
+        const next = new Set(selected);
+        for (const i of images) if (selected.has(i.id)) selectionIds(i).forEach((id) => next.add(id));
+        selection.setMany([...next]);
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || selecting) return toggleImageSelection(image);
     }
+    // 组图格从封面打开看图器；去组图页点右上角的张数
     if (onOpen) onOpen(image, index);
     else {
       // 从格子里「拿起」（SEL-12）
       const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      showLightbox(ids, index, gridId, { left: r.left, top: r.top, width: r.width, height: r.height, thumb: gridThumbWidth(r.width) });
+      showLightbox(ids, ids.indexOf(image.id), gridId, { left: r.left, top: r.top, width: r.width, height: r.height, thumb: gridThumbWidth(r.width) });
     }
   };
   return { selection, selecting, handleClick, gridId, ids };
@@ -325,6 +336,7 @@ function Tile({
   onFavorite: () => void;
 }) {
   const thumbWidth = gridThumbWidth(width);
+  const starred = image.collectionGroup?.allFavorite ?? image.favorite;
   return (
     <div
       className={cn(
@@ -354,6 +366,7 @@ function Tile({
         />
       </button>
 
+      <GroupBadge image={image} forceBlur={forceBlur} />
       {/* 悬停：底部渐变 + 这是谁（BR-5）；多选时和窄格子不显示 */}
       {!selecting && width >= 120 && height >= 120 && (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-linear-to-t from-black/55 via-black/20 to-transparent opacity-0 transition-opacity duration-300 group-hover/tile:opacity-100">
@@ -376,17 +389,17 @@ function Tile({
       {!selecting && (
         <button
           type="button"
-          aria-label={image.favorite ? '取消收藏' : '收藏'}
+          aria-label={image.collectionGroup ? `${starred ? '取消收藏' : '收藏'}这 ${image.collectionGroup.count} 张` : starred ? '取消收藏' : '收藏'}
           onClick={(e) => {
             e.stopPropagation();
             onFavorite();
           }}
           className={cn(
             'absolute right-1.5 bottom-1.5 z-10 flex size-7 items-center justify-center rounded-full text-white transition-[opacity,scale] duration-200 active:scale-90 [&_svg]:size-4 [&_svg]:drop-shadow-[0_1px_2px_rgb(0_0_0/0.5)]',
-            image.favorite ? 'opacity-100' : 'opacity-0 group-hover/tile:opacity-100',
+            starred ? 'opacity-100' : 'opacity-0 group-hover/tile:opacity-100',
           )}
         >
-          <Heart className={cn(image.favorite && 'fill-white')} />
+          <Heart className={cn(starred && 'fill-white')} />
         </button>
       )}
       {overlay}

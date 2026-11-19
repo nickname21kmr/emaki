@@ -7,6 +7,7 @@ import {
   type BulkCollectionsBody,
   type Character,
   type CollectionKind,
+  type CreateCollectionBody,
   type CollectionSummary,
   type GetCollectionResponse,
   type ID,
@@ -25,8 +26,8 @@ import { comicAreaOf } from './comic.ts';
 import { mockDominantColor } from '../../util/color.ts';
 import type { CharacterRow, CollectionRow, ImageRow, MockDb, WorkRow } from './fixtures.ts';
 
-const KIND_LABEL: Record<CollectionKind, string> = { doujin: '本子', artbook: '画集' };
-const isKind = (v: unknown): v is CollectionKind => v === 'doujin' || v === 'artbook';
+const KIND_LABEL: Record<CollectionKind, string> = { doujin: '本子', artbook: '画集', group: '组图' };
+const isKind = (v: unknown): v is CollectionKind => v === 'doujin' || v === 'artbook' || v === 'group';
 const dirOf = (img: ImageRow) => (img.relPath.length > img.fileName.length ? img.relPath.slice(0, img.relPath.length - img.fileName.length - 1) : '');
 const leafOf = (dir: string) => dir.slice(dir.lastIndexOf('/') + 1);
 const collator = new Intl.Collator('ja', { numeric: true });
@@ -133,6 +134,7 @@ export class MockCollections {
           covers: s.covers.map((c) => ({ imageId: c.imageId, rating: c.rating, color: c.color, focus: null })),
           coverTagged: s.coverTagged,
           origin: row.origin,
+          membership: row.membership ?? 'folder',
           pending: s.pending,
           unrecognizedPageCount: s.unrecognizedPageCount,
           lastAddedAt: s.lastAddedAt,
@@ -208,7 +210,7 @@ export class MockCollections {
   }
 
   stats(): { collectionCounts: Record<CollectionKind, number>; pendingCollectionCount: number } {
-    const counts: Record<CollectionKind, number> = { doujin: 0, artbook: 0 };
+    const counts: Record<CollectionKind, number> = { doujin: 0, artbook: 0, group: 0 };
     const pending = new Set<string>();
     for (const { summary: s } of this.loadAll().values()) {
       if (s.pageCount === 0) continue;
@@ -239,12 +241,12 @@ export class MockCollections {
 
   /** 一个目录下的直接成员（可见、未排除） */
   private members(rootId: ID, dir: string): ImageRow[] {
-    return this.d.visible().filter((img) => !img.excludedBy && img.libraryRootId === rootId && dirOf(img) === dir);
+    return this.d.visible().filter((img) => !img.excludedBy && !img.collectionDetached && img.libraryRootId === rootId && dirOf(img) === dir);
   }
 
   /** 按页序重新编号；这本之外的页离开合集 */
   private assignPages(c: CollectionRow): ImageRow[] {
-    const members = this.members(c.rootId, c.relDir);
+    const members = c.membership && c.membership !== 'folder' ? this.d.visible().filter(img => !img.excludedBy && img.collectionId === c.id) : this.members(c.rootId, c.relDir);
     const ordered = orderPages(
       members.map((img) => ({ ...this.toDirPage(img), img })),
       c.pageOrder,
@@ -264,12 +266,13 @@ export class MockCollections {
 
   private snapshot(ids: ID[]) {
     const rows = ids.map((id) => ({ ...this.d.db.collections.get(id)! }));
-    const pages = [...this.d.db.images.values()].map((img) => ({ img, collectionId: img.collectionId, pageNo: img.pageNo }));
+    const pages = [...this.d.db.images.values()].map((img) => ({ img, collectionId: img.collectionId, pageNo: img.pageNo, detached: img.collectionDetached }));
     return () => {
       for (const r of rows) this.d.db.collections.set(r.id, { ...r });
       for (const p of pages) {
         p.img.collectionId = p.collectionId;
         p.img.pageNo = p.pageNo;
+        p.img.collectionDetached = p.detached;
       }
     };
   }
@@ -292,11 +295,11 @@ export class MockCollections {
     return area ? parseComicDir(ComicAreas.relIn(area, dir), area.path) : parseBookDir(dir, bookLeaf(dir));
   }
 
-  create(body: { fromImageId: ID; kind: CollectionKind }): MutationResult & { collection: CollectionSummary } {
+  create(body: CreateCollectionBody): MutationResult & { collection: CollectionSummary } {
     if (!isKind(body.kind)) throw new BadRequestError('类型只能是本子或画集');
-    const img = this.d.db.images.get(body.fromImageId);
+    const img = this.d.db.images.get(body.fromImageId ?? body.imageIds?.[0] ?? '');
     if (!img || !this.d.visible().includes(img)) throw new NotFoundError('图片');
-    const dir = dirOf(img);
+    const dir = body.imageIds ? '@selection/' + Date.now() + '-' + Math.random() : dirOf(img);
     if (!dir && !this.isComicRoot(img.libraryRootId)) throw new BadRequestError('图库根目录里的图不能成册');
     const ex = [...this.d.db.collections.values()].find((c) => c.rootId === img.libraryRootId && c.relDir === dir);
     if (ex?.state === 'active') throw new ConflictError('这个文件夹已经是合集');
@@ -315,10 +318,11 @@ export class MockCollections {
         id: `col${next}`,
         rootId: img.libraryRootId,
         relDir: dir,
+        membership: body.imageIds ? 'selection' : 'folder',
         kind: body.kind,
         kindSource: 'manual',
         kindManual: true,
-        title: p.title,
+        title: body.imageIds ? body.title?.trim() || '新组图' : p.title,
         titleManual: false,
         event: p.event,
         circle: p.circle,
@@ -341,10 +345,15 @@ export class MockCollections {
       };
       this.d.db.collections.set(row.id, row);
     }
+    if (body.imageIds) {
+      for (const id of body.imageIds) if (!this.d.db.images.has(id)) throw new NotFoundError('图片');
+      for (const id of body.imageIds) Object.assign(this.d.db.images.get(id)!, { collectionId: row.id, collectionDetached: true });
+    } else for (const m of this.members(img.libraryRootId, dir)) m.collectionDetached = false;
     const n = this.assignPages(row).length;
     const created = !ex;
     const id = row.id;
-    const result = this.d.withUndo(`已把「${leafOf(dir)}」做成${KIND_LABEL[body.kind]}（${n} 页）`, () => {
+    const message = body.imageIds ? `已新建${KIND_LABEL[body.kind]}「${row.title}」，收进 ${n} 张` : `已把「${leafOf(dir)}」做成${KIND_LABEL[body.kind]}（${n} 页）`;
+    const result = this.d.withUndo(message, () => {
       restore();
       if (created) this.d.db.collections.delete(id);
     });
@@ -421,8 +430,21 @@ export class MockCollections {
       next.manualWorkIds = [...new Set(body.manualWorkIds)];
       notes.push('已更新作品');
     }
+    const folder = (c.membership ?? 'folder') === 'folder';
+    const adding = body.addImageIds?.length ?? 0;
+    const removing = body.removeImageIds?.length ?? 0;
+    // 同 sqlite：文件夹书只能移出页，不能收别处的图、不能整理到子文件夹
+    if (folder && (adding || body.organizeFiles)) throw new BadRequestError('按文件夹成册的本子和画集跟着文件夹走，不能收进别处的图；可以选图另建组图');
+    if (adding || removing) notes.push(adding && removing ? '已更新组图' : adding ? `已加入 ${adding} 张` : `已移出 ${removing} 张`);
+    if (body.organizeFiles) notes.push('演示数据不移动文件');
     if (!notes.length) throw new BadRequestError('没有要修改的内容');
     const restore = this.snapshot([c.id]);
+    if (adding || removing) {
+      if (!folder) next.membership = 'selection';
+      for (const id of body.addImageIds ?? []) { const img = this.d.db.images.get(id); if (!img) throw new NotFoundError('图片'); Object.assign(img, { collectionId: c.id, collectionDetached: true }); }
+      for (const id of body.removeImageIds ?? []) { const img = this.d.db.images.get(id); if (img?.collectionId === c.id) Object.assign(img, { collectionId: null, pageNo: null, collectionDetached: true }); }
+      reorder = true;
+    }
     Object.assign(c, next, { origin: 'manual', updatedAt: new Date(this.d.now).toISOString() });
     if (reorder) this.assignPages(c);
     return this.d.withUndo(notes.join('，'), restore);
@@ -438,7 +460,7 @@ export class MockCollections {
         img.pageNo = null;
       }
     }
-    return this.d.withUndo(`已取消成册：${c.title ?? '无题'}`, restore);
+    return this.d.withUndo((c.membership ?? 'folder') === 'folder' ? `已取消成册：${c.title ?? '无题'}` : `已解散${KIND_LABEL[c.kind]}：${c.title ?? '无题'}（图片都还在）`, restore);
   }
 
   bulk(body: BulkCollectionsBody): MutationResult {

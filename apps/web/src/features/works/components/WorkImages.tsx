@@ -1,7 +1,8 @@
 import type { ID, ImageItem } from '@emaki/shared';
-import { EyeOff, Heart, HeartOff, Palette } from 'lucide-react';
+import { EyeOff, Heart, HeartOff, Layers, Palette } from 'lucide-react';
 import { ArtistBulkPicker } from '@/features/gallery/ArtistPicker';
 import { useCallback, useMemo, useState } from 'react';
+import { AddToGroupDialog, CollapseGroupsMenu, selectionIds } from '@/components/media/CollectionControls';
 import { ImageGrid, ImageGridSkeleton } from '@/components/media/ImageGrid';
 import { Button, EmptyState, ErrorState, Segmented } from '@/components/ui';
 import { api } from '@/lib/api';
@@ -49,6 +50,7 @@ export function WorkImages({ workId, gridKey, dialogOpen = false }: { workId: ID
 
   const scope = `work:${workId}`;
   const [artistOpen, setArtistOpen] = useState(false);
+  const [grouping, setGrouping] = useState(false);
   const selection = useScopedSelection(scope, images, dialogOpen || artistOpen);
 
   const favorite = useMutate(
@@ -59,8 +61,9 @@ export function WorkImages({ workId, gridKey, dialogOpen = false }: { workId: ID
     onSuccess: selection.clear,
   });
 
-  const byId = useMemo(() => new Map(images.map((i) => [i.id, i])), [images]);
-  const allFavorite = selection.ids.length > 0 && selection.ids.every((id) => byId.get(id)?.favorite);
+  // 收拢的组图格按整组算：整组都收藏了才算收藏
+  const starred = useMemo(() => new Map(images.flatMap((i) => selectionIds(i).map((id) => [id, i.collectionGroup?.allFavorite ?? i.favorite] as const))), [images]);
+  const allFavorite = selection.ids.length > 0 && selection.ids.every((id) => starred.get(id));
   const busy = favorite.isPending || exclude.isPending;
 
   const actions: SelectionAction[] = [
@@ -73,6 +76,7 @@ export function WorkImages({ workId, gridKey, dialogOpen = false }: { workId: ID
       onClick: () => favorite.mutate({ ids: selection.ids, value: !allFavorite }),
     },
     { key: 'artist', label: '画师…', icon: <Palette />, disabled: busy, onClick: () => setArtistOpen(true) },
+    { key: 'group', label: '组图…', icon: <Layers />, disabled: busy, onClick: () => setGrouping(true) },
     {
       key: 'exclude',
       label: '排除',
@@ -147,9 +151,10 @@ export function WorkImages({ workId, gridKey, dialogOpen = false }: { workId: ID
           </span>
         </div>
       )}
-      <ImagesToolbar total={total} filters={filters} otherCount={otherCount} />
+      <ImagesToolbar extra={<CollapseGroupsMenu collapsed={query.data?.pages[0]?.collapsed} />} total={total} filters={filters} otherCount={otherCount} />
       {body}
       <ArtistBulkPicker open={artistOpen} onOpenChange={setArtistOpen} ids={selection.ids} onDone={selection.clear} />
+      <AddToGroupDialog open={grouping} onOpenChange={setGrouping} ids={selection.ids} onDone={selection.clear} />
       <SelectionBar count={selection.count} actions={actions} onClear={selection.clear} />
     </section>
   );
