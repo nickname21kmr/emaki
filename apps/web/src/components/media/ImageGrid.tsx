@@ -15,7 +15,7 @@ import { justify } from './justify';
 import { Thumb } from './Thumb';
 import type { BlurContext } from '@/lib/blur';
 import { useCan } from '@/lib/capabilities';
-import { Button } from '@/components/ui';
+import { Button, IconButton } from '@/components/ui';
 import { useLongPress } from '@/lib/useLongPress';
 import { balancedRows, gridGap, gridRowHeight, useViewport } from '@/lib/viewport';
 
@@ -286,17 +286,18 @@ export function useGridInteractions(images: ImageItem[], selectionScope?: string
  */
 export function SelectButton({ scope }: { scope: string }) {
   const on = useSelection((s) => isSelecting(s, scope));
+  // 平时是页头的一个图标（和模糊、撤销、帮助一样不抢眼）；多选中变成醒目的「完成」，一眼看得到怎么退出
   return (
     <span className="hidden touch:contents">
-      <Button
-        variant={on ? 'primary' : 'outline'}
-        size="md"
-        icon={<CheckCheck />}
-        className="rounded-full"
-        onClick={() => (on ? useSelection.getState().clear() : useSelection.getState().start(scope))}
-      >
-        {on ? '完成' : '选择'}
-      </Button>
+      {on ? (
+        <Button variant="primary" size="md" icon={<CheckCheck />} className="rounded-full" onClick={() => useSelection.getState().clear()}>
+          完成
+        </Button>
+      ) : (
+        <IconButton label="选择" onClick={() => useSelection.getState().start(scope)}>
+          <CheckCheck />
+        </IconButton>
+      )}
     </span>
   );
 }

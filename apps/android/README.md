@@ -18,14 +18,14 @@
 | `.../AppModel.kt` | 页面之间怎么走（找电脑 → 请求 → 等批准 → 主界面；电脑不在线、已被电脑移除、需要更新、证书不对） |
 | `.../ConnectionWatch.kt` | 断线处理（docs/mobile.md 3.6）：主界面上核实连接（`core/Liveness.kt` 的 `LinkCheck`），「电脑不在线」页面上自动重连 |
 | `.../core/Uploads.kt` | 传图（docs/mobile.md 5.4）：算 sha256、先问电脑有没有、分段传、断点续传（`Uploader`），照 `apps/server/scripts/lan-client.ts` 的 upload 写 |
-| `.../platform/UploadWork.kt` | 「从手机添加」选的图排成后台任务（WorkManager）：前台服务通知进度，连不上电脑过一会儿重试，传完通知结果 |
+| `.../platform/UploadWork.kt` | 「传到电脑」→「选图片」选的图排成后台任务（WorkManager）：前台服务通知进度，连不上电脑过一会儿重试，传完通知结果 |
 | `.../core/AlbumSync.kt` | 同步相册（docs/mobile.md 5.5）的规则：盘点（每个相册电脑上有几张、老图在哪）、同步（只传电脑上没有的、删过的不传），和安卓无关，有单元测试 |
 | `.../platform/MediaIndex.kt`、`SyncDb.kt`、`AlbumSyncWork.kt` | 读 MediaStore 的相册和图（要读照片的权限）、手机上记的 sha256 和处理过的、同步任务（只在 App 开着时：打开 App、开着时相册有新图、用户点的；关掉后正在传的传完） |
 
 网页那边两处配合：`apps/web/src/lib/deviceAuth.ts` 在有 `window.EmakiApp` 时，遇到 401 调 `EmakiApp.unpaired(code)`，
 不显示网页自己的「连接到电脑」页；`apps/web/src/lib/connection.ts` 连不上电脑时调 `EmakiApp.connectionLost()`，不显示网页自己的提示条；
-图库页头的「从手机添加」（`features/gallery/components/AddFromPhone.tsx`）在有 `EmakiApp.pickImages` 时显示，点了调它；
-有 `EmakiApp.syncAlbums`（0.3.0 起）时变成菜单，多一项「同步相册」（`features/access/AlbumSync.tsx`）。
+图库页头的「传到电脑」图标（`features/gallery/components/SendToComputer.tsx`）在有 `EmakiApp.pickImages` 时显示；
+有 `EmakiApp.syncAlbums`（0.3.0 起）时点开是一个面板：「选图片上传」+「同步相册」（`features/access/AlbumSync.tsx`），老版本直接打开选图界面。
 
 ## 在哪构建
 

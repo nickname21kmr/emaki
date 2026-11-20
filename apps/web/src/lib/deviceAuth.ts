@@ -31,7 +31,7 @@ interface EmakiAppBridge {
   unpaired(code: DeviceAuthLost): void;
   /** 连不上电脑了（lib/connection.ts）：App 核实后切到原生的「电脑不在线」。老版本的 App 没有 */
   connectionLost?(): void;
-  /** 「从手机添加」：App 打开系统的选图界面，选完在后台传给电脑（docs/mobile.md 5.4）。0.2.0 起才有 */
+  /** 「传到电脑」→「选图片」：App 打开系统的选图界面，选完在后台传给电脑（docs/mobile.md 5.4）。0.2.0 起才有 */
   pickImages?(): void;
   /**
    * 同步相册（docs/mobile.md 5.5）：inventory 盘点（读手机上所有相册、问电脑有没有，第一次要读照片的权限）；

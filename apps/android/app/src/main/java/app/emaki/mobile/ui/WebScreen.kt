@@ -56,7 +56,7 @@ fun interface FileChooser {
     fun choose(callback: ValueCallback<Array<Uri>>, params: WebChromeClient.FileChooserParams): Boolean
 }
 
-/** 网页上点「从手机添加」（window.EmakiApp.pickImages，B1）：Activity 打开系统的选图界面，选完排进后台上传（platform/UploadWork.kt） */
+/** 网页上点「传到电脑」→「选图片」（window.EmakiApp.pickImages，B1）：Activity 打开系统的选图界面，选完排进后台上传（platform/UploadWork.kt） */
 fun interface ImagePicker {
     fun pick()
 }
@@ -78,7 +78,7 @@ fun interface AlbumSyncRequest {
  * - 注入 `window.EmakiApp`：网页遇到 401（设备被移除）时调 `unpaired(code)`，App 回到原生页面，不显示网页自己的配对页；
  *   网页连不上电脑时调 `connectionLost()`（apps/web/src/lib/connection.ts），App 核实后换到「电脑不在线」；
  *   `paper(color)` 是 App 自己注入的脚本用的，把网页的纸色报上来，状态栏、导航栏跟着换颜色；
- *   `pickImages()`：网页上的「从手机添加」，打开系统的选图界面，选完在后台传给电脑（docs/mobile.md 5.4）；
+ *   `pickImages()`：网页上「传到电脑」里的「选图片」，打开系统的选图界面，选完在后台传给电脑（docs/mobile.md 5.4）；
  *   `syncAlbums(mode)`：网页上的「同步相册」，盘点（inventory）或者现在同步一次（sync），在后台做（5.5）。
  */
 @Composable

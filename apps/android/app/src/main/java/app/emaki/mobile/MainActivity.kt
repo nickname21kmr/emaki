@@ -84,7 +84,7 @@ class MainActivity : ComponentActivity() {
         pendingFiles = null
     }
 
-    /** 「从手机添加」：系统的选图界面（Android Photo Picker，可多选，不用存储权限），选完排进后台上传 */
+    /** 「传到电脑」→「选图片」：系统的选图界面（Android Photo Picker，可多选，不用存储权限），选完排进后台上传 */
     private val pickImages = registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
         if (uris.isEmpty()) return@registerForActivityResult
         UploadQueue.enqueue(this, uris)

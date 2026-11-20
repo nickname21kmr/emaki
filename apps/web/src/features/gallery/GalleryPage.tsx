@@ -5,7 +5,7 @@ import { Link, useNavigate } from 'react-router';
 import { PageBody, PageHeader } from '@/components/layout/PageHeader';
 import { useScrollContainer } from '@/components/layout/ScrollContainer';
 import { ImageGrid, ImageGridSkeleton, SelectButton } from '@/components/media/ImageGrid';
-import { AddFromPhoneButton } from './components/AddFromPhone';
+import { SendToComputerButton } from './components/SendToComputer';
 import { KindBadge } from '@/components/media/KindBadge';
 import { KIND_LABEL, kindTotal } from '@/lib/kinds';
 import { KindIndex } from '@/features/annex/KindIndex';
@@ -181,7 +181,7 @@ export function GalleryPage() {
         actions={
           <>
             {artist && <ArtistMenu artist={artist} onMoved={(tag) => update({ artist: tag })} />}
-            <AddFromPhoneButton />
+            <SendToComputerButton />
             {images.length > 0 && <SelectButton scope={SCOPE} />}
           </>
         }

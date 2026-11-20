@@ -43,7 +43,7 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /**
- * 手动上传（B1，docs/mobile.md 5.4）：网页上点「从手机添加」→ 系统选图界面 → 这里排一个后台任务（WorkManager）传给电脑。
+ * 手动上传（B1，docs/mobile.md 5.4）：网页上点「传到电脑」→「选图片」→ 系统选图界面 → 这里排一个后台任务（WorkManager）传给电脑。
  *
  * - 选的图的地址（content://）写进 files/uploads/<批次>.json（WorkManager 的参数放不下几百个地址），能拿长期读权限的拿上；
  * - 任务在前台服务里跑（通知栏显示「正在传到 <电脑>：3 / 10」），App 退到后台、锁屏也接着传；
