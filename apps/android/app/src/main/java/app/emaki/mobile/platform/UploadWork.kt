@@ -28,6 +28,7 @@ import androidx.work.workDataOf
 import app.emaki.mobile.BuildConfig
 import app.emaki.mobile.MainActivity
 import app.emaki.mobile.R
+import app.emaki.mobile.core.AlbumSyncer
 import app.emaki.mobile.core.ApiException
 import app.emaki.mobile.core.EmakiApi
 import app.emaki.mobile.core.ReconnectResult
@@ -57,9 +58,13 @@ object UploadQueue {
 
     private fun listFile(context: Context, batchId: String) = File(File(context.filesDir, DIR).apply { mkdirs() }, "$batchId.json")
 
-    /** 排一批；返回批次 id */
-    fun enqueue(context: Context, uris: List<Uri>): String {
-        val batchId = UUID.randomUUID().toString()
+    /** 这一批的临时文件（分享过来的图拷在这里、HEIF 转成的 JPEG）：这一批结束时删掉 */
+    fun workDir(context: Context, batchId: String) = File(context.cacheDir, "upload/$batchId")
+
+    fun newBatchId(): String = UUID.randomUUID().toString()
+
+    /** 排一批；返回批次 id（分享过来的图先拷进 workDir(batchId)，再用同一个 batchId 排） */
+    fun enqueue(context: Context, uris: List<Uri>, batchId: String = newBatchId()): String {
         for (u in uris) runCatching { context.contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         listFile(context, batchId).writeText(JSONArray(uris.map { it.toString() }).toString())
         val request = OneTimeWorkRequestBuilder<UploadWorker>()
@@ -84,6 +89,7 @@ object UploadQueue {
         val uris = uris(context, batchId)
         for (u in uris) runCatching { context.contentResolver.releasePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         listFile(context, batchId).delete()
+        workDir(context, batchId).deleteRecursively()
     }
 
     const val TAG = "upload"
@@ -124,7 +130,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             // 电脑关着、不在同一个网络：过一会儿再试
             is ReconnectResult.Offline -> return retryOrGiveUp(batchId, saved.name)
         }
-        val files = uris.mapNotNull { fileOf(it) }
+        val files = uris.mapIndexedNotNull { i, uri -> fileOf(uri, File(UploadQueue.workDir(applicationContext, batchId), "heif/$i")) }
         val uploader = Uploader(EmakiApi(address, saved.fingerprintBytes).uploads(saved.token))
         return try {
             val summary = uploader.run(batchId, files) { p -> runCatching { setForegroundAsync(foreground(saved.name, p)) } }
@@ -148,8 +154,32 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         return Result.success()
     }
 
-    /** 手机上的一个图：名字、大小、拍摄 / 修改时间；读不到的跳过 */
-    private fun fileOf(uri: Uri): UploadFile? {
+    /**
+     * 手机上的一个图：名字、大小、拍摄 / 修改时间；读不到的跳过。分享过来的图（file://，拷在 workDir 里）按文件本身。
+     * HEIF（看文件头）电脑读不了：先转成 JPEG 存进 heifDir 再传（docs/mobile.md 5.5）
+     */
+    private fun fileOf(uri: Uri, heifDir: File): UploadFile? {
+        val file = if (uri.scheme == "file") File(uri.path ?: return null) else null
+        val plain = (if (file != null) fileFromDisk(file) else contentFile(uri)) ?: return null
+        val head = runCatching { plain.open().use { input -> ByteArray(12).also { var n = 0; while (n < 12) { val r = input.read(it, n, 12 - n); if (r < 0) break; n += r } } } }.getOrNull()
+        if (head == null || !AlbumSyncer.heif(head)) return plain
+        val jpeg = MediaIndex.toJpeg(applicationContext, uri) ?: return plain // 转不了就原样传，电脑会说读不了
+        val out = File(heifDir.apply { mkdirs() }, AlbumSyncer.jpegName(plain.name))
+        out.writeBytes(jpeg)
+        return UploadFile(name = out.name, size = out.length(), modifiedAt = plain.modifiedAt, open = { out.inputStream() })
+    }
+
+    private fun fileFromDisk(f: File): UploadFile? {
+        if (!f.isFile || f.length() <= 0) return null
+        return UploadFile(
+            name = f.name,
+            size = f.length(),
+            modifiedAt = f.lastModified().takeIf { it > 0 }?.let { Instant.ofEpochMilli(it).toString() },
+            open = { f.inputStream() },
+        )
+    }
+
+    private fun contentFile(uri: Uri): UploadFile? {
         val resolver = applicationContext.contentResolver
         var name: String? = null
         var size: Long? = null

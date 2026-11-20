@@ -4,7 +4,7 @@
 在局域网里找电脑、请求连接（6 位校验码）、保存凭证、认准电脑的证书、之后每次打开自动连上、被电脑移除时回到原生页面。
 设计见 [docs/mobile.md](../../docs/mobile.md) 第 2、3 节；配对协议见 `apps/server/src/access/pairing.ts` 的文件头。
 
-- applicationId `app.emaki.mobile`，版本 0.3.3（versionCode 6），Android 10 以上（minSdk 29），targetSdk 35。
+- applicationId `app.emaki.mobile`，版本 0.4.0（versionCode 7），Android 10 以上（minSdk 29），targetSdk 35。
 - 装好的 APK 在 [Releases](https://github.com/zhaochengggg/emaki/releases) 下载（用下面「签名密钥」里那把密钥签的）；也可以自己构建。
 - 依赖：Compose（Material 3）、OkHttp、zxing-android-embedded（扫码，不依赖 Google Play 服务）。没有统计、推送、广告。
 - 这个目录没有 package.json，npm 的 workspaces 不会管它。
@@ -18,8 +18,9 @@
 | `.../ui/` | 原生页面（Compose）和 WebView 主界面（`WebScreen.kt`） |
 | `.../AppModel.kt` | 页面之间怎么走（找电脑 → 请求 → 等批准 → 主界面；电脑不在线、已被电脑移除、需要更新、证书不对） |
 | `.../ConnectionWatch.kt` | 断线处理（docs/mobile.md 3.6）：主界面上核实连接（`core/Liveness.kt` 的 `LinkCheck`），「电脑不在线」页面上自动重连 |
-| `.../core/Uploads.kt` | 传图（docs/mobile.md 5.4）：算 sha256、先问电脑有没有、分段传、断点续传（`Uploader`），照 `apps/server/scripts/lan-client.ts` 的 upload 写 |
+| `.../core/Uploads.kt` | 传图（docs/mobile.md 5.4）：算 sha256、先问电脑有没有、分段传、断点续传、同时传 2 个、限速 4 MiB/s（`Uploader`、`RateLimiter`），照 `apps/server/scripts/lan-client.ts` 的 upload 写 |
 | `.../platform/UploadWork.kt` | 「传到电脑」→「选图片」选的图排成后台任务（WorkManager）：前台服务通知进度，连不上电脑过一会儿重试，传完通知结果 |
+| `.../ShareActivity.kt` | 「分享到 Emaki」：别的 App 分享过来的图拷进这一批的临时目录，排进后台上传（和「选图片」一样），没有界面 |
 | `.../core/AlbumSync.kt` | 同步相册（docs/mobile.md 5.5）的规则：盘点（每个相册电脑上有几张、老图在哪）、同步（只传电脑上没有的、删过的不传），和安卓无关，有单元测试 |
 | `.../platform/MediaIndex.kt`、`SyncDb.kt`、`AlbumSyncWork.kt` | 读 MediaStore 的相册和图（要读照片的权限）、手机上记的 sha256 和处理过的、同步任务（只在 App 开着时：打开 App、开着时相册有新图、用户点的；关掉后正在传的传完） |
 

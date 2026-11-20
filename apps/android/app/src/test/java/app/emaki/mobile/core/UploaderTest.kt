@@ -25,6 +25,10 @@ internal class FakeUploads(val have: MutableMap<String, String> = mutableMapOf()
     var conflictOnce = false
     /** 下一个传完的文件内容被弄坏（complete 回 400，内容和 sha256 对不上） */
     var corruptOnce = false
+    /** 每段 PUT 花多久（测同时传几个）；同时在传的最多几段 */
+    var putDelayMs = 0L
+    private var inFlight = 0
+    var maxInFlight = 0
     var revoked = false
     /** 电脑上删过的（回收站里） */
     val deleted = mutableSetOf<String>()
@@ -57,6 +61,13 @@ internal class FakeUploads(val have: MutableMap<String, String> = mutableMapOf()
         guard()
         puts++
         if (dropAtPut == puts) throw IOException("网络断了")
+        inFlight++
+        maxInFlight = maxOf(maxInFlight, inFlight)
+        try {
+            if (putDelayMs > 0) kotlinx.coroutines.delay(putDelayMs)
+        } finally {
+            inFlight--
+        }
         val u = uploads.getValue(uploadId)
         if (conflictOnce) {
             conflictOnce = false
@@ -183,5 +194,25 @@ class UploaderTest {
         )
         assertEquals(BeginResult("u1", 5, "receiving", null), Json.uploadBegin("""{"uploadId":"u1","received":5,"status":"receiving","imageId":null}"""))
         assertEquals(CompleteResult("existing", "9"), Json.uploadComplete("""{"ok":true,"message":"x","status":"existing","imageId":"9"}"""))
+    }
+
+    @Test
+    fun twoFilesAtATimeByDefaultAndOneWhenAsked() = runTest {
+        val files = (1..4).map { file("$it.png", bytes(3_000, it)) }
+        val api = FakeUploads().apply { putDelayMs = 100 }
+        val s = Uploader(api, chunkSize = 4_096, limiter = null).run("b", files)
+        assertEquals(4, s.imported)
+        assertEquals(2, api.maxInFlight)
+        val one = FakeUploads().apply { putDelayMs = 100 }
+        Uploader(one, chunkSize = 4_096, parallel = 1, limiter = null).run("b", files)
+        assertEquals(1, one.maxInFlight)
+    }
+
+    @Test
+    fun theRateLimitSpreadsChunksOverTime() = runTest {
+        // 每秒 1000 字节：3 段各 1000 字节，第一段马上，后两段各等 1 秒
+        val limiter = RateLimiter(1_000) { testScheduler.currentTime * 1_000_000 }
+        repeat(3) { limiter.acquire(1_000) }
+        assertEquals(2_000, testScheduler.currentTime)
     }
 }
