@@ -18,6 +18,8 @@ import { GalleryToolbar, GalleryViewControls } from './components/GalleryToolbar
 import { GridFooter } from './components/GridStates';
 import { SelectionBar } from './components/SelectionBar';
 import { useGalleryParams } from './useGalleryParams';
+import { usePoseEnabled, usePoseSimilarInfinite } from '@/features/pose/client';
+import { PoseEntryLazy } from '@/features/pose/lazy';
 
 const SCOPE = 'gallery';
 
@@ -41,14 +43,18 @@ export function GalleryPage() {
   const counts = useSummary().data?.images;
   const { data: settings } = useSettings();
   const rowHeight = usePrefs((s) => s.gridRowHeight);
-  const list = useImagesInfinite(query);
+  // 「找同姿势的图」：列表换成姿势相近的那一串（同一类里按和那张图的骨架距离排）
+  const poseOn = usePoseEnabled();
+  const liked = usePoseSimilarInfinite(filters.poseLike);
+  const plain = useImagesInfinite(query, !filters.poseLike);
+  const list = filters.poseLike ? liked : plain;
   const images = useMemo(() => list.data?.pages.flatMap((p) => p.items) ?? [], [list.data]);
   const total = list.data?.pages[0]?.total ?? 0;
   const scrollRef = useScrollContainer();
   const navigate = useNavigate();
 
   // 换筛选：回到顶部，并清空多选（选中的图可能已经不在当前结果里了）
-  const queryKey = JSON.stringify(query);
+  const queryKey = JSON.stringify([query, filters.poseLike]);
   const mounted = useRef(false);
   useEffect(() => {
     if (!mounted.current) {
@@ -108,8 +114,12 @@ export function GalleryPage() {
         glyph="无"
         title={filters.q ? `没有找到「${filters.q}」` : `没有符合条件的${kindNoun(filters.kind)}`}
         description={
-          filters.q
+          filters.poseLike
+            ? '那张图还没有能比的姿势（没提取过，或者没找到人物）。'
+            : filters.q
             ? '可以搜文件名，或 Danbooru 风格的标签，比如 long_hair、smile。'
+            : filters.poseClass
+            ? '这一类姿势在当前筛选下没有图片，放宽一些条件或换一类试试。'
             : '当前的分级、方向、动图或收藏筛选下没有图片，放宽一些条件试试。'
         }
         action={
@@ -194,6 +204,16 @@ export function GalleryPage() {
             hasFilters={hasFilters}
             onClearFilters={clearFilters}
             customThemes={customThemes}
+            leading={
+              poseOn ? (
+                <PoseEntryLazy
+                  poseClass={filters.poseClass}
+                  liked={!!filters.poseLike}
+                  onPick={(id) => update({ poseClass: id })}
+                  onClear={() => update({ poseClass: undefined })}
+                />
+              ) : undefined
+            }
           />
         </div>
         {onlyIllust && <KindTip annex={(counts?.annex ?? 0)} />}

@@ -75,6 +75,7 @@ const FAKE_TOTALS: Record<JobKind, number> = {
   'pixiv-tags': 60,
   artists: 120,
   dedupe: 900,
+  pose: 300,
 };
 
 /** 后台任务部件：每种任务都只走一遍进度条（约 5 秒），不扫描、不跑模型、不联网、不改数据 */
@@ -107,6 +108,8 @@ export function demoPorts(clock: () => number = Date.now, jobStepMs = 80): DemoP
     imageFiles: new PlaceholderImages(),
     libraryFiles: false,
     jobRunner: (kind) => simulatedJob(kind, jobStepMs),
+    // 演示不跑姿势模型（假任务只走进度条）
+    poseDetector: null,
     autoJobs: false,
     // 词库导入会按词库改角色的显示名（演示数据里的名字是写好的），也要多花约 1 秒：不导入
     importDict: false,

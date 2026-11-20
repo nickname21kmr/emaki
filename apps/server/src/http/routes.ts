@@ -23,6 +23,8 @@ export const OPERATION_HEADER = 'idempotency-key';
 const FILE_QUERIES: Record<string, string> = {
   'images.thumbnail': 'public, max-age=31536000, immutable',
   'images.original': 'private, max-age=3600',
+  // 姿势类别的示意小人：随版本换（地址带 v）
+  'pose.figure': 'public, max-age=86400',
 };
 
 /** 一条路由的输入：路径参数 + 查询串或请求体（路径参数优先） */

@@ -87,6 +87,8 @@ export type Change =
   | ImageChange<'duplicates.changed'>
   // 设置
   | ImageChange<'settings.changed', { sections: string[] }>
+  /** 这些图的姿势数据变了（提取、导入；姿势模块写） */
+  | ImageChange<'pose.changed'>
   /** 启动：规则版本可能变了，派生数据整体对一遍（全量重算合集、排除结果） */
   | ImageChange<'library.opened'>;
 
@@ -117,6 +119,7 @@ const IMAGE_SCOPED = new Set<ChangeType>([
   'curation.vetoesChanged',
   'visibility.rulesChanged',
   'visibility.changed',
+  'pose.changed',
 ]);
 
 /** 这条变化有没有内容（按图片的变化 ids 为空时没有） */
@@ -173,6 +176,7 @@ export const PUBLIC_CHANGE: Record<ChangeType, DomainChange | null> = {
   'duplicates.changed': 'duplicates.changed',
   'settings.changed': 'settings.changed',
   'library.opened': 'library.opened',
+  'pose.changed': 'pose.changed',
 };
 
 /** 一组变化对外的类型（去重，按出现顺序） */

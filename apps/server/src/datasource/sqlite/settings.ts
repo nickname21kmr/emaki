@@ -15,10 +15,11 @@ export const SETTINGS_KEYS = {
   dedupe: 'dedupe',
   ui: 'ui',
   browse: 'browse',
+  pose: 'pose',
   danbooruApiKey: 'secret.danbooruApiKey',
 } as const;
 
-export type SettingsSection = 'tagger' | 'danbooru' | 'dedupe' | 'ui' | 'browse';
+export type SettingsSection = 'tagger' | 'danbooru' | 'dedupe' | 'ui' | 'browse' | 'pose';
 
 export const DEFAULT_SETTINGS = {
   tagger: {
@@ -48,9 +49,11 @@ export const DEFAULT_SETTINGS = {
   // 只放图库设置；模糊、密度这类是本机偏好，在浏览器里（迁移 039 删掉了以前写进来的 blurSensitive、density）
   ui: { theme: 'system' },
   browse: { customThemes: [] as CustomTheme[] },
+  // 按姿势找图（实验）：默认关；关着时不跑任务、不下载、相关查询返回 403
+  pose: { enabled: false as boolean },
 } as const;
 
-const SECTIONS: SettingsSection[] = ['tagger', 'danbooru', 'dedupe', 'ui', 'browse'];
+const SECTIONS: SettingsSection[] = ['tagger', 'danbooru', 'dedupe', 'ui', 'browse', 'pose'];
 
 /**
  * 不再是图库设置的键（P5，附录 #32）：模糊开关、网格密度是本机偏好。读的时候不返回、写的时候不存，

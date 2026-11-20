@@ -24,11 +24,14 @@ interface Manifest {
   files: Record<string, { sha256: string; size: number; source: ModelSourceId | 'local'; verifiedAt: string }>;
 }
 
-export function modelDir(modelsDir: string, spec: TaggerModelSpec): string {
+/** 下载只用到仓库名、固定的修订号和 ModelScope 镜像（姿势模型也用这一套） */
+export type RepoSpec = Pick<TaggerModelSpec, 'repo' | 'revision' | 'modelscopeRepo'>;
+
+export function modelDir(modelsDir: string, spec: RepoSpec): string {
   return path.join(modelsDir, spec.repo.replace('/', '__'));
 }
 
-export function sourceUrl(source: ModelSourceId, spec: TaggerModelSpec, file: string): string | null {
+export function sourceUrl(source: ModelSourceId, spec: RepoSpec, file: string): string | null {
   switch (source) {
     case 'huggingface':
       return `${config.hfEndpoint}/${spec.repo}/resolve/${spec.revision}/${file}`;
@@ -123,8 +126,8 @@ async function downloadOnce(url: string, part: string, total: number, onBytes: (
   }
 }
 
-async function ensureFile(
-  spec: TaggerModelSpec,
+export async function ensureFile(
+  spec: RepoSpec,
   dir: string,
   file: ModelFile,
   sources: ModelSourceId[],

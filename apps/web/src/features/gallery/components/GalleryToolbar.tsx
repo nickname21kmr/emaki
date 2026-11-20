@@ -14,6 +14,7 @@ import {
   Image as ImageIcon,
   Check,
   Pencil,
+  PersonStanding,
   Play,
   Plus,
   Shuffle,
@@ -94,6 +95,7 @@ export function GalleryToolbar({
   onClearFilters,
   customThemes,
   animatedChip = true,
+  leading,
 }: {
   filters: GalleryFilters;
   /** 当前的图片查询（搜索下拉里的张数按它数） */
@@ -105,6 +107,8 @@ export function GalleryToolbar({
   customThemes: CustomTheme[];
   /** 显示「动图」chip（别册的动图页本身就是这个筛选，不显示） */
   animatedChip?: boolean;
+  /** 放在筛选最前面的东西（图库：姿势检索打开时的「按姿势」） */
+  leading?: ReactNode;
 }) {
   const toggleRating = (r: GalleryFilters['rating'][number]) =>
     update({ rating: filters.rating.includes(r) ? filters.rating.filter((x) => x !== r) : [...filters.rating, r] });
@@ -137,6 +141,12 @@ export function GalleryToolbar({
         <div className="-ml-3 flex min-w-0 flex-1 items-center">
           <div className="min-w-0 overflow-x-auto scrollbar-none fade-x">
             <div className="flex w-max items-center gap-1.5 py-1 pr-8 pl-4">
+              {leading && (
+                <>
+                  {leading}
+                  <Divider />
+                </>
+              )}
               {/* 搜索框「按标签」和 ⌘K 加进来的必含标签 */}
               {filters.tags.length > 0 && (
                 <>
@@ -248,6 +258,9 @@ export function GalleryViewControls({
   /** 当前列表收拢着组图（接口返回的 collapsed） */
   collapsed?: boolean;
 }) {
+  // 选了姿势类别时多一种排法：离这一类代表姿势近的在前；「找同姿势的图」按和那张图相近排
+  const sortLabel = filters.poseLike ? '姿势相近' : filters.poseOrder ? '姿势典型' : SORT_LABEL[filters.sort];
+  const noDirection = filters.sort === 'random' || filters.poseOrder || !!filters.poseLike;
   return (
     <div className="flex items-center gap-0.5">
       {/* 只看收藏：常用的开关，开着时整个按钮变朱色，一眼看得出现在只显示收藏 */}
@@ -276,16 +289,32 @@ export function GalleryViewControls({
             variant="ghost"
             size="sm"
             icon={<ArrowDownUp className="size-3.5" />}
-            aria-label={`排序：${SORT_LABEL[filters.sort]}`}
-            title={`排序：${SORT_LABEL[filters.sort]}`}
+            aria-label={`排序：${sortLabel}`}
+            title={`排序：${sortLabel}`}
             className="text-[12.5px] @max-[1420px]/kindbar:gap-0 @max-[1420px]/kindbar:px-2"
           >
-            <span className="@max-[1420px]/kindbar:hidden">{SORT_LABEL[filters.sort]}</span>
+            <span className="@max-[1420px]/kindbar:hidden">{sortLabel}</span>
           </Button>
         }
       >
         <MenuLabel>排序方式</MenuLabel>
-        <MenuRadioGroup value={filters.sort} onValueChange={(sort) => update({ sort })}>
+        <MenuRadioGroup
+          value={filters.poseLike ? 'like' : filters.poseOrder ? 'pose' : filters.sort}
+          onValueChange={(v) => {
+            if (v === 'pose') update({ poseOrder: true });
+            else if (v !== 'like') update({ sort: v as GallerySort });
+          }}
+        >
+          {filters.poseLike && (
+            <MenuRadioItem value="like" icon={<PersonStanding />}>
+              和那张姿势相近
+            </MenuRadioItem>
+          )}
+          {filters.poseClass && (
+            <MenuRadioItem value="pose" icon={<PersonStanding />}>
+              姿势典型的在前
+            </MenuRadioItem>
+          )}
           {SORTS.map((s) => (
             <MenuRadioItem key={s} value={s} icon={SORT_ICON[s]}>
               {SORT_LABEL[s]}
@@ -296,8 +325,8 @@ export function GalleryViewControls({
 
       <IconButton
         size="sm"
-        label={orderLabel(filters.sort, filters.order)}
-        disabled={filters.sort === 'random'}
+        label={noDirection && filters.sort !== 'random' ? '按姿势排没有方向' : orderLabel(filters.sort, filters.order)}
+        disabled={noDirection}
         onClick={() => update({ order: filters.order === 'desc' ? 'asc' : 'desc' })}
       >
         {filters.order === 'desc' ? <ArrowDownWideNarrow /> : <ArrowUpNarrowWide />}

@@ -34,6 +34,13 @@ export interface ArtistStage {
 export interface DedupeStage {
   run(ctx: JobContext): Promise<string>;
 }
+/** 按姿势找图（实验，默认关）：打开了、模型在才自动续跑 */
+export interface PoseStage {
+  enabled(): boolean;
+  isReady(): boolean;
+  pendingCount(): number;
+  run: JobRunner;
+}
 /** 按 Pixiv 标签补充角色（会联网）：enabled() 只管识别后的自动排队，手动点按钮照常跑 */
 export interface PixivStage {
   enabled(): boolean;
@@ -53,6 +60,7 @@ export interface PipelineDeps {
   dedupe?: DedupeStage;
   artists?: ArtistStage;
   pixiv?: PixivStage;
+  pose?: PoseStage;
   /**
    * 「要查重」的标记（P2：持久化在 pending_work 里，可见性和文件内容变化的反应会标记，重启不丢）。
    * 不给时只在内存里（单元测试）。查重开始时 peek() 记下标记，跑完 done(那个值) 只清掉那之前的标记
@@ -75,10 +83,10 @@ export type PausableKind = PausableJobKind;
 /** 延后的文件（2 秒内刚写入）过多久再扫 */
 const DEFERRED_RETRY_MS = 3000;
 
-export type PipelineStages = Partial<Pick<PipelineDeps, 'tag' | 'danbooru' | 'dedupe' | 'artists' | 'pixiv' | 'afterTag' | 'afterScan'>>;
+export type PipelineStages = Partial<Pick<PipelineDeps, 'tag' | 'danbooru' | 'dedupe' | 'artists' | 'pixiv' | 'pose' | 'afterTag' | 'afterScan'>>;
 
 /** 每种任务的执行体（阶段）：一个阶段只能有一个注册者 */
-const STAGES = ['tag', 'danbooru', 'dedupe', 'artists', 'pixiv'] as const;
+const STAGES = ['tag', 'danbooru', 'dedupe', 'artists', 'pixiv', 'pose'] as const;
 
 export class Pipeline {
   private memoryDedupe = false;
@@ -185,6 +193,8 @@ export class Pipeline {
             // 开着画师的：接着补（新图、WD 识别的旧图、重启前没补完的）；用户取消过就等他手动再点
             const a = this.d.artists;
             if (this.canAutoArtists()) this.d.jobs().enqueue('artists');
+            // 开着姿势检索的：新图接着提取姿势（显卡道里排在画师后面）
+            if (this.canAutoPose()) this.d.jobs().enqueue('pose');
             // 放在最后：enqueue 会马上启动空闲的 io 道，先排的话 Pixiv 会抢在同步、查重前面
             this.maybePixiv();
           }
@@ -227,6 +237,13 @@ export class Pipeline {
         case 'danbooru-sync': {
           if (!this.d.danbooru) throw new NotImplementedError('T11', 'Danbooru 同步');
           return this.d.danbooru.run(ctx);
+        }
+        case 'pose': {
+          if (!this.d.pose) throw new NotImplementedError('pose', '提取姿势');
+          if (!this.d.pose.enabled()) return '提取姿势：设置里没有打开';
+          const msg = await this.d.pose.run(ctx);
+          if (ctx.signal.aborted) this.setPaused('pose', true);
+          return msg;
         }
       }
     };
@@ -293,6 +310,18 @@ export class Pipeline {
     // 识别确实不用跑（比如重启后）才接着补画师；识别被用户暂停时也不接，免得新图先被 PixAI 跑一遍画师、恢复识别后再跑一遍
     else if (!tagNeeded && this.canAutoArtists()) this.d.jobs().enqueue('artists');
     if (!tagNeeded && !this.tagPaused) this.maybePixiv();
+    if (!tagNeeded && this.canAutoPose()) this.d.jobs().enqueue('pose');
+  }
+
+  /** 姿势检索打开了、模型在、用户没暂停、有没提取的图 */
+  private canAutoPose(): boolean {
+    const p = this.d.pose;
+    return !!p && p.enabled() && p.isReady() && !this.paused('pose') && p.pendingCount() > 0;
+  }
+
+  /** 刚打开姿势检索（或者导入、换了图）：能自动跑时排一轮；正在跑也再排一轮 */
+  requestPose(): void {
+    if (this.canAutoPose()) this.d.jobs().enqueue('pose', { requeueIfRunning: true });
   }
 
   private maybePixiv(requeueIfRunning = true): void {

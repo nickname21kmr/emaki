@@ -1,6 +1,6 @@
 import { JOB_KIND_LIST, JOB_KINDS, type Job, type JobKind, type JobStatus } from '@emaki/shared';
 export { JOB_LABEL } from '@emaki/shared';
-import { CloudDownload, Copy, FolderSearch, Image as ImageIcon, Palette, ScanFace, type LucideIcon } from 'lucide-react';
+import { CloudDownload, Copy, FolderSearch, Image as ImageIcon, Palette, PersonStanding, ScanFace, type LucideIcon } from 'lucide-react';
 
 /** 进度条旁边的动词，比「进行中」更具体（任务种类的注册表 packages/shared/src/jobs.ts） */
 export const JOB_VERB = Object.fromEntries(JOB_KIND_LIST.map((k) => [k, JOB_KINDS[k].verb])) as Record<JobKind, string>;
@@ -13,6 +13,7 @@ export const JOB_ICON: Record<JobKind, LucideIcon> = {
   dedupe: Copy,
   artists: Palette,
   'pixiv-tags': CloudDownload,
+  pose: PersonStanding,
 };
 
 /** 「运行任务」菜单里的顺序：按日常使用频率（只列能手动启动的） */

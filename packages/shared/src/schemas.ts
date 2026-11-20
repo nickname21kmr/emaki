@@ -48,6 +48,8 @@ export const qList = <T extends z.ZodType<unknown, string>>(item: T) =>
   ]);
 
 export const Id = z.string().min(1);
+/** 姿势类别的 id：full_01 这样 */
+const POSE_CLASS_ID = /^[a-z]+_\d{2}$/;
 export const IdInput = z.object({ id: Id });
 export const RatingSchema = z.enum(['general', 'sensitive', 'questionable', 'explicit']);
 const animatedIsNotKind = (issue: { input?: unknown }) =>
@@ -362,6 +364,7 @@ export const UpdateSettingsInput = z.object({
     })
     .partial()
     .optional(),
+  pose: z.object({ enabled: z.boolean() }).partial().optional(),
   danbooruApiKey: z.string().optional(),
 });
 export const SourceModeInput = z.object({ mode: z.enum(['strict', 'broad']) });
@@ -405,6 +408,7 @@ export const ListImagesInput = z.object({
   imageIds: qList(z.string()).optional(),
   similarTo: z.string().optional(),
   artist: z.string().min(1).max(200).optional(),
+  poseClass: z.string().regex(POSE_CLASS_ID).optional(),
   order: z.enum(['asc', 'desc']).optional(),
   cursor: z.string().optional(),
   limit: qNumber.min(1).max(200).optional(),
@@ -467,3 +471,17 @@ export const AuditInput = z.object({
   /** 翻页：只看 id 比它小的 */
   before: qNumber.optional(),
 });
+
+// ------------------------------------------------------------------ 按姿势找图（实验）
+
+/** 下载姿势模型：要用户明确同意（会从 Hugging Face 下载约 350 MB） */
+export const PoseDownloadInput = z.object({ consent: z.literal(true) });
+/** 从本机文件夹复制姿势模型（文件夹里要有 yolox_l.onnx 和 dw-ll_ucoco_384.onnx） */
+export const PoseCopyInput = z.object({ path: z.string().min(1).max(1000) });
+/** 导入原型的姿势数据（一次性；同样的文件再导一次结果不变） */
+export const PoseImportInput = z.object({
+  keypointsPath: z.string().min(1).max(1000).describe('原型的 keypoints_lib.npz'),
+  assignmentsPath: z.string().min(1).max(1000).describe('原型的 assignments.json'),
+});
+export const PoseClassInput = z.object({ id: z.string().regex(POSE_CLASS_ID) });
+export const PoseSimilarInput = z.object({ id: Id, cursor: z.string().optional(), limit: qNumber.min(1).max(200).optional() });

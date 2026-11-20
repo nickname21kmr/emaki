@@ -63,7 +63,7 @@ export function JobAction({
   );
 }
 
-function JobProgressInline({ job }: { job: Job }) {
+export function JobProgressInline({ job }: { job: Job }) {
   const cancel = useCancelJob();
   const queued = job.status === 'queued';
   return (

@@ -105,6 +105,18 @@ export const JOB_KINDS = {
     verb: '查询中',
     glyph: 'P',
   },
+  // 按姿势找图（实验）：设置里打开才跑；不在 jobs.start 里，经 pose.extract 启动
+  pose: {
+    label: '提取姿势',
+    lane: 'gpu',
+    priority: 7,
+    cancellable: true,
+    startable: false,
+    pausable: true,
+    network: false,
+    verb: '提取中',
+    glyph: '姿',
+  },
 } as const satisfies Record<string, JobKindSpec>;
 
 /** artists：给还没识别过画师的图补跑 PixAI，只记画师（2026-10-04） */

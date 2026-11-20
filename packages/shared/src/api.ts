@@ -312,6 +312,8 @@ export interface ListImagesQuery extends PageQuery {
   similarTo?: ID;
   /** 画师（合集页「画师」里的 tag）：识别出这位画师的图，同一个人的不同标签一起算 */
   artist?: string;
+  /** 姿势类别（full_01 这样；姿势检索打开时才能用）：归到这一类的图。不传 sort 时按离代表骨架的距离排（近的在前） */
+  poseClass?: string;
   sort?: ImageSort;
   order?: 'asc' | 'desc';
 }

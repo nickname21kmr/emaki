@@ -5,6 +5,7 @@ import type { SqliteDataSource } from '../datasource/sqlite/SqliteDataSource.ts'
 import { catalogCommands } from './catalog.ts';
 import { curationCommands } from './curation.ts';
 import { libraryCommands, libraryQueries } from './library.ts';
+import { poseCommands, poseQueries } from './pose.ts';
 import { queries } from './queries.ts';
 import { Registry, type Def } from './registry.ts';
 import { systemCommands, systemQueries } from './system.ts';
@@ -17,6 +18,8 @@ export const DEFINITIONS: readonly Def[] = [
   ...queries,
   ...libraryQueries,
   ...systemQueries,
+  ...poseCommands,
+  ...poseQueries,
 ];
 
 export function createRegistry(engine: SqliteDataSource): Registry {

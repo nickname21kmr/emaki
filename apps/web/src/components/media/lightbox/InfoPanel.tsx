@@ -24,6 +24,7 @@ import { PanelTags } from './PanelTags';
 import type { ImageActions } from './useImageActions';
 import { TRASH_HINT, useCharacter, useSettings } from '@/lib/queries';
 import { CharacterAvatar } from '@/features/gallery/CharacterPicker';
+import { PoseInfoRowLazy } from '@/features/pose/lazy';
 
 const RATINGS = Object.keys(RATING_LABEL) as Rating[];
 
@@ -330,6 +331,8 @@ function Details({ detail: d, onNavigate }: { detail: ImageDetail; onNavigate: (
             <PanelCollection detail={d} onNavigate={onNavigate} />
           </Row>
         )}
+        {/* 姿势检索打开、这张有姿势结果时才有这一行 */}
+        <PoseInfoRowLazy imageId={d.id} onNavigate={onNavigate} />
         <Row label="文件">
           <span className="break-all">{d.fileName}</span>
         </Row>

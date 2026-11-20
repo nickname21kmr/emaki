@@ -19,7 +19,8 @@ export type ModuleId =
   | 'duplicates'
   | 'settings'
   | 'commands'
-  | 'propagation';
+  | 'propagation'
+  | 'pose';
 
 /** 模块的中文名和目录（相对 apps/server/src，以 / 结尾） */
 export const MODULES: Record<ModuleId, { name: string; dir: string }> = {
@@ -36,6 +37,8 @@ export const MODULES: Record<ModuleId, { name: string; dir: string }> = {
   commands: { name: '命令层', dir: 'commands/' },
   // 变更传播（P2）：变化集、反应注册表；排队状态（pending_work）
   propagation: { name: '变更传播', dir: 'propagation/' },
+  // 按姿势找图（实验，迁移 041）：姿势类别、每张图的主要人物姿势
+  pose: { name: '姿势', dir: 'domain/pose/' },
 };
 
 /** 表（images 是 images#<列组>）→ 主人 */
@@ -102,6 +105,9 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   // 变更传播：交给后台任务、还没做完的工作和用户的暂停（迁移 033）；派生数据的版本（迁移 037）
   pending_work: 'propagation',
   derived_versions: 'propagation',
+  // 姿势（实验，迁移 041）
+  pose_classes: 'pose',
+  image_poses: 'pose',
 };
 
 /**

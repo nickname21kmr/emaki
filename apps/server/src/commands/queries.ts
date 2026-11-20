@@ -45,6 +45,7 @@ import { toAbs } from '../services/fs/paths.ts';
 import { htmlAnimationCache, readHtmlAnimation } from '../services/image/htmlAnimation.ts';
 import { isModelReady } from '../services/tagger/download.ts';
 import { DEFAULT_TAGGER_MODEL, MODEL_NOTES, modelDownloadSize, TAGGER_MODELS } from '../services/tagger/models.ts';
+import { requirePose } from './pose.ts';
 import { defineQuery, type Engine } from './registry.ts';
 
 /** 查不到就 404（查询返回 null 的那几个） */
@@ -363,7 +364,11 @@ export const queries = [
     input: ListImagesInput,
     scope: 'read',
     http: [{ method: 'GET', path: '/api/images' }],
-    run: (e, q) => listImages(e.ctx.db, q, (key, compute) => e.results.get('count:' + key, compute) as number),
+    run(e, q) {
+      // 按姿势类别筛选（实验）：姿势检索关着时 403
+      if (q.poseClass) requirePose(e);
+      return listImages(e.ctx.db, q, (key, compute) => e.results.get('count:' + key, compute) as number);
+    },
   }),
   defineQuery({
     name: 'images.get',

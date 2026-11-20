@@ -164,7 +164,7 @@ export const useCharactersInfinite = (q: Omit<ListCharactersQuery, 'cursor'>) =>
 export const collapseParam = (mode: CollapseMode): boolean | 'auto' => (mode === 'auto' ? 'auto' : mode === 'on');
 
 /** 图片列表（无限滚动），配合 components/media/ImageGrid 使用 */
-export const useImagesInfinite = (q: Omit<ListImagesQuery, 'cursor'>) => {
+export const useImagesInfinite = (q: Omit<ListImagesQuery, 'cursor'>, enabled = true) => {
   // 收拢组图（本机偏好，URL 里写了按 URL）：看一本合集的页时不收拢；auto 交给后端按结果张数决定
   const mode = useCollapseMode();
   const query = { ...q, collapseCollections: q.collapseCollections ?? (q.collectionId ? false : collapseParam(mode)) };
@@ -174,6 +174,7 @@ export const useImagesInfinite = (q: Omit<ListImagesQuery, 'cursor'>) => {
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor ?? undefined,
     placeholderData: keepPreviousData,
+    enabled,
   });
 };
 

@@ -14,6 +14,7 @@ import { themeQuery } from '@/lib/customTheme';
 import { useCustomThemes } from '@/lib/queries';
 import { usePrefs } from '@/lib/stores';
 import { withParam } from '@/lib/urlPrefs';
+import { usePoseEnabled } from '@/features/pose/client';
 
 /**
  * 图库的筛选状态全部放在 URL 里（?q= &tags= &kind= &anim= &rating= &orient= &fav= &sort= &order=），
@@ -47,6 +48,12 @@ export interface GalleryFilters {
   favorite: boolean;
   /** 画师（Danbooru 标签，?artist=），从合集页的「画师」点进来 */
   artist: string | undefined;
+  /** 姿势类别（?poseClass=full_01）：姿势检索打开时才生效 */
+  poseClass: string | undefined;
+  /** 按和这张图的姿势相近排（?poseLike=图片 id，「找同姿势的图」）；改别的筛选、排序时去掉，只留类别 */
+  poseLike: string | undefined;
+  /** 选了姿势类别、URL 里没写排序：按离这一类代表姿势的距离排（最典型的在前），不发 sort */
+  poseOrder: boolean;
   sort: GallerySort;
   order: SortOrder;
 }
@@ -77,12 +84,16 @@ function validKinds(stored: ContentKind[] | 'all'): ContentKind[] | 'all' {
 
 const kindParam = (kind: ContentKind[] | 'all') => (kind === 'all' ? 'all' : kind.join(','));
 
-function parse(params: URLSearchParams, kindFallback: ContentKind[] | 'all'): GalleryFilters {
+const POSE_CLASS_RE = /^[a-z]+_\d{1,3}$/;
+
+export function parseGalleryParams(params: URLSearchParams, kindFallback: ContentKind[] | 'all'): GalleryFilters {
   const ratingSet = new Set((params.get('rating') ?? '').split(','));
   const orient = params.get('orient');
   const sortParam = params.get('sort');
-  const sort = SORTS.includes(sortParam as GallerySort) ? (sortParam as GallerySort) : 'addedAt';
+  const sortGiven = SORTS.includes(sortParam as GallerySort);
+  const sort = sortGiven ? (sortParam as GallerySort) : 'addedAt';
   const orderParam = params.get('order');
+  const poseClass = POSE_CLASS_RE.test(params.get('poseClass') ?? '') ? params.get('poseClass')! : undefined;
   return {
     q: params.get('q') ?? '',
     tags: [...new Set((params.get('tags') ?? '').split(',').filter(Boolean))],
@@ -95,9 +106,69 @@ function parse(params: URLSearchParams, kindFallback: ContentKind[] | 'all'): Ga
     custom: params.get('custom') || undefined,
     favorite: params.get('fav') === '1',
     artist: params.get('artist') || undefined,
+    poseClass,
+    poseLike: (poseClass && params.get('poseLike')) || undefined,
+    poseOrder: !!poseClass && !sortGiven,
     sort,
     order: orderParam === 'asc' || orderParam === 'desc' ? orderParam : defaultOrder(sort),
   };
+}
+
+/** 把一次修改写回 URL 参数（纯函数，测试直接用）。writeKind：这一页管类型，或者这次改了类型 */
+export function applyGalleryPatch(
+  prev: URLSearchParams,
+  patch: Partial<GalleryFilters>,
+  kindPref: ContentKind[] | 'all',
+  writeKind: boolean,
+): URLSearchParams {
+  const next = new URLSearchParams(prev);
+  const cur = parseGalleryParams(prev, kindPref);
+  const merged = { ...cur, ...patch };
+  // 内置画面和自定义画面只能选一个
+  if (patch.theme) merged.custom = undefined;
+  if (patch.custom) merged.theme = undefined;
+  // 姿势：「找同姿势的图」的排法只在没动别的时保留；换了类别默认按典型度排，明确选了排序就按那个
+  if (!('poseLike' in patch)) merged.poseLike = undefined;
+  if (!merged.poseClass) merged.poseLike = undefined;
+  if (patch.poseOrder === undefined) {
+    if (patch.sort !== undefined) merged.poseOrder = false;
+    else if (patch.poseClass && patch.poseClass !== cur.poseClass) merged.poseOrder = true;
+  }
+  if (!merged.poseClass) merged.poseOrder = false;
+  const set = (key: string, value: string | undefined) => {
+    if (value) next.set(key, value);
+    else next.delete(key);
+  };
+  set('q', merged.q.trim() || undefined);
+  set('tags', merged.tags.length ? [...new Set(merged.tags)].slice(0, CUSTOM_THEME_LIMITS.tags).join(',') : undefined);
+  // 类型：一直写在 URL 里
+  if (writeKind) set('kind', kindParam(merged.kind));
+  set('anim', merged.animated ? '1' : undefined);
+  set('rating', merged.rating.length ? RATINGS.filter((r) => merged.rating.includes(r)).join(',') : undefined);
+  set('orient', merged.orientation);
+  set('theme', merged.theme);
+  set('custom', merged.custom);
+  set('fav', merged.favorite ? '1' : undefined);
+  set('artist', merged.artist);
+  set('poseClass', merged.poseClass);
+  set('poseLike', merged.poseLike);
+  if (merged.poseOrder) {
+    // 按典型度排没有方向
+    next.delete('sort');
+    next.delete('order');
+    return next;
+  }
+  // 选着姿势类别时「最近添加」也要写出来，不然读回来又成了按典型度
+  set('sort', merged.sort === 'addedAt' && !merged.poseClass ? undefined : merged.sort);
+  // 换排序时回到该排序的默认方向；方向等于默认值时不写进 URL
+  const order = patch.sort && patch.order === undefined ? defaultOrder(merged.sort) : merged.order;
+  set('order', order === defaultOrder(merged.sort) ? undefined : order);
+  return next;
+}
+
+/** 姿势检索关着时去掉姿势参数（URL 里留着，打开后还能用） */
+export function gatePose(f: GalleryFilters, poseOn: boolean): GalleryFilters {
+  return poseOn ? f : { ...f, poseClass: undefined, poseLike: undefined, poseOrder: false };
 }
 
 /** ownsKind：类型由这一页决定（图库）。别册页的类型来自路由，不把图库的类型偏好补进 URL */
@@ -106,42 +177,15 @@ export function useGalleryParams({ ownsKind = true }: { ownsKind?: boolean } = {
   const storedKinds = usePrefs((s) => s.galleryKinds);
   const kindPref = useMemo(() => validKinds(storedKinds), [storedKinds]);
   const setKindPref = usePrefs((s) => s.setGalleryKinds);
-  const filters = useMemo(() => parse(params, kindPref), [params, kindPref]);
+  // 姿势检索关着时 URL 里的姿势参数当没写（接口会 403）
+  const poseOn = usePoseEnabled();
+  const filters = useMemo(() => gatePose(parseGalleryParams(params, kindPref), poseOn), [params, kindPref, poseOn]);
 
   const update = useCallback(
     (patch: Partial<GalleryFilters>) => {
-      setParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          const cur = parse(prev, kindPref);
-          const merged = { ...cur, ...patch };
-          // 内置画面和自定义画面只能选一个
-          if (patch.theme) merged.custom = undefined;
-          if (patch.custom) merged.theme = undefined;
-          const set = (key: string, value: string | undefined) => {
-            if (value) next.set(key, value);
-            else next.delete(key);
-          };
-          set('q', merged.q.trim() || undefined);
-          set('tags', merged.tags.length ? [...new Set(merged.tags)].slice(0, CUSTOM_THEME_LIMITS.tags).join(',') : undefined);
-          // 类型：一直写在 URL 里；用户换了类型就记成新偏好
-          if (patch.kind !== undefined) setKindPref(merged.kind);
-          if (ownsKind || patch.kind !== undefined) set('kind', kindParam(merged.kind));
-          set('anim', merged.animated ? '1' : undefined);
-          set('rating', merged.rating.length ? RATINGS.filter((r) => merged.rating.includes(r)).join(',') : undefined);
-          set('orient', merged.orientation);
-          set('theme', merged.theme);
-          set('custom', merged.custom);
-          set('fav', merged.favorite ? '1' : undefined);
-          set('artist', merged.artist);
-          set('sort', merged.sort === 'addedAt' ? undefined : merged.sort);
-          // 换排序时回到该排序的默认方向；方向等于默认值时不写进 URL
-          const order = patch.sort && patch.order === undefined ? defaultOrder(merged.sort) : merged.order;
-          set('order', order === defaultOrder(merged.sort) ? undefined : order);
-          return next;
-        },
-        { replace: true },
-      );
+      // 用户换了类型就记成新偏好
+      if (patch.kind !== undefined) setKindPref(patch.kind);
+      setParams((prev) => applyGalleryPatch(prev, patch, kindPref, ownsKind || patch.kind !== undefined), { replace: true });
     },
     [setParams, kindPref, setKindPref, ownsKind],
   );
@@ -170,8 +214,10 @@ export function useGalleryParams({ ownsKind = true }: { ownsKind?: boolean } = {
       tagsAll: mergeTags(customTags.tagsAll, filters.tags),
       favorite: filters.favorite || undefined,
       artist: filters.artist,
-      sort: filters.sort,
-      order: filters.sort === 'random' ? undefined : filters.order,
+      poseClass: filters.poseClass,
+      // 按姿势典型度排时不发排序（服务端默认按距离）
+      sort: filters.poseOrder ? undefined : filters.sort,
+      order: filters.poseOrder || filters.sort === 'random' ? undefined : filters.order,
     }),
     [filters, customTags],
   );
@@ -185,7 +231,8 @@ export function useGalleryParams({ ownsKind = true }: { ownsKind?: boolean } = {
     filters.theme ||
     customTheme ||
     filters.favorite ||
-    filters.artist
+    filters.artist ||
+    filters.poseClass
   );
 
   const clearFilters = useCallback(
@@ -200,6 +247,8 @@ export function useGalleryParams({ ownsKind = true }: { ownsKind?: boolean } = {
         custom: undefined,
         favorite: false,
         artist: undefined,
+        poseClass: undefined,
+        poseLike: undefined,
       }),
     [update],
   );

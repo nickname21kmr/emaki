@@ -10,6 +10,7 @@
 import type { ImageFormat, JobKind, ThumbWidth } from '@emaki/shared';
 import type { JobRunner } from '../core/jobs.ts';
 import type { TrashImpl } from '../services/trash/recycleBin.ts';
+import type { PoseDetectorFactory } from '../services/pose/protocol.ts';
 
 /** 图片文件响应：要么直接给内容（演示模式的 SVG 占位图），要么给磁盘路径让 fastify 流式发送 */
 export type FileResponse =
@@ -61,6 +62,11 @@ export interface EnginePorts {
    */
   jobRunner: ((kind: JobKind) => JobRunner) | null;
 
+  /**
+   * 姿势检测（「提取姿势」任务用的 YOLOX + DWPose）。null = 真的推理子进程（services/pose/client.ts）；测试换成假的检测器
+   */
+  poseDetector: PoseDetectorFactory | null;
+
   /** 启动时自动开文件监听、排扫描和识别（T07）。测试和演示模式关掉 */
   autoJobs: boolean;
 
@@ -76,6 +82,7 @@ export const REAL_PORTS: EnginePorts = {
   imageFiles: null,
   libraryFiles: true,
   jobRunner: null,
+  poseDetector: null,
   autoJobs: true,
   importDict: true,
 };

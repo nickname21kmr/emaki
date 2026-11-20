@@ -525,6 +525,10 @@ export interface Settings {
     /** 自定义画面筛选，最多 30 个，顺序即显示顺序 */
     customThemes: CustomTheme[];
   };
+  /** 按姿势找图（实验，默认关）：打开要先有两个模型（GET /api/pose/status 的 models.ready） */
+  pose: {
+    enabled: boolean;
+  };
 }
 
 /** 任务种类登记在 jobs.ts（JOB_KINDS） */

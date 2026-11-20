@@ -112,7 +112,9 @@ export const REFRESH: Record<DomainChange, readonly string[]> = {
   'visibility.changed': [...IMAGE_VIEWS, 'exclusions', 'duplicates'],
   'collections.changed': IMAGE_VIEWS,
   'duplicates.changed': ['duplicates', 'stats', 'summary', 'undo-status'],
-  'settings.changed': [...IMAGE_VIEWS, 'settings', 'tagger-models'],
+  'settings.changed': [...IMAGE_VIEWS, 'settings', 'tagger-models', 'pose'],
+  // 按姿势找图（实验）：类别的张数、姿势筛选的列表
+  'pose.changed': [...IMAGE_VIEWS, 'pose'],
   'library.opened': [...WITH_FILES, 'exclusions', 'tags', 'custom-character-matches'],
 };
 
