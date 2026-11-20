@@ -27,6 +27,13 @@ describe('「从手机添加」（docs/mobile.md 5.4）', () => {
     expect(html(['read', 'upload'])).toContain('从手机添加');
   });
 
+  it('App 0.3.0 起（有 syncAlbums）：按钮变成菜单（选图片、同步相册），照样显示', () => {
+    g.EmakiApp = { unpaired: () => {}, pickImages: () => {}, syncAlbums: () => {} };
+    const out = html(['read', 'upload']);
+    expect(out).toContain('从手机添加');
+    expect(out).toContain('aria-haspopup="menu"');
+  });
+
   it('没有上传权限、浏览器里（没有 App）、老版本的 App（没有 pickImages）：都不显示', () => {
     g.EmakiApp = { unpaired: () => {}, pickImages: () => {} };
     expect(html(['read'])).toBe('');

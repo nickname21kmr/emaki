@@ -4,7 +4,7 @@
  */
 import type { AccessStatus, MutationResult, Scope } from '@emaki/shared';
 import { useQueryClient } from '@tanstack/react-query';
-import { api, withMeta } from '@/lib/api';
+import { api, withMeta, type AlbumSyncChanges } from '@/lib/api';
 import { qk, useMutate } from '@/lib/queries';
 
 const done = (r: { message: string }): MutationResult => withMeta({ ok: true, message: r.message, undoToken: null }, r);
@@ -91,4 +91,21 @@ export function useUndoUploadBatch() {
     ...m,
     undoBatch: (id: string) => m.mutate(id, { onSettled: () => void client.invalidateQueries({ queryKey: qk.uploadBatches }) }),
   };
+}
+
+/**
+ * 改同步相册（deviceId 不给是这台设备自己的）：回来的新状态直接放进缓存。不可撤销（App 下次同步时按新的）。
+ * 在 App 里改的，改完让 App 马上同步一次（顺便按新的条件安排后台同步）
+ */
+export function useSetAlbums(deviceId?: string, after?: () => void) {
+  const client = useQueryClient();
+  const m = useMutate(
+    (v: AlbumSyncChanges) =>
+      api.setAlbums({ ...v, deviceId }).then((r) => {
+        client.setQueryData(qk.albumSync(deviceId), r.info);
+        return done(r);
+      }),
+    { undo: false, onSuccess: () => after?.() },
+  );
+  return { ...m, save: (v: AlbumSyncChanges, onSuccess?: () => void) => m.mutate(v, { onSuccess }) };
 }

@@ -1,8 +1,10 @@
 import type { DeviceInfo, Scope, UploadTarget } from '@emaki/shared';
-import { Pencil, Smartphone, Trash2 } from 'lucide-react';
+import { FolderSync, Pencil, Smartphone, Trash2 } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Button, Dialog, DialogFooter, Input } from '@/components/ui';
 import { formatDateTime, formatRelative } from '@/lib/format';
+import { useAlbumSync } from '@/lib/queries';
+import { AlbumSyncDialog, syncStatusText } from './AlbumSync';
 import { describeScopes, scopeText, sortScopes } from './format';
 import { useRevokeDevice, useUpdateDevice } from './hooks';
 import { ScopePicker } from './ScopePicker';
@@ -15,13 +17,14 @@ export function lastSeenText(d: Pick<DeviceInfo, 'lastSeenAt' | 'lastAddress'>, 
 }
 
 /**
- * 设置 →「手机访问」里已批准的设备：名称、型号、最后访问、权限、传上来的图放到哪（有上传权限的）；
- * 「编辑」（改名称、权限）「移除」，「更改」落点
+ * 设置 →「手机访问」里已批准的设备：名称、型号、最后访问、权限、传上来的图放到哪、同步相册（有上传权限的）；
+ * 「编辑」（改名称、权限）「移除」，「更改」落点，「同步相册」
  */
 export function DeviceList({ devices, targets = [] }: { devices: DeviceInfo[]; targets?: UploadTarget[] }) {
   const [editing, setEditing] = useState<DeviceInfo | null>(null);
   const [removing, setRemoving] = useState<DeviceInfo | null>(null);
   const [placing, setPlacing] = useState<DeviceInfo | null>(null);
+  const [syncing, setSyncing] = useState<DeviceInfo | null>(null);
   const targetOf = (id: string) => targets.find((t) => t.deviceId === id);
   return (
     <>
@@ -42,6 +45,7 @@ export function DeviceList({ devices, targets = [] }: { devices: DeviceInfo[]; t
                 <span title={sortScopes(d.scopes).map((s) => scopeText(s).head).join('、')}>{describeScopes(d.scopes)}</span>
               </div>
               <UploadTargetLine device={d} target={targetOf(d.id)} onChange={() => setPlacing(d)} />
+              <AlbumSyncLine device={d} onOpen={() => setSyncing(d)} />
             </div>
             <Button size="sm" variant="ghost" icon={<Pencil />} onClick={() => setEditing(d)}>
               编辑
@@ -56,7 +60,24 @@ export function DeviceList({ devices, targets = [] }: { devices: DeviceInfo[]; t
       <EditDeviceDialog key={editing?.id ?? 'none'} device={editing} onClose={() => setEditing(null)} />
       <RemoveDeviceDialog device={removing} onClose={() => setRemoving(null)} />
       <UploadTargetDialog key={`place-${placing?.id ?? 'none'}`} device={placing} target={placing ? targetOf(placing.id) : undefined} onClose={() => setPlacing(null)} />
+      <AlbumSyncDialog deviceId={syncing?.id} deviceName={syncing?.name} open={!!syncing} onOpenChange={(o) => !o && setSyncing(null)} />
     </>
+  );
+}
+
+/** 「同步相册：同步 3 个相册 · 上次 5 分钟前」+「设置」（有上传权限的设备） */
+function AlbumSyncLine({ device, onOpen }: { device: DeviceInfo; onOpen: () => void }) {
+  const can = device.scopes.includes('upload');
+  const { data } = useAlbumSync(device.id, { enabled: can });
+  if (!can) return null;
+  return (
+    <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12.5px] text-fg-muted">
+      <FolderSync className="size-3.5 shrink-0" />
+      <span className="truncate tabular">同步相册：{data ? syncStatusText(data) : '…'}</span>
+      <button type="button" onClick={onOpen} className="shrink-0 text-fg-subtle underline-offset-4 touch-hit hover:text-fg hover:underline">
+        设置
+      </button>
+    </div>
   );
 }
 

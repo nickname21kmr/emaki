@@ -146,6 +146,9 @@ const BY_COMMAND: Record<string, readonly string[]> = {
   'upload.complete': ['uploads'],
   'upload.undoBatch': ['uploads'],
   'devices.setUpload': ['uploads'],
+  // 同步相册：App 报相册、盘点、进度；改同步设置
+  'upload.reportAlbums': ['uploads'],
+  'upload.setAlbums': ['uploads'],
 };
 
 /** 这些变化要刷新的查询（第一段）；null 是全部 */

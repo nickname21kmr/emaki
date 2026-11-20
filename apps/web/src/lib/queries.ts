@@ -78,6 +78,7 @@ export const qk = {
   access: ['access'] as const,
   uploadTargets: ['uploads', 'targets'] as const,
   uploadBatches: ['uploads', 'batches'] as const,
+  albumSync: (deviceId?: string) => ['uploads', 'albums', deviceId ?? 'self'] as const,
   /** 谁在调用（GET /api/me）：网页按它隐藏用不了的入口（lib/capabilities.ts） */
   me: ['me'] as const,
 };
@@ -275,6 +276,17 @@ export const useJobs = () => useQuery({ queryKey: qk.jobs, queryFn: api.jobs });
 export const useUploadTargets = (enabled = true) => useQuery({ queryKey: qk.uploadTargets, queryFn: api.uploadTargets, enabled });
 /** 最近从手机传上来的批次：传图时 upload.* 的命令事件让它重新取（lib/events.ts） */
 export const useUploadBatches = (enabled = true) => useQuery({ queryKey: qk.uploadBatches, queryFn: api.uploadBatches, enabled });
+/**
+ * 一台设备的同步相册（电脑上给 deviceId，手机上看自己的）。App 在盘点、同步时（或者刚让 App 开始，poll）每 3 秒重新取：
+ * 电脑上有 upload.reportAlbums 的命令事件，手机上收不到命令事件
+ */
+export const useAlbumSync = (deviceId?: string, opts: { enabled?: boolean; poll?: boolean } = {}) =>
+  useQuery({
+    queryKey: qk.albumSync(deviceId),
+    queryFn: () => api.albumSync(deviceId),
+    enabled: opts.enabled ?? true,
+    refetchInterval: (q) => (opts.poll || q.state.data?.state.running ? 3000 : false),
+  });
 
 /**
  * 手机访问的状态：开关、端口、地址、等批准的请求、已批准的设备。变化靠 SSE 的 access 事件（lib/events.ts）。
