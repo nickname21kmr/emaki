@@ -90,8 +90,15 @@ export function stagePadding(v: Pick<Viewport, 'touch' | 'width'>): { x: number;
 /** 页头吸顶：手机横屏（高度 compact）不吸顶，不然筛选条一吸就占掉小半屏 */
 export const stickyHeaderFits = (v: Pick<Viewport, 'height'>): boolean => v.height !== 'compact';
 
-/** 阅读器能不能双页：横屏而且宽度 expanded（竖屏一律单页） */
-export const readerSpreadFits = (v: Pick<Viewport, 'width' | 'orientation'>): boolean => v.width === 'expanded' && v.orientation === 'landscape';
+/** 电脑上（鼠标）窗口至少这么宽才双页：和原来一样（A1 之前就是 1100） */
+export const DESKTOP_SPREAD_MIN = 1100;
+
+/**
+ * 阅读器能不能双页：竖屏一律单页。触屏（手机、平板横屏）宽度 expanded 就行；
+ * 电脑上（鼠标）照原来的规则，窗口宽 ≥ 1100 才双页，840–1099 宽的窗口还是单页
+ */
+export const readerSpreadFits = (v: Pick<Viewport, 'w' | 'width' | 'orientation' | 'touch'>): boolean =>
+  v.orientation === 'landscape' && (v.touch ? v.width === 'expanded' : v.w >= DESKTOP_SPREAD_MIN);
 
 // ------------------------------------------------------------------ useViewport
 

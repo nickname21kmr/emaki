@@ -10,6 +10,7 @@ import { modKeyLabel } from '@/lib/hotkeys';
 import { useUndoStore, type UndoEntry } from '@/lib/stores';
 import { Kbd } from './Kbd';
 import { Spinner } from './Button';
+import { canWith } from '@/lib/capabilities';
 import { afterUndone, errorMessage, forgetFailedUndo, goToUndone } from '@/lib/queries';
 
 /** 正在显示的可撤销 toast：Ctrl+Z 优先交给它，胶囊原地变成「已撤销」 */
@@ -25,7 +26,9 @@ export function undoViaToast(token: string): boolean {
 
 /** 结果 toast（SEL-11）：墨色胶囊 + 底部朱色引信；可撤销的 6 秒、不可撤销的 3.2 秒燃尽后消失 */
 export function showResultToast(message: string, undoToken: string | null, client: QueryClient) {
-  toast.custom((id) => <ResultToast id={id} message={message} undoToken={undoToken} client={client} />, {
+  // 没有「撤销」权限的设备（history）：不给撤销按钮（点了也是 403）
+  const token = undoToken && canWith(client, 'history') ? undoToken : null;
+  toast.custom((id) => <ResultToast id={id} message={message} undoToken={token} client={client} />, {
     duration: Infinity,
     unstyled: true,
     // 自绘的 li 没有宽度；铺满 toaster 再居中，长消息向两侧溢出

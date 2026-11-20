@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router';
 import { isTypingTarget, useHotkey } from '@/lib/hotkeys';
 import { useEffect } from 'react';
+import { useCan } from '@/lib/capabilities';
 import { requestUndo, setUndoNavigate } from '@/lib/queries';
 import { useLightbox, useOverlays, usePrefs } from '@/lib/stores';
 import { useCanVisit } from '@/pages';
@@ -51,9 +52,12 @@ export function useGlobalHotkeys() {
  */
 export function useUndoHotkey({ inEmptyInputs = false } = {}) {
   const client = useQueryClient();
+  // 没有「撤销」权限的设备：Ctrl+Z 留给浏览器
+  const canUndo = useCan('history');
   useHotkey(
     'mod+z',
     (e) => {
+      if (!canUndo) return;
       if (isTypingTarget(e.target) && !(inEmptyInputs && isEmptyField(e.target))) return;
       e.preventDefault();
       // 别的页面的、超过 2 分钟的先问；问着的时候再按一次就是确认

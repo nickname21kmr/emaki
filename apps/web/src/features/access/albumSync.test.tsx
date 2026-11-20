@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import { qk } from '@/lib/queries';
-import { albumCountsText, AlbumSyncPanel, syncStatusText } from './AlbumSync';
+import { albumCountsText, AlbumSyncPanel, lastResultText, syncStatusText } from './AlbumSync';
 
 const g = globalThis as { EmakiApp?: unknown };
 afterEach(() => {
@@ -49,7 +49,17 @@ const info = (over: Partial<AlbumSyncInfo> = {}): AlbumSyncInfo => ({
   target: { deviceId: 'pad', rootId: '2', rootPath: 'D:/Pictures', dir: '下载图片/平板导入', isDefault: false },
   wifiOnly: true,
   chargingOnly: false,
-  state: { running: null, done: null, total: null, error: null, summary: null, reportedAt: null, inventoriedAt: null, syncedAt: null },
+  state: {
+    running: null,
+    done: null,
+    total: null,
+    error: null,
+    summary: null,
+    summaryAt: null,
+    reportedAt: null,
+    inventoriedAt: null,
+    syncedAt: null,
+  },
   albums: [],
   ...over,
 });
@@ -79,9 +89,14 @@ describe('同步相册的说法（docs/mobile.md 5.5）', () => {
     expect(syncStatusText(info({ state: { ...s, inventoriedAt: ago(5) }, albums: [album()] }), NOW)).toBe(
       '5分钟前盘点过，还没有同步的相册',
     );
-    expect(syncStatusText(info({ state: { ...s, syncedAt: ago(3), summary: '同步了 12 张' }, albums: [album({ sync: true })] }), NOW)).toBe(
-      '同步 1 个相册 · 上次 3分钟前 · 同步了 12 张',
-    );
+    // 上次同步和最近的结果分开写：没有新图的同步不会盖掉「同步了 12 张」
+    const synced = info({
+      state: { ...s, syncedAt: ago(3), summary: '同步了 12 张', summaryAt: ago(60) },
+      albums: [album({ sync: true })],
+    });
+    expect(syncStatusText(synced, NOW)).toBe('同步 1 个相册 · 上次 3分钟前');
+    expect(lastResultText(synced.state, NOW)).toBe('最近：同步了 12 张（1小时前）');
+    expect(lastResultText({ summary: null, summaryAt: null }, NOW)).toBeNull();
   });
 
   it('相册的张数：盘点结果；都在电脑上；一张都没有；没盘点过；同步过的写还有几张没传', () => {

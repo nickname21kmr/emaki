@@ -10,6 +10,7 @@ import { getChapter } from './chapters';
 import { IconButton, Kbd, Menu, MenuItem, MenuSeparator } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { modKeyLabel } from '@/lib/hotkeys';
+import { useCan } from '@/lib/capabilities';
 import { requestUndo, undoTitle } from '@/lib/queries';
 import { placeText } from '@/lib/undoPlace';
 import { useBlurPrefs, useOverlays, usePrefs, useUndoStore } from '@/lib/stores';
@@ -198,6 +199,7 @@ export function GlobalActions() {
   const what = [blurLevel === 'explicit' ? '限制级图片' : '敏感图片', blurPhoto && '照片', blurText && '文字图'].filter(Boolean).join('、');
   const toggleBlur = usePrefs((s) => s.toggleBlurSensitive);
   const lastUndo = useUndoStore((s) => s.entries[0]);
+  const canUndo = useCan('history');
   // 提示里的「3 分钟前」每半分钟走一次
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -222,15 +224,18 @@ export function GlobalActions() {
       <IconButton label={blur ? `显示${what}` : `模糊${what}`} shortcut="B" active={blur} onClick={toggleBlur} className="compact:hidden">
         {blur ? <EyeOff /> : <Eye />}
       </IconButton>
-      <IconButton
-        label={lastUndo ? undoTitle(lastUndo) + placeText(lastUndo, now) : '没有可撤销的操作'}
-        shortcut={`${modKeyLabel} Z`}
-        disabled={!lastUndo}
-        onClick={() => void requestUndo(client)}
-        className="compact:hidden"
-      >
-        <UndoNod />
-      </IconButton>
+      {/* 没有「撤销」权限的设备（history）：不放撤销按钮 */}
+      {canUndo && (
+        <IconButton
+          label={lastUndo ? undoTitle(lastUndo) + placeText(lastUndo, now) : '没有可撤销的操作'}
+          shortcut={`${modKeyLabel} Z`}
+          disabled={!lastUndo}
+          onClick={() => void requestUndo(client)}
+          className="compact:hidden"
+        >
+          <UndoNod />
+        </IconButton>
+      )}
       <IconButton label="快捷键与帮助" shortcut="?" onClick={() => setHelpOpen(true)} className="compact:hidden">
         <CircleHelp />
       </IconButton>
@@ -248,9 +253,11 @@ export function GlobalActions() {
           <MenuItem icon={blur ? <Eye /> : <EyeOff />} onSelect={toggleBlur}>
             {blur ? `显示${what}` : `模糊${what}`}
           </MenuItem>
-          <MenuItem icon={<Undo2 />} disabled={!lastUndo} onSelect={() => void requestUndo(client)}>
-            <span className="line-clamp-2">{lastUndo ? undoTitle(lastUndo) + placeText(lastUndo, now) : '没有可撤销的操作'}</span>
-          </MenuItem>
+          {canUndo && (
+            <MenuItem icon={<Undo2 />} disabled={!lastUndo} onSelect={() => void requestUndo(client)}>
+              <span className="line-clamp-2">{lastUndo ? undoTitle(lastUndo) + placeText(lastUndo, now) : '没有可撤销的操作'}</span>
+            </MenuItem>
+          )}
           <MenuSeparator />
           <MenuItem icon={<CircleHelp />} onSelect={() => setHelpOpen(true)}>
             帮助

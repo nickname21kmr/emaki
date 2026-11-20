@@ -44,6 +44,11 @@ export const RATE_MAX = 10;
 export const TICKET_TTL_MS = 2 * 60_000;
 /** 长轮询最多等这么多秒 */
 export const MAX_WAIT_S = 25;
+/**
+ * 凭证发出去了、这么久还从没来过的设备删掉：手机没收到那次回答（取凭证、扫码的回答在网络上丢了），
+ * 手机上没有凭证，只能重新请求；不删的话设备列表里一直留着一条用不了的
+ */
+export const NEVER_SEEN_MS = 30 * 60_000;
 
 /** 校验码（第 3 步）：手机和电脑各算一遍，测试和假手机脚本也用它 */
 export function pairingCode(fingerprint: Uint8Array, nonceA: Uint8Array, nonceB: Uint8Array): string {
@@ -231,7 +236,7 @@ export class Pairing {
 
   /**
    * 清掉过期的请求、口令和限速记录（每次调用时都先做一遍，另有一个定时器在最早的过期时间叫醒它）。
-   * 批准了没取走凭证的，设备行一并删掉。返回现在的时间
+   * 批准了没取走凭证的，设备行一并删掉；凭证发出去了但半小时还没来过的设备也删掉（NEVER_SEEN_MS）。返回现在的时间
    */
   sweep(): number {
     const now = this.deps.clock();
@@ -242,6 +247,7 @@ export class Pairing {
       if (r.state === 'approved' && r.issued) this.deps.devices.remove(r.issued.deviceId);
       this.drop(r);
     }
+    if (this.deps.devices.pruneNeverSeen(now - NEVER_SEEN_MS) > 0) changed = true;
     for (const [t, expires] of this.tickets) if (expires <= now) this.tickets.delete(t);
     for (const [a, times] of this.attempts) {
       const recent = times.filter((t) => now - t < RATE_WINDOW_MS);

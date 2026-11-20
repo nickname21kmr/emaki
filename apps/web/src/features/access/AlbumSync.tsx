@@ -25,9 +25,13 @@ export function syncStatusText(info: Pick<AlbumSyncInfo, 'state' | 'albums'>, no
   if (s.running === 'sync') return `正在同步${progress}`;
   const on = info.albums.filter((a) => a.sync).length;
   if (!on) return s.inventoriedAt ? `${formatRelative(s.inventoriedAt, now)}盘点过，还没有同步的相册` : '还没盘点过';
-  return [`同步 ${on} 个相册`, s.syncedAt ? `上次 ${formatRelative(s.syncedAt, now)}` : '还没同步过', s.summary]
-    .filter(Boolean)
-    .join(' · ');
+  return [`同步 ${on} 个相册`, s.syncedAt ? `上次 ${formatRelative(s.syncedAt, now)}` : '还没同步过'].join(' · ');
+}
+
+/** 「最近：同步了 12 张（1小时前）」：最近一次有结果的同步、盘点（没有新图的那几次不算） */
+export function lastResultText(state: Pick<AlbumSyncInfo['state'], 'summary' | 'summaryAt'>, now = Date.now()): string | null {
+  if (!state.summary) return null;
+  return `最近：${state.summary}` + (state.summaryAt ? `（${formatRelative(state.summaryAt, now)}）` : '');
 }
 
 /** 「8,725 张 · 13.2 GB · 电脑上已有 8,571 张 · 没有的 152 张（194 MB）」；同步过的写还有几张没传上来 */
@@ -109,6 +113,14 @@ export function AlbumSyncPanel({ deviceId }: { deviceId?: string }) {
             <span className="tabular">{syncStatusText(info)}</span>
           </div>
           {info.state.error && <p className="mt-1 text-[12.5px] leading-relaxed text-warn">{info.state.error}</p>}
+          {!running && lastResultText(info.state) && (
+            <div
+              className="mt-0.5 text-[12.5px] text-fg-muted"
+              title={info.state.summaryAt ? formatDateTime(info.state.summaryAt) : undefined}
+            >
+              {lastResultText(info.state)}
+            </div>
+          )}
           {info.state.reportedAt && (
             <div className="mt-0.5 text-[12px] text-fg-subtle" title={formatDateTime(info.state.reportedAt)}>
               App 上次报告：{formatRelative(info.state.reportedAt)}

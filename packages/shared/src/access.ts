@@ -267,8 +267,10 @@ export interface AlbumSyncState {
   done: number | null;
   total: number | null;
   error: string | null;
-  /** 上次的结果：「同步了 12 张」 */
+  /** 最近一次有结果的同步、盘点：「同步了 12 张」「盘点了 22 个相册」（没有新图的同步不报） */
   summary: string | null;
+  /** summary 是什么时候的 */
+  summaryAt: string | null;
   reportedAt: string | null;
   inventoriedAt: string | null;
   syncedAt: string | null;

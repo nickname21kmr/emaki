@@ -136,6 +136,13 @@ export class Devices {
     this.seenWritten.delete(id);
   }
 
+  /** 删掉 before（毫秒）之前建的、一次都没来过的设备（凭证发出去了但手机没收到）。返回删了几台 */
+  pruneNeverSeen(before: number): number {
+    const dead = this.list().filter((d) => d.lastSeenAt === null && Date.parse(d.createdAt) < before);
+    for (const d of dead) this.remove(d.id);
+    return dead.length;
+  }
+
   /** 撤销：之后这个凭证的每个请求都是 device_revoked，开着的事件连接立即断开。已经撤销过的返回 false */
   revoke(id: string): boolean {
     const e = this.entry(id);

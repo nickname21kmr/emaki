@@ -94,7 +94,7 @@ describe('撤销不了的一步', () => {
   });
 
   it('移到回收站占住撤销栈，Ctrl+Z 只提示并拿掉它，不越过去撤更早的', async () => {
-    const client = { invalidateQueries: vi.fn() } as never;
+    const client = { invalidateQueries: vi.fn(), getQueryData: () => undefined } as never;
     useUndoStore.getState().push({ token: 'older', label: '全部保留' });
     announce({ ok: true, message: '已保留 1 张，2 张移到回收站', undoToken: null, irreversible: true }, client);
     const top = useUndoStore.getState().entries[0]!;
@@ -104,7 +104,7 @@ describe('撤销不了的一步', () => {
   });
 
   it('第 6 次移到回收站把最早那次挤出去：它原地变成占位，Ctrl+Z 不越过它', async () => {
-    const client = { invalidateQueries: vi.fn() } as never;
+    const client = { invalidateQueries: vi.fn(), getQueryData: () => undefined } as never;
     useUndoStore.getState().push({ token: 'older', label: '收藏 1 张' });
     useUndoStore.getState().push({ token: 't1', label: '已把 1 张图移到回收站' });
     useUndoStore.getState().push({ token: 'fav', label: '收藏 2 张' });
@@ -126,7 +126,7 @@ describe('撤销不了的一步', () => {
   });
 
   it('改设置 / 开始任务这种没有撤销的写操作也占一格，Ctrl+Z 只提示，不越过去', async () => {
-    const client = { invalidateQueries: vi.fn() } as never;
+    const client = { invalidateQueries: vi.fn(), getQueryData: () => undefined } as never;
     const spy = vi.spyOn(api, 'undo');
     useUndoStore.getState().push({ token: 'older', label: '收藏 1 张' });
     announce({ ok: true, message: '已保存', undoToken: null }, client, { barrier: '改了设置' });
@@ -147,7 +147,7 @@ describe('连着改设置', () => {
   });
 
   it('挨着的同一种占位只留一条，不把能撤销的挤出栈', () => {
-    const client = { invalidateQueries: vi.fn() } as never;
+    const client = { invalidateQueries: vi.fn(), getQueryData: () => undefined } as never;
     useUndoStore.getState().push({ token: 'fav', label: '收藏 1 张' });
     for (let i = 0; i < 30; i++) {
       const id = beginPending('改了设置');
@@ -158,7 +158,7 @@ describe('连着改设置', () => {
 });
 
 describe('还在进行的操作', () => {
-  const client = { invalidateQueries: vi.fn() } as never;
+  const client = { invalidateQueries: vi.fn(), getQueryData: () => undefined } as never;
   beforeEach(() => {
     saved.clear();
     useUndoStore.setState({ entries: [], boot: null });
@@ -223,7 +223,7 @@ describe('还在进行的操作', () => {
 });
 
 describe('合成一条的多个 token', () => {
-  const client = { invalidateQueries: vi.fn() } as never;
+  const client = { invalidateQueries: vi.fn(), getQueryData: () => undefined } as never;
   beforeEach(() => {
     saved.clear();
     useUndoStore.setState({ entries: [], boot: null });
@@ -250,7 +250,7 @@ describe('合成一条的多个 token', () => {
 });
 
 describe('撤销前先看在哪、多久以前', () => {
-  const client = { invalidateQueries: vi.fn() } as never;
+  const client = { invalidateQueries: vi.fn(), getQueryData: () => undefined } as never;
   const now = Date.parse('2026-10-25T12:00:00Z');
   const min = 60_000;
   const flush = () => new Promise((r) => setTimeout(r, 0));
