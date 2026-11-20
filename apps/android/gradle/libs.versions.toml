@@ -1,5 +1,5 @@
 # 依赖尽量少（docs/mobile.md 3.2）：Compose、OkHttp、扫码、WorkManager（传图）；不要 Firebase、统计、广告、Google Play 服务。
-# 版本选的是支持 compileSdk 35 的（x99e 上装的是 SDK 35、build-tools 35）。
+# 版本选的是支持 compileSdk 35 的（Android SDK 35、build-tools 35）。
 [versions]
 agp = "8.7.3"
 kotlin = "2.1.0"

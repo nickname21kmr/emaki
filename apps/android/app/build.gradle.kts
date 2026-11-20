@@ -8,7 +8,7 @@ plugins {
 
 /**
  * release 的签名：密钥和密码不进仓库。用 -Pemaki.signing=<文件> 或环境变量 EMAKI_SIGNING 指向一个 properties 文件
- * （storeFile、storePassword、keyAlias、keyPassword），x99e 上是 /root/emaki-dev/android/keys/signing.properties（见 README）。
+ * （storeFile、storePassword、keyAlias、keyPassword），不进仓库。
  * 没给的话 release 照样能构建，只是没签名、装不上。
  */
 val signingFile: File? = ((findProperty("emaki.signing") as String?) ?: System.getenv("EMAKI_SIGNING"))

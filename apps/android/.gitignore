@@ -7,7 +7,7 @@ local.properties
 *.iml
 captures/
 .cxx/
-# 签名密钥和密码永远不进仓库（放在 x99e 的 /root/emaki-dev/android/keys/，见 README）
+# 签名密钥和密码永远不进仓库（发布 APK 的人自己保管，见 README）
 *.jks
 *.keystore
 *.p12

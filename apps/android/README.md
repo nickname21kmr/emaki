@@ -4,7 +4,8 @@
 在局域网里找电脑、请求连接（6 位校验码）、保存凭证、认准电脑的证书、之后每次打开自动连上、被电脑移除时回到原生页面。
 设计见 [docs/mobile.md](../../docs/mobile.md) 第 2、3 节；配对协议见 `apps/server/src/access/pairing.ts` 的文件头。
 
-- applicationId `app.emaki.mobile`，版本 0.1.0（versionCode 1），Android 10 以上（minSdk 29），targetSdk 35。
+- applicationId `app.emaki.mobile`，版本 0.3.3（versionCode 6），Android 10 以上（minSdk 29），targetSdk 35。
+- 装好的 APK 在 [Releases](https://github.com/zhaochengggg/emaki/releases) 下载（用下面「签名密钥」里那把密钥签的）；也可以自己构建。
 - 依赖：Compose（Material 3）、OkHttp、zxing-android-embedded（扫码，不依赖 Google Play 服务）。没有统计、推送、广告。
 - 这个目录没有 package.json，npm 的 workspaces 不会管它。
 
@@ -27,46 +28,38 @@
 图库页头的「传到电脑」图标（`features/gallery/components/SendToComputer.tsx`）在有 `EmakiApp.pickImages` 时显示；
 有 `EmakiApp.syncAlbums`（0.3.0 起）时点开是一个面板：「选图片上传」+「同步相册」（`features/access/AlbumSync.tsx`），老版本直接打开选图界面。
 
-## 在哪构建
+## 构建
 
-在 **x99e** 上构建（`ssh x99`，32 核，有 KVM）。开发机（2 核 2 GB）不要跑 Gradle、模拟器。
+要 JDK 17 和 Android SDK 35（platform、build-tools 35）；Gradle 由 wrapper 下载（`gradle/wrapper`，带 sha256 校验），
+依赖来自 Google Maven 和 Maven Central。机器配置低的话别在上面跑模拟器。
 
 ```bash
-# 把这个目录同步过去（build 产物不带）
-rsync -az --delete --exclude .gradle --exclude build --exclude app/build --exclude .kotlin --exclude emulator.log \
-  apps/android/ x99:/root/emaki-dev/app/
-
-ssh x99
-source /root/emaki-dev/android/env.sh                      # JDK 17、Android SDK 35、build-tools 35、emulator、adb
-export GRADLE_USER_HOME=/root/emaki-dev/android/gradle-home  # Gradle 的缓存也放在 /root/emaki-dev/android 下
-cd /root/emaki-dev/app
+cd apps/android
 ./gradlew testDebugUnitTest                      # 单元测试（JVM，不要模拟器）
 ./gradlew assembleDebug                          # app/build/outputs/apk/debug/app-debug.apk
-./gradlew assembleRelease -Pemaki.signing=/root/emaki-dev/android/keys/signing.properties
+./gradlew assembleRelease -Pemaki.signing=<signing.properties 的路径>
                                                  # app/build/outputs/apk/release/app-release.apk（已签名）
 ```
 
-x99e 能直连 Google Maven、Maven Central、services.gradle.org；Gradle 本身由 wrapper 下载（`gradle/wrapper`，带 sha256 校验）。
-
 ## 签名密钥
 
-- release 用的密钥在 x99e 的 **`/root/emaki-dev/android/keys/`**：`emaki-release.jks`（PKCS12，RSA 4096，有效期 100 年，别名 `emaki`）
-  和 `signing.properties`（storeFile、storePassword、keyAlias、keyPassword）。两个文件都是 600 权限，**不进仓库**（`.gitignore` 挡着 `*.jks`、`signing.properties`）。
-- 证书指纹（SHA-256）：`69:98:B3:C8:F2:52:38:12:B2:9A:82:A5:AE:E2:5B:AC:54:F2:5F:E6:41:85:A0:89:60:8A:38:BA:9B:FF:D7:F3`。
-  核对一个 APK 是不是用这把密钥签的：`$ANDROID_HOME/build-tools/35.0.0/apksigner verify --print-certs app-release.apk`。
-- **要备份**：密钥丢了，以后的新版本就装不上，只能卸载重装（App 里保存的配对也跟着没了）。把整个目录拷一份到电脑上，例如
-  `scp -r x99:/root/emaki-dev/android/keys <电脑上的备份目录>`，和 `signing.properties` 里的密码一起放在只有自己能看的地方（docs/mobile.md 3.4）。
+- release 用的密钥（`emaki-release.jks`，PKCS12，RSA 4096，有效期 100 年，别名 `emaki`）和 `signing.properties`
+  （storeFile、storePassword、keyAlias、keyPassword）由发布 APK 的人保管，**不进仓库**（`.gitignore` 挡着 `*.jks`、`signing.properties`）。
+- Releases 里的 APK 的证书指纹（SHA-256）：`69:98:B3:C8:F2:52:38:12:B2:9A:82:A5:AE:E2:5B:AC:54:F2:5F:E6:41:85:A0:89:60:8A:38:BA:9B:FF:D7:F3`。
+  核对：`$ANDROID_HOME/build-tools/35.0.0/apksigner verify --print-certs app-release.apk`。
+- 安卓只允许用同一把密钥签的新版本覆盖安装：换了密钥（自己构建的、别人发的）要先卸载，App 里保存的配对也跟着没了，重新请求连接一次就好。
+- **要备份**：密钥丢了，以后的新版本就装不上（docs/mobile.md 3.4）。
 - 没给 `-Pemaki.signing`（或环境变量 `EMAKI_SIGNING`）时 release 也能构建，只是没签名、装不上。
 
 ## 在真机上装
 
-1. 手机上打开「开发者选项」→「无线调试」，在 x99e 上配对一次：`adb pair <手机 IP>:<配对端口>`（输手机上显示的配对码），再 `adb connect <手机 IP>:<端口>`。
-   或者把 APK 传到手机上直接点开安装（要允许「安装未知应用」）。
-2. `adb install -r app-release.apk`。debug 和 release 的签名不同，换着装要先 `adb uninstall app.emaki.mobile`。
+1. 把 APK 传到手机上直接点开安装（要允许「安装未知应用」）。或者用 adb：手机上打开「开发者选项」→「无线调试」，
+   配对一次 `adb pair <手机 IP>:<配对端口>`（输手机上显示的配对码），再 `adb connect <手机 IP>:<端口>`、`adb install -r app-release.apk`。
+2. debug 和 release 的签名不同，换着装要先 `adb uninstall app.emaki.mobile`。
 3. 电脑上打开 Emaki 的 设置 →「手机访问」。手机连同一个 Wi-Fi，打开 App：列表里会出现这台电脑；点它，核对两边的校验码一样，在电脑上点「批准」。
    列表里没有（路由器开了 AP 隔离、访客 Wi-Fi）时用「扫码」或「手动输入地址」（`主机:端口`，端口默认 5175）。
 
-## 模拟器端到端（x99e 上无窗口运行）
+## 模拟器端到端（无窗口运行，要 KVM）
 
 ```bash
 avdmanager create avd -n emaki-a2 -k "system-images;android-35;google_apis;x86_64" -d pixel_4

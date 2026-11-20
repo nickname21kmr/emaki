@@ -96,7 +96,7 @@ export function AlbumSyncPanel({ deviceId }: { deviceId?: string }) {
   const others = info.albums.filter((a) => !a.sync && !a.suggested);
   const suggestedOff = info.albums.filter((a) => a.suggested && !a.sync);
   const noneOn = !info.albums.some((a) => a.sync);
-  // 新图放到电脑上的哪里：完整路径（B:\Users\zc\Pictures\下载图片\平板导入\下载）
+  // 新图放到电脑上的哪里：完整路径（D:\Pictures\下载图片\平板导入\下载）
   const where = (a: DeviceAlbum) => (info.target.rootPath ? displayPath(info.target.rootPath, info.target.dir, a.dir) : null);
   const toggle = (a: DeviceAlbum, sync: boolean) => save({ albums: [{ path: a.path, sync }] });
 

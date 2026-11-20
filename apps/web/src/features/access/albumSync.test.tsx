@@ -46,7 +46,7 @@ const album = (over: Partial<DeviceAlbum> = {}): DeviceAlbum => ({
 const info = (over: Partial<AlbumSyncInfo> = {}): AlbumSyncInfo => ({
   deviceId: 'pad',
   deviceName: '小米平板',
-  target: { deviceId: 'pad', rootId: '2', rootPath: 'B:/Users/zc/Pictures', dir: '下载图片/平板导入', isDefault: false },
+  target: { deviceId: 'pad', rootId: '2', rootPath: 'D:/Pictures', dir: '下载图片/平板导入', isDefault: false },
   wifiOnly: true,
   chargingOnly: false,
   state: { running: null, done: null, total: null, error: null, summary: null, reportedAt: null, inventoriedAt: null, syncedAt: null },
@@ -120,7 +120,7 @@ describe('同步相册面板', () => {
     expect(out).not.toContain('DCIM/Screenshots');
     expect(out).not.toContain('盘点相册');
     // 每个相册写电脑上的完整路径；不再有「只在充电时」
-    expect(out).toContain('B:\\Users\\zc\\Pictures\\下载图片\\平板导入\\下载');
+    expect(out).toContain('D:\\Pictures\\下载图片\\平板导入\\下载');
     expect(out).toContain('App 开着时才同步');
     expect(out).not.toContain('只在充电时');
   });
