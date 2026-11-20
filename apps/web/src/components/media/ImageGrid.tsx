@@ -374,6 +374,8 @@ function Tile({
           image={image}
           width={thumbWidth}
           className="size-full"
+          // 网格是虚拟列表，只渲染看得见的行和上下几行，本身就是按需加载；再交给浏览器原生 lazy 会多等 0.4–0.9 秒才开始请求缩略图
+          eager
           blurBadge="corner"
           revealOnHover
           rated={rated}

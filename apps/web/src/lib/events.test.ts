@@ -174,3 +174,32 @@ describe('openEventStream：断了自己重连', () => {
     expect(FakeSource.all).toHaveLength(1);
   });
 });
+
+describe('createInvalidator：提取姿势时只刷新姿势相关的查询', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('pose.changed 刷新姿势查询和按姿势筛的图库，不碰普通图库、角色、作品、计数', () => {
+    const { client, calls } = fakeClient();
+    const { invalidate, dispose } = createInvalidator(client);
+    invalidate('pose' as never, ['pose.changed']);
+    vi.advanceTimersByTime(400);
+    const refreshed = (key: readonly unknown[]) => calls.some((c) => c.refetchType !== 'none' && c.predicate({ queryKey: key }));
+    expect(refreshed(['pose', 'classes'])).toBe(true);
+    expect(refreshed(['pose', 'similar', '7'])).toBe(true);
+    expect(refreshed(['images', { kind: ['illustration'], poseClass: 'full_03' }])).toBe(true);
+    expect(refreshed(['images', { kind: ['illustration'], collapseCollections: 'auto' }])).toBe(false);
+    for (const root of ['image', 'characters', 'works', 'unrecognized', 'stats', 'summary', 'collections'])
+      expect(refreshed([root, {}]), root).toBe(false);
+    dispose();
+  });
+
+  it('其他变化照旧按第一段刷新', () => {
+    const { client, calls } = fakeClient();
+    const { invalidate, dispose } = createInvalidator(client);
+    invalidate('tag', ['evidence.changed']);
+    vi.advanceTimersByTime(400);
+    expect(calls.some((c) => c.predicate({ queryKey: ['images', { kind: ['illustration'] }] }))).toBe(true);
+    dispose();
+  });
+});

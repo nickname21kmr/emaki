@@ -84,6 +84,14 @@ const IMAGE_VIEWS = [
   'undo-status',
 ] as const;
 const WITH_FILES = [...IMAGE_VIEWS, 'duplicates', 'changes', 'settings', 'artists'] as const;
+/** 不是查询的第一段：表示「按姿势类别筛的图库列表」（images 查询里带 poseClass 的），见 matchesRoots */
+const POSE_LISTS = 'images:pose';
+
+/** 这个查询在不在要刷新的范围里：按第一段；POSE_LISTS 另外匹配带姿势筛选的图库列表 */
+export function matchesRoots(roots: ReadonlySet<string>, key: readonly unknown[]): boolean {
+  if (roots.has(String(key[0]))) return true;
+  return roots.has(POSE_LISTS) && key[0] === 'images' && !!(key[1] as { poseClass?: unknown } | undefined)?.poseClass;
+}
 export const REFRESH: Record<DomainChange, readonly string[]> = {
   'image.added': WITH_FILES,
   'image.gone': WITH_FILES,
@@ -113,8 +121,9 @@ export const REFRESH: Record<DomainChange, readonly string[]> = {
   'collections.changed': IMAGE_VIEWS,
   'duplicates.changed': ['duplicates', 'stats', 'summary', 'undo-status'],
   'settings.changed': [...IMAGE_VIEWS, 'settings', 'tagger-models', 'pose'],
-  // 按姿势找图（实验）：类别的张数、姿势筛选的列表
-  'pose.changed': [...IMAGE_VIEWS, 'pose'],
+  // 按姿势找图（实验）：只动姿势数据。刷新姿势相关的查询和按姿势筛的图库列表（POSE_LISTS），别的列表、计数都不受影响。
+  // 以前跟着刷新整组 IMAGE_VIEWS：提取姿势时每 3 秒重拉一遍图库已加载的每一页、角色、作品、未识别，后端一直被占着，看图和筛选都慢
+  'pose.changed': ['pose', POSE_LISTS],
   'library.opened': [...WITH_FILES, 'exclusions', 'tags', 'custom-character-matches'],
 };
 
@@ -166,7 +175,7 @@ export function createInvalidator(client: QueryClient) {
     if (!p) return;
     const reason = p.reason;
     const throttleRanks = reason === 'tag' && Date.now() - lastRankRefresh < 60_000;
-    const hit = (key: readonly unknown[]) => !p.roots || p.roots.has(String(key[0]));
+    const hit = (key: readonly unknown[]) => !p.roots || matchesRoots(p.roots, key);
     if (!p.roots || [...p.roots].some((r) => r === 'works' || r === 'characters')) {
       clearTimeout(rankTimer);
       if (!throttleRanks) lastRankRefresh = Date.now();
@@ -248,12 +257,12 @@ export async function settleRefresh(client: QueryClient, meta: CommandMeta | und
   if (!meta) return void (await client.invalidateQueries());
   if (meta.eventId === null) {
     const roots = rootsFor([], meta.command);
-    if (roots?.size) await client.invalidateQueries({ predicate: (q) => roots.has(String(q.queryKey[0])) });
+    if (roots?.size) await client.invalidateQueries({ predicate: (q) => matchesRoots(roots, q.queryKey) });
     return;
   }
   if (await eventSeen(meta.eventId)) return void (await refreshes.get(meta.eventId));
   const roots = rootsFor(meta.changes, meta.command);
-  await client.invalidateQueries(roots ? { predicate: (q) => roots.has(String(q.queryKey[0])) } : undefined);
+  await client.invalidateQueries(roots ? { predicate: (q) => matchesRoots(roots, q.queryKey) } : undefined);
 }
 
 /**

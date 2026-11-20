@@ -261,7 +261,7 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
   // 按姿势类别筛选、没指定排序时按离代表骨架的距离（近的在前，游标用偏移：距离不在图片行里）
   const sort: ImageSort | 'poseDistance' = q.poseClass && !q.sort ? 'poseDistance' : q.sort === 'page' && collection === null ? 'addedAt' : (q.sort ?? 'addedAt');
 
-  if (!q.collectionId && !q.poseClass && decideCollapse(q.collapseCollections, q.cursor, total)) return collapsedImages(db, q, countWhere.join(' AND '), p, total);
+  if (!q.collectionId && !q.poseClass && decideCollapse(q.collapseCollections, q.cursor, total)) return collapsedImages(db, q, w, countWhere.join(' AND '), p, total);
 
   if (sort === 'random' || sort === 'poseDistance') {
     const offset = decodeCursor(q.cursor, isOffset) ?? 0;
