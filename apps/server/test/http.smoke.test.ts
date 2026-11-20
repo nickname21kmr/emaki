@@ -899,7 +899,7 @@ describe('手机上传（注册表：upload.*、devices.setUpload；http/uploads
   const sha = 'a'.repeat(64);
   route('POST /api/uploads/check', async () => {
     const { status, json } = await call('POST', '/api/uploads/check', { files: [{ sha256: sha, size: 10 }] });
-    expect([status, json]).toEqual([200, { results: [{ sha256: sha, imageId: null }] }]);
+    expect([status, json]).toEqual([200, { results: [{ sha256: sha, imageId: null, deleted: false, dir: null }] }]);
     expect((await call('POST', '/api/uploads/check', { files: [{ sha256: 'xyz', size: 10 }] })).status).toBe(400);
   });
   route('POST /api/uploads', async () => {
@@ -925,6 +925,26 @@ describe('手机上传（注册表：upload.*、devices.setUpload；http/uploads
   });
   route('PATCH /api/devices/:id/upload', async () => {
     expect(await call('PATCH', '/api/devices/nope/upload', { rootId: null })).toMatchObject({ status: 404, json: apiError('not_found') });
+  });
+  // 同步相册（docs/mobile.md 5.5）：本机入口上要给 deviceId；报相册只有设备能调
+  route('GET /api/uploads/albums', async () => {
+    expect(await call('GET', '/api/uploads/albums')).toMatchObject({ status: 400, json: apiError('bad_request') });
+    expect(await call('GET', '/api/uploads/albums?deviceId=nope')).toMatchObject({ status: 404, json: apiError('not_found') });
+    const { device } = ds.access.devices.create({ name: 'Pixel 7', model: null, scopes: ['upload'] });
+    const { status, json } = await call('GET', `/api/uploads/albums?deviceId=${device.id}`);
+    expect([status, json]).toEqual([200, expect.objectContaining({ deviceId: device.id, albums: [], wifiOnly: true, chargingOnly: false })]);
+  });
+  route('POST /api/uploads/albums', async () => {
+    expect(await call('POST', '/api/uploads/albums', { albums: [] })).toMatchObject({ status: 400, json: apiError('bad_request') });
+  });
+  route('PATCH /api/uploads/albums', async () => {
+    const { device } = ds.access.devices.create({ name: 'Pixel 7', model: null, scopes: ['upload'] });
+    const { status, json } = await call('PATCH', '/api/uploads/albums', { deviceId: device.id, wifiOnly: false });
+    expect([status, json.info.wifiOnly]).toEqual([200, false]);
+    expect(await call('PATCH', '/api/uploads/albums', { deviceId: device.id, albums: [{ path: 'Download', sync: true }] })).toMatchObject({
+      status: 404,
+      json: apiError('not_found'),
+    });
   });
 });
 

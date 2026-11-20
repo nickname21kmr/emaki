@@ -120,7 +120,7 @@ describe('传一张', () => {
   it('先问没有 → 分段传 → 入库到默认落点（收件箱/手机/<设备名>/手动上传），保留手机上的修改时间，执行者是这台设备', async () => {
     const bytes = await png('#d72');
     const check = await lan('POST', '/api/uploads/check', { files: [{ sha256: sha256Hex(bytes), size: bytes.length }] });
-    expect(check.json()).toEqual({ results: [{ sha256: sha256Hex(bytes), imageId: null }] });
+    expect(check.json()).toEqual({ results: [{ sha256: sha256Hex(bytes), imageId: null, deleted: false, dir: null }] });
 
     const { complete } = await upload(bytes, { fileName: '12345678_p0.png', modifiedAt: '2025-03-04T05:06:07.000Z', chunk: 50 });
     expect(complete!.statusCode, complete!.body).toBe(200);

@@ -64,8 +64,15 @@ describe('范围的定义', () => {
       'upload.batches',
       'upload.targets',
     ]);
-    // 上传的三步是手机上的 App 调的：设备默认有 upload
-    expect(DEFINITIONS.filter((d) => d.scope === 'upload').map((d) => d.name)).toEqual(['upload.begin', 'upload.complete', 'upload.check']);
+    // 上传的三步、同步相册是手机上的 App 调的：设备默认有 upload（同步相册的看和改，设备只能是自己的，见 test/upload/albums.test.ts）
+    expect(DEFINITIONS.filter((d) => d.scope === 'upload').map((d) => d.name)).toEqual([
+      'upload.begin',
+      'upload.complete',
+      'upload.reportAlbums',
+      'upload.setAlbums',
+      'upload.check',
+      'upload.albums',
+    ]);
   });
 });
 

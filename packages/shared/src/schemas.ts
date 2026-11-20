@@ -430,12 +430,70 @@ export const UploadBeginInput = z.object({
   fileName: z.string().min(1).max(200),
   /** 手机上的修改时间（ISO），入库后的文件照这个时间 */
   modifiedAt: z.string().datetime({ offset: true }).optional(),
-  /** 同步的相册名；手动上传不给 */
-  album: z.string().min(1).max(100).optional(),
+  /** 同步的相册：手机上的文件夹路径（'Download'、'Pictures/bili'）；手动上传不给 */
+  album: z.string().min(1).max(300).optional(),
   /** 手机上这个文件的标识（相册同步用 MediaStore 的 id） */
   clientKey: z.string().min(1).max(200).optional(),
 });
 export const UploadBatchesInput = z.object({ limit: qNumber.min(1).max(100).optional() });
+
+// ------------------------------------------------------------------ 同步相册（B2，docs/mobile.md 5.5）
+
+/** 手机上的相册路径（MediaStore 的 RELATIVE_PATH）：服务端去掉两头的斜杠、反斜杠换成正斜杠 */
+const AlbumPath = z.string().min(1).max(300);
+const Count = z.number().int().min(0).max(100_000_000);
+const Bytes = z.number().int().min(0);
+/** 一台设备的同步相册：设备自己问不用给 deviceId；电脑上（本机入口）要给 */
+export const AlbumsQueryInput = z.object({ deviceId: Id.optional() });
+/** App 报相册（full = 这是手机上全部的相册，没列出的标成「手机上没有了」）、盘点结果、同步状态 */
+export const AlbumReportInput = z.object({
+  albums: z
+    .array(
+      z.object({
+        path: AlbumPath,
+        name: z.string().min(1).max(200),
+        count: Count,
+        bytes: Bytes,
+        latestAt: z.string().datetime({ offset: true }).optional(),
+        inventory: z
+          .object({
+            total: Count,
+            have: Count,
+            inTarget: Count,
+            deleted: Count,
+            new: Count,
+            newBytes: Bytes,
+            folder: z.string().max(400).nullable(),
+            folderCount: Count,
+          })
+          .optional(),
+        /** 这次同步完还没传上来的 */
+        pending: Count.optional(),
+      }),
+    )
+    .max(2000)
+    .default([]),
+  full: z.boolean().default(false),
+  state: z
+    .object({
+      running: z.enum(['inventory', 'sync']).nullable(),
+      done: Count.optional(),
+      total: Count.optional(),
+      error: z.string().max(500).nullable().optional(),
+      summary: z.string().max(500).nullable().optional(),
+    })
+    .optional(),
+});
+/** 改同步设置：哪些相册同步、新图放到哪（dir 为 null 恢复自动）；只在 Wi-Fi、只在充电 */
+export const AlbumSetInput = z.object({
+  deviceId: Id.optional(),
+  albums: z
+    .array(z.object({ path: AlbumPath, sync: z.boolean().optional(), dir: z.string().max(400).nullable().optional() }))
+    .max(2000)
+    .default([]),
+  wifiOnly: z.boolean().optional(),
+  chargingOnly: z.boolean().optional(),
+});
 
 // ------------------------------------------------------------------ 查询
 

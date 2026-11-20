@@ -159,7 +159,15 @@ export interface UploadTarget {
 
 /** POST /api/uploads/check：这些图电脑上有没有（按 sha256） */
 export interface UploadCheckResult {
-  results: { sha256: string; imageId: string | null }[];
+  results: {
+    sha256: string;
+    /** 图库里内容相同的图；没有是 null */
+    imageId: string | null;
+    /** 图库里没有，但删过（只在回收站里、或文件丢了）：同步相册时不再传（电脑上删掉的不会被同步回来） */
+    deleted: boolean;
+    /** 那张图在问的这台设备的「上传到」里：所在的文件夹（相对「上传到」，'' 是它本身）；不在里面、或者不是设备问的是 null */
+    dir: string | null;
+  }[];
 }
 
 export type UploadStatus = 'receiving' | 'imported' | 'existing' | 'failed';
@@ -199,4 +207,87 @@ export interface UploadBatch {
   receiving: number;
   /** 这一批新入库的图（最多 12 张，给缩略图） */
   imageIds: string[];
+}
+
+// ---------------------------------------------------------------- 同步相册（B2，docs/mobile.md 5.5）
+
+/** 一个相册的盘点：App 把相册里每张图的 sha256 问过电脑之后报的 */
+export interface AlbumInventory {
+  total: number;
+  /** 电脑上有（任何地方） */
+  have: number;
+  /** 其中在这台设备的「上传到」里的 */
+  inTarget: number;
+  /** 电脑上删过的（只在回收站里、或文件丢了）：不会再传 */
+  deleted: number;
+  /** 电脑上没有的：同步时要传 */
+  new: number;
+  newBytes: number;
+  /** 「上传到」里老图最集中的文件夹（相对「上传到」）和张数；一张都不在里面是 null */
+  folder: string | null;
+  folderCount: number;
+  at: string;
+}
+
+/** 新图放到哪是怎么来的：跟着老图、按相册路径取名、用户改的 */
+export type AlbumDirReason = 'history' | 'name' | 'manual';
+
+/** 手机上的一个相册（= 一个文件夹，不含子文件夹） */
+export interface DeviceAlbum {
+  /** 手机上的路径：'Download'、'Pictures/bili' */
+  path: string;
+  name: string;
+  count: number;
+  bytes: number;
+  latestAt: string | null;
+  /** 手机上没有这个文件夹了 */
+  gone: boolean;
+  /** 没盘点过是 null */
+  inventory: AlbumInventory | null;
+  sync: boolean;
+  /** 新图放到「上传到」下的哪个文件夹（'' 是「上传到」本身）：定下来的，或者还没定时现在会选的 */
+  dir: string;
+  dirReason: AlbumDirReason;
+  /** 定下来了：第一次打开同步时定，之后不再自动变 */
+  dirFixed: boolean;
+  /** 为什么放这里：「以前的 8556 张都在这里」「按相册路径取的名字」「你改的」 */
+  dirNote: string;
+  /** 建议同步：盘点过，电脑上已有的图过半在这台设备的「上传到」里（以前拷过的相册） */
+  suggested: boolean;
+  /** 上次同步完还没传上来的 */
+  pending: number | null;
+  syncedAt: string | null;
+}
+
+/** App 报的同步状态 */
+export interface AlbumSyncState {
+  running: 'inventory' | 'sync' | null;
+  done: number | null;
+  total: number | null;
+  error: string | null;
+  /** 上次的结果：「同步了 12 张」 */
+  summary: string | null;
+  reportedAt: string | null;
+  inventoriedAt: string | null;
+  syncedAt: string | null;
+}
+
+/** GET /api/uploads/albums：一台设备的同步相册 */
+export interface AlbumSyncInfo {
+  deviceId: string;
+  deviceName: string;
+  target: UploadTarget;
+  /** 只在 Wi-Fi（不按流量计费的网络）下同步 */
+  wifiOnly: boolean;
+  /** 只在充电时同步 */
+  chargingOnly: boolean;
+  state: AlbumSyncState;
+  albums: DeviceAlbum[];
+}
+
+/** POST /api/uploads/albums（App 报相册、盘点、状态）的回答：App 按它同步 */
+export interface AlbumSyncConfig {
+  wifiOnly: boolean;
+  chargingOnly: boolean;
+  albums: { path: string; sync: boolean }[];
 }

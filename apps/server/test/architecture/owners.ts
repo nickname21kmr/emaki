@@ -111,9 +111,11 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   // 设备与访问：局域网入口的配置（迁移 041）、批准过的设备和凭证的哈希
   lan_access: 'access',
   devices: 'access',
-  // 手机上传（迁移 042）
+  // 手机上传（迁移 042）、同步相册（迁移 043）
   upload_batches: 'upload',
   uploads: 'upload',
+  device_albums: 'upload',
+  device_sync: 'upload',
 };
 
 /**

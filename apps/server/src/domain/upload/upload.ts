@@ -7,10 +7,11 @@
  * 判断「同一个文件」：
  * - 整个图库里有内容相同（sha256）的图：不再存一份，complete 回 existing 和那张的 id（导入图片本来就这样）；
  * - 这台设备传过的：有 client_key（相册同步）按 设备 + client_key + sha256，没有按 设备 + 相册 + sha256，begin 直接回 done。
- *   电脑上删掉的图因此不会被同步回来。
+ *   电脑上删掉的图因此不会被同步回来（同步相册在问的时候还会跳过回收站里有的，见 checkUploads 的 deleted）。
  *
  * 放到哪：设备的「上传到」（devices.upload_root_id / upload_dir，access/ 写），没设过是第一个自动识别的图库文件夹下的
- * 收件箱/手机/<设备名>；再按 album 分子文件夹（手动上传是「手动上传」）。按漫画导入的图库文件夹、漫画子文件夹不能当落点。
+ * 收件箱/手机/<设备名>；手动上传再进「手动上传」，同步的相册进为它定下来的文件夹（albums.ts）。
+ * 按漫画导入的图库文件夹、漫画子文件夹不能当落点。
  */
 import type { ID, UploadBatch, UploadBeginResult, UploadCheckResult, UploadTarget } from '@emaki/shared';
 import { createHash, randomUUID } from 'node:crypto';
@@ -24,6 +25,7 @@ import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors
 import { ComicAreas } from '../../services/classify/comicAreas.ts';
 import { ROOT_ACTIVE, VISIBLE } from '../../readmodel/terms.ts';
 import { importImages } from '../library/import.ts';
+import { albumDir, normalizeAlbumPath } from './albums.ts';
 import { normalizeSubdir } from '../library/move.ts';
 import type { TrashImpl } from '../../services/trash/recycleBin.ts';
 
@@ -107,13 +109,29 @@ export function checkUploadTarget(ctx: SqliteContext, rootId: ID, dir: string): 
 
 // ---------------------------------------------------------------- 上传
 
-/** 这些图电脑上有没有：按 sha256 找图库里的图（排除了的也算有，回收站里的不算） */
-export function checkUploads(ctx: SqliteContext, files: { sha256: string }[]): UploadCheckResult {
-  const find = ctx.db
-    .prepare(`SELECT i.id FROM images i JOIN library_roots r ON r.id = i.root_id WHERE i.sha256 = ? AND ${VISIBLE} ORDER BY i.id LIMIT 1`)
-    .pluck();
+/**
+ * 这些图电脑上有没有：按 sha256 找图库里的图（排除了的也算有，回收站里的不算，但记下「删过」）。
+ * 设备问的（device）另外回答那张图在不在它的「上传到」里、在哪个文件夹：同步相册的盘点据此跟着老图走（albums.ts）
+ */
+export function checkUploads(ctx: SqliteContext, files: { sha256: string }[], device?: Device): UploadCheckResult {
+  const live = ctx.db.prepare(
+    `SELECT i.id, i.root_id, i.rel_path FROM images i JOIN library_roots r ON r.id = i.root_id WHERE i.sha256 = ? AND ${VISIBLE} ORDER BY i.id LIMIT 50`,
+  );
+  const gone = ctx.db.prepare('SELECT 1 FROM images i WHERE i.sha256 = ? AND (i.trashed_at IS NOT NULL OR i.missing = 1) LIMIT 1').pluck();
+  const target = device ? uploadTarget(ctx, device) : null;
+  // 「上传到」的前缀（不分大小写：Windows 上路径不分大小写，手填的落点和磁盘上的写法可能不一样）
+  const prefix = target?.rootId != null ? (target.dir ? `${target.dir.toLowerCase()}/` : '') : null;
   return {
-    results: files.map((f) => ({ sha256: f.sha256, imageId: ((id) => (id === undefined ? null : String(id)))(find.get(f.sha256)) })),
+    results: files.map((f) => {
+      const hits = live.all(f.sha256) as { id: number; root_id: number; rel_path: string }[];
+      const first = hits[0];
+      if (!first) return { sha256: f.sha256, imageId: null, deleted: !!gone.get(f.sha256), dir: null };
+      const inTarget =
+        prefix === null ? undefined : hits.find((h) => String(h.root_id) === target?.rootId && h.rel_path.toLowerCase().startsWith(prefix));
+      const rest = inTarget?.rel_path.slice(prefix?.length ?? 0);
+      const dir = rest === undefined ? null : rest.includes('/') ? rest.slice(0, rest.lastIndexOf('/')) : '';
+      return { sha256: f.sha256, imageId: String((inTarget ?? first).id), deleted: false, dir };
+    }),
   };
 }
 
@@ -130,10 +148,24 @@ export interface BeginInput {
   clientKey?: string;
 }
 
-/** 开始传一个文件，或者接着上次传了一半的；这台设备传过同一个文件的直接回 done */
+/** 这一批（App 生成的 uuid）：第一个文件开始传时建；一批属于一台设备 */
+function ensureBatch(ctx: SqliteContext, deviceId: string, batchId: string, album: string | null, at: string): void {
+  const batch = ctx.db.prepare('SELECT device_id FROM upload_batches WHERE id = ?').get(batchId) as { device_id: string } | undefined;
+  if (batch && batch.device_id !== deviceId) throw new ConflictError('这一批是另一台设备的');
+  if (!batch)
+    ctx.db
+      .prepare('INSERT INTO upload_batches (id, device_id, album, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .run(batchId, deviceId, album, at, at);
+  else ctx.db.prepare('UPDATE upload_batches SET updated_at = ? WHERE id = ?').run(at, batchId);
+}
+
+/**
+ * 开始传一个文件，或者接着上次传了一半的；这台设备传过同一个文件的直接回 done。
+ * 同步相册（有 client_key）的「传过」不看那张图还在不在：电脑上删掉的不会被同步回来；上次传失败的那一行接着用
+ */
 export function beginUpload(ctx: SqliteContext, deviceId: string, input: BeginInput): UploadBeginResult {
   cleanupStale(ctx);
-  const album = input.album === undefined ? null : safeName(input.album, '相册');
+  const album = input.album === undefined ? null : normalizeAlbumPath(input.album);
   const same = input.clientKey
     ? (ctx.db.prepare(`${SELECT} WHERE device_id = ? AND client_key = ? AND sha256 = ?`).get(deviceId, input.clientKey, input.sha256) as
         Row | undefined)
@@ -142,8 +174,24 @@ export function beginUpload(ctx: SqliteContext, deviceId: string, input: BeginIn
           `${SELECT} WHERE device_id = ? AND album IS ? AND sha256 = ? AND status IN ('imported', 'existing') ORDER BY created_at DESC LIMIT 1`,
         )
         .get(deviceId, album, input.sha256) as Row | undefined);
-  if (same && (same.status === 'imported' || same.status === 'existing') && same.image_id !== null)
-    return { uploadId: same.id, received: same.size, status: same.status, imageId: String(same.image_id) };
+  if (same && (same.status === 'imported' || same.status === 'existing') && (same.image_id !== null || input.clientKey))
+    return { uploadId: same.id, received: same.size, status: same.status, imageId: same.image_id === null ? null : String(same.image_id) };
+  const at = now(ctx);
+  // 同步相册上次传失败的（client_key 唯一，不能再插一行）：从头再传，算进这一批
+  if (same && same.status === 'failed' && input.clientKey) {
+    ctx.db.transaction(() => {
+      ensureBatch(ctx, deviceId, input.batchId, album, at);
+      ctx.db
+        .prepare(
+          `UPDATE uploads SET batch_id = ?, album = ?, file_name = ?, modified_at = ?, received = 0, status = 'receiving', error = NULL,
+             image_id = NULL, updated_at = ? WHERE id = ?`,
+        )
+        .run(input.batchId, album, safeName(input.fileName, 'image'), input.modifiedAt ?? null, at, same.id);
+    })();
+    mkdirSync(uploadsDir(ctx), { recursive: true });
+    rmSync(partPath(ctx, same.id), { force: true });
+    return { uploadId: same.id, received: 0, status: 'receiving', imageId: null };
+  }
   // 传了一半的（同一台设备、同一个内容）：接着传。.part 不在了（被清掉）就从头
   const partial =
     same?.status === 'receiving'
@@ -161,17 +209,9 @@ export function beginUpload(ctx: SqliteContext, deviceId: string, input: BeginIn
     }
     return { uploadId: partial.id, received: partial.received, status: 'receiving', imageId: null };
   }
-  // 一批属于一台设备
-  const batch = ctx.db.prepare('SELECT device_id FROM upload_batches WHERE id = ?').get(input.batchId) as { device_id: string } | undefined;
-  if (batch && batch.device_id !== deviceId) throw new ConflictError('这一批是另一台设备的');
-  const at = now(ctx);
   const id = randomUUID();
   ctx.db.transaction(() => {
-    if (!batch)
-      ctx.db
-        .prepare('INSERT INTO upload_batches (id, device_id, album, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
-        .run(input.batchId, deviceId, album, at, at);
-    else ctx.db.prepare('UPDATE upload_batches SET updated_at = ? WHERE id = ?').run(at, input.batchId);
+    ensureBatch(ctx, deviceId, input.batchId, album, at);
     ctx.db
       .prepare(
         `INSERT INTO uploads (id, batch_id, device_id, album, client_key, sha256, size, file_name, modified_at, created_at, updated_at)
@@ -262,7 +302,8 @@ export async function completeUpload(
   if (!device) throw new NotFoundError('设备');
   const target = uploadTarget(ctx, device);
   if (target.rootId === null) throw new ConflictError('电脑上还没有可以放图的图库文件夹（自动识别的），请先在设置里添加');
-  const dir = [target.dir, row.album ?? MANUAL_DIR].filter(Boolean).join('/');
+  // 手动上传进「手动上传」；同步的相册进为它定下来的文件夹（albums.ts：跟着老图走，或者按相册路径取名）
+  const dir = [target.dir, row.album === null ? MANUAL_DIR : albumDir(ctx, deviceId, row.album)].filter(Boolean).join('/');
   const result = await importImages(
     ctx,
     {
