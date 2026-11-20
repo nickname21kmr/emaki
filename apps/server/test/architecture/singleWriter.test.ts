@@ -78,6 +78,16 @@ describe('单一写入者', () => {
     expect(added, '新增的越权写入：改成调用主人模块的命令；确实需要暂时保留的，加进 writers.allowlist.ts 并说明').toEqual([]);
     expect(stale, '这些写入已经不在了：从 writers.allowlist.ts 里删掉').toEqual([]);
   });
+
+  it('设备与访问的表（devices、lan_access，docs/mobile.md 2.8）只有 access/ 写，允许清单里没有它们', () => {
+    const own = new Set(['devices', 'lan_access']);
+    expect(TABLE_OWNERS.devices).toBe('access');
+    expect(TABLE_OWNERS.lan_access).toBe('access');
+    const touched = writes.filter((w) => own.has(w.table));
+    expect(new Set(touched.map((w) => w.table))).toEqual(own);
+    expect(touched.filter((w) => !w.file.startsWith('access/')).map((w) => `${w.file}:${w.line} ${w.table}`)).toEqual([]);
+    expect(ALLOWED_WRITES.filter((a) => own.has(a.table))).toEqual([]);
+  });
 });
 
 describe('扫描器本身', () => {

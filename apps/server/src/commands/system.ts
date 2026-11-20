@@ -34,7 +34,8 @@ import { countLinks, evaluateAuto, promotionScope } from '../domain/curation/ree
 import { snapshotSources } from '../domain/evidence/source.ts';
 import { applySettingsPatch, readSettings } from '../datasource/sqlite/settings.ts';
 import { iso, parseId } from '../datasource/sqlite/sql.ts';
-import { BadRequestError } from '../http/errors.ts';
+import { BadRequestError, HttpError } from '../http/errors.ts';
+import { currentActor, deviceIdOf } from '../propagation/actor.ts';
 import { snapshotVersion } from '../propagation/versions.ts';
 import { readSettingsView } from '../readmodel/settings.ts';
 import { HAS_CHARACTER } from '../readmodel/terms.ts';
@@ -331,7 +332,13 @@ export const systemCommands = [
     barrier: false,
     idempotent: false,
     http: [{ method: 'POST', path: '/api/undo/:token' }],
-    run: (e, input) => e.ctx.undo.run(input.token),
+    run: (e, input) => {
+      // 手机（device:<id>）只能撤销这台设备自己的操作：审计记录里能看到所有令牌，不拦的话手机能撤销电脑上的操作（docs/mobile.md 2.5）
+      const actor = currentActor();
+      if (deviceIdOf(actor) && e.registry.audit.actorOfUndoToken(input.token) !== actor)
+        throw new HttpError(403, 'forbidden', '手机上只能撤销这台设备自己做的操作');
+      return e.ctx.undo.run(input.token);
+    },
   }),
   defineCommand({
     name: 'history.revertChange',
@@ -349,12 +356,12 @@ export const systemCommands = [
     },
   }),
 
-  // ---------------------------------------------------------------- 界面
+  // ---------------------------------------------------------------- 在这台电脑的屏幕上弹东西（desktop：局域网上的设备拿不到）
   defineCommand({
     name: 'system.pickFolder',
     summary: '由后端弹出系统「选择文件夹」对话框（演示模式也会弹，但添加文件夹会被拒绝）；取消时 path 为 null',
     input: EmptyInput,
-    scope: 'ui',
+    scope: 'desktop',
     undoable: false,
     barrier: false,
     idempotent: false,
@@ -368,7 +375,9 @@ export const systemQueries = [
     name: 'settings.get',
     summary: '图库设置和图库文件夹',
     input: EmptyInput,
-    scope: 'settings',
+    // 读是 read、改是 settings（docs/mobile.md 2.5）：主题、首页、看图器、移动对话框都要按设置渲染，手机默认也读得到。
+    // 这里没有秘密：Danbooru 的 API Key 只给 hasApiKey（datasource/sqlite/settings.ts）
+    scope: 'read',
     http: [{ method: 'GET', path: '/api/settings' }],
     run: (e) => readSettingsView(e.ctx),
   }),

@@ -256,6 +256,25 @@ describe('DedupeService + 接口（:memory:）', () => {
     expect((await ds.listDuplicates({})).every((g) => g.setId === null)).toBe(true);
   });
 
+  it('建议保留和同一投稿的其他页在一起的那份（投稿不被拆在两个文件夹里）', async () => {
+    const post = (rel: string, sha: string) => {
+      const id = addImage(rel, sha, null);
+      ds.ctx.db
+        .prepare("UPDATE images SET file_name = ?, source_site = 'pixiv', source_post_id = '123' WHERE id = ?")
+        .run(path.basename(rel), id);
+      return id;
+    };
+    // 手机先同步上来 p0、p1（先入库），电脑后下了 p0–p3：p0 两份完全一样
+    post('平板导入/下载/123_p0.png', 'p0');
+    post('平板导入/下载/123_p1.png', 'q1');
+    const desktop = post('pixiv/123_p0.png', 'p0');
+    for (const k of [1, 2, 3]) post(`pixiv/123_p${k}.png`, `d${k}`);
+    expect(ds.dedupe.loadRows().find((r) => r.id === desktop)).toMatchObject({ post_siblings: 3 });
+    await ds.dedupe.runOnce();
+    const [g] = await ds.listDuplicates({});
+    expect(g!.suggestedKeepId).toBe(String(desktop));
+  });
+
   it('resolve：其余移到回收站，组标为已处理；文件先不动，可撤销，退出时才真的移走', async () => {
     const keep = addImage('a.png', 's1', H);
     addImage('a (1).png', 's1', H);

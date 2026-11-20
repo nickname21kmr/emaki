@@ -110,6 +110,8 @@ export function demoPorts(clock: () => number = Date.now, jobStepMs = 80): DemoP
     autoJobs: false,
     // 词库导入会按词库改角色的显示名（演示数据里的名字是写好的），也要多花约 1 秒：不导入
     importDict: false,
+    // 局域网入口用真实网络：默认关着，手动打开后可以拿假手机脚本（scripts/lan-client.ts）对着演示数据走一遍
+    lan: null,
     trashed,
   };
 }

@@ -4,44 +4,45 @@
  */
 import type {
   AcceptSuggestionBody,
-  DomainChange,
-  UndoKind,
-  UndoStatusResponse,
+  AccessStatus,
+  AccessTicket,
   AddLibraryRootBody,
+  AlbumSyncInfo,
   ApiError,
   BulkCollectionsBody,
   BulkImagesBody,
+  ChangeEntry,
+  ChangeGroup,
+  Character,
   CollectionCountsQuery,
   CollectionCountsResponse,
   CollectionSummary,
-  CreateCollectionBody,
-  GetCollectionResponse,
-  ListCollectionsQuery,
-  ListArtistsResponse,
-  ListCollectionsResponse,
-  UpdateCollectionBody,
-  Character,
   ContentKind,
   CoverCandidatesQuery,
   CoverCandidatesResponse,
   CreateCharacterBody,
-  CustomCharacterMatch,
+  CreateCollectionBody,
   CreateExclusionBody,
+  CustomCharacterMatch,
+  DeviceInfo,
+  DomainChange,
   GetCharacterResponse,
+  GetCollectionResponse,
   GetImageResponse,
   GetSettingsResponse,
   GetStatsResponse,
-  LibrarySummary,
+  HealthResponse,
   ID,
   ImportImagesBody,
   ImportImagesResult,
-  ReplaceImageBody,
-  ReplaceImageResult,
   Job,
   JobKind,
-  StartJobBody,
+  LibrarySummary,
+  ListArtistsResponse,
   ListCharactersQuery,
   ListCharactersResponse,
+  ListCollectionsQuery,
+  ListCollectionsResponse,
   ListContentKindsResponse,
   ListDuplicatesQuery,
   ListDuplicatesResponse,
@@ -50,36 +51,45 @@ import type {
   ListImagesResponse,
   ListJobsResponse,
   ListTaggerModelsResponse,
-  PromotableSuggestions,
   ListUnrecognizedQuery,
   ListUnrecognizedResponse,
-  RetagResult,
-  UnrecognizedSummary,
-  UnrecognizedSummaryQuery,
-  HealthResponse,
-  MoveImagesBody,
-  MovePreview,
-  ChangeEntry,
-  ChangeGroup,
-  SourceModePreview,
-  NetworkCheckResponse,
-  PickFolderResponse,
   ListWorksQuery,
   ListWorksResponse,
+  Me,
+  MoveImagesBody,
+  MovePreview,
   MutationResult,
+  NetworkCheckResponse,
+  PickFolderResponse,
+  PromotableSuggestions,
+  ReplaceImageBody,
+  ReplaceImageResult,
+  RetagResult,
+  Scope,
   SearchResponse,
-  TagSuggestionsResponse,
-  TagPhraseResponse,
   Settings,
+  SourceModePreview,
+  StartJobBody,
+  TagPhraseResponse,
+  TagSuggestionsResponse,
   TopCharactersQuery,
   TopCharactersResponse,
-  UpdateCharacterBody,
-  UpdateImageBody,
-  UpdateSettingsBody,
-  UpdateLibraryRootBody,
+  UndoKind,
+  UndoStatusResponse,
+  UnrecognizedSummary,
+  UnrecognizedSummaryQuery,
   UpdateArtistLinksBody,
+  UpdateCharacterBody,
+  UpdateCollectionBody,
+  UpdateImageBody,
+  UpdateLibraryRootBody,
+  UpdateSettingsBody,
+  UploadBatch,
+  UploadTarget,
   Work,
 } from '@emaki/shared';
+import { SLOW_REQUEST_MS, suspect } from './connection';
+import { noteResponse } from './deviceAuth';
 import { uuid } from './random';
 
 /**
@@ -158,6 +168,8 @@ export async function request<T>(method: string, path: string, body?: unknown): 
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   // 写请求带 operationId（Idempotency-Key）：同一个键重试，服务端返回第一次的结果，不会做两遍
   if (method !== 'GET') headers['Idempotency-Key'] = uuid();
+  // 连不上、或者很久没回应：让连接状态探一下是不是电脑不在了（lib/connection.ts）
+  const slow = setTimeout(suspect, SLOW_REQUEST_MS);
   try {
     res = await fetch(`/api${path}`, {
       method,
@@ -165,16 +177,22 @@ export async function request<T>(method: string, path: string, body?: unknown): 
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
+    suspect();
     throw new ApiRequestError(0, 'network', '连不上后端：可能正在重启，过几秒再试；一直这样的话，看看后端窗口是不是关了');
+  } finally {
+    clearTimeout(slow);
   }
   // 开发模式下 vite 代理连不上后端时回 502 / 503 / 504（后端重启要十几秒）：按「连不上」处理，查询会自动重试
   if (res.status === 502 || res.status === 503 || res.status === 504) {
+    suspect();
     throw new ApiRequestError(res.status, 'network', '后端暂时连不上（可能正在重启），过几秒再试一次');
   }
   const text = await res.text();
   const data = text ? (JSON.parse(text) as unknown) : undefined;
   if (!res.ok) {
     const err = data as Partial<ApiError> | undefined;
+    // 局域网入口上没有凭证 / 被电脑移除了：整页换成「连接到电脑」；403 forbidden 时重新取 /api/me（lib/deviceAuth.ts）
+    noteResponse(res.status, err?.code, path);
     throw new ApiRequestError(res.status, err?.code ?? 'internal', err?.error ?? `请求失败（${res.status}）`);
   }
   const meta = readMeta(res);
@@ -279,6 +297,8 @@ export const api = {
     tokens.length <= 50 ? get<UndoStatusResponse>('/undo/status', { tokens }) : post<UndoStatusResponse>('/undo/status', { tokens }),
 
   health: () => get<HealthResponse>('/health'),
+  /** 谁在调用：本机入口 local、全部范围；局域网入口是这台设备和它真正生效的范围（lib/capabilities.ts） */
+  me: () => get<Me>('/me'),
   /** 由后端弹出系统「选择文件夹」对话框；用户取消时 path 为 null */
   pickFolder: () => post<PickFolderResponse>('/system/pick-folder'),
   /** 移到图库里的某个文件夹（磁盘上真的移动），可撤销 */
@@ -294,4 +314,41 @@ export const api = {
   revertChange: (id: ID) => post<MutationResult>(`/changes/${encodeURIComponent(id)}/revert`),
   /** 连一下 Danbooru、Hugging Face 和国内镜像，排查同步失败 */
   checkNetwork: () => get<NetworkCheckResponse>('/system/network-check'),
+
+  // 手机访问（docs/mobile.md 第 2 节）：scope 是 devices，只有本机入口能用（局域网入口上是 403）；都不可撤销、不占撤销栈
+  accessStatus: () => get<AccessStatus>('/access'),
+  /** 打开 / 关闭局域网入口、改端口、改电脑名称（name 为 null 恢复成计算机名），立即生效 */
+  configureAccess: (body: { enabled?: boolean; port?: number; name?: string | null }) =>
+    patch<{ ok: true; message: string; status: AccessStatus }>('/access', body),
+  /** 批准连接请求：scopes 不给是默认权限 */
+  approveDevice: (id: string, body: { scopes?: Scope[]; name?: string } = {}) =>
+    post<{ ok: true; message: string; device: DeviceInfo }>(`/access/requests/${encodeURIComponent(id)}/approve`, body),
+  rejectDevice: (id: string) => post<{ ok: true; message: string }>(`/access/requests/${encodeURIComponent(id)}/reject`),
+  updateDevice: (id: string, body: { name?: string; scopes?: Scope[] }) =>
+    patch<{ ok: true; message: string; device: DeviceInfo }>(`/devices/${encodeURIComponent(id)}`, body),
+  /** 移除设备：它立即断开，要用的话得重新请求 */
+  revokeDevice: (id: string) => del<{ ok: true; message: string }>(`/devices/${encodeURIComponent(id)}`),
+  /** 扫码添加用的一次性口令（2 分钟有效，用一次就失效）；局域网入口没开时 409 */
+  createAccessTicket: () => post<AccessTicket>('/access/tickets'),
+
+  // 手机上传（docs/mobile.md 5.4）：电脑上看最近的批次、撤销一批、改每台设备的落点（scope devices，只有本机入口能用）
+  uploadTargets: () => get<UploadTarget[]>('/uploads/targets'),
+  uploadBatches: () => get<UploadBatch[]>('/uploads/batches'),
+  /** rootId 为 null 恢复默认（收件箱/手机/<设备名>） */
+  setDeviceUpload: (id: string, body: { rootId: ID | null; dir?: string }) =>
+    patch<{ ok: true; message: string; target: UploadTarget }>(`/devices/${encodeURIComponent(id)}/upload`, body),
+  /** 这一批新入库的图移到回收站（可撤销） */
+  undoUploadBatch: (id: string) => post<MutationResult>(`/uploads/batches/${encodeURIComponent(id)}/undo`),
+
+  // 同步相册（docs/mobile.md 5.5，scope upload）：手机上看、改自己的不给 deviceId；电脑上给
+  albumSync: (deviceId?: string) => get<AlbumSyncInfo>('/uploads/albums', deviceId ? { deviceId } : undefined),
+  setAlbums: (body: AlbumSyncChanges & { deviceId?: string }) =>
+    patch<{ ok: true; message: string; info: AlbumSyncInfo }>('/uploads/albums', body),
 };
+
+/** 改同步相册：哪些相册同步、新图放到哪（dir 为 null 恢复自动）；只在 Wi-Fi、充电时 */
+export interface AlbumSyncChanges {
+  albums?: { path: string; sync?: boolean; dir?: string | null }[];
+  wifiOnly?: boolean;
+  chargingOnly?: boolean;
+}

@@ -3,7 +3,9 @@ import { ArrowRight } from 'lucide-react';
 import { Fragment, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { Dialog, Kbd } from '@/components/ui';
+import { cn } from '@/lib/cn';
 import { useOverlays } from '@/lib/stores';
+import { useCanVisit } from '@/pages';
 import { PAGE_JUMPS, SHORTCUT_GROUPS, type ShortcutGroup, type ShortcutGroupId, type ShortcutItem } from './shortcuts';
 
 /** 两列排版：按行数大致配平（左：全局 + 图库 + 重复；右：看图器 + 未识别） */
@@ -20,6 +22,8 @@ export function HelpDialog() {
   const open = useOverlays((s) => s.helpOpen);
   const setOpen = useOverlays((s) => s.setHelpOpen);
   const navigate = useNavigate();
+  // 这台设备去不了的页（src/pages.ts）不列跳转、不给「设置」的入口
+  const canVisit = useCanVisit();
 
   const goto = (to: string) => {
     setOpen(false);
@@ -39,14 +43,14 @@ export function HelpDialog() {
           <div key={i} className="flex flex-col gap-7">
             {column.map((id, row) => (
               <GroupBlock key={id} group={SHORTCUT_GROUPS[id]} delay={row * 70 + i * 35}>
-                {id === 'global' && <PageJumps onJump={goto} />}
+                {id === 'global' && <PageJumps onJump={goto} canVisit={canVisit} />}
               </GroupBlock>
             ))}
           </div>
         ))}
       </div>
 
-      <LocalNote onSettings={() => goto('/settings')} />
+      <LocalNote onSettings={canVisit('/settings') ? () => goto('/settings') : null} />
     </Dialog>
   );
 }
@@ -81,7 +85,9 @@ function ShortcutRow({ item }: { item: ShortcutItem }) {
             {i > 0 && <span className="text-[11px] text-fg-subtle">/</span>}
             <span className="flex items-center gap-0.5">
               {combo.map((k) => (
-                <Kbd key={k}>{k}</Kbd>
+                <Kbd key={k} doc>
+                  {k}
+                </Kbd>
               ))}
             </span>
           </Fragment>
@@ -92,19 +98,19 @@ function ShortcutRow({ item }: { item: ShortcutItem }) {
 }
 
 /** 数字键跳页：做成一排可点的小格子，顺便当导航用 */
-function PageJumps({ onJump }: { onJump: (to: string) => void }) {
+function PageJumps({ onJump, canVisit }: { onJump: (to: string) => void; canVisit: (to: string) => boolean }) {
   return (
     <div className="mt-2">
       <div className="mb-2 text-[13px] text-fg-muted">跳转页面</div>
       <div className="grid grid-cols-5 gap-1.5">
-        {PAGE_JUMPS.map((p) => (
+        {PAGE_JUMPS.filter((p) => canVisit(p.to)).map((p) => (
           <button
             key={p.key}
             type="button"
             onClick={() => onJump(p.to)}
             className="group flex flex-col items-center gap-1.5 rounded-[10px] bg-sunken/60 py-2.5 transition-[background-color,transform] duration-200 hover:bg-hover active:scale-[0.97]"
           >
-            <Kbd>{p.key}</Kbd>
+            <Kbd doc>{p.key}</Kbd>
             <span className="text-[11.5px] text-fg-muted transition-colors group-hover:text-fg">{p.label}</span>
           </button>
         ))}
@@ -114,7 +120,7 @@ function PageJumps({ onJump }: { onJump: (to: string) => void }) {
 }
 
 /** 底部的说明：图库在本地，开了 AI 助手才会往外发图。朱印当落款 */
-function LocalNote({ onSettings }: { onSettings: () => void }) {
+function LocalNote({ onSettings }: { onSettings: (() => void) | null }) {
   return (
     <div className="mt-8 flex items-center gap-4 rounded-[14px] bg-sunken/70 py-3.5 pr-3 pl-4">
       <Emblem size={36} />
@@ -124,14 +130,19 @@ function LocalNote({ onSettings }: { onSettings: () => void }) {
           识别模型在本机运行；Danbooru 同步只下载标签资料，可以在设置里关掉；查 Pixiv 标签只发作品号，识别后自动查默认关。
         </p>
       </div>
-      <button
-        type="button"
-        onClick={onSettings}
-        className="flex shrink-0 items-center gap-1 rounded-full px-3 py-1.5 text-[12px] font-medium text-fg-muted transition-colors hover:bg-hover hover:text-fg"
-      >
-        设置
-        <ArrowRight className="size-3.5" />
-      </button>
+      {onSettings && (
+        <button
+          type="button"
+          onClick={onSettings}
+          className={cn(
+            'flex shrink-0 items-center gap-1 rounded-full px-3 py-1.5 text-[12px] font-medium text-fg-muted',
+            'transition-colors hover:bg-hover hover:text-fg',
+          )}
+        >
+          设置
+          <ArrowRight className="size-3.5" />
+        </button>
+      )}
     </div>
   );
 }

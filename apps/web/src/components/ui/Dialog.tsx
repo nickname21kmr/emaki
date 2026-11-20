@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { cn } from '@/lib/cn';
 
 /**
- * 居中弹窗。用法：
+ * 居中弹窗；宽度 compact（手机竖屏）时排成底部面板（贴底、圆角朝上、让出手势导航条，A1）。用法：
  *   <Dialog open={open} onOpenChange={setOpen} title="新建角色" description="…">
  *     …内容…
  *     <DialogFooter>…按钮…</DialogFooter>
@@ -48,6 +48,10 @@ export function Dialog({
           className={cn(
             'fixed top-1/2 left-1/2 z-50 max-h-[calc(100vh-64px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto',
             'rounded-xl bg-raised p-6 shadow-pop ring-1 ring-line outline-none data-[state=open]:animate-rise scrollbar-thin',
+            // 手机竖屏：底部面板。行内的 width 要用 ! 才盖得住
+            'compact:top-auto compact:bottom-0 compact:left-0 compact:max-h-[92dvh] compact:w-full! compact:translate-x-0 compact:translate-y-0',
+            'compact:rounded-t-[var(--radius-sheet)] compact:rounded-b-none compact:px-5 compact:pt-5 compact:pb-[calc(1.25rem+env(safe-area-inset-bottom))]',
+            'compact:data-[state=open]:animate-sheet-up',
             className,
           )}
         >
@@ -62,7 +66,7 @@ export function Dialog({
             </div>
             <D.Close
               aria-label="关闭"
-              className="-mt-1 -mr-2 flex size-8 items-center justify-center rounded-md text-fg-subtle hover:bg-hover hover:text-fg"
+              className="-mt-1 -mr-2 flex size-8 items-center justify-center rounded-md text-fg-subtle touch-hit hover:bg-hover hover:text-fg"
             >
               <X className="size-4" />
             </D.Close>

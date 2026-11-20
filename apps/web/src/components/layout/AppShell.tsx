@@ -8,11 +8,16 @@ import { useSettings } from '@/lib/queries';
 import { useGlobalHotkeys } from './useGlobalHotkeys';
 import { ScrollContainerContext } from './ScrollContainer';
 import { Sidebar } from './Sidebar';
+import { TabBar } from './TabBar';
 import { AssistantLauncher, AssistantSpacer } from '@/features/assistant/AssistantLauncher';
+import { AccessPrompts } from '@/features/access/AccessPrompts';
+import { useCapabilities } from '@/lib/capabilities';
+import { useCanVisit } from '@/pages';
 
 /**
  * 整体布局：暖灰「桌面」上左边一条窄导航，右边一张圆角「纸」（主内容，独立滚动）。
  * 助手附页并排时贴在纸的右边，纸让出位置（AssistantSpacer）。
+ * 宽度 compact（手机竖屏，A1）：纸铺满屏幕，侧栏换成底部标签栏（TabBar）；手机横屏（高度 compact）照旧是侧栏，让出刘海。
  */
 export function AppShell() {
   useServerEvents();
@@ -21,6 +26,10 @@ export function AppShell() {
   const { pathname, key } = useLocation();
   const navType = useNavigationType();
   const settings = useSettings().data;
+  // 首次使用引导要能加文件夹（settings）：手机上空库也留在首页
+  const canVisit = useCanVisit();
+  const { ready } = useCapabilities();
+  const canWelcome = ready && canVisit('/welcome');
 
   // 按历史条目记住滚动位置：后退 / 前进时恢复（SEL-14）
   const positions = useRef(new Map<string, number>());
@@ -51,28 +60,31 @@ export function AppShell() {
   }, [pathname]);
 
   // 还没有任何图库文件夹 → 首次使用引导。必须放在所有 hook 之后（hook 数量不能随数据变化）
-  if (settings && settings.libraryRoots.length === 0) return <Navigate to="/welcome" replace />;
+  if (settings && settings.libraryRoots.length === 0 && canWelcome) return <Navigate to="/welcome" replace />;
 
   return (
     <ScrollContainerContext.Provider value={scrollRef}>
       {/* 文档本身永远不滚：只有侧栏和纸各自滚 */}
-      <div className="flex h-full overflow-hidden bg-canvas">
+      <div className="flex h-full overflow-hidden bg-canvas compact:flex-col compact:pt-[env(safe-area-inset-top)]">
         <Sidebar />
-        <main className="min-w-0 flex-1 py-2 pr-2">
+        <main className="min-w-0 flex-1 py-2 pr-2 compact:min-h-0 compact:p-0 short:pr-[max(0.5rem,env(safe-area-inset-right))]">
           <div
             ref={scrollRef}
-            className="relative h-full overflow-x-hidden overflow-y-auto rounded-[var(--radius-sheet)] bg-sheet paper chapter-scope shadow-[var(--shadow-sheet)] scrollbar-thin"
+            className="relative h-full overflow-x-hidden overflow-y-auto rounded-[var(--radius-sheet)] bg-sheet paper chapter-scope shadow-[var(--shadow-sheet)] scrollbar-thin compact:rounded-none compact:shadow-none"
           >
             <Outlet />
           </div>
         </main>
         {/* 并排时占 W + 8：纸的右边缘到附页左边缘正好 8px 桌面；宽度一帧到位不补间 */}
         <AssistantSpacer />
+        <TabBar />
       </div>
       <Lightbox />
       <CommandPalette />
       <HelpDialog />
       <AssistantLauncher />
+      {/* 手机发来连接请求时，任何页面都弹出批准提示 */}
+      <AccessPrompts />
     </ScrollContainerContext.Provider>
   );
 }

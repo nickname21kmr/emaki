@@ -171,8 +171,9 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
           )
         }
       >
-        <div className="flex items-center gap-3">
-          <SearchInput value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索书名、社团、作者、画师" className="w-[280px]" />
+        {/* 手机竖屏（A1）：搜索框整行，类型切换换到下一行 */}
+        <div className="flex items-center gap-3 compact:flex-wrap">
+          <SearchInput value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索书名、社团、作者、画师" className="w-[280px] compact:w-full" />
           <Segmented<'all' | CollectionKind | 'artist'>
             size="sm"
             value={kind ?? 'all'}

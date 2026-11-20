@@ -7,6 +7,7 @@ import { formatConfidence, suggestionEvidence } from '@/lib/format';
 import { useCharacter } from '@/lib/queries';
 import { Section } from './PanelParts';
 import type { ImageActions } from './useImageActions';
+import { cn } from '@/lib/cn';
 
 /**
  * 角色：已关联的 chip（可移除、点名字进详情）+「添加」弹出搜索 + tagger 建议（一键采纳）。
@@ -29,14 +30,22 @@ export function PanelCharacters({
 }) {
   const pending = suggestions.filter((s) => !s.characterId || !characterIds.includes(s.characterId));
   const linkOf = new Map(links.map((l) => [l.characterId, l]));
+  // 改角色要 curate（IMAGE_ACTION_NEEDS）：没有时只看，不给添加、移除、采纳
+  const editable = actions.allow.characters;
 
   return (
     <Section title="角色" meta={characterIds.length ? `${characterIds.length} 位` : undefined}>
       <div className="flex flex-wrap gap-1.5">
         {characterIds.map((cid) => (
-          <CharacterChip key={cid} id={cid} link={linkOf.get(cid)} onRemove={() => actions.removeCharacter(cid)} onNavigate={onNavigate} />
+          <CharacterChip
+            key={cid}
+            id={cid}
+            link={linkOf.get(cid)}
+            onRemove={editable ? () => actions.removeCharacter(cid) : undefined}
+            onNavigate={onNavigate}
+          />
         ))}
-        <CharacterPicker
+        {editable && <CharacterPicker
           side="left"
           align="start"
           title="添加角色"
@@ -51,14 +60,14 @@ export function PanelCharacters({
             <Plus className="size-3.5" />
             {characterIds.length ? '添加' : '添加角色'}
           </button>
-        </CharacterPicker>
+        </CharacterPicker>}
       </div>
 
       {characterIds.length === 0 && pending.length === 0 && (
         <p className="mt-2.5 text-xs leading-relaxed text-fg-subtle">这张还没有归到任何角色。</p>
       )}
 
-      {pending.length > 0 && (
+      {editable && pending.length > 0 && (
         <div className="mt-4">
           <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-fg-subtle">
             <Sparkles className="size-3" />
@@ -88,7 +97,18 @@ function autoHint(link: CharacterLinkProvenance): string {
   return '自动关联';
 }
 
-function CharacterChip({ id, link, onRemove, onNavigate }: { id: ID; link?: CharacterLinkProvenance; onRemove: () => void; onNavigate: () => void }) {
+function CharacterChip({
+  id,
+  link,
+  onRemove,
+  onNavigate,
+}: {
+  id: ID;
+  link?: CharacterLinkProvenance;
+  /** 没有 curate 时不给（只看） */
+  onRemove?: () => void;
+  onNavigate: () => void;
+}) {
   const { data, isPending } = useCharacter(id);
   if (isPending) return <Skeleton className="h-8 w-24 rounded-full" />;
   const c = data?.character;
@@ -104,14 +124,20 @@ function CharacterChip({ id, link, onRemove, onNavigate }: { id: ID; link?: Char
           </Tooltip>
         )}
       </Link>
-      <button
-        type="button"
-        aria-label={`移除「${c.name}」`}
-        onClick={onRemove}
-        className="flex size-6 shrink-0 items-center justify-center rounded-full text-fg-subtle opacity-60 transition-[opacity,background-color,color] group-hover/chip:opacity-100 hover:bg-hover hover:text-fg focus-visible:opacity-100"
-      >
-        <X className="size-3" />
-      </button>
+      {onRemove && (
+        <button
+          type="button"
+          aria-label={`移除「${c.name}」`}
+          onClick={onRemove}
+          className={cn(
+            'flex size-6 shrink-0 items-center justify-center rounded-full text-fg-subtle opacity-60',
+            'transition-[opacity,background-color,color] group-hover/chip:opacity-100',
+            'hover:bg-hover hover:text-fg focus-visible:opacity-100',
+          )}
+        >
+          <X className="size-3" />
+        </button>
+      )}
     </span>
   );
 }

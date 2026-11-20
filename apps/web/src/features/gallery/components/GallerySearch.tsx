@@ -293,7 +293,8 @@ export function GallerySearch({
               </>
             )}
           </div>
-          <div className="mt-1 flex items-center gap-3 border-t border-line px-2.5 pt-1.5 text-[11px] text-fg-subtle">
+          {/* 键盘提示：触屏上整行不显示（A1） */}
+          <div className="mt-1 flex items-center gap-3 border-t border-line px-2.5 pt-1.5 text-[11px] text-fg-subtle touch:hidden">
             <span className="inline-flex items-center gap-1">
               <Kbd>↑</Kbd>
               <Kbd>↓</Kbd> 选择

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef } from 'react';
+import type { GetStatsResponse, Settings } from '@emaki/shared';
+import { Fragment, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { PageBody, PageHeader } from '@/components/layout/PageHeader';
 import { ErrorState } from '@/components/ui';
@@ -14,20 +15,22 @@ import { SettingsSkeleton } from './components/SettingsSkeleton';
 import { SettingsToc } from './components/SettingsToc';
 import { TaggerSection } from './components/TaggerSection';
 import { useSectionNav } from './hooks';
-import { isSectionId, type SectionId } from './sections';
+import { isSectionId, useSettingsSections, type SectionId } from './sections';
 import { AssistantSettingsSection } from '@/features/assistant/AssistantSettingsSection';
+import { PhoneAccessSection } from '@/features/access/PhoneAccessSection';
 
 /**
  * 设置：左侧吸顶小目录 + 右侧分组卡片。修改即时保存（滑块松手时才保存）。
  * 支持 /settings#library 这样的深链接，别的页面可以直接跳到某一节。
  */
 export function SettingsPage() {
+  const sections = useSettingsSections();
   const settings = useSettings();
   const { data: stats } = useStats();
   const ready = settings.isSuccess;
   const { active, jump } = useSectionNav(ready);
   const navigate = useNavigate();
-  const { hash } = useLocation();
+  const { hash, key, state } = useLocation();
 
   // 首次加载完成后按 hash 定位一次；之后 hash 由点击目录写入，不再反向触发滚动
   const didInitialJump = useRef(false);
@@ -37,6 +40,15 @@ export function SettingsPage() {
     const id = decodeURIComponent(hash.slice(1));
     if (isSectionId(id)) requestAnimationFrame(() => jump(id, 'auto'));
   }, [ready, hash, jump]);
+
+  // 已经在设置页时，别处带着 state.section 跳过来（比如批准提示的「设置…」）：hash 定位只在首次加载时做，这里补上
+  const mountKey = useRef(key);
+  const wanted = (state as { section?: string } | null)?.section;
+  useEffect(() => {
+    if (!ready || key === mountKey.current || !wanted || !isSectionId(wanted)) return;
+    mountKey.current = key;
+    requestAnimationFrame(() => jump(wanted));
+  }, [ready, key, wanted, jump]);
 
   const onJump = useCallback(
     (id: SectionId) => {
@@ -64,18 +76,38 @@ export function SettingsPage() {
           <div className="flex animate-fade-in gap-14">
             <SettingsToc active={active} onJump={onJump} />
             <div className="max-w-[760px] min-w-0 flex-1 space-y-10">
-              <LibrarySection roots={settings.data.libraryRoots} />
-              <TaggerSection tagger={settings.data.tagger} unrecognizedCount={stats?.unrecognizedCount} untaggedCount={stats?.untaggedCount} />
-              <DanbooruSection danbooru={settings.data.danbooru} />
-              <DedupeSection dedupe={settings.data.dedupe} groupCount={stats?.duplicateGroupCount} />
-              <AppearanceSection ui={settings.data.ui} />
-              <JobsSection />
-              <AssistantSettingsSection />
-              <AboutSection stats={stats} />
+              {/* 只画这台设备看得到的分组（sections.ts 里各自声明了需要的能力） */}
+              {sections.map((s) => (
+                <Fragment key={s.id}>{renderSection(s.id, settings.data, stats)}</Fragment>
+              ))}
             </div>
           </div>
         )}
       </PageBody>
     </>
   );
+}
+
+/** 每一节画什么 */
+function renderSection(id: SectionId, settings: Settings, stats: GetStatsResponse | undefined): ReactNode {
+  switch (id) {
+    case 'library':
+      return <LibrarySection roots={settings.libraryRoots} />;
+    case 'tagger':
+      return <TaggerSection tagger={settings.tagger} unrecognizedCount={stats?.unrecognizedCount} untaggedCount={stats?.untaggedCount} />;
+    case 'danbooru':
+      return <DanbooruSection danbooru={settings.danbooru} />;
+    case 'dedupe':
+      return <DedupeSection dedupe={settings.dedupe} groupCount={stats?.duplicateGroupCount} />;
+    case 'appearance':
+      return <AppearanceSection ui={settings.ui} />;
+    case 'jobs':
+      return <JobsSection />;
+    case 'phone':
+      return <PhoneAccessSection />;
+    case 'assistant':
+      return <AssistantSettingsSection />;
+    case 'about':
+      return <AboutSection stats={stats} />;
+  }
 }

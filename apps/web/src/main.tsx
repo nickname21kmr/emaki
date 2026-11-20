@@ -1,13 +1,18 @@
-import { ApiRequestError } from './lib/api';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MotionConfig } from 'motion/react';
-import { StrictMode } from 'react';
+import { lazy, StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
-import { RouterProvider } from 'react-router';
+import { createBrowserRouter, RouterProvider } from 'react-router';
 import { Toaster } from 'sonner';
 import { ThemeSync } from '@/components/layout/ThemeSync';
 import { TooltipProvider } from '@/components/ui';
-import { router } from './router';
+import { ConnectionBanner } from '@/features/access/ConnectionBanner';
+import { api, ApiRequestError } from './lib/api';
+import { watchForbidden } from './lib/capabilities';
+import { watchConnection } from './lib/connection';
+import { useDeviceAuth } from './lib/deviceAuth';
+import { meRetry, qk } from './lib/queries';
+import { routes } from './router';
 import './styles/index.css';
 
 const queryClient = new QueryClient({
@@ -23,6 +28,29 @@ const queryClient = new QueryClient({
   },
 });
 
+// 谁在调用（lib/capabilities.ts）：一开始就去问，页面等它的时间最短；请求回 403 forbidden 时重新问（权限可能刚在电脑上改了）
+void queryClient.prefetchQuery({ queryKey: qk.me, queryFn: api.me, retry: meRetry, retryDelay: 500 });
+watchForbidden(queryClient);
+// 连不上电脑：浏览器里顶部提示、App 里交给 App；重新连上时全部重新取（lib/connection.ts）
+watchConnection(queryClient);
+
+const router = createBrowserRouter(routes);
+
+// 局域网入口上没有凭证时才用到（本机入口不下载它）
+const PairingPage = lazy(() => import('./features/access/PairingPage').then((m) => ({ default: m.PairingPage })));
+
+/** 手机浏览器打开局域网入口、还没批准（或被电脑移除了）：任何请求收到这两种 401，整页换成「连接到电脑」（lib/deviceAuth.ts） */
+function Root() {
+  const lost = useDeviceAuth((s) => s.lost);
+  if (lost)
+    return (
+      <Suspense fallback={null}>
+        <PairingPage reason={lost} />
+      </Suspense>
+    );
+  return <RouterProvider router={router} />;
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     {/* 系统开了「减少动态效果」时，motion 的 JS 动画也直接显示终态（CSS 那边由 index.css 的媒体查询兜底） */}
@@ -30,7 +58,8 @@ createRoot(document.getElementById('root')!).render(
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <ThemeSync />
-          <RouterProvider router={router} />
+          <Root />
+          <ConnectionBanner />
           <Toaster
             position="bottom-center"
             offset={24}

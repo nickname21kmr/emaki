@@ -80,7 +80,7 @@ function NetworkCheck() {
 
   return (
     <div className="py-3.5">
-      <div className="flex items-center justify-between gap-6">
+      <div className="flex items-center justify-between gap-6 compact:flex-wrap compact:gap-y-3">
         <div className="min-w-0">
           <div className="text-sm font-medium">检测网络</div>
           <div className="mt-0.5 text-[12.5px] leading-relaxed text-fg-muted">同步失败时点一下，看看是哪一段连不上、有没有用上代理。</div>

@@ -40,7 +40,7 @@ export function AllWorksPopover({
           align="end"
           sideOffset={8}
           collisionPadding={16}
-          className="z-[60] w-[360px] origin-[var(--radix-popover-content-transform-origin)] overflow-hidden rounded-lg bg-raised shadow-pop ring-1 ring-line data-[state=open]:animate-rise"
+          className="z-[60] w-[360px] max-w-[calc(100vw-32px)] origin-[var(--radix-popover-content-transform-origin)] overflow-hidden rounded-lg bg-raised shadow-pop ring-1 ring-line data-[state=open]:animate-rise"
         >
           <WorkCommandList
             works={works}

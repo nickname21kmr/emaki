@@ -4,6 +4,7 @@ import { isTypingTarget, useHotkey } from '@/lib/hotkeys';
 import { useEffect } from 'react';
 import { requestUndo, setUndoNavigate } from '@/lib/queries';
 import { useLightbox, useOverlays, usePrefs } from '@/lib/stores';
+import { useCanVisit } from '@/pages';
 
 /**
  * 全局快捷键（帮助面板 HelpDialog 里列出的那些）。
@@ -19,6 +20,7 @@ export function useGlobalHotkeys() {
   // 阅读器自己处理 b、方向键，数字键和 / 不跳页（T38e）
   const onReader = pathname.endsWith('/read');
   const pageKeys = !lightboxOpen && !onTriage && !onReader;
+  const canVisit = useCanVisit();
 
   // 撤销提示里的「去看看」用路由跳转，不整页刷新
   useEffect(() => {
@@ -33,13 +35,14 @@ export function useGlobalHotkeys() {
   useUndoHotkey();
   useHotkey('b', () => usePrefs.getState().toggleBlurSensitive(), { enabled: !lightboxOpen && !onReader });
 
-  // g 然后 数字 太复杂了，直接用数字键跳转
-  useHotkey('1', () => navigate('/'), { enabled: pageKeys });
-  useHotkey('2', () => navigate('/gallery'), { enabled: pageKeys });
-  useHotkey('3', () => navigate('/characters'), { enabled: pageKeys });
-  useHotkey('4', () => navigate('/unrecognized'), { enabled: pageKeys });
-  useHotkey('5', () => navigate('/duplicates'), { enabled: pageKeys });
-  useHotkey('6', () => navigate('/annex'), { enabled: pageKeys });
+  // g 然后 数字 太复杂了，直接用数字键跳转；这台设备去不了的页（src/pages.ts）不跳
+  const jump = (to: string) => ({ enabled: pageKeys && canVisit(to) });
+  useHotkey('1', () => navigate('/'), jump('/'));
+  useHotkey('2', () => navigate('/gallery'), jump('/gallery'));
+  useHotkey('3', () => navigate('/characters'), jump('/characters'));
+  useHotkey('4', () => navigate('/unrecognized'), jump('/unrecognized'));
+  useHotkey('5', () => navigate('/duplicates'), jump('/duplicates'));
+  useHotkey('6', () => navigate('/annex'), jump('/annex'));
 }
 
 /**

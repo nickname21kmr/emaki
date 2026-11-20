@@ -7,3 +7,4 @@ export * from './rules.ts';
 export * from './jobs.ts';
 export * from './events.ts';
 export * from './commands.ts';
+export * from './access.ts';

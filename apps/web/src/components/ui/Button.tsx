@@ -83,7 +83,8 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
         aria-label={label}
         aria-pressed={active}
         className={cn(
-          'inline-flex shrink-0 items-center justify-center transition-[background-color,color,scale] duration-150 active:scale-[0.92]',
+          // touch-hit：触屏上点击区域补到 44×44（A1）
+          'inline-flex shrink-0 items-center justify-center transition-[background-color,color,scale] duration-150 touch-hit active:scale-[0.92]',
           'disabled:pointer-events-none disabled:opacity-40',
           variants[variant],
           iconSizes[size],

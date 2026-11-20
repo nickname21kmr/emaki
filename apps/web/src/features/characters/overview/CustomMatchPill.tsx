@@ -18,11 +18,16 @@ export function CustomMatchPill({ count, onViewCustom }: { count: number; onView
     <>
       <button
         onClick={() => setOpen(true)}
+        aria-label={count > 0 ? `${formatCount(count)} 个 Danbooru 关联待确认` : 'Danbooru 关联'}
         className={cn('inline-flex h-9 items-center gap-2 rounded-full px-3.5 text-[13px] whitespace-nowrap transition-colors',
-          count > 0 ? 'bg-shu-soft text-shu-fg hover:bg-hover' : 'bg-sunken text-fg-muted hover:bg-hover hover:text-fg')}
+          // 手机竖屏（A1）：没有待确认的只留图标，有的留数字
+          count > 0 ? 'bg-shu-soft text-shu-fg hover:bg-hover' : 'bg-sunken text-fg-muted hover:bg-hover hover:text-fg compact:w-9 compact:justify-center compact:px-0')}
       >
         <Link2 className="size-3.5" aria-hidden />
-        {count > 0 ? `${formatCount(count)} 个 Danbooru 关联待确认` : 'Danbooru 关联'}
+        <span className={cn(count > 0 ? 'compact:hidden' : 'compact:sr-only')}>
+          {count > 0 ? `${formatCount(count)} 个 Danbooru 关联待确认` : 'Danbooru 关联'}
+        </span>
+        {count > 0 && <span className="hidden tabular compact:inline">{formatCount(count)}</span>}
       </button>
       <Dialog open={open} onOpenChange={setOpen} title="关联 Danbooru 角色" width={600}
         description="名称精确匹配、身份唯一且作品无冲突时，会自动关联。下面列出需要你选择的匹配。">

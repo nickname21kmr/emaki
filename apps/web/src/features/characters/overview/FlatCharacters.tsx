@@ -3,6 +3,8 @@ import { Plus, X } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Button, EmptyState, ErrorState, Spinner } from '@/components/ui';
+import { useCan } from '@/lib/capabilities';
+import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import type { CharactersView } from '@/lib/stores';
 import { CharacterRows, ListHeader, ListSkeleton } from './CharacterList';
@@ -11,6 +13,7 @@ import { EndMark, SectionBar, SortMenu } from './SectionBar';
 import { ShelfGrid, ShelfSkeleton } from './ShelfGrid';
 import { useSentinel } from './useSentinel';
 import type { WorkIndex } from './works';
+import { useCanVisit } from '@/pages';
 
 /**
  * 不分组的角色列表：选中作品 / 最近在收 / 搜索 / 只看自建，以及列表视图下的总览。
@@ -161,11 +164,15 @@ function Empty({
   workName?: string;
   onCreate: (name?: string) => void;
 }) {
-  const createButton = (label: string, name?: string) => (
-    <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => onCreate(name)}>
-      {label}
-    </Button>
-  );
+  // 新建角色要 catalog，添加文件夹在设置页（lib/capabilities.ts、src/pages.ts）：这台设备用不了的不显示
+  const canCreate = useCan('catalog');
+  const canVisit = useCanVisit();
+  const createButton = (label: string, name?: string) =>
+    canCreate && (
+      <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => onCreate(name)}>
+        {label}
+      </Button>
+    );
 
   if (q) {
     return (
@@ -216,12 +223,17 @@ function Empty({
       title="还没有角色"
       description="添加图库文件夹并运行识别后，角色会按作品自动整理到这里。"
       action={
-        <Link
-          to="/settings"
-          className="inline-flex h-9 items-center rounded-md bg-ink px-3.5 text-sm font-medium text-fg-inverse transition-colors hover:bg-ink-hover"
-        >
-          添加图片文件夹
-        </Link>
+        canVisit('/settings') && (
+          <Link
+            to="/settings"
+            className={cn(
+              'inline-flex h-9 items-center rounded-md bg-ink px-3.5 text-sm font-medium text-fg-inverse',
+              'transition-colors hover:bg-ink-hover',
+            )}
+          >
+            添加图片文件夹
+          </Link>
+        )
       }
     />
   );

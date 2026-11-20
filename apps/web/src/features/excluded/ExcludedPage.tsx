@@ -16,6 +16,13 @@ import { SelectionBar } from './components/SelectionBar';
 import { SingleImagesSection } from './components/SingleImagesSection';
 import { useSinglesSelection } from './useSinglesSelection';
 import { sortRules } from './utils';
+import { useAllowedActions, type Need } from '@/lib/capabilities';
+
+/**
+ * 这一页的改动需要的能力（lib/capabilities.ts）：加规则、恢复一条规则、单张的「恢复这张」都是删 / 建排除记录（rules）；
+ * 多选后的「恢复」是恢复这些图（curate）。手机上默认只有后者
+ */
+const EXCLUDED_NEEDS = { rules: 'rules' } as const satisfies Record<string, Need>;
 
 /**
  * 已排除 —— 规则（标签 / 文件夹 / 角色）在上，单张图片在下。
@@ -25,6 +32,7 @@ export function ExcludedPage() {
   const query = useExclusions();
   const stats = useStats();
   const [addOpen, setAddOpen] = useState(false);
+  const allow = useAllowedActions(EXCLUDED_NEEDS);
 
   const all = useMemo(() => query.data ?? [], [query.data]);
   const rules = useMemo(() => sortRules(all.filter((e) => e.kind !== 'image')), [all]);
@@ -66,9 +74,11 @@ export function ExcludedPage() {
         title="已排除"
         subtitle={subtitle}
         actions={
-          <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setAddOpen(true)}>
-            添加规则
-          </Button>
+          allow.rules && (
+            <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setAddOpen(true)}>
+              添加规则
+            </Button>
+          )
         }
       >
         <p className="inline-flex items-center gap-2 rounded-full bg-sunken px-3.5 py-1.5 text-[12.5px] text-fg-muted">
@@ -88,9 +98,11 @@ export function ExcludedPage() {
             title="没有排除任何图片"
             description="不想在图库里看到的图，可以在图库或看图器里按 E 排除；也可以按标签、文件夹或角色添加规则整批排除。"
             action={
-              <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setAddOpen(true)}>
-                添加规则
-              </Button>
+              allow.rules && (
+                <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setAddOpen(true)}>
+                  添加规则
+                </Button>
+              )
             }
           />
         ) : (
@@ -105,13 +117,13 @@ export function ExcludedPage() {
                         key={rule.id}
                         rule={rule}
                         busy={busyId === rule.id}
-                        onRestore={() => restoreRule(rule)}
+                        onRestore={allow.rules ? () => restoreRule(rule) : undefined}
                       />
                     ))}
                   </AnimatePresence>
                 </ul>
               ) : (
-                <RulesEmpty onAdd={() => setAddOpen(true)} />
+                <RulesEmpty onAdd={allow.rules ? () => setAddOpen(true) : undefined} />
               )}
             </section>
 
@@ -120,7 +132,7 @@ export function ExcludedPage() {
                 singles={singles}
                 selection={selection}
                 busyId={busyId}
-                onRestore={restoreRule}
+                onRestore={allow.rules ? restoreRule : undefined}
               />
             )}
           </div>
@@ -134,17 +146,19 @@ export function ExcludedPage() {
             key: 'restore',
             label: '恢复',
             icon: <RotateCcw />,
+            need: 'curate',
             loading: restoreMany.isPending,
             onClick: () => restoreMany.mutate([...selection.selected]),
           },
           {
             key: 'all',
             label: '全选',
+            need: null,
             icon: <CheckCheck />,
             shortcut: `${modKeyLabel} A`,
             onClick: selection.selectAll,
           },
-          { key: 'clear', label: '取消选择', icon: <X />, shortcut: 'Esc', onClick: selection.clear },
+          { key: 'clear', label: '取消选择', icon: <X />, need: null, shortcut: 'Esc', onClick: selection.clear },
         ]}
       />
 
@@ -154,7 +168,7 @@ export function ExcludedPage() {
 }
 
 /** 没有规则时的安静提示（单张排除还在下面） */
-function RulesEmpty({ onAdd }: { onAdd: () => void }) {
+function RulesEmpty({ onAdd }: { onAdd?: () => void }) {
   return (
     <div className="flex items-center justify-between gap-4 rounded-[16px] border border-dashed border-line-strong px-5 py-5">
       <div>
@@ -163,9 +177,11 @@ function RulesEmpty({ onAdd }: { onAdd: () => void }) {
           比如排除所有带 comic 标签的漫画分镜，或者整个表情包文件夹。
         </div>
       </div>
-      <Button size="sm" icon={<Plus className="size-3.5" />} onClick={onAdd}>
-        添加规则
-      </Button>
+      {onAdd && (
+        <Button size="sm" icon={<Plus className="size-3.5" />} onClick={onAdd}>
+          添加规则
+        </Button>
+      )}
     </div>
   );
 }

@@ -33,14 +33,15 @@ export function WorkHero({ work, heroRef }: { work: Work; heroRef?: Ref<HTMLElem
     <section
       ref={heroRef}
       aria-label={`${work.name} 的概况`}
-      className="group/fan relative isolate h-[300px] overflow-hidden rounded-[22px] ring-1 ring-line"
+      // 窄屏（手机、平板竖屏，A1）：扇形封面在上、名字和统计在下，高度随内容
+      className="group/fan relative isolate h-[300px] overflow-hidden rounded-[22px] ring-1 ring-line narrow:h-auto"
       style={paper}
     >
       {/* 右侧：作品前三位角色的封面扇形（CR-13）；不足两张时退回单张封面淡入 */}
       {work.covers.length >= 2 ? (
         <motion.div
           aria-hidden
-          className="absolute top-1/2 right-16 w-[300px] -translate-y-1/2"
+          className="absolute top-1/2 right-16 w-[300px] -translate-y-1/2 narrow:relative narrow:top-auto narrow:right-auto narrow:mx-auto narrow:mt-7 narrow:w-[230px] narrow:translate-y-0"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.6 }}
@@ -50,7 +51,7 @@ export function WorkHero({ work, heroRef }: { work: Work; heroRef?: Ref<HTMLElem
       ) : work.coverImageId && (
         <motion.div
           aria-hidden
-          className="absolute inset-y-0 right-0 w-[60%]"
+          className="absolute inset-y-0 right-0 w-[60%] narrow:relative narrow:inset-auto narrow:h-[200px] narrow:w-full narrow:[mask-image:linear-gradient(to_top,transparent,black_55%)]!"
           style={{ maskImage: fade, WebkitMaskImage: fade }}
           initial={{ opacity: 0, x: 28 }}
           animate={{ opacity: 1, x: 0 }}
@@ -66,14 +67,14 @@ export function WorkHero({ work, heroRef }: { work: Work; heroRef?: Ref<HTMLElem
         </motion.div>
       )}
 
-      <div className="relative flex h-full max-w-[min(560px,56%)] flex-col justify-between p-9">
+      <div className="relative flex h-full max-w-[min(560px,56%)] flex-col justify-between p-9 narrow:h-auto narrow:max-w-full narrow:gap-6 narrow:p-6">
         <div className="min-w-0">
           <motion.div {...rise(0)} className="mb-4 flex items-center gap-3">
             <Seal glyph={work.name.slice(0, 1)} />
             <span className="text-[11.5px] font-medium tracking-[0.24em] text-fg-muted">作品</span>
             {work.danbooruTag ? <CopyTag tag={work.danbooruTag} /> : <Badge>自建</Badge>}
           </motion.div>
-          <motion.h2 {...rise(1)} className="truncate text-[34px] leading-tight font-semibold tracking-tight">
+          <motion.h2 {...rise(1)} className="truncate text-[34px] leading-tight font-semibold tracking-tight narrow:text-[28px]">
             {work.name}
           </motion.h2>
           {work.aliases.length > 0 && (
@@ -83,7 +84,7 @@ export function WorkHero({ work, heroRef }: { work: Work; heroRef?: Ref<HTMLElem
           )}
         </div>
 
-        <motion.dl {...rise(3)} className="flex items-end gap-9">
+        <motion.dl {...rise(3)} className="flex items-end gap-9 narrow:flex-wrap narrow:gap-x-6 narrow:gap-y-3">
           <Stat value={work.characterCount} label="位角色" />
           <Stat value={work.imageCount} label={work.otherCount > 0 ? `张插画 · 另有 ${formatCount(work.otherCount)} 张漫画等` : '张插画'} />
           <Stat value={work.recentImageCount} label="最近 30 天" fresh={work.recentImageCount > 0} />
@@ -113,7 +114,7 @@ function Stat({ value, label, fresh }: { value: number; label: string; fresh?: b
         {fresh && <span className="size-1.5 rounded-full bg-shu" />}
         {label}
       </dt>
-      <dd className="numeral text-[44px] text-fg">
+      <dd className="numeral text-[44px] text-fg narrow:text-[36px]">
         {fresh ? '+' : ''}
         {formatCount(value)}
       </dd>
@@ -123,7 +124,7 @@ function Stat({ value, label, fresh }: { value: number; label: string; fresh?: b
 
 export function WorkHeroSkeleton() {
   return (
-    <div className="relative h-[300px] overflow-hidden rounded-[22px] bg-sunken/50">
+    <div className="relative h-[300px] overflow-hidden rounded-[22px] bg-sunken/50 narrow:h-[260px]">
       <div className="flex h-full flex-col justify-between p-9">
         <div>
           <div className="mb-4 flex items-center gap-3">

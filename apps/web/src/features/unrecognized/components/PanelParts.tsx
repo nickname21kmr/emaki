@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { Badge, Kbd, Tooltip } from '@/components/ui';
 import { cn } from '@/lib/cn';
 
-/** 决策面板里的小节：一行小标题 + 右侧提示 */
+/** 决策面板里的小节：一行小标题 + 右侧提示（都是键盘的，触屏上不显示） */
 export function PanelSection({
   title,
   hint,
@@ -19,7 +19,7 @@ export function PanelSection({
     <section className={cn('mt-7', className)}>
       <div className="mb-2.5 flex items-baseline justify-between gap-3">
         <h3 className="text-[12.5px] font-semibold tracking-tight text-fg-muted">{title}</h3>
-        {hint && <span className="text-[11px] text-fg-subtle">{hint}</span>}
+        {hint && <span className="text-[11px] text-fg-subtle touch:hidden">{hint}</span>}
       </div>
       {children}
     </section>
@@ -128,7 +128,7 @@ export function SuggestionRow({
   );
 }
 
-/** 底部操作键：图标 + 文字 + 快捷键，竖排的小方块 */
+/** 底部操作键：图标 + 文字 + 快捷键，竖排的小方块。触屏上不显示快捷键，方块矮一点（还是够 44 高） */
 export function ActionKey({
   icon,
   label,
@@ -149,16 +149,17 @@ export function ActionKey({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        'group flex h-[62px] flex-col items-center justify-center gap-1.5 rounded-[12px] bg-sunken text-[12.5px] font-medium text-fg',
+        'group flex h-[62px] flex-col items-center justify-center gap-1.5 rounded-[12px] bg-sunken text-[12.5px] font-medium text-fg touch:h-12',
         'transition-[background-color,color,transform] duration-150 hover:bg-hover active:scale-[0.97] disabled:pointer-events-none disabled:opacity-40',
         tone === 'danger' && 'hover:bg-danger-soft hover:text-danger',
       )}
     >
-      <span className="flex items-center gap-1.5 [&_svg]:size-4 [&_svg]:text-fg-muted group-hover:[&_svg]:text-current">
+      {/* 触屏上图标在字的上面：四个一排时每个只有七十来宽，「不是插画」横排会折成两行 */}
+      <span className="flex items-center gap-1.5 touch:flex-col touch:gap-1 touch:whitespace-nowrap [&_svg]:size-4 [&_svg]:text-fg-muted group-hover:[&_svg]:text-current">
         {icon}
         {label}
       </span>
-      <span className="flex items-center gap-1">
+      <span className="flex items-center gap-1 touch:hidden">
         {keys.map((k) => (
           <Kbd key={k}>{k}</Kbd>
         ))}

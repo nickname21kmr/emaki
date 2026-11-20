@@ -2,6 +2,7 @@ import type { ContentKind, FocusPoint, ImageItem, ThumbWidth } from '@emaki/shar
 import { EyeOff } from 'lucide-react';
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { imageUrl } from '@/lib/api';
+import { useImageRetry } from '@/lib/connection';
 import { cn } from '@/lib/cn';
 import { blurLabel, blurReason, type BlurContext } from '@/lib/blur';
 import { useBlurPrefs, usePrefs } from '@/lib/stores';
@@ -70,8 +71,12 @@ export function Thumb({
   /** 大幅展示时先用缩略图占位，原图解码完成后切换；失败时保留缩略图。 */
   original?: boolean;
 }) {
-  const preview = imageUrl.thumb(image.id, width, image.modifiedAt);
-  const full = original ? imageUrl.file(image.id, image.modifiedAt) : null;
+  // 加载失败过的（电脑断开那一会儿），重新连上后换个地址重新加载（lib/connection.ts）
+  const previewLoad = useImageRetry(imageUrl.thumb(image.id, width, image.modifiedAt));
+  const fullLoad = useImageRetry(original ? imageUrl.file(image.id, image.modifiedAt) : '');
+  const preview = previewLoad.src;
+  const full = original ? fullLoad.src : null;
+  const onFullError = fullLoad.onError;
   const [decoded, setDecoded] = useState<string | null>(null);
   const src = full && decoded === full ? full : preview;
   useEffect(() => {
@@ -84,9 +89,12 @@ export function Thumb({
         if (!cancelled) setDecoded(full);
       }).catch(() => { /* The thumbnail remains visible if full-image decoding fails. */ });
     };
+    loader.onerror = () => {
+      if (!cancelled) onFullError();
+    };
     loader.src = full;
-    return () => { cancelled = true; loader.onload = null; loader.removeAttribute('src'); };
-  }, [full]);
+    return () => { cancelled = true; loader.onload = null; loader.onerror = null; loader.removeAttribute('src'); };
+  }, [full, onFullError]);
   const crop = useCoverPosition(focus, src);
   const [loaded, setLoaded] = useState(() => loadedUrls.has(src));
   const prefs = useBlurPrefs();
@@ -128,6 +136,7 @@ export function Thumb({
         decoding="async"
         draggable={false}
         onLoad={markLoaded}
+        onError={src === preview ? previewLoad.onError : fullLoad.onError}
         className={cn(
           // Tailwind v4 的 scale-* 用的是独立的 scale 属性，不是 transform，所以过渡列表里要写 scale
           'size-full object-cover transition-[opacity,filter,scale] duration-500 ease-[var(--ease-out-soft)]',

@@ -455,7 +455,7 @@ export const queries = [
   }),
   defineQuery({
     name: 'audit.list',
-    summary: '审计记录：谁（user / assistant / job:<任务>）执行了哪个命令、结果、撤销令牌、变了哪些事实；新的在前',
+    summary: '审计记录：谁（user / assistant / job:<任务> / device:<设备>）执行了哪个命令、结果、撤销令牌、变了哪些事实；新的在前',
     input: AuditInput,
     scope: 'read',
     http: [{ method: 'GET', path: '/api/audit' }],
@@ -465,6 +465,8 @@ export const queries = [
         at: r.at,
         command: r.command,
         actor: r.actor,
+        // 手机等设备：界面上显示设备名称（撤销了的设备也还有名字）
+        ...(r.actor.startsWith('device:') ? { actorName: e.access.devices.get(r.actor.slice(7))?.name ?? null } : {}),
         status: r.status,
         message: r.message,
         undoToken: r.undo_token,

@@ -23,6 +23,7 @@ import { formatCount, formatDateTime, formatPercent, formatRelative, RATING_LABE
 import { errorMessage, useMutate } from '@/lib/queries';
 import { useRemoveRoot, useUpdateRoot } from '../hooks';
 import { EASE_OUT } from '@/lib/motion';
+import { useCan } from '@/lib/capabilities';
 
 /**
  * 图库文件夹的添加表单与列表。设置页「图库文件夹」一节和首次使用引导共用。
@@ -66,6 +67,7 @@ export function AddFolderForm({
   // 新文件夹包含已有的文件夹：后端返回要问的话，确认后带 merge 重发
   const [confirm, setConfirm] = useState<{ path: string; question: string; mode: LibraryRootMode; comicRating: Rating } | null>(null);
   const [picking, setPicking] = useState(false);
+  const canPick = useCan('desktop');
   // 导入方式：插画（识别角色）/ 漫画（跳过识别，每个子文件夹一本）；漫画要先选分级（不识别就不知道）
   const [mode, setMode] = useState<LibraryRootMode>('auto');
   const [comicRating, setComicRating] = useState<Rating>('general');
@@ -159,9 +161,12 @@ export function AddFolderForm({
           aria-describedby="add-folder-hint"
           className="min-w-0 flex-1 font-mono"
         />
-        <Button type="button" variant="ghost" size="lg" icon={<FolderSearch />} loading={picking} onClick={browse}>
-          浏览…
-        </Button>
+        {/* 在电脑屏幕上弹出选文件夹的窗口（desktop）：手机上没有，只能输入路径 */}
+        {canPick && (
+          <Button type="button" variant="ghost" size="lg" icon={<FolderSearch />} loading={picking} onClick={browse}>
+            浏览…
+          </Button>
+        )}
       </div>
       {confirm && (
         <div role="alertdialog" aria-label="合并文件夹" className="mt-3 animate-fade-in rounded-lg bg-sunken px-4 py-3">
@@ -187,7 +192,7 @@ export function AddFolderForm({
         {problem ??
           (mode === 'comic'
             ? '漫画：每个子文件夹算一本（按卷号排），页面直接归到别册 · 漫画，不跑识别、不找角色。没识别就不知道分级，先按上面选的显示。也可以选已有图库文件夹里面的子文件夹。'
-            : '支持本地磁盘和网络路径（\\\\NAS\\共享文件夹）。可以从资源管理器地址栏复制，或点「浏览…」选择。')}
+            : '支持本地磁盘和网络路径（\\\\NAS\\共享文件夹）。可以从资源管理器地址栏复制' + (canPick ? '，或点「浏览…」选择。' : '。'))}
       </p>
       {actions({ disabled: !trimmed || !!problem || !!confirm, loading: add.isPending })}
     </form>
@@ -323,7 +328,8 @@ function RootRow({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, x: -12, transition: { duration: 0.2 } }}
       transition={{ duration: 0.35, ease: EASE_OUT }}
-      className="group flex items-center gap-4 bg-raised py-4"
+      // 手机竖屏（A1）：图标和路径一行，张数和开关换到第二行
+      className="group flex items-center gap-4 bg-raised py-4 compact:flex-wrap compact:gap-y-2"
     >
       <span
         className={cn(
@@ -334,7 +340,7 @@ function RootRow({
         {off ? <FolderX /> : <FolderOpen />}
       </span>
 
-      <div className={cn('min-w-0 flex-1 transition-opacity duration-300', off && 'opacity-55')}>
+      <div className={cn('min-w-0 flex-1 transition-opacity duration-300 compact:basis-[calc(100%-56px)]', off && 'opacity-55')}>
         <div className="flex min-w-0 items-center gap-2">
           <div className="truncate text-sm font-medium" title={root.path}>
             <span className="text-fg-subtle">{parent}</span>
@@ -383,20 +389,20 @@ function RootRow({
         )}
       </div>
 
-      <div className={cn('w-24 text-right transition-opacity duration-300', off && 'opacity-40')}>
+      <div className={cn('w-24 text-right transition-opacity duration-300 compact:ml-14 compact:w-auto compact:text-left', off && 'opacity-40')}>
         <div className="numeral text-[26px] tabular">{formatCount(root.imageCount)}</div>
         <div className="mt-1 text-[11px] text-fg-subtle tabular">
           {share !== null ? `张 · 占 ${formatPercent(share)}` : '张'}
         </div>
       </div>
 
-      <div className="flex items-center gap-1 pl-2">
+      <div className="flex items-center gap-1 pl-2 compact:ml-auto">
         <ModeMenu root={root} onUpdate={onUpdate} />
         <Switch checked={root.enabled} onCheckedChange={(enabled) => onUpdate({ enabled })} label={`启用 ${root.path}`} />
         <IconButton
           label="移除（不会删除磁盘上的文件）"
           onClick={onRemove}
-          className="ml-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+          className="ml-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 touch:opacity-100"
         >
           <Trash />
         </IconButton>

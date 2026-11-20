@@ -11,6 +11,7 @@ import { formatCount, formatConfidence, suggestionEvidence } from '@/lib/format'
 import type { ClickModifiers, Triage } from '../useTriage';
 import { FreshButton } from './FreshButton';
 import { EASE_OUT } from '@/lib/motion';
+import { useLongPress } from '@/lib/useLongPress';
 
 const EASE = EASE_OUT;
 /** 一行的高度：48px 缩略图 + 内边距 */
@@ -47,7 +48,12 @@ export function TriageQueue({ triage }: { triage: Triage }) {
       return;
     }
     const el = scroller.querySelector<HTMLElement>(`[data-id="${CSS.escape(currentId)}"]`);
-    el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (!el) return;
+    // 只滚队列自己：scrollIntoView 会连外面的页面一起滚（手机竖屏上队列在页面最下面，一打开就被带下去了）
+    const r = el.getBoundingClientRect();
+    const box = scroller.getBoundingClientRect();
+    const by = r.top < box.top ? r.top - box.top : r.bottom > box.bottom ? r.bottom - box.bottom : 0;
+    if (by) scroller.scrollBy({ top: by, behavior: 'smooth' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentId, virtual]);
 
@@ -73,7 +79,9 @@ export function TriageQueue({ triage }: { triage: Triage }) {
   }, [busy]);
 
   return (
-    <aside className="flex min-h-0 w-[232px] shrink-0 flex-col xl:w-[264px]">
+    // 窄屏（A1）：平板竖屏占左边一列的两行（第一行是 1fr，队列不参与定行高，自己滚）；
+    // 手机横屏只占第一行、和大图并排；手机竖屏排在最下面，给一个固定高度自己滚
+    <aside className="flex min-h-0 w-[232px] shrink-0 flex-col xl:w-[264px] narrow:row-span-2 narrow:w-auto short:row-span-1 short:w-auto compact:order-3 compact:row-span-1 compact:h-[60vh]">
       <div className="flex h-8 items-center justify-between px-2">
         <span className="text-[13px] font-semibold tracking-tight">队列</span>
         <span className="flex items-center gap-2">
@@ -150,7 +158,8 @@ export function TriageQueue({ triage }: { triage: Triage }) {
       </div>
 
       <div className="mt-2 border-t border-line px-2 pt-2.5 text-[11px] leading-relaxed text-fg-subtle">
-        Ctrl / ⌘ 点击多选 · Shift 连选 · X 选中当前
+        <span className="touch:hidden">Ctrl / ⌘ 点击多选 · Shift 连选 · X 选中当前</span>
+        <span className="hidden touch:inline">长按一张进入多选，再点按勾选</span>
       </div>
     </aside>
   );
@@ -173,6 +182,8 @@ const QueueRow = memo(function QueueRow({
 }) {
   const { image, suggestions, tagged } = item;
   const top = suggestions[0];
+  // 触屏（A1）：长按一张进入多选并勾上它
+  const longPress = useLongPress(() => void (!selected && onToggle(image.id)));
 
   return (
     <motion.li
@@ -183,6 +194,7 @@ const QueueRow = memo(function QueueRow({
       {/* 左侧留 8px 给朱色书签线，li 的 overflow-hidden（收起动画要用）不会把它裁掉 */}
       <div className="py-[3px] pr-1 pl-2">
         <button
+          {...longPress}
           onClick={(e) => onClick(image.id, e)}
           aria-current={current || undefined}
           aria-label={`${image.fileName}${selected ? '（已选中）' : ''}`}
@@ -227,7 +239,7 @@ const QueueRow = memo(function QueueRow({
                 'absolute -top-1 -left-1 flex size-[18px] items-center justify-center rounded-full transition-[opacity,transform,background-color] duration-150',
                 selected
                   ? 'bg-shu text-white opacity-100'
-                  : 'bg-black/30 text-transparent opacity-0 ring-1 ring-white/70 backdrop-blur-sm group-hover:opacity-100 hover:scale-110',
+                  : 'bg-black/30 text-transparent opacity-0 ring-1 ring-white/70 backdrop-blur-sm group-hover:opacity-100 hover:scale-110 touch:opacity-100',
               )}
             >
               <Check className="size-3" strokeWidth={3} />

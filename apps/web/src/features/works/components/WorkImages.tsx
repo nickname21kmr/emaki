@@ -69,16 +69,18 @@ export function WorkImages({ workId, gridKey, dialogOpen = false }: { workId: ID
   const actions: SelectionAction[] = [
     {
       key: 'favorite',
+      need: 'curate',
       label: allFavorite ? '取消收藏' : '收藏',
       icon: allFavorite ? <HeartOff /> : <Heart />,
       loading: favorite.isPending,
       disabled: busy,
       onClick: () => favorite.mutate({ ids: selection.ids, value: !allFavorite }),
     },
-    { key: 'artist', label: '画师…', icon: <Palette />, disabled: busy, onClick: () => setArtistOpen(true) },
-    { key: 'group', label: '组图…', icon: <Layers />, disabled: busy, onClick: () => setGrouping(true) },
+    { key: 'artist', label: '画师…', icon: <Palette />, need: 'curate', disabled: busy, onClick: () => setArtistOpen(true) },
+    { key: 'group', label: '组图…', icon: <Layers />, need: 'collections', disabled: busy, onClick: () => setGrouping(true) },
     {
       key: 'exclude',
+      need: 'curate',
       label: '排除',
       icon: <EyeOff />,
       loading: exclude.isPending,

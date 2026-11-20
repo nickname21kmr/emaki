@@ -12,6 +12,7 @@ import { useCharacter, useImage, useWorks } from '@/lib/queries';
 import { dayKey, daySeed } from '@/lib/random';
 import { useLightbox, usePrefs } from '@/lib/stores';
 import { useDailyPlateState } from '../dailyPlateState';
+import { cn } from '@/lib/cn';
 
 const SITE: Record<string, string> = { pixiv: 'pixiv', twitter: 'X', danbooru: 'Danbooru', fanbox: 'FANBOX', other: '' };
 
@@ -101,12 +102,18 @@ function Plate({ img, seed }: { img: ImageItem; seed: number }) {
   };
 
   return (
-    <div className={tall ? 'grid grid-cols-[auto_minmax(260px,1fr)] items-end gap-8' : 'grid grid-cols-[minmax(0,1fr)_260px] items-end gap-8'}>
+    // 手机竖屏（A1）：图在上、文字在下
+    <div
+      className={cn(
+        tall ? 'grid grid-cols-[auto_minmax(260px,1fr)] items-end gap-8' : 'grid grid-cols-[minmax(0,1fr)_260px] items-end gap-8',
+        'compact:grid-cols-1 compact:gap-5',
+      )}
+    >
       <button
         type="button"
         onClick={open}
         // 不加 overflow-hidden：键盘聚焦时的四角印框画在图版外面（SEL-15），圆角裁切交给 Thumb 自己
-        className="focus-frame animate-unroll cursor-zoom-in rounded-[var(--radius-plate)] shadow-plate"
+        className="focus-frame animate-unroll cursor-zoom-in rounded-[var(--radius-plate)] shadow-plate compact:mx-auto compact:h-auto! compact:max-h-[70vh] compact:max-w-full"
         style={tall ? { height: 440, aspectRatio: ar } : { aspectRatio: ar, maxHeight: 460, width: '100%' }}
         aria-label="看大图"
       >

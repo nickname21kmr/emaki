@@ -1,16 +1,17 @@
 import { Check } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '@/lib/cn';
-import { SECTIONS, sectionNumber, type SectionId } from '../sections';
+import { sectionNumber, useSettingsSections, type SectionId } from '../sections';
 
 /**
  * 左侧小目录（吸顶）。当前节左边一道朱色竖线，和侧边栏的「书签」同一个语言。
  */
 export function SettingsToc({ active, onJump }: { active: SectionId; onJump: (id: SectionId) => void }) {
+  const sections = useSettingsSections();
   return (
     <nav aria-label="设置目录" className="sticky top-8 hidden w-44 shrink-0 self-start lg:block">
       <ol className="border-l border-line">
-        {SECTIONS.map((s, i) => {
+        {sections.map((s, i) => {
           const on = s.id === active;
           return (
             <li key={s.id}>

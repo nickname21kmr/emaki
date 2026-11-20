@@ -1,6 +1,7 @@
 import type { AssistantContext, AssistantDetection, AssistantModel, AssistantSession, AssistantSettings } from '@emaki/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { request } from '@/lib/api';
+import { useCapabilities } from '@/lib/capabilities';
 
 export const assistantApi = {
   settings: () => request<AssistantSettings>('GET', '/assistant/settings'),
@@ -19,8 +20,19 @@ export const assistantApi = {
   resume: (id: string, body: { requestId: string; messageId: string; model: string; effort: string }) => request<AssistantSession>('POST', `/assistant/sessions/${id}/resume`, body),
   answer: (id: string, requestId: string, value: string) => request('POST', `/assistant/sessions/${id}/answer`, { requestId, value }),
 };
-// 开启时每 30 秒同步一次；关闭时两分钟一次（别的标签页重新打开后这里也能跟上），切回窗口时也读
-export function useAssistantSettings() { return useQuery({ queryKey: ['assistant-settings'], queryFn: assistantApi.settings, staleTime: 30000, refetchOnWindowFocus: true, refetchInterval: query => (query.state.data?.enabled ? 30000 : 120000) }); }
+// 开启时每 30 秒同步一次；关闭时两分钟一次（别的标签页重新打开后这里也能跟上），切回窗口时也读。
+// 只在确定是电脑上（本机入口）时才读：局域网入口不挂助手的接口，手机上助手整个不加载（胶囊、快捷键、设置分区），不发任何 /api/assistant/* 请求
+export function useAssistantSettings() {
+  const local = useCapabilities().known('assistant');
+  return useQuery({
+    queryKey: ['assistant-settings'],
+    queryFn: assistantApi.settings,
+    enabled: local,
+    staleTime: 30000,
+    refetchOnWindowFocus: true,
+    refetchInterval: (query) => (query.state.data?.enabled ? 30000 : 120000),
+  });
+}
 export function useAssistantSave() {
   const client = useQueryClient();
   return async (body: unknown) => { const settings = await assistantApi.saveSettings(body); client.setQueryData(['assistant-settings'], settings); await client.invalidateQueries({ queryKey: ['assistant-models'] }); return settings; };

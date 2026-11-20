@@ -42,3 +42,12 @@ it('合集里的页优先保留：哪怕另一份更早入库、文件名更像�
   // 两份都在合集里，照原来的规则比
   expect(pickKeep([c(1, 'a.png', { collection_id: 3 }), c(2, 'a.png', { collection_id: 7, width: 2000 })]).id).toBe(2);
 });
+
+it('完全一样的两份：和同一投稿的其他页在一起的那份优先，哪怕另一份更早入库', () => {
+  // 手机先同步上来 5 张（平板导入/下载，同投稿的另外 4 张），电脑后下了 10 张（下载文件夹，另外 9 张）
+  const phone = c(1, '123_p0.png', { added_at: '2026-01-01T00:00:00.000Z', post_siblings: 4 });
+  const desktop = c(2, '123_p0.png', { added_at: '2026-02-01T00:00:00.000Z', post_siblings: 9 });
+  expect(pickKeep([phone, desktop]).id).toBe(2);
+  // 像素、体积照样优先：手机上的是压缩版时留电脑的原图，和这条无关
+  expect(pickKeep([c(3, 'x.png', { post_siblings: 9 }), c(4, 'x.png', { width: 2000, post_siblings: 0 })]).id).toBe(4);
+});

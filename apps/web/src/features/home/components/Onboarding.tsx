@@ -4,6 +4,8 @@ import { Button } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { useRunningJob } from '@/lib/events';
 import { useSettings, useStartJob } from '@/lib/queries';
+import { useCan } from '@/lib/capabilities';
+import { useCanVisit } from '@/pages';
 
 const STEPS = [
   { title: '添加图片文件夹', body: '在设置里选一个或几个存图的文件夹，比如 pixiv 的下载目录。原文件不会被移动。' },
@@ -22,6 +24,9 @@ export function Onboarding() {
   const settings = useSettings();
   const job = useRunningJob();
   const scan = useStartJob(() => '已开始扫描图库');
+  // 手机上（局域网入口）一般没有这些能力：按钮不显示，换成一句「到电脑上处理」
+  const canScan = useCan('jobs');
+  const canVisit = useCanVisit();
 
   const roots = settings.data?.libraryRoots ?? [];
   const hasRoots = roots.length > 0;
@@ -63,26 +68,30 @@ export function Onboarding() {
         <p className="mt-3 max-w-md text-[14px] leading-relaxed text-fg-muted">{copy.body}</p>
 
         <div className="mt-8 flex flex-wrap items-center gap-3">
-          {stage === 'ready' ? (
+          {stage === 'ready' && (canScan || canVisit('/settings')) ? (
             <>
-              <Button
-                variant="primary"
-                size="lg"
-                icon={<ScanSearch className="size-[18px]" />}
-                loading={scan.isPending}
-                onClick={() => scan.mutate('scan')}
-              >
-                立即扫描
-              </Button>
-              <Button variant="ghost" size="lg" onClick={() => navigate('/settings')}>
-                管理文件夹
-              </Button>
+              {canScan && (
+                <Button
+                  variant="primary"
+                  size="lg"
+                  icon={<ScanSearch className="size-[18px]" />}
+                  loading={scan.isPending}
+                  onClick={() => scan.mutate('scan')}
+                >
+                  立即扫描
+                </Button>
+              )}
+              {canVisit('/settings') && (
+                <Button variant="ghost" size="lg" onClick={() => navigate('/settings')}>
+                  管理文件夹
+                </Button>
+              )}
             </>
-          ) : stage === 'disabled' ? (
+          ) : stage === 'disabled' && canVisit('/settings#library') ? (
             <Button variant="primary" size="lg" onClick={() => navigate('/settings#library')}>
               去启用
             </Button>
-          ) : stage === 'empty' ? (
+          ) : stage === 'empty' && canVisit('/welcome') ? (
             <>
               <Button
                 variant="primary"
@@ -94,11 +103,13 @@ export function Onboarding() {
               </Button>
               <span className="ml-1 text-[12.5px] text-fg-subtle">支持 jpg · png · webp · gif · avif</span>
             </>
-          ) : (
+          ) : stage === 'scanning' && canVisit('/settings') ? (
             <Button variant="outline" size="lg" onClick={() => navigate('/settings')}>
               查看设置
             </Button>
-          )}
+          ) : stage !== 'scanning' ? (
+            <span className="text-[13px] text-fg-subtle">这台设备上做不了，到电脑上处理</span>
+          ) : null}
         </div>
       </div>
 

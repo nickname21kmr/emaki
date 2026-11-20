@@ -49,7 +49,8 @@ export function Segmented<T extends string>({
             disabled={disabled}
             onClick={() => onChange(opt.value)}
             className={cn(
-              'relative inline-flex h-full items-center gap-1.5 rounded-full font-medium transition-colors duration-200',
+              // 窄屏上整组可以横向滚动（调用方给 overflow-x-auto），每项不折行
+              'relative inline-flex h-full shrink-0 items-center gap-1.5 rounded-full font-medium whitespace-nowrap transition-colors duration-200',
               size === 'md' ? 'px-3.5 text-[13px]' : 'px-2.5 text-xs',
               active ? 'text-fg' : 'text-fg-muted hover:text-fg',
             )}

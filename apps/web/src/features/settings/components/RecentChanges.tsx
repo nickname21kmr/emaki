@@ -6,6 +6,7 @@ import { Button, Dialog, DialogFooter } from '@/components/ui';
 import { api } from '@/lib/api';
 import { formatCount, formatDateTime, formatRelative } from '@/lib/format';
 import { useMutate } from '@/lib/queries';
+import { useCan } from '@/lib/capabilities';
 
 const COLLAPSED = 5;
 
@@ -31,6 +32,8 @@ export function RecentChanges({ group }: { group: ChangeGroup }) {
   const [expanded, setExpanded] = useState(false);
   const [pending, setPending] = useState<ChangeEntry | null>(null);
   const revert = useMutate((id: string) => api.revertChange(id), { label: text.action });
+  // 撤回是 history（lib/capabilities.ts）：没有的设备只看记录
+  const canRevert = useCan('history');
   const list = data ?? [];
   const visible = expanded ? list : list.slice(0, COLLAPSED);
 
@@ -54,16 +57,18 @@ export function RecentChanges({ group }: { group: ChangeGroup }) {
                   {c.note && <span className="text-danger"> · {c.note}</span>}
                 </div>
               </div>
-              <Button
-                size="sm"
-                variant="ghost"
-                icon={<Undo2 />}
-                disabled={!c.revertable}
-                title={c.revertable ? undefined : c.revertHint}
-                onClick={() => setPending(c)}
-              >
-                {text.action}
-              </Button>
+              {canRevert && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  icon={<Undo2 />}
+                  disabled={!c.revertable}
+                  title={c.revertable ? undefined : c.revertHint}
+                  onClick={() => setPending(c)}
+                >
+                  {text.action}
+                </Button>
+              )}
             </li>
           ))}
         </ul>
