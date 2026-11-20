@@ -177,6 +177,7 @@ object Json {
                     })
                 }
                 if (a.pending != null) put("pending", a.pending)
+                if (a.rejected != null) put("rejected", a.rejected)
             }
         }))
         r.state?.let { st ->

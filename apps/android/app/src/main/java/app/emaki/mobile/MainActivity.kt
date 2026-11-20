@@ -120,7 +120,7 @@ class MainActivity : ComponentActivity() {
         when {
             MediaIndex.canRead(this) -> startAlbumSync(pendingAlbumMode)
             MediaIndex.partial(this) -> {
-                Toast.makeText(this, "同步相册要读所有照片：在「照片和视频」里选「全部允许」", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "同步相册要读所有照片：在「照片和视频」里选「允许访问全部」", Toast.LENGTH_LONG).show()
                 openAppSettings()
             }
             else -> {

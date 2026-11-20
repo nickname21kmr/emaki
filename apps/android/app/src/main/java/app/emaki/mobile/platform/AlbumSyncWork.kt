@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.provider.MediaStore
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -176,8 +177,8 @@ class AlbumSyncWorker(context: Context, params: WorkerParameters) : CoroutineWor
         val api = EmakiApi(address, saved.fingerprintBytes)
         val albums = api.albums(saved.token)
         if (!MediaIndex.canRead(ctx)) {
-            val error = if (MediaIndex.partial(ctx)) "只允许了读部分照片，相册里的新图看不到：在 Emaki 的「同步相册」里点「盘点相册」，选「全部允许」"
-            else "没有读照片的权限：在 Emaki 的「同步相册」里点「盘点相册」，允许读照片"
+            val error = if (MediaIndex.partial(ctx)) "只允许了读部分照片，相册里的新图看不到：在 Emaki 的「同步相册」里点「盘点相册」，选「允许访问全部」"
+            else "没有读照片的权限：在 Emaki 的「同步相册」里点「盘点相册」，选「允许访问全部」"
             runCatching { albums.report(AlbumReport(emptyList(), full = false, state = AlbumSyncState(null, error = error))) }
             return Result.success()
         }
@@ -214,6 +215,7 @@ class AlbumSyncWorker(context: Context, params: WorkerParameters) : CoroutineWor
             }
             Result.success()
         } catch (e: ApiException) {
+            Log.w(TAG, "同步相册（$mode）：电脑回了 ${e.status} ${e.code}", e)
             when {
                 e.unauthorized -> {
                     AlbumSync.stop(ctx)
@@ -227,6 +229,8 @@ class AlbumSyncWorker(context: Context, params: WorkerParameters) : CoroutineWor
                 }
             }
         } catch (e: IOException) {
+            // 断网、电脑关了、读到一半的文件没了……过一会儿重试（做完的都记下了）
+            Log.w(TAG, "同步相册（$mode）第 ${runAttemptCount + 1} 次：${e.javaClass.simpleName}: ${e.message}", e)
             if (runAttemptCount < MAX_ATTEMPTS) Result.retry() else Result.success()
         } finally {
             db.close()
@@ -294,6 +298,7 @@ class AlbumSyncWorker(context: Context, params: WorkerParameters) : CoroutineWor
     )
 
     companion object {
+        private const val TAG = "AlbumSync"
         private val lock = Mutex()
         const val MAX_ATTEMPTS = 6
         private const val NOTICE_ID = 0x51A0

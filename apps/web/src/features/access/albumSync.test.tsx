@@ -38,6 +38,7 @@ const album = (over: Partial<DeviceAlbum> = {}): DeviceAlbum => ({
   dirNote: '以前的 8556 张都在这里',
   suggested: true,
   pending: null,
+  rejected: null,
   syncedAt: null,
   ...over,
 });
@@ -94,6 +95,9 @@ describe('同步相册的说法（docs/mobile.md 5.5）', () => {
     );
     expect(albumCountsText(album({ count: 1, bytes: 1, inventory: null }))).toBe('1 张 · 1 B · 没盘点过');
     expect(albumCountsText(album({ count: 1, bytes: 1, sync: true, syncedAt: ago(1), pending: 0 }))).toBe('1 张 · 1 B · 都传上来了');
+    expect(albumCountsText(album({ count: 21, bytes: 1, sync: true, syncedAt: ago(1), pending: 0, rejected: 13 }))).toBe(
+      '21 张 · 1 B · 13 张电脑读不了（格式不支持），不传',
+    );
   });
 });
 
@@ -124,6 +128,10 @@ describe('同步相册面板', () => {
     const inApp = html(info());
     expect(inApp).toContain('盘点相册');
     expect(inApp).toContain('只问，不上传');
+    // 盘点中：说要多久，不再重复「还没盘点过」
+    const busy = html(info({ state: { ...info().state, running: 'inventory', done: 10, total: 100 } }));
+    expect(busy).toContain('正在盘点相册：10 / 100');
+    expect(busy).toContain('进度在通知栏');
   });
 
   it('同步着了：不再出「按建议同步」；App 里有「现在同步」', () => {

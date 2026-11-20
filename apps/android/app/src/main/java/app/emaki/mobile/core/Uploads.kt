@@ -89,7 +89,7 @@ class Uploader(
      * 记进 failed，接着传下一个。
      *
      * precheck：先问电脑有没有，有的不传（手动上传）；相册同步自己问过了（还要跳过删过的），传 false。
-     * onFile：每个文件的结果（imported / existing / failed），相册同步据此记下传过的
+     * onFile：每个文件的结果（imported / existing / failed / rejected：电脑读不了），相册同步据此记下传过的、读不了的
      */
     suspend fun run(
         batchId: String,
@@ -120,7 +120,8 @@ class Uploader(
             } catch (e: ApiException) {
                 if (e.unauthorized || e.status >= 500) throw e
                 failed += h.file.name to (e.message ?: "电脑拒绝了（${e.status}）")
-                onFile(h.file, "failed")
+                // 422：电脑读不了这个文件（格式不支持），同一个内容再传也一样
+                onFile(h.file, if (e.status == 422) "rejected" else "failed")
             }
         }
         onProgress(UploadProgress(hashed.size, hashed.size, null))

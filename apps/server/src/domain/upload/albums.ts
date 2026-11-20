@@ -105,6 +105,7 @@ interface AlbumRow {
   dir: string | null;
   dir_reason: AlbumDirReason | null;
   pending: number | null;
+  rejected: number | null;
   synced_at: string | null;
 }
 
@@ -186,6 +187,7 @@ function toAlbum(r: AlbumRow, rows: AlbumRow[]): DeviceAlbum {
     dirNote: auto ? auto.note : fixedNote(r),
     suggested: suggests(r),
     pending: r.pending,
+    rejected: r.rejected,
     syncedAt: r.synced_at,
   };
 }
@@ -259,6 +261,7 @@ export interface AlbumReport {
       folderCount: number;
     };
     pending?: number;
+    rejected?: number;
   }[];
   full: boolean;
   state?: { running: 'inventory' | 'sync' | null; done?: number; total?: number; error?: string | null; summary?: string | null };
@@ -280,7 +283,7 @@ export function reportAlbums(ctx: SqliteContext, deviceId: string, input: AlbumR
       `UPDATE device_albums SET inv_total = ?, inv_have = ?, inv_in_target = ?, inv_deleted = ?, inv_new = ?, inv_new_bytes = ?,
          inv_folder = ?, inv_folder_count = ?, inventoried_at = ? WHERE device_id = ? AND path = ?`,
     );
-    const pending = ctx.db.prepare('UPDATE device_albums SET pending = ?, synced_at = ? WHERE device_id = ? AND path = ?');
+    const pending = ctx.db.prepare('UPDATE device_albums SET pending = ?, rejected = ?, synced_at = ? WHERE device_id = ? AND path = ?');
     const paths: string[] = [];
     let inventoried = false;
     let synced = false;
@@ -313,7 +316,7 @@ export function reportAlbums(ctx: SqliteContext, deviceId: string, input: AlbumR
         inventoried = true;
       }
       if (a.pending !== undefined) {
-        pending.run(a.pending, at, deviceId, p);
+        pending.run(a.pending, a.rejected ?? 0, at, deviceId, p);
         synced = true;
       }
     }

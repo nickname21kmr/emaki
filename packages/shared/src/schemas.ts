@@ -467,8 +467,10 @@ export const AlbumReportInput = z.object({
             folderCount: Count,
           })
           .optional(),
-        /** 这次同步完还没传上来的 */
+        /** 这次同步完还没传上来的（会再试） */
         pending: Count.optional(),
+        /** 电脑读不了的（不再传） */
+        rejected: Count.optional(),
       }),
     )
     .max(2000)

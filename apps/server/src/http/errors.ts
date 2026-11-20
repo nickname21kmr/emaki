@@ -36,6 +36,13 @@ export class NeedsConfirmError extends HttpError {
   }
 }
 
+/** 传上来的文件电脑读不了（手机上传：格式不支持）：同一个文件再传也一样，App 不再重传 */
+export class UnsupportedContentError extends HttpError {
+  constructor(message: string) {
+    super(422, 'unsupported', message);
+  }
+}
+
 /**
  * 还没实现的功能统一抛这个，参数是 docs/TASKS.md 里的任务编号，
  * 这样前端 toast 能直接告诉你缺的是哪一项。

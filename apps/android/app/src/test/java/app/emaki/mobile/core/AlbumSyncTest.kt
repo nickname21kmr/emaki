@@ -33,6 +33,9 @@ private class MemoryStore : SyncStore {
     override fun markHandled(id: Long, sha256: String) {
         handled[id] = sha256
     }
+    override fun clearHandled(id: Long) {
+        handled.remove(id)
+    }
     override fun retain(ids: Set<Long>) {
         shas.keys.retainAll(ids)
         handled.keys.retainAll(ids)
@@ -117,7 +120,7 @@ class AlbumSyncTest {
         assertTrue(albums.reports.first().full)
         assertEquals(listOf("DCIM/Camera", "Download"), albums.reports.first().albums.map { it.path })
         val last = albums.reports.last()
-        assertEquals(listOf(ReportedAlbum("Download", "Download", 3, 11_000, "2023-11-14T22:13:20Z", pending = 0)), last.albums)
+        assertEquals(listOf(ReportedAlbum("Download", "Download", 3, 11_000, "2023-11-14T22:13:20Z", pending = 0, rejected = 0)), last.albums)
         assertEquals(AlbumSyncState(null, summary = "同步了 1 张"), last.state)
     }
 
@@ -175,15 +178,37 @@ class AlbumSyncTest {
     }
 
     @Test
-    fun aRejectedFileIsPendingForItsAlbum() = runTest {
-        val bad = bytes(1_000, 1)
-        phone.add(1, "Pictures/bili", bad)
-        computer.rejectSha += sha(bad)
+    fun aFileTheComputerCannotReadIsNotSentAgainUntilTheNextInventory() = runTest {
+        val heif = bytes(1_000, 1)
+        phone.add(1, "Pictures/weibo", heif)
+        phone.add(2, "Pictures/weibo", bytes(1_000, 2))
+        computer.rejectSha += sha(heif)
+        albums.syncing += "Pictures/weibo"
+        val r = syncer().sync(phone.items)
+        assertEquals("同步了 1 张，1 张电脑读不了（格式不支持），不再传", r.text())
+        assertEquals(listOf(0 to 1), albums.reports.last().albums.map { it.pending to it.rejected })
+        // 下一次：不再传，照样报读不了几张
+        val begins = computer.begins.size
+        val again = syncer().sync(phone.items)
+        assertEquals("没有新图", again.text())
+        assertEquals(begins, computer.begins.size)
+        assertEquals(listOf(0 to 1), albums.reports.last().albums.map { it.pending to it.rejected })
+        // 重新盘点：清掉记号，再试一次
+        syncer().inventory(phone.items)
+        syncer().sync(phone.items)
+        assertEquals(begins + 1, computer.begins.size)
+    }
+
+    @Test
+    fun aCorruptedTransferIsPendingAndRetried() = runTest {
+        phone.add(1, "Pictures/bili", bytes(1_000, 1))
         albums.syncing += "Pictures/bili"
+        computer.corruptOnce = true
         val r = syncer().sync(phone.items)
         assertEquals("1 张没传成", r.text())
-        assertEquals(1, albums.reports.last().albums.single().pending)
+        assertEquals(listOf(1 to 0), albums.reports.last().albums.map { it.pending to it.rejected })
         assertFalse(store.handled.containsKey(1L))
+        assertEquals(1, syncer().sync(phone.items).imported)
     }
 
     @Test

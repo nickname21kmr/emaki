@@ -23,6 +23,8 @@ internal class FakeUploads(val have: MutableMap<String, String> = mutableMapOf()
     val rejectSha = mutableSetOf<String>()
     /** 下一次 PUT 回 409（另一个任务改了断点） */
     var conflictOnce = false
+    /** 下一个传完的文件内容被弄坏（complete 回 400，内容和 sha256 对不上） */
+    var corruptOnce = false
     var revoked = false
     /** 电脑上删过的（回收站里） */
     val deleted = mutableSetOf<String>()
@@ -69,9 +71,17 @@ internal class FakeUploads(val have: MutableMap<String, String> = mutableMapOf()
         guard()
         val u = uploads.getValue(uploadId)
         if (u.data.size.toLong() != u.size) throw ApiException(409, "conflict", "还没传完")
-        if (u.sha in rejectSha || sha(u.data) != u.sha) {
+        if (corruptOnce) {
+            corruptOnce = false
+            u.data = u.data.copyOf().also { it[0] = (it[0] + 1).toByte() }
+        }
+        if (sha(u.data) != u.sha) {
             u.status = "failed"
             throw ApiException(400, "bad_request", "传上来的内容和 sha256 对不上")
+        }
+        if (u.sha in rejectSha) {
+            u.status = "failed"
+            throw ApiException(422, "unsupported", "电脑读不了这个文件：不支持的格式：heif")
         }
         u.status = "imported"
         u.imageId = (nextImage++).toString()
@@ -145,7 +155,7 @@ class UploaderTest {
         val api = FakeUploads().apply { rejectSha += sha(bad) }
         val s = Uploader(api).run("b", listOf(file("bad.png", bad), file("good.png", good)))
         assertEquals(1, s.imported)
-        assertEquals(listOf("bad.png" to "传上来的内容和 sha256 对不上"), s.failed)
+        assertEquals(listOf("bad.png" to "电脑读不了这个文件：不支持的格式：heif"), s.failed)
         assertEquals("已传 1 张，1 张没传成", s.text())
     }
 

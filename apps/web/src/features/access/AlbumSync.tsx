@@ -33,8 +33,13 @@ export function syncStatusText(info: Pick<AlbumSyncInfo, 'state' | 'albums'>, no
 /** 「8,725 张 · 13.2 GB · 电脑上已有 8,571 张 · 没有的 152 张（194 MB）」；同步过的写还有几张没传上来 */
 export function albumCountsText(a: DeviceAlbum): string {
   const head = `${formatCount(a.count)} 张 · ${formatBytes(a.bytes)}`;
-  if (a.sync && a.syncedAt && a.pending !== null)
-    return `${head} · ${a.pending ? `还有 ${formatCount(a.pending)} 张没传上来` : '都传上来了'}`;
+  if (a.sync && a.syncedAt && a.pending !== null) {
+    const rest = [
+      a.pending && `还有 ${formatCount(a.pending)} 张没传上来`,
+      a.rejected && `${formatCount(a.rejected)} 张电脑读不了（格式不支持），不传`,
+    ].filter(Boolean);
+    return [head, ...(rest.length ? rest : ['都传上来了'])].join(' · ');
+  }
   const inv = a.inventory;
   if (!inv) return `${head} · 没盘点过`;
   if (!inv.have && !inv.deleted) return `${head} · 电脑上一张都没有`;
@@ -125,9 +130,11 @@ export function AlbumSyncPanel({ deviceId }: { deviceId?: string }) {
 
       {!info.albums.length ? (
         <p className="rounded-xl px-5 py-4 text-[13px] leading-relaxed text-fg-muted ring-1 ring-line ring-inset">
-          {inApp
-            ? '还没盘点过。盘点会读这台设备上所有相册里的图，算出每张图的指纹问电脑有没有（只问，不上传），然后建议同步哪些相册。第一次要允许读照片。'
-            : `还没盘点过。在「${info.deviceName}」上打开 Emaki，图库页头「从手机添加」→「同步相册」，点「盘点相册」（要 App 0.3.0 或更新）。`}
+          {running
+            ? '第一次盘点要把每张图读一遍，几千张要一两分钟，上万张要几分钟。可以先关掉这里，进度在通知栏。'
+            : inApp
+              ? '盘点会读这台设备上所有相册里的图，算出每张图的指纹问电脑有没有（只问，不上传），然后建议同步哪些相册。第一次要允许读照片。'
+              : `在「${info.deviceName}」上打开 Emaki，图库页头「从手机添加」→「同步相册」，点「盘点相册」（要 App 0.3.0 或更新）。`}
         </p>
       ) : (
         <>

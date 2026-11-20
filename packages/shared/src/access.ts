@@ -254,8 +254,10 @@ export interface DeviceAlbum {
   dirNote: string;
   /** 建议同步：盘点过，电脑上已有的图过半在这台设备的「上传到」里（以前拷过的相册） */
   suggested: boolean;
-  /** 上次同步完还没传上来的 */
+  /** 上次同步完还没传上来的（会再试） */
   pending: number | null;
+  /** 电脑读不了的（格式不支持，例如改成 .jpg 的 HEIF）：不再传，重新盘点后再试一次 */
+  rejected: number | null;
   syncedAt: string | null;
 }
 

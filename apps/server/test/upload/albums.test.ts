@@ -378,6 +378,20 @@ describe('同步传上来的图', () => {
     expect(relOf(retry.complete!.json().imageId)).toBe('下载图片/平板导入/QQ浏览器/x.png');
   });
 
+  it('电脑读不了的文件（例如改成 .jpg 的 HEIF）：422 unsupported，记下被拒；App 报的「读不了几张」', async () => {
+    const notImage = Buffer.from('ftypheic 这不是电脑能读的图'.repeat(20));
+    const sent = await sendSync(notImage, { album: 'Pictures/weibo', clientKey: '55', fileName: 'img-1.jpg' });
+    expect(sent.complete!.statusCode).toBe(422);
+    expect(sent.complete!.json()).toMatchObject({ code: 'unsupported', error: expect.stringContaining('电脑读不了这个文件') });
+    const row = ds.ctx.db.prepare("SELECT status, rejected FROM uploads WHERE client_key = '55'").get();
+    expect(row).toEqual({ status: 'failed', rejected: 1 });
+    // 重新盘点后 App 再试一次：接着用那一行，被拒的记号清掉
+    const again = await sendSync(notImage, { album: 'Pictures/weibo', clientKey: '55', fileName: 'img-1.jpg' });
+    expect(again.complete!.statusCode).toBe(422);
+    await report({ albums: [{ path: 'Pictures/weibo', name: 'weibo', count: 21, bytes: 1, pending: 0, rejected: 13 }] });
+    expect(await album('Pictures/weibo')).toMatchObject({ pending: 0, rejected: 13 });
+  });
+
   it('没盘点过、没打开同步就传上来的相册：按路径取名，并且定下来', async () => {
     const sent = await sendSync(await png(), { album: 'Pictures/Twitter', clientKey: '9', fileName: 'a.png' });
     expect(relOf(sent.complete!.json().imageId)).toBe('下载图片/平板导入/Twitter/a.png');

@@ -17,6 +17,7 @@ import kotlin.coroutines.coroutineContext
  *   → 报结果（每个相册还有几张没传上来）。
  * - 网络问题（IOException）、设备被移除（401）原样抛出，交给调用方（WorkManager）重试或停下；做完的都记下了，重跑不会重复。
  * - 读不到的图（同步途中被删了、没权限）跳过，不算网络问题。
+ * - 电脑读不了的（422，格式不支持，例如改成 .jpg 的 HEIF）记成 rejected:<sha256>，以后不再传；重新盘点时清掉，再试一次。
  */
 
 /** 相册里的一张图（MediaStore 的一行） */
@@ -44,6 +45,7 @@ interface SyncStore {
     fun putSha(id: Long, size: Long, modifiedSec: Long, sha256: String)
     fun handled(id: Long): String?
     fun markHandled(id: Long, sha256: String)
+    fun clearHandled(id: Long)
     /** 手机上没有了的忘掉 */
     fun retain(ids: Set<Long>)
 }
@@ -66,8 +68,10 @@ data class ReportedAlbum(
     val bytes: Long,
     val latestAt: String?,
     val inventory: AlbumInventory? = null,
-    /** 同步完还没传上来的 */
+    /** 同步完还没传上来的（会再试） */
     val pending: Int? = null,
+    /** 电脑读不了的（格式不支持）：不再传 */
+    val rejected: Int? = null,
 )
 
 /** App 现在在做什么：running 是 inventory / sync / null（闲着） */
@@ -99,12 +103,16 @@ data class SyncResult(
     val existing: Int,
     /** 电脑上删过的，不再传 */
     val skipped: Int,
+    /** 没传成的（包括这次新发现电脑读不了的） */
     val failed: List<Pair<String, String>>,
+    /** 这次新发现电脑读不了的（格式不支持）：记下，以后不再传 */
+    val rejected: Int = 0,
 ) {
-    /** 「同步了 12 张，1 张没传成」「没有新图」 */
+    /** 「同步了 12 张，1 张没传成」「13 张电脑读不了（格式不支持），不再传」「没有新图」 */
     fun text(): String = buildList {
         if (imported > 0) add("同步了 $imported 张")
-        if (failed.isNotEmpty()) add("${failed.size} 张没传成")
+        if (failed.size > rejected) add("${failed.size - rejected} 张没传成")
+        if (rejected > 0) add("$rejected 张电脑读不了（格式不支持），不再传")
     }.joinToString("，").ifEmpty { "没有新图" }
 }
 
@@ -187,8 +195,9 @@ class AlbumSyncer(
                         newBytes += item.size
                     }
                 }
-                // 电脑上有了、删过的：以后同步不用再管（内容变了才再看）
+                // 电脑上有了、删过的：以后同步不用再管（内容变了才再看）；以前读不了的再试一次（电脑可能能读了）
                 if (hit.imageId != null || hit.deleted) store.markHandled(item.id, sha)
+                else if (store.handled(item.id)?.startsWith(REJECTED) == true) store.clearHandled(item.id)
             }
             val top = folders.entries.sortedWith(compareBy<Map.Entry<String, Int>>({ -it.value }, { it.key })).firstOrNull()
             albumOf(path, list).copy(inventory = AlbumInventory(list.size, have, inTarget, deleted, new, newBytes, top?.key, top?.value ?: 0))
@@ -206,15 +215,23 @@ class AlbumSyncer(
         lastReport = clock()
         val mine = items.filter { it.album in config.syncing }
         val todo = ArrayList<Pair<MediaItem, String>>()
+        // 电脑读不了的（以前记下的和这次的）：每个相册几张
+        val rejectedIn = HashMap<String, Int>()
         mine.forEachIndexed { i, item ->
             coroutineContext.ensureActive()
             val sha = shaOf(item)
-            if (sha != null && store.handled(item.id) != sha) todo += item to sha
+            val handled = store.handled(item.id)
+            when {
+                sha == null || handled == sha -> Unit
+                handled == REJECTED + sha -> rejectedIn[item.album] = (rejectedIn[item.album] ?: 0) + 1
+                else -> todo += item to sha
+            }
             onProgress(SyncProgress("hash", i + 1, mine.size, item.album))
         }
         var imported = 0
         var existing = 0
         var skipped = 0
+        var rejected = 0
         val failed = mutableListOf<Pair<String, String>>()
         val pending = HashMap<String, Int>()
         if (todo.isNotEmpty()) {
@@ -249,12 +266,25 @@ class AlbumSyncer(
                     ) { reader.open(item) }
                 }
                 val base = done
+                var newlyRejected = 0
                 val summary = Uploader(uploads, chunkSize).run(
                     batchIdOf(album),
                     files,
                     album,
                     precheck = false,
-                    onFile = { f, status -> if (status != "failed") byKey[f.clientKey]?.let { (item, sha) -> store.markHandled(item.id, sha) } },
+                    onFile = { f, status ->
+                        val (item, sha) = byKey.getValue(f.clientKey!!)
+                        when (status) {
+                            "failed" -> Unit
+                            "rejected" -> {
+                                store.markHandled(item.id, REJECTED + sha)
+                                rejectedIn[album] = (rejectedIn[album] ?: 0) + 1
+                                newlyRejected++
+                                rejected++
+                            }
+                            else -> store.markHandled(item.id, sha)
+                        }
+                    },
                     onProgress = { p ->
                         onProgress(SyncProgress("upload", base + p.done, send.size, p.current))
                         progress("sync", base + p.done, send.size)
@@ -264,13 +294,15 @@ class AlbumSyncer(
                 imported += summary.imported
                 existing += summary.existing
                 failed += summary.failed
-                if (summary.failed.isNotEmpty()) pending[album] = summary.failed.size
+                // 没传成的里面，电脑读不了的不算「还没传上来」（不会再传）
+                val retry = summary.failed.size - newlyRejected
+                if (retry > 0) pending[album] = retry
             }
         }
-        val result = SyncResult(config, imported, existing, skipped, failed)
+        val result = SyncResult(config, imported, existing, skipped, failed, rejected)
         val final = albums.report(
             AlbumReport(
-                all.filter { it.path in config.syncing }.map { it.copy(pending = pending[it.path] ?: 0) },
+                all.filter { it.path in config.syncing }.map { it.copy(pending = pending[it.path] ?: 0, rejected = rejectedIn[it.path] ?: 0) },
                 full = false,
                 state = AlbumSyncState(null, summary = result.text()),
             ),
@@ -280,6 +312,8 @@ class AlbumSyncer(
 
     companion object {
         const val REPORT_EVERY_MS = 10_000L
+        /** 处理过的记号：电脑读不了的记成 rejected:<sha256> */
+        const val REJECTED = "rejected:"
 
         private fun albumOf(path: String, list: List<MediaItem>) = ReportedAlbum(
             path = path,

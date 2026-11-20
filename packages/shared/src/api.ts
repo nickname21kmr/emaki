@@ -100,6 +100,7 @@ export interface ApiError {
   /** unauthorized：没带或带错了凭证（401，MCP 的访问凭证、局域网入口的设备凭证） */
   /** forbidden：不许这样调用（403，只许本机、只许 Emaki 自己的页面、设备没有这个权限） */
   /** device_revoked：这台设备已经被电脑移除（401，局域网入口）；too_many_requests：请求太频繁（429，局域网入口的配对） */
+  /** unsupported：传上来的文件电脑读不了（422，手机上传：格式不支持），同一个文件再传也一样 */
   code:
     | 'not_found'
     | 'bad_request'
@@ -110,6 +111,7 @@ export interface ApiError {
     | 'needs_confirm'
     | 'too_many_requests'
     | 'not_implemented'
+    | 'unsupported'
     | 'internal';
 }
 

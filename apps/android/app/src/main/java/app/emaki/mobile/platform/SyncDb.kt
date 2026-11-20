@@ -64,6 +64,10 @@ class SyncDb(context: Context) : SQLiteOpenHelper(context, "album-sync.db", null
         writableDatabase.execSQL("UPDATE media SET handled = ? WHERE id = ?", arrayOf(sha256, id))
     }
 
+    override fun clearHandled(id: Long) {
+        writableDatabase.execSQL("UPDATE media SET handled = NULL WHERE id = ?", arrayOf(id))
+    }
+
     override fun retain(ids: Set<Long>) {
         val db = writableDatabase
         val gone = db.rawQuery("SELECT id FROM media", null).use { c -> buildList { while (c.moveToNext()) c.getLong(0).let { if (it !in ids) add(it) } } }

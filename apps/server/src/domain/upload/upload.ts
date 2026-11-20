@@ -21,7 +21,7 @@ import path from 'node:path';
 import type { Device, Devices } from '../../access/devices.ts';
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import { parseId } from '../../datasource/sqlite/sql.ts';
-import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
+import { BadRequestError, ConflictError, NotFoundError, UnsupportedContentError } from '../../http/errors.ts';
 import { ComicAreas } from '../../services/classify/comicAreas.ts';
 import { ROOT_ACTIVE, VISIBLE } from '../../readmodel/terms.ts';
 import { importImages } from '../library/import.ts';
@@ -184,7 +184,7 @@ export function beginUpload(ctx: SqliteContext, deviceId: string, input: BeginIn
       ctx.db
         .prepare(
           `UPDATE uploads SET batch_id = ?, album = ?, file_name = ?, modified_at = ?, received = 0, status = 'receiving', error = NULL,
-             image_id = NULL, updated_at = ? WHERE id = ?`,
+             rejected = 0, image_id = NULL, updated_at = ? WHERE id = ?`,
         )
         .run(input.batchId, album, safeName(input.fileName, 'image'), input.modifiedAt ?? null, at, same.id);
     })();
@@ -290,8 +290,11 @@ export async function completeUpload(
   const size = existsSync(file) ? statSync(file).size : -1;
   if (size !== row.size || row.received !== row.size)
     throw new ConflictError(`还没传完：电脑上已收到 ${Math.max(0, size)} / ${row.size} 字节`);
-  const fail = (error: string) => {
-    ctx.db.prepare("UPDATE uploads SET status = 'failed', error = ?, updated_at = ? WHERE id = ?").run(error, now(ctx), uploadId);
+  // rejected：入库时被拒（格式不支持），同一个内容再传也一样
+  const fail = (error: string, rejected = false) => {
+    ctx.db
+      .prepare("UPDATE uploads SET status = 'failed', error = ?, rejected = ?, updated_at = ? WHERE id = ?")
+      .run(error, rejected ? 1 : 0, now(ctx), uploadId);
     rmSync(file, { force: true });
   };
   if ((await sha256File(file)) !== row.sha256) {
@@ -317,8 +320,8 @@ export async function completeUpload(
   const item = result.items[0];
   if (!item || item.status === 'failed') {
     const error = item?.error ?? '入库失败';
-    fail(error);
-    throw new BadRequestError(error);
+    fail(error, true);
+    throw new UnsupportedContentError(`电脑读不了这个文件：${error}`);
   }
   const at = now(ctx);
   ctx.db
