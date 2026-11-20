@@ -50,7 +50,8 @@ export const DEFAULT_SETTINGS = {
   ui: { theme: 'system' },
   browse: { customThemes: [] as CustomTheme[] },
   // 按姿势找图（实验）：默认关；关着时不跑任务、不下载、相关查询返回 403
-  pose: { enabled: false as boolean },
+  // showClasses：51 类的界面（默认藏起来，图库用 PoseWear 姿势库）
+  pose: { enabled: false as boolean, showClasses: false as boolean },
 } as const;
 
 const SECTIONS: SettingsSection[] = ['tagger', 'danbooru', 'dedupe', 'ui', 'browse', 'pose'];

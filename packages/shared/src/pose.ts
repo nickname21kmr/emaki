@@ -81,6 +81,88 @@ export interface PoseStatus {
   prototype: { keypointsPath: string; assignmentsPath: string } | null;
   /** 正在跑或排队的「提取姿势」任务 */
   job: Job | null;
+  /** PoseWear 姿势库：导入了多少姿势、多少张图有匹配；本机找得到时给两个导入的默认路径 */
+  posewear: {
+    poses: number;
+    assigned: number;
+    defaults: { folder: string | null; assignmentsPath: string | null };
+  };
+}
+
+// ------------------------------------------------------------------ PoseWear 姿势库
+
+/** PoseWear 的三套单人姿势（双人的 pair60 暂时不导） */
+export type PoseWearSet = 'full_single' | 'full_sexy' | 'upper80v2';
+export const POSEWEAR_SETS = ['full_single', 'full_sexy', 'upper80v2'] as const;
+export const POSEWEAR_SET_LABEL: Record<PoseWearSet, string> = { full_single: '全身', full_sexy: '全身·性感', upper80v2: '上半身' };
+/** 姿势 id：full_single_P001 这样 */
+export const POSEWEAR_POSE_ID = /^(full_single|full_sexy|upper80v2)_P\d{3}$/;
+
+export interface PoseWearPose {
+  id: string;
+  set: PoseWearSet;
+  /** P001 */
+  number: string;
+  name: string;
+  category: string;
+  /** 主要匹配到这个姿势、计入统计的图 */
+  count: number;
+  /** 线稿小图（300×400 webp） */
+  thumbUrl: string;
+  /** 线稿大图（900×1200 webp，代表视角） */
+  imageUrl: string;
+}
+
+export interface PoseWearCategory {
+  name: string;
+  count: number;
+  poses: PoseWearPose[];
+}
+
+export interface PoseWearSetGroup {
+  id: PoseWearSet;
+  name: string;
+  count: number;
+  categories: PoseWearCategory[];
+}
+
+/** GET /api/pose/posewear：按套、分类分好组（默认只给有图的姿势，all=1 全给） */
+export interface PoseWearCatalogResponse {
+  sets: PoseWearSetGroup[];
+  /** 导入了的姿势总数（不管有没有图） */
+  poses: number;
+}
+
+export interface PoseWearMatch {
+  pose: PoseWearPose;
+  distance: number | null;
+  tagScore: number | null;
+  method: string | null;
+  /** 匹配上的那个视角的小图（没有记视角时用代表视角） */
+  viewThumbUrl: string;
+}
+
+/** GET /api/pose/posewear/of/:id：这张图的主要姿势和过了阈值的其他候选（最多 2 个） */
+export interface PoseWearOfResponse {
+  imageId: string;
+  primary: (PoseWearMatch & { rank: number }) | null;
+  related: PoseWearMatch[];
+}
+
+/** 导入 PoseWear 姿势库的结果 */
+export interface PoseWearImportResult extends PoseActionResult {
+  poses: number;
+  files: number;
+}
+
+/** 导入姿势匹配结果的结果 */
+export interface PoseWearAssignResult extends PoseActionResult {
+  imported: number;
+  candidates: number;
+  /** 本图库里没有的图 */
+  missing: number;
+  /** 姿势库里没有的姿势（先导入姿势库） */
+  unknownPose: number;
 }
 
 /** GET /api/pose/similar/:id 的一项 */

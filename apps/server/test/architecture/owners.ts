@@ -108,6 +108,10 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   // 姿势（实验，迁移 041）
   pose_classes: 'pose',
   image_poses: 'pose',
+  // PoseWear 姿势库（实验，迁移 042）
+  posewear_poses: 'pose',
+  image_posewear: 'pose',
+  image_posewear_candidates: 'pose',
 };
 
 /**

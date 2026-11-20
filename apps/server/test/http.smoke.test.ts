@@ -869,6 +869,41 @@ describe('按姿势找图（实验，注册表：pose.*）', () => {
     // 这张图还没有姿势数据
     expect([status, json.items, json.source.classId]).toEqual([200, [], null]);
   });
+  // PoseWear 姿势库：导入、目录、线稿、每张图的匹配（细节在 domain/pose/posewear.test.ts）
+  route('POST /api/pose/posewear/import', async () => {
+    expect((await call('POST', '/api/pose/posewear/import', { path: 'Z:/no/such/dir' })).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const r = await call('POST', '/api/pose/posewear/import', { path: 'Z:/no/such/dir' });
+    expect([r.status, r.json.error]).toEqual([400, expect.stringContaining('找不到文件夹')]);
+  });
+  route('POST /api/pose/posewear/matches', async () => {
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const r = await call('POST', '/api/pose/posewear/matches', { assignmentsPath: 'Z:/no/such.json' });
+    expect([r.status, r.json.error]).toEqual([400, expect.stringContaining('找不到文件')]);
+  });
+  route('GET /api/pose/posewear', async () => {
+    expect((await call('GET', '/api/pose/posewear')).status).toBe(403);
+    expect((await call('GET', '/api/images?posewearPose=full_single_P001')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const { status, json } = await call('GET', '/api/pose/posewear?all=1');
+    expect([status, json]).toEqual([200, { sets: [], poses: 0 }]);
+    const list = await call('GET', '/api/images?posewearPose=full_single_P001');
+    expect([list.status, list.json.total]).toEqual([200, 0]);
+    expect((await call('GET', '/api/images?posewearPose=pair60_P001')).status).toBe(400);
+  });
+  route('GET /api/pose/posewear/:size/:file', async () => {
+    expect((await call('GET', '/api/pose/posewear/t/full_single_P001_front.webp')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    // 没导入过
+    expect((await call('GET', '/api/pose/posewear/t/full_single_P001_front.webp')).status).toBe(404);
+    expect((await call('GET', '/api/pose/posewear/x/full_single_P001_front.webp')).status).toBe(400);
+  });
+  route('GET /api/pose/posewear-match/:id', async () => {
+    expect((await call('GET', '/api/pose/posewear-match/i1')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const { status, json } = await call('GET', '/api/pose/posewear-match/i1');
+    expect([status, json.primary, json.related]).toEqual([200, null, []]);
+  });
 });
 
 describe('本机安全（T23）', () => {

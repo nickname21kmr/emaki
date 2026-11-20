@@ -94,7 +94,7 @@ export function PoseEntry({ poseClass, liked, onPick, onClear }: PoseEntryProps)
 // ------------------------------------------------------------------ 选类别
 
 /** 方向键在格子间移动焦点：左右一格，上下找上一行 / 下一行里横向最近的那格 */
-function moveFocus(e: KeyboardEvent<HTMLElement>, root: HTMLElement | null) {
+export function moveFocus(e: KeyboardEvent<HTMLElement>, root: HTMLElement | null) {
   const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
   if (!root || !keys.includes(e.key)) return;
   const cells = [...root.querySelectorAll<HTMLElement>('[data-pose-cell]')];
@@ -241,7 +241,7 @@ export function PoseInfoRow({ imageId, onNavigate }: { imageId: string; onNaviga
   const to = `/gallery?poseClass=${encodeURIComponent(classId)}&poseLike=${encodeURIComponent(imageId)}`;
   return (
     <>
-      <dt className="text-fg-subtle">姿势</dt>
+      <dt className="text-fg-subtle">姿势类</dt>
       <dd className="min-w-0">
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="text-[12px] text-fg-muted" title={cls?.description}>

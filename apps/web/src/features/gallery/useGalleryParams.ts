@@ -1,5 +1,6 @@
 import {
   BROWSE_THEMES,
+  POSEWEAR_POSE_ID,
   CONTENT_KINDS,
   CUSTOM_THEME_LIMITS,
   type BrowseTheme,
@@ -14,7 +15,7 @@ import { themeQuery } from '@/lib/customTheme';
 import { useCustomThemes } from '@/lib/queries';
 import { usePrefs } from '@/lib/stores';
 import { withParam } from '@/lib/urlPrefs';
-import { usePoseEnabled } from '@/features/pose/client';
+import { usePoseClassesShown, usePoseEnabled } from '@/features/pose/client';
 
 /**
  * 图库的筛选状态全部放在 URL 里（?q= &tags= &kind= &anim= &rating= &orient= &fav= &sort= &order=），
@@ -52,7 +53,9 @@ export interface GalleryFilters {
   poseClass: string | undefined;
   /** 按和这张图的姿势相近排（?poseLike=图片 id，「找同姿势的图」）；改别的筛选、排序时去掉，只留类别 */
   poseLike: string | undefined;
-  /** 选了姿势类别、URL 里没写排序：按离这一类代表姿势的距离排（最典型的在前），不发 sort */
+  /** PoseWear 姿势（?pwPose=full_single_P001）：姿势检索打开时才生效；和 51 类只能选一个 */
+  pwPose: string | undefined;
+  /** 选了姿势类别或 PoseWear 姿势、URL 里没写排序：按典型度 / 匹配名次排（最像的在前），不发 sort */
   poseOrder: boolean;
   sort: GallerySort;
   order: SortOrder;
@@ -94,6 +97,7 @@ export function parseGalleryParams(params: URLSearchParams, kindFallback: Conten
   const sort = sortGiven ? (sortParam as GallerySort) : 'addedAt';
   const orderParam = params.get('order');
   const poseClass = POSE_CLASS_RE.test(params.get('poseClass') ?? '') ? params.get('poseClass')! : undefined;
+  const pwPose = POSEWEAR_POSE_ID.test(params.get('pwPose') ?? '') ? params.get('pwPose')! : undefined;
   return {
     q: params.get('q') ?? '',
     tags: [...new Set((params.get('tags') ?? '').split(',').filter(Boolean))],
@@ -108,7 +112,8 @@ export function parseGalleryParams(params: URLSearchParams, kindFallback: Conten
     artist: params.get('artist') || undefined,
     poseClass,
     poseLike: (poseClass && params.get('poseLike')) || undefined,
-    poseOrder: !!poseClass && !sortGiven,
+    pwPose,
+    poseOrder: !!(poseClass || pwPose) && !sortGiven,
     sort,
     order: orderParam === 'asc' || orderParam === 'desc' ? orderParam : defaultOrder(sort),
   };
@@ -127,14 +132,18 @@ export function applyGalleryPatch(
   // 内置画面和自定义画面只能选一个
   if (patch.theme) merged.custom = undefined;
   if (patch.custom) merged.theme = undefined;
+  // 51 类和 PoseWear 姿势只能选一个
+  if (patch.pwPose) merged.poseClass = undefined;
+  if (patch.poseClass) merged.pwPose = undefined;
   // 姿势：「找同姿势的图」的排法只在没动别的时保留；换了类别默认按典型度排，明确选了排序就按那个
   if (!('poseLike' in patch)) merged.poseLike = undefined;
   if (!merged.poseClass) merged.poseLike = undefined;
   if (patch.poseOrder === undefined) {
     if (patch.sort !== undefined) merged.poseOrder = false;
     else if (patch.poseClass && patch.poseClass !== cur.poseClass) merged.poseOrder = true;
+    else if (patch.pwPose && patch.pwPose !== cur.pwPose) merged.poseOrder = true;
   }
-  if (!merged.poseClass) merged.poseOrder = false;
+  if (!merged.poseClass && !merged.pwPose) merged.poseOrder = false;
   const set = (key: string, value: string | undefined) => {
     if (value) next.set(key, value);
     else next.delete(key);
@@ -152,23 +161,26 @@ export function applyGalleryPatch(
   set('artist', merged.artist);
   set('poseClass', merged.poseClass);
   set('poseLike', merged.poseLike);
+  set('pwPose', merged.pwPose);
   if (merged.poseOrder) {
     // 按典型度排没有方向
     next.delete('sort');
     next.delete('order');
     return next;
   }
-  // 选着姿势类别时「最近添加」也要写出来，不然读回来又成了按典型度
-  set('sort', merged.sort === 'addedAt' && !merged.poseClass ? undefined : merged.sort);
+  // 选着姿势时「最近添加」也要写出来，不然读回来又成了按典型度
+  set('sort', merged.sort === 'addedAt' && !merged.poseClass && !merged.pwPose ? undefined : merged.sort);
   // 换排序时回到该排序的默认方向；方向等于默认值时不写进 URL
   const order = patch.sort && patch.order === undefined ? defaultOrder(merged.sort) : merged.order;
   set('order', order === defaultOrder(merged.sort) ? undefined : order);
   return next;
 }
 
-/** 姿势检索关着时去掉姿势参数（URL 里留着，打开后还能用） */
-export function gatePose(f: GalleryFilters, poseOn: boolean): GalleryFilters {
-  return poseOn ? f : { ...f, poseClass: undefined, poseLike: undefined, poseOrder: false };
+/** 姿势检索关着时去掉姿势参数（URL 里留着，打开后还能用）；51 类没显示时去掉类别和找同姿势 */
+export function gatePose(f: GalleryFilters, poseOn: boolean, classesOn = true): GalleryFilters {
+  if (!poseOn) return { ...f, poseClass: undefined, poseLike: undefined, pwPose: undefined, poseOrder: false };
+  if (classesOn || !f.poseClass) return f;
+  return { ...f, poseClass: undefined, poseLike: undefined, poseOrder: f.poseOrder && !!f.pwPose };
 }
 
 /** ownsKind：类型由这一页决定（图库）。别册页的类型来自路由，不把图库的类型偏好补进 URL */
@@ -179,7 +191,8 @@ export function useGalleryParams({ ownsKind = true }: { ownsKind?: boolean } = {
   const setKindPref = usePrefs((s) => s.setGalleryKinds);
   // 姿势检索关着时 URL 里的姿势参数当没写（接口会 403）
   const poseOn = usePoseEnabled();
-  const filters = useMemo(() => gatePose(parseGalleryParams(params, kindPref), poseOn), [params, kindPref, poseOn]);
+  const classesOn = usePoseClassesShown();
+  const filters = useMemo(() => gatePose(parseGalleryParams(params, kindPref), poseOn, classesOn), [params, kindPref, poseOn, classesOn]);
 
   const update = useCallback(
     (patch: Partial<GalleryFilters>) => {
@@ -215,7 +228,8 @@ export function useGalleryParams({ ownsKind = true }: { ownsKind?: boolean } = {
       favorite: filters.favorite || undefined,
       artist: filters.artist,
       poseClass: filters.poseClass,
-      // 按姿势典型度排时不发排序（服务端默认按距离）
+      posewearPose: filters.pwPose,
+      // 按姿势典型度排时不发排序（服务端默认按距离 / 名次）
       sort: filters.poseOrder ? undefined : filters.sort,
       order: filters.poseOrder || filters.sort === 'random' ? undefined : filters.order,
     }),
@@ -232,7 +246,8 @@ export function useGalleryParams({ ownsKind = true }: { ownsKind?: boolean } = {
     customTheme ||
     filters.favorite ||
     filters.artist ||
-    filters.poseClass
+    filters.poseClass ||
+    filters.pwPose
   );
 
   const clearFilters = useCallback(
@@ -249,6 +264,7 @@ export function useGalleryParams({ ownsKind = true }: { ownsKind?: boolean } = {
         artist: undefined,
         poseClass: undefined,
         poseLike: undefined,
+        pwPose: undefined,
       }),
     [update],
   );

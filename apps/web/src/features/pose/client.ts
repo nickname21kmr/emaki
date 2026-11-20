@@ -1,4 +1,19 @@
-import type { ID, ImageItem, Job, ListImagesResponse, PoseActionResult, PoseClass, PoseClassesResponse, PoseSimilarResponse, PoseStatus } from '@emaki/shared';
+import type {
+  ID,
+  ImageItem,
+  Job,
+  ListImagesResponse,
+  PoseActionResult,
+  PoseClass,
+  PoseClassesResponse,
+  PoseSimilarResponse,
+  PoseStatus,
+  PoseWearAssignResult,
+  PoseWearCatalogResponse,
+  PoseWearImportResult,
+  PoseWearOfResponse,
+  PoseWearPose,
+} from '@emaki/shared';
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { request } from '@/lib/api';
 import { useSettings } from '@/lib/queries';
@@ -19,11 +34,39 @@ export const poseApi = {
   classes: () => request<PoseClassesResponse>('GET', '/pose/classes'),
   similar: (id: ID, cursor?: string, limit = 60) =>
     request<PoseSimilarResponse>('GET', `/pose/similar/${encodeURIComponent(id)}?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`),
+  // PoseWear 姿势库
+  importPoseWear: (body: { path: string; viewsPath?: string }) => request<PoseWearImportResult>('POST', '/pose/posewear/import', body),
+  importPoseWearMatches: (assignmentsPath: string) => request<PoseWearAssignResult>('POST', '/pose/posewear/matches', { assignmentsPath }),
+  posewear: (all: boolean) => request<PoseWearCatalogResponse>('GET', `/pose/posewear${all ? '?all=1' : ''}`),
+  posewearOf: (id: ID) => request<PoseWearOfResponse>('GET', `/pose/posewear-match/${encodeURIComponent(id)}`),
 };
 
 /** 设置里打开了没有（没加载出来按关着算） */
 export function usePoseEnabled(): boolean {
   return useSettings().data?.pose?.enabled ?? false;
+}
+
+/** 51 类的界面（按人偶挑、找同姿势的图）：设置里另开，默认藏起来 */
+export function usePoseClassesShown(): boolean {
+  const pose = useSettings().data?.pose;
+  return !!pose?.enabled && !!pose.showClasses;
+}
+
+/** PoseWear 姿势目录；all = 连没有图的姿势也要 */
+export function usePoseWear(enabled: boolean, all = false) {
+  return useQuery({ queryKey: ['pose', 'posewear', all], queryFn: () => poseApi.posewear(all), enabled, staleTime: 60_000 });
+}
+
+/** 按 id 找 PoseWear 姿势 */
+export function findPoseWear(data: PoseWearCatalogResponse | undefined, id: string | undefined): PoseWearPose | undefined {
+  if (!data || !id) return undefined;
+  for (const s of data.sets) for (const c of s.categories) for (const p of c.poses) if (p.id === id) return p;
+  return undefined;
+}
+
+/** 一张图匹配到的 PoseWear 姿势 */
+export function usePoseWearOf(id: ID | undefined, enabled: boolean) {
+  return useQuery({ queryKey: ['pose', 'posewear-of', id], queryFn: () => poseApi.posewearOf(id!), enabled: enabled && !!id, staleTime: 60_000 });
 }
 
 /** 状态：下载或提取进行中时两秒一次（下载没有 SSE 事件） */

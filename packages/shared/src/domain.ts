@@ -528,6 +528,8 @@ export interface Settings {
   /** 按姿势找图（实验，默认关）：打开要先有两个模型（GET /api/pose/status 的 models.ready） */
   pose: {
     enabled: boolean;
+    /** 显示 51 类（按人偶挑姿势、找同姿势的图）；默认藏起来，图库用 PoseWear 姿势库 */
+    showClasses: boolean;
   };
 }
 

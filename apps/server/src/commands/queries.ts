@@ -366,7 +366,7 @@ export const queries = [
     http: [{ method: 'GET', path: '/api/images' }],
     run(e, q) {
       // 按姿势类别筛选（实验）：姿势检索关着时 403
-      if (q.poseClass) requirePose(e);
+      if (q.poseClass || q.posewearPose) requirePose(e);
       return listImages(e.ctx.db, q, (key, compute) => e.results.get('count:' + key, compute) as number);
     },
   }),

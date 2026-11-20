@@ -165,6 +165,11 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
     both('i.id IN (SELECT image_id FROM image_poses WHERE class_id = @poseClass)');
     p.poseClass = q.poseClass;
   }
+  if (q.posewearPose) {
+    // PoseWear 姿势（实验，domain/pose/posewear.ts）：主要匹配到这个姿势的图
+    both('i.id IN (SELECT image_id FROM image_posewear WHERE pose_id = @pwPose)');
+    p.pwPose = q.posewearPose;
+  }
   if (q.theme) {
     // 任一组标签达到阈值（THEME_FILTERS）。先把标签名换成 id，SQL 里不再联 tags 表；
     // 按 image_id 走 image_tags 主键，每张只看自己的几十个标签
@@ -259,16 +264,20 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
   const limit = Math.min(Math.max(q.limit ?? 60, 1), 200);
   // page 只在看某一本时按页序，否则当入库时间
   // 按姿势类别筛选、没指定排序时按离代表骨架的距离（近的在前，游标用偏移：距离不在图片行里）
-  const sort: ImageSort | 'poseDistance' = q.poseClass && !q.sort ? 'poseDistance' : q.sort === 'page' && collection === null ? 'addedAt' : (q.sort ?? 'addedAt');
+  // 按 PoseWear 姿势筛选、没指定排序时按匹配名次
+  const byPose = !q.sort && (q.posewearPose ? 'poseRank' : q.poseClass ? 'poseDistance' : null);
+  const sort: ImageSort | 'poseDistance' | 'poseRank' = byPose || (q.sort === 'page' && collection === null ? 'addedAt' : (q.sort ?? 'addedAt'));
 
-  if (!q.collectionId && !q.poseClass && decideCollapse(q.collapseCollections, q.cursor, total)) return collapsedImages(db, q, w, countWhere.join(' AND '), p, total);
+  if (!q.collectionId && !q.poseClass && !q.posewearPose && decideCollapse(q.collapseCollections, q.cursor, total)) return collapsedImages(db, q, w, countWhere.join(' AND '), p, total);
 
-  if (sort === 'random' || sort === 'poseDistance') {
+  if (sort === 'random' || sort === 'poseDistance' || sort === 'poseRank') {
     const offset = decodeCursor(q.cursor, isOffset) ?? 0;
     const order =
       sort === 'poseDistance'
         ? `(SELECT ip.distance FROM image_poses ip WHERE ip.image_id = i.id) ${q.order === 'desc' ? 'DESC' : 'ASC'}`
-        : q.seed !== undefined
+        : sort === 'poseRank'
+          ? `(SELECT pw.rank FROM image_posewear pw WHERE pw.image_id = i.id) ${q.order === 'desc' ? 'DESC' : 'ASC'}`
+          : q.seed !== undefined
           ? SEEDED_RANDOM_EXPR
           : RANDOM_EXPR;
     const rows = db

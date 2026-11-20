@@ -84,13 +84,14 @@ const IMAGE_VIEWS = [
   'undo-status',
 ] as const;
 const WITH_FILES = [...IMAGE_VIEWS, 'duplicates', 'changes', 'settings', 'artists'] as const;
-/** 不是查询的第一段：表示「按姿势类别筛的图库列表」（images 查询里带 poseClass 的），见 matchesRoots */
+/** 不是查询的第一段：表示「按姿势筛的图库列表」（images 查询里带 poseClass 或 posewearPose 的），见 matchesRoots */
 const POSE_LISTS = 'images:pose';
 
 /** 这个查询在不在要刷新的范围里：按第一段；POSE_LISTS 另外匹配带姿势筛选的图库列表 */
 export function matchesRoots(roots: ReadonlySet<string>, key: readonly unknown[]): boolean {
   if (roots.has(String(key[0]))) return true;
-  return roots.has(POSE_LISTS) && key[0] === 'images' && !!(key[1] as { poseClass?: unknown } | undefined)?.poseClass;
+  const q = key[1] as { poseClass?: unknown; posewearPose?: unknown } | undefined;
+  return roots.has(POSE_LISTS) && key[0] === 'images' && !!(q?.poseClass || q?.posewearPose);
 }
 export const REFRESH: Record<DomainChange, readonly string[]> = {
   'image.added': WITH_FILES,

@@ -188,6 +188,8 @@ describe('createInvalidator：提取姿势时只刷新姿势相关的查询', ()
     expect(refreshed(['pose', 'classes'])).toBe(true);
     expect(refreshed(['pose', 'similar', '7'])).toBe(true);
     expect(refreshed(['images', { kind: ['illustration'], poseClass: 'full_03' }])).toBe(true);
+    expect(refreshed(['images', { kind: ['illustration'], posewearPose: 'full_single_P001' }])).toBe(true);
+    expect(refreshed(['pose', 'posewear', false])).toBe(true);
     expect(refreshed(['images', { kind: ['illustration'], collapseCollections: 'auto' }])).toBe(false);
     for (const root of ['image', 'characters', 'works', 'unrecognized', 'stats', 'summary', 'collections'])
       expect(refreshed([root, {}]), root).toBe(false);

@@ -19,7 +19,7 @@ import { GridFooter } from './components/GridStates';
 import { SelectionBar } from './components/SelectionBar';
 import { useGalleryParams } from './useGalleryParams';
 import { usePoseEnabled, usePoseSimilarInfinite } from '@/features/pose/client';
-import { PoseEntryLazy } from '@/features/pose/lazy';
+import { PoseEntryLazy, PoseWearEntryLazy } from '@/features/pose/lazy';
 
 const SCOPE = 'gallery';
 
@@ -118,8 +118,8 @@ export function GalleryPage() {
             ? '那张图还没有能比的姿势（没提取过，或者没找到人物）。'
             : filters.q
             ? '可以搜文件名，或 Danbooru 风格的标签，比如 long_hair、smile。'
-            : filters.poseClass
-            ? '这一类姿势在当前筛选下没有图片，放宽一些条件或换一类试试。'
+            : filters.poseClass || filters.pwPose
+            ? '这个姿势在当前筛选下没有图片，放宽一些条件或换一个试试。'
             : '当前的分级、方向、动图或收藏筛选下没有图片，放宽一些条件试试。'
         }
         action={
@@ -206,12 +206,16 @@ export function GalleryPage() {
             customThemes={customThemes}
             leading={
               poseOn ? (
-                <PoseEntryLazy
-                  poseClass={filters.poseClass}
-                  liked={!!filters.poseLike}
-                  onPick={(id) => update({ poseClass: id })}
-                  onClear={() => update({ poseClass: undefined })}
-                />
+                <>
+                  <PoseWearEntryLazy pose={filters.pwPose} onPick={(id) => update({ pwPose: id })} onClear={() => update({ pwPose: undefined })} />
+                  {/* 51 类：设置里另开才有 */}
+                  <PoseEntryLazy
+                    poseClass={filters.poseClass}
+                    liked={!!filters.poseLike}
+                    onPick={(id) => update({ poseClass: id })}
+                    onClear={() => update({ poseClass: undefined })}
+                  />
+                </>
               ) : undefined
             }
           />

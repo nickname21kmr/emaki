@@ -47,7 +47,7 @@ export function assistantCommands(registry: Registry): CommandDef[] {
 export function readableQueries(registry: Registry): { def: QueryDef; path: string; pattern: RegExp; params: string[] }[] {
   return registry
     .queries()
-    .filter((d) => ASSISTANT_SCOPES.includes(d.scope) && d.name !== 'images.thumbnail' && d.name !== 'images.original' && d.name !== 'pose.figure')
+    .filter((d) => ASSISTANT_SCOPES.includes(d.scope) && d.name !== 'images.thumbnail' && d.name !== 'images.original' && d.name !== 'pose.figure' && d.name !== 'pose.posewearFile')
     .flatMap((def) =>
       (def.http ?? [])
         .filter((h) => h.method === 'GET')

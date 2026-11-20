@@ -27,6 +27,7 @@ import {
   type LibraryRootMode,
   type Rating,
 } from './domain.ts';
+import { POSEWEAR_POSE_ID } from './pose.ts';
 
 /** shared 不带 DOM / node 的类型：这里只用到 URL 的这几个字段（运行时是全局的 URL） */
 declare const URL: new (url: string) => { protocol: string; username: string; password: string };
@@ -364,7 +365,7 @@ export const UpdateSettingsInput = z.object({
     })
     .partial()
     .optional(),
-  pose: z.object({ enabled: z.boolean() }).partial().optional(),
+  pose: z.object({ enabled: z.boolean(), showClasses: z.boolean() }).partial().optional(),
   danbooruApiKey: z.string().optional(),
 });
 export const SourceModeInput = z.object({ mode: z.enum(['strict', 'broad']) });
@@ -409,6 +410,7 @@ export const ListImagesInput = z.object({
   similarTo: z.string().optional(),
   artist: z.string().min(1).max(200).optional(),
   poseClass: z.string().regex(POSE_CLASS_ID).optional(),
+  posewearPose: z.string().regex(POSEWEAR_POSE_ID).optional(),
   order: z.enum(['asc', 'desc']).optional(),
   cursor: z.string().optional(),
   limit: qNumber.min(1).max(200).optional(),
@@ -483,5 +485,18 @@ export const PoseImportInput = z.object({
   keypointsPath: z.string().min(1).max(1000).describe('原型的 keypoints_lib.npz'),
   assignmentsPath: z.string().min(1).max(1000).describe('原型的 assignments.json'),
 });
+/** 导入 PoseWear 姿势库（本机的 PoseWear 文件夹；线稿复制进数据目录，不进仓库） */
+export const PoseWearImportInput = z.object({
+  path: z.string().min(1).max(1000).describe('PoseWear 文件夹（里面有 assets/poses.*.json 和 p/t、p/i）'),
+  viewsPath: z.string().min(1).max(1000).optional().describe('posewear_v1 的 poses.json：每个姿势的代表视角；不给就用正面'),
+});
+/** 导入姿势匹配结果（posewear_v1 的 assignments.json）；整批替换 */
+export const PoseWearAssignInput = z.object({ assignmentsPath: z.string().min(1).max(1000) });
+export const PoseWearCatalogInput = z.object({ all: qBool.optional() });
+export const PoseWearFileInput = z.object({
+  size: z.enum(['t', 'i']),
+  file: z.string().regex(/^(full_single|full_sexy|upper80v2)_P\d{3}_(front|high|low|side|diag)\.webp$/),
+});
+export const PoseWearOfInput = z.object({ id: Id });
 export const PoseClassInput = z.object({ id: z.string().regex(POSE_CLASS_ID) });
 export const PoseSimilarInput = z.object({ id: Id, cursor: z.string().optional(), limit: qNumber.min(1).max(200).optional() });

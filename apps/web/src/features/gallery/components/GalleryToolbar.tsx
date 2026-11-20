@@ -259,7 +259,7 @@ export function GalleryViewControls({
   collapsed?: boolean;
 }) {
   // 选了姿势类别时多一种排法：离这一类代表姿势近的在前；「找同姿势的图」按和那张图相近排
-  const sortLabel = filters.poseLike ? '姿势相近' : filters.poseOrder ? '姿势典型' : SORT_LABEL[filters.sort];
+  const sortLabel = filters.poseLike ? '姿势相近' : filters.poseOrder ? (filters.pwPose ? '姿势最像' : '姿势典型') : SORT_LABEL[filters.sort];
   const noDirection = filters.sort === 'random' || filters.poseOrder || !!filters.poseLike;
   return (
     <div className="flex items-center gap-0.5">
@@ -310,9 +310,9 @@ export function GalleryViewControls({
               和那张姿势相近
             </MenuRadioItem>
           )}
-          {filters.poseClass && (
+          {(filters.poseClass || filters.pwPose) && (
             <MenuRadioItem value="pose" icon={<PersonStanding />}>
-              姿势典型的在前
+              {filters.pwPose ? '和姿势最像的在前' : '姿势典型的在前'}
             </MenuRadioItem>
           )}
           {SORTS.map((s) => (

@@ -1,9 +1,10 @@
 import type { PoseStatus } from '@emaki/shared';
 import { useQueryClient } from '@tanstack/react-query';
-import { CircleAlert, Download, FolderInput, X } from 'lucide-react';
+import { CircleAlert, Download, FolderInput, FolderOpen, X } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 import { Badge, Button, Dialog, DialogFooter, Field, IconButton, Input, Progress, Switch } from '@/components/ui';
+import { api } from '@/lib/api';
 import { formatBytes, formatCount } from '@/lib/format';
 import { useSettings } from '@/lib/queries';
 import { BlockRow, SettingsCard, SettingsSection } from '@/features/settings/components/SettingsSection';
@@ -17,6 +18,7 @@ import { poseApi, usePoseStatus } from './client';
  */
 export function PoseSettingsSection() {
   const enabled = useSettings().data?.pose?.enabled ?? false;
+  const showClasses = useSettings().data?.pose?.showClasses ?? false;
   const save = useSaveSettings();
   const status = usePoseStatus();
   const client = useQueryClient();
@@ -63,7 +65,13 @@ export function PoseSettingsSection() {
         )}
         {s && <ModelRow status={s} run={run} />}
         {s && enabled && ready && <ExtractRow status={s} run={run} />}
-        {s && enabled && s.prototype && <ImportRow defaults={s.prototype} run={run} />}
+        {s && enabled && <PoseWearRows status={s} run={run} />}
+        {enabled && (
+          <Field label="显示 51 类" hint="早先按骨架聚出来的 51 类：图库里多一个「按人偶挑」，看图器里多一行「姿势类」。数据一直保留。">
+            <Switch label="显示 51 类" checked={showClasses} onCheckedChange={(on) => save({ pose: { showClasses: on } })} />
+          </Field>
+        )}
+        {s && enabled && showClasses && s.prototype && <ImportRow defaults={s.prototype} run={run} />}
       </SettingsCard>
     </SettingsSection>
   );
@@ -225,6 +233,64 @@ function ExtractRow({ status, run }: { status: PoseStatus; run: Run }) {
   );
 }
 
+/** PoseWear 姿势库和匹配结果：都是本机文件，导入后线稿存进数据目录 */
+function PoseWearRows({ status, run }: { status: PoseStatus; run: Run }) {
+  const [lib, setLib] = useState(false);
+  const [match, setMatch] = useState(false);
+  const pw = status.posewear;
+  // 原型 posewear_v1 的 poses.json 在匹配结果旁边：给代表视角
+  const views = pw.defaults.assignmentsPath?.replace(/assignments[.]json$/, 'poses.json') ?? '';
+  return (
+    <>
+      <Field
+        label="PoseWear 姿势库"
+        hint={
+          pw.poses > 0
+            ? <span className="tabular">已导入 {formatCount(pw.poses)} 个单人姿势（全身、全身·性感、上半身）；再导一次会替换。</span>
+            : '从本机的 PoseWear 文件夹导入姿势和线稿（复制到数据目录）。'
+        }
+      >
+        <Button size="sm" variant={pw.poses > 0 ? 'outline' : 'secondary'} onClick={() => setLib(true)}>
+          导入…
+        </Button>
+        <PathDialog
+          open={lib}
+          onOpenChange={setLib}
+          title="导入 PoseWear 姿势库"
+          description="PoseWear 文件夹里要有 assets/poses.*.json 和 p/t、p/i 线稿。双人姿势暂时不导。"
+          fields={[
+            { key: 'path', label: 'PoseWear 文件夹', value: pw.defaults.folder ?? '', pick: true },
+            { key: 'viewsPath', label: '代表视角（posewear_v1 的 poses.json，可以不填，不填用正面）', value: views, optional: true },
+          ]}
+          submit="导入"
+          onSubmit={(v) => run(() => poseApi.importPoseWear({ path: v.path!, ...(v.viewsPath ? { viewsPath: v.viewsPath } : {}) }))}
+        />
+      </Field>
+      <Field
+        label="姿势匹配结果"
+        hint={
+          pw.assigned > 0
+            ? <span className="tabular">{formatCount(pw.assigned)} 张图匹配到了姿势；新图要重新跑匹配再导入。</span>
+            : '每张图匹配到哪个 PoseWear 姿势（assignments.json），只导本图库里有的图。'
+        }
+      >
+        <Button size="sm" variant="outline" disabled={pw.poses === 0} onClick={() => setMatch(true)}>
+          导入…
+        </Button>
+        <PathDialog
+          open={match}
+          onOpenChange={setMatch}
+          title="导入姿势匹配结果"
+          description="posewear_v1 的 assignments.json：图片 → 主要姿势、名次和前三个候选。整批替换之前导入的。"
+          fields={[{ key: 'assignmentsPath', label: '匹配结果', value: pw.defaults.assignmentsPath ?? '' }]}
+          submit="导入"
+          onSubmit={(v) => run(() => poseApi.importPoseWearMatches(v.assignmentsPath!))}
+        />
+      </Field>
+    </>
+  );
+}
+
 function ImportRow({ defaults, run }: { defaults: NonNullable<PoseStatus['prototype']>; run: Run }) {
   const [open, setOpen] = useState(false);
   return (
@@ -262,7 +328,8 @@ function PathDialog({
   onOpenChange: (open: boolean) => void;
   title: string;
   description: string;
-  fields: { key: string; label: string; value: string }[];
+  /** optional：可以空着；pick：旁边有「选择…」（弹系统的选文件夹窗口） */
+  fields: { key: string; label: string; value: string; optional?: boolean; pick?: boolean }[];
   submit: string;
   /** 成功返回 true，对话框才关 */
   onSubmit: (values: Record<string, string>) => Promise<boolean>;
@@ -285,19 +352,37 @@ function PathDialog({
         {fields.map((f) => (
           <label key={f.key} className="block">
             <span className="mb-1 block text-[12px] text-fg-muted">{f.label}</span>
-            <Input
-              value={value(f.key)}
-              onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
-              spellCheck={false}
-              className="font-mono text-[12px]"
-            />
+            <span className="flex items-center gap-2">
+              <Input
+                value={value(f.key)}
+                onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                spellCheck={false}
+                className="min-w-0 flex-1 font-mono text-[12px]"
+              />
+              {f.pick && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  icon={<FolderOpen />}
+                  onClick={() =>
+                    void api
+                      .pickFolder()
+                      .then(({ path }) => path && setValues((v) => ({ ...v, [f.key]: path })))
+                      .catch((e: Error) => toast.error(e.message))
+                  }
+                >
+                  选择…
+                </Button>
+              )}
+            </span>
           </label>
         ))}
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
             取消
           </Button>
-          <Button type="submit" variant="primary" loading={busy} disabled={fields.some((f) => !value(f.key).trim())}>
+          <Button type="submit" variant="primary" loading={busy} disabled={fields.some((f) => !f.optional && !value(f.key).trim())}>
             {submit}
           </Button>
         </DialogFooter>

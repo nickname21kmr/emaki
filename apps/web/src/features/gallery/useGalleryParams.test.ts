@@ -48,3 +48,43 @@ describe('姿势参数', () => {
     expect(gatePose(parse('poseClass=bust_04'), true).poseClass).toBe('bust_04');
   });
 });
+
+describe('PoseWear 姿势参数（?pwPose=）', () => {
+  it('选一个姿势：写 pwPose，不写排序（按匹配名次），读回来一样', () => {
+    const next = patch('kind=illustration&sort=bytes', { pwPose: 'full_sexy_P012' });
+    expect(next.get('pwPose')).toBe('full_sexy_P012');
+    expect(next.get('sort')).toBeNull();
+    const f = parse(next.toString());
+    expect([f.pwPose, f.poseOrder]).toEqual(['full_sexy_P012', true]);
+  });
+
+  it('明确选了排序就按排序（最近添加也写出来），再选回按名次', () => {
+    const a = patch('kind=illustration&pwPose=upper80v2_P003', { sort: 'addedAt' });
+    expect(a.get('sort')).toBe('addedAt');
+    expect(parse(a.toString()).poseOrder).toBe(false);
+    expect(parse(patch(a.toString(), { poseOrder: true }).toString()).poseOrder).toBe(true);
+  });
+
+  it('和 51 类只能选一个；去掉姿势排序也去掉', () => {
+    const a = patch('kind=illustration&poseClass=full_01&poseLike=9', { pwPose: 'full_single_P001' });
+    expect([a.get('pwPose'), a.get('poseClass'), a.get('poseLike')]).toEqual(['full_single_P001', null, null]);
+    const b = patch(a.toString(), { poseClass: 'mid_02' });
+    expect([b.get('pwPose'), b.get('poseClass')]).toEqual([null, 'mid_02']);
+    const c = parse(patch(a.toString(), { pwPose: undefined }).toString());
+    expect([c.pwPose, c.poseOrder]).toEqual([undefined, false]);
+  });
+
+  it('不认的 id 当没写（双人的 pair60 也不认）', () => {
+    expect(parse('pwPose=pair60_P001').pwPose).toBeUndefined();
+    expect(parse('pwPose=../../x').pwPose).toBeUndefined();
+    expect(parse('pwPose=full_single_P1').pwPose).toBeUndefined();
+  });
+
+  it('关着时都去掉；51 类没显示时只去掉类别，PoseWear 留着', () => {
+    expect(gatePose(parse('pwPose=full_single_P001'), false).pwPose).toBeUndefined();
+    const f = gatePose(parse('pwPose=full_single_P001'), true, false);
+    expect([f.pwPose, f.poseOrder]).toEqual(['full_single_P001', true]);
+    const g = gatePose(parse('poseClass=bust_04&poseLike=a'), true, false);
+    expect([g.poseClass, g.poseLike, g.poseOrder]).toEqual([undefined, undefined, false]);
+  });
+});
