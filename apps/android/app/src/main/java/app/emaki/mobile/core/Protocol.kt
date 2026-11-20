@@ -116,11 +116,15 @@ object Json {
     fun uploadCheckBody(files: List<Pair<String, Long>>): String =
         JSONObject().put("files", org.json.JSONArray(files.map { (sha, size) -> JSONObject().put("sha256", sha).put("size", size) })).toString()
 
-    fun uploadCheck(text: String): Map<String, String?> = parse("检查结果", text) { o ->
+    fun uploadCheck(text: String): Map<String, CheckHit> = parse("检查结果", text) { o ->
         val results = o.getJSONArray("results")
         (0 until results.length()).associate { i ->
             val r = results.getJSONObject(i)
-            r.getString("sha256") to (if (r.isNull("imageId")) null else r.getString("imageId"))
+            r.getString("sha256") to CheckHit(
+                imageId = if (r.isNull("imageId")) null else r.getString("imageId"),
+                deleted = r.optBoolean("deleted", false),
+                dir = if (!r.has("dir") || r.isNull("dir")) null else r.getString("dir"),
+            )
         }
     }
 
@@ -147,6 +151,56 @@ object Json {
 
     fun uploadComplete(text: String): CompleteResult = parse("上传结果", text) { o ->
         CompleteResult(status = o.getString("status"), imageId = o.getString("imageId"))
+    }
+
+    // ---------------------------------------------------------------- 同步相册（docs/mobile.md 5.5）
+
+    fun albumReportBody(r: AlbumReport): String = JSONObject().apply {
+        put("full", r.full)
+        put("albums", org.json.JSONArray(r.albums.map { a ->
+            JSONObject().apply {
+                put("path", a.path)
+                put("name", a.name)
+                put("count", a.count)
+                put("bytes", a.bytes)
+                if (a.latestAt != null) put("latestAt", a.latestAt)
+                a.inventory?.let { i ->
+                    put("inventory", JSONObject().apply {
+                        put("total", i.total)
+                        put("have", i.have)
+                        put("inTarget", i.inTarget)
+                        put("deleted", i.deleted)
+                        put("new", i.new)
+                        put("newBytes", i.newBytes)
+                        put("folder", i.folder ?: JSONObject.NULL)
+                        put("folderCount", i.folderCount)
+                    })
+                }
+                if (a.pending != null) put("pending", a.pending)
+            }
+        }))
+        r.state?.let { st ->
+            put("state", JSONObject().apply {
+                put("running", st.running ?: JSONObject.NULL)
+                if (st.done != null) put("done", st.done)
+                if (st.total != null) put("total", st.total)
+                if (st.error != null) put("error", st.error)
+                if (st.summary != null) put("summary", st.summary)
+            })
+        }
+    }.toString()
+
+    fun albumConfig(text: String): AlbumConfig = parse("同步设置", text) { o ->
+        val albums = o.optJSONArray("albums")
+        AlbumConfig(
+            wifiOnly = o.optBoolean("wifiOnly", true),
+            chargingOnly = o.optBoolean("chargingOnly", false),
+            syncing = if (albums == null) emptySet() else (0 until albums.length())
+                .map { albums.getJSONObject(it) }
+                .filter { it.optBoolean("sync", false) }
+                .map { it.getString("path") }
+                .toSet(),
+        )
     }
 }
 

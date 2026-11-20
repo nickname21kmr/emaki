@@ -11,7 +11,7 @@ import java.io.IOException
 import java.security.MessageDigest
 
 /** 假电脑的上传接口：照 apps/server/src/domain/upload/upload.ts 的规则回答（断点、传过的、内容核对） */
-private class FakeUploads(val have: MutableMap<String, String> = mutableMapOf()) : UploadApi {
+internal class FakeUploads(val have: MutableMap<String, String> = mutableMapOf()) : UploadApi {
     class Up(val id: String, val sha: String, val size: Long, var data: ByteArray = ByteArray(0), var status: String = "receiving", var imageId: String? = null)
 
     val uploads = mutableMapOf<String, Up>()
@@ -24,20 +24,26 @@ private class FakeUploads(val have: MutableMap<String, String> = mutableMapOf())
     /** 下一次 PUT 回 409（另一个任务改了断点） */
     var conflictOnce = false
     var revoked = false
+    /** 电脑上删过的（回收站里） */
+    val deleted = mutableSetOf<String>()
+    /** 在这台设备「上传到」里的图所在的文件夹 */
+    val dirs = mutableMapOf<String, String>()
+    val begins = mutableListOf<BeginRequest>()
     private var nextImage = 100
 
     private fun guard() {
         if (revoked) throw ApiException(401, "device_revoked", "这台设备已经被电脑移除")
     }
 
-    override suspend fun check(files: List<Pair<String, Long>>): Map<String, String?> {
+    override suspend fun check(files: List<Pair<String, Long>>): Map<String, CheckHit> {
         guard()
         checks++
-        return files.associate { (sha, _) -> sha to have[sha] }
+        return files.associate { (sha, _) -> sha to CheckHit(have[sha], deleted = have[sha] == null && sha in deleted, dir = if (have[sha] != null) dirs[sha] else null) }
     }
 
     override suspend fun begin(request: BeginRequest): BeginResult {
         guard()
+        begins += request
         uploads.values.firstOrNull { it.sha == request.sha256 && it.status == "imported" }?.let { return BeginResult(it.id, it.size, "imported", it.imageId) }
         uploads.values.firstOrNull { it.sha == request.sha256 && it.status == "receiving" }?.let { return BeginResult(it.id, it.data.size.toLong(), "receiving", null) }
         val u = Up("u${uploads.size + 1}", request.sha256, request.size)
@@ -74,8 +80,8 @@ private class FakeUploads(val have: MutableMap<String, String> = mutableMapOf())
     }
 }
 
-private fun sha(b: ByteArray) = Hex.encode(MessageDigest.getInstance("SHA-256").digest(b))
-private fun bytes(n: Int, seed: Int) = ByteArray(n) { ((it * 31 + seed) and 0xff).toByte() }
+internal fun sha(b: ByteArray) = Hex.encode(MessageDigest.getInstance("SHA-256").digest(b))
+internal fun bytes(n: Int, seed: Int) = ByteArray(n) { ((it * 31 + seed) and 0xff).toByte() }
 private fun file(name: String, data: ByteArray) = UploadFile(name, data.size.toLong(), "2026-11-20T00:00:00Z") { ByteArrayInputStream(data) }
 
 class UploaderTest {
@@ -159,7 +165,12 @@ class UploaderTest {
         val body = org.json.JSONObject(Json.uploadBeginBody(BeginRequest("b1", "ab", 12, "a.png", null, "Download", "media:1")))
         assertEquals("Download", body.getString("album"))
         assertTrue(!body.has("modifiedAt"))
-        assertEquals(mapOf("x" to "3", "y" to null), Json.uploadCheck("""{"results":[{"sha256":"x","imageId":"3"},{"sha256":"y","imageId":null}]}"""))
+        assertEquals(
+            mapOf("x" to CheckHit("3", false, "下载"), "y" to CheckHit(null, true, null), "z" to CheckHit(null)),
+            Json.uploadCheck(
+                """{"results":[{"sha256":"x","imageId":"3","deleted":false,"dir":"下载"},{"sha256":"y","imageId":null,"deleted":true,"dir":null},{"sha256":"z","imageId":null}]}""",
+            ),
+        )
         assertEquals(BeginResult("u1", 5, "receiving", null), Json.uploadBegin("""{"uploadId":"u1","received":5,"status":"receiving","imageId":null}"""))
         assertEquals(CompleteResult("existing", "9"), Json.uploadComplete("""{"ok":true,"message":"x","status":"existing","imageId":"9"}"""))
     }

@@ -197,6 +197,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     fun forget() {
         job?.cancel()
         store.clear()
+        // 忘掉了这台电脑：相册不再同步给它
+        app.emaki.mobile.platform.AlbumSync.stop(getApplication())
         CookieManager.getInstance().removeAllCookies(null)
         goFind()
     }

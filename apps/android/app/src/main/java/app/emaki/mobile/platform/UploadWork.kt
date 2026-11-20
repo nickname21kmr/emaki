@@ -89,6 +89,22 @@ object UploadQueue {
     const val TAG = "upload"
 }
 
+/** 传图、同步相册的通知都在「传图」这个渠道（不响、不弹） */
+internal fun ensureUploadChannel(context: Context) {
+    val nm = context.getSystemService(NotificationManager::class.java) ?: return
+    if (nm.getNotificationChannel(UploadWorker.CHANNEL) == null)
+        nm.createNotificationChannel(
+            NotificationChannel(UploadWorker.CHANNEL, "传图", NotificationManager.IMPORTANCE_LOW).apply { description = "把手机上的图传到电脑的进度" },
+        )
+}
+
+/** 有通知权限才发（Android 13+ 要用户给） */
+internal fun notifyIfAllowed(context: Context, id: Int, n: android.app.Notification) {
+    val allowed = Build.VERSION.SDK_INT < 33 ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    if (allowed) runCatching { NotificationManagerCompat.from(context).notify(id, n) }
+}
+
 class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     private val notifications = NotificationManagerCompat.from(context)
     private val notificationId = (params.id.hashCode() and 0x7fffffff) or 1
@@ -200,11 +216,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         if (allowed) runCatching { notifications.notify(id, n) }
     }
 
-    private fun channel() {
-        val nm = applicationContext.getSystemService(NotificationManager::class.java) ?: return
-        if (nm.getNotificationChannel(CHANNEL) == null)
-            nm.createNotificationChannel(NotificationChannel(CHANNEL, "传图", NotificationManager.IMPORTANCE_LOW).apply { description = "把手机上的图传到电脑的进度" })
-    }
+    private fun channel() = ensureUploadChannel(applicationContext)
 
     companion object {
         const val CHANNEL = "uploads"

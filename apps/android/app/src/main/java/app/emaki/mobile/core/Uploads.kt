@@ -20,7 +20,19 @@ class UploadFile(
     val modifiedAt: String?,
     /** 相册同步用：手机上这个文件的标识（MediaStore 的 id），手动上传不给 */
     val clientKey: String? = null,
+    /** 已经算好的 sha256（相册同步先盘点过）；null = 传之前现算 */
+    val sha256: String? = null,
     val open: () -> InputStream,
+)
+
+/** 问电脑「这个 sha256 你有没有」的回答（apps/server/src/domain/upload/upload.ts 的 checkUploads） */
+data class CheckHit(
+    /** 图库里内容相同的图；没有是 null */
+    val imageId: String?,
+    /** 没有，但删过（在回收站里、或者文件丢了）：同步相册不再传 */
+    val deleted: Boolean = false,
+    /** 那张图在这台设备的「上传到」里：所在的文件夹（相对「上传到」）；不在里面是 null */
+    val dir: String? = null,
 )
 
 data class BeginRequest(
@@ -41,8 +53,8 @@ data class CompleteResult(val status: String, val imageId: String)
 
 /** 电脑这一侧的上传接口；测试里换成假的 */
 interface UploadApi {
-    /** sha256 → 电脑上那张图的 id（没有是 null）；一次最多 500 个 */
-    suspend fun check(files: List<Pair<String, Long>>): Map<String, String?>
+    /** sha256 → 电脑上有没有、删过没有、在哪个文件夹；一次最多 500 个 */
+    suspend fun check(files: List<Pair<String, Long>>): Map<String, CheckHit>
     suspend fun begin(request: BeginRequest): BeginResult
     /** 传一段（bytes 的前 length 个字节），返回电脑上已收到的字节数 */
     suspend fun put(uploadId: String, offset: Long, bytes: ByteArray, length: Int): Long
@@ -74,30 +86,41 @@ class Uploader(
 ) {
     /**
      * 传一批。网络问题（IOException）、设备被移除（401）原样抛出，整批停下；单个文件被电脑拒绝（400，例如内容和哈希对不上、不是图片）
-     * 记进 failed，接着传下一个
+     * 记进 failed，接着传下一个。
+     *
+     * precheck：先问电脑有没有，有的不传（手动上传）；相册同步自己问过了（还要跳过删过的），传 false。
+     * onFile：每个文件的结果（imported / existing / failed），相册同步据此记下传过的
      */
-    suspend fun run(batchId: String, files: List<UploadFile>, album: String? = null, onProgress: (UploadProgress) -> Unit = {}): UploadSummary {
-        val hashed = files.map { f -> Hashed(f, sha256(f)) }
-        val have = HashMap<String, String?>()
-        for (part in hashed.chunked(CHECK_MAX)) have.putAll(api.check(part.map { it.sha256 to it.file.size }))
+    suspend fun run(
+        batchId: String,
+        files: List<UploadFile>,
+        album: String? = null,
+        precheck: Boolean = true,
+        onFile: (UploadFile, String) -> Unit = { _, _ -> },
+        onProgress: suspend (UploadProgress) -> Unit = {},
+    ): UploadSummary {
+        val hashed = files.map { f -> Hashed(f, f.sha256 ?: sha256(f)) }
+        val have = HashMap<String, CheckHit>()
+        if (precheck) for (part in hashed.chunked(CHECK_MAX)) have.putAll(api.check(part.map { it.sha256 to it.file.size }))
         var imported = 0
         var existing = 0
         val failed = mutableListOf<Pair<String, String>>()
         hashed.forEachIndexed { i, h ->
             coroutineContext.ensureActive()
             onProgress(UploadProgress(i, hashed.size, h.file.name))
-            if (have[h.sha256] != null) {
+            if (have[h.sha256]?.imageId != null) {
                 existing++
+                onFile(h.file, "existing")
                 return@forEachIndexed
             }
             try {
-                when (one(batchId, h, album).status) {
-                    "imported" -> imported++
-                    else -> existing++
-                }
+                val status = one(batchId, h, album).status
+                if (status == "imported") imported++ else existing++
+                onFile(h.file, status)
             } catch (e: ApiException) {
                 if (e.unauthorized || e.status >= 500) throw e
                 failed += h.file.name to (e.message ?: "电脑拒绝了（${e.status}）")
+                onFile(h.file, "failed")
             }
         }
         onProgress(UploadProgress(hashed.size, hashed.size, null))
@@ -142,9 +165,12 @@ class Uploader(
         const val CHUNK_BYTES = 4 * 1024 * 1024
         const val CHECK_MAX = 500
 
-        fun sha256(f: UploadFile): String {
+        fun sha256(f: UploadFile): String = sha256(f.open())
+
+        /** 读完这个流算 sha256（读完关掉） */
+        fun sha256(stream: InputStream): String {
             val md = MessageDigest.getInstance("SHA-256")
-            f.open().use { input ->
+            stream.use { input ->
                 val buf = ByteArray(64 * 1024)
                 while (true) {
                     val n = input.read(buf)

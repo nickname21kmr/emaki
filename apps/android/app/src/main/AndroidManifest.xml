@@ -8,6 +8,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 同步相册（docs/mobile.md 5.5）：读所有照片（第一次点「盘点相册」时才问）；只允许「部分照片」时看不到新图，要能看出来；
+         读照片里的位置：读原文件，sha256 才和电脑上拷过去的那份对得上 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
     <!-- 扫码用相机（zxing-android-embedded 自己申请权限）；没有相机的设备也能装，只是不能扫码 -->
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 

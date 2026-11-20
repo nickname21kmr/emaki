@@ -67,7 +67,7 @@ class EmakiApi(
 
         private fun auth(r: Request): Request = r.newBuilder().header("Authorization", "Bearer $token").build()
 
-        override suspend fun check(files: List<Pair<String, Long>>): Map<String, String?> =
+        override suspend fun check(files: List<Pair<String, Long>>): Map<String, CheckHit> =
             Json.uploadCheck(call(auth(post("/api/uploads/check", Json.uploadCheckBody(files)))))
 
         override suspend fun begin(request: BeginRequest): BeginResult =
@@ -81,6 +81,14 @@ class EmakiApi(
 
         override suspend fun complete(uploadId: String): CompleteResult =
             Json.uploadComplete(call(auth(post("/api/uploads/${encode(uploadId)}/complete", "{}")), slow))
+    }
+
+    /** 同步相册（docs/mobile.md 5.5）：报相册、盘点、状态，拿回该同步哪些相册 */
+    fun albums(token: String): AlbumApi = object : AlbumApi {
+        override suspend fun report(report: AlbumReport): AlbumConfig {
+            val r = post("/api/uploads/albums", Json.albumReportBody(report)).newBuilder().header("Authorization", "Bearer $token").build()
+            return Json.albumConfig(call(r))
+        }
     }
 
     private fun get(path: String): Request =

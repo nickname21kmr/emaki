@@ -62,6 +62,14 @@ fun interface ImagePicker {
 }
 
 /**
+ * 网页上的「同步相册」（window.EmakiApp.syncAlbums(mode)，B2）：inventory 盘点、sync 现在同步一次。
+ * Activity 先要读照片的权限（第一次），再排进后台任务（platform/AlbumSyncWork.kt）
+ */
+fun interface AlbumSyncRequest {
+    fun request(mode: String)
+}
+
+/**
  * 主界面：全屏 WebView 加载电脑上的网页 `https://<地址>:<端口>/`（docs/mobile.md 3.1）。
  *
  * - 加载前给这个地址写 Cookie `emaki_device=<凭证>`（网页的请求靠它认证，DeviceCookie）：地址变了 WebView 就重建，Cookie 写到新地址上；
@@ -70,7 +78,8 @@ fun interface ImagePicker {
  * - 注入 `window.EmakiApp`：网页遇到 401（设备被移除）时调 `unpaired(code)`，App 回到原生页面，不显示网页自己的配对页；
  *   网页连不上电脑时调 `connectionLost()`（apps/web/src/lib/connection.ts），App 核实后换到「电脑不在线」；
  *   `paper(color)` 是 App 自己注入的脚本用的，把网页的纸色报上来，状态栏、导航栏跟着换颜色；
- *   `pickImages()`：网页上的「从手机添加」，打开系统的选图界面，选完在后台传给电脑（docs/mobile.md 5.4）。
+ *   `pickImages()`：网页上的「从手机添加」，打开系统的选图界面，选完在后台传给电脑（docs/mobile.md 5.4）；
+ *   `syncAlbums(mode)`：网页上的「同步相册」，盘点（inventory）或者现在同步一次（sync），在后台做（5.5）。
  */
 @Composable
 fun WebScreen(
@@ -80,6 +89,7 @@ fun WebScreen(
     path: String,
     fileChooser: FileChooser,
     imagePicker: ImagePicker,
+    albumSync: AlbumSyncRequest,
     onPaper: (Color) -> Unit,
     onPath: (String) -> Unit,
     onUnpaired: (String) -> Unit,
@@ -107,6 +117,7 @@ fun WebScreen(
             server.fingerprintBytes,
             fileChooser,
             imagePicker,
+            albumSync,
             object : WebEvents {
                 override fun history(view: WebView, path: String?) {
                     canGoBack = view.canGoBack()
@@ -225,6 +236,7 @@ private fun createWebView(
     fingerprint: ByteArray,
     fileChooser: FileChooser,
     imagePicker: ImagePicker,
+    albumSync: AlbumSyncRequest,
     events: WebEvents,
 ): WebView {
     WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
@@ -265,6 +277,12 @@ private fun createWebView(
             @JavascriptInterface
             fun pickImages() {
                 main.post { imagePicker.pick() }
+            }
+
+            @JavascriptInterface
+            fun syncAlbums(mode: String?) {
+                val m = if (mode == "inventory") "inventory" else "sync"
+                main.post { albumSync.request(m) }
             }
 
             @JavascriptInterface

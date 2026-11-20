@@ -9,6 +9,7 @@ import android.net.Network
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.widget.Toast
@@ -37,8 +38,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.emaki.mobile.platform.AlbumSync
 import app.emaki.mobile.platform.FoundServer
+import app.emaki.mobile.platform.MediaIndex
 import app.emaki.mobile.platform.UploadQueue
+import app.emaki.mobile.ui.AlbumSyncRequest
 import app.emaki.mobile.ui.AddressDialog
 import app.emaki.mobile.ui.BusyScreen
 import app.emaki.mobile.ui.CertWrongScreen
@@ -83,21 +87,68 @@ class MainActivity : ComponentActivity() {
         Toast.makeText(this, "开始传 ${uris.size} 张，进度在通知栏", Toast.LENGTH_SHORT).show()
     }
 
-    /** 第一次传图前问一下通知权限（Android 13+）：给不给都照样传，只是看不到进度 */
-    private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { launchPicker() }
+    /** 第一次传图、同步相册前问一下通知权限（Android 13+）：给不给都照样做，只是看不到进度 */
+    private var afterNotifications: (() -> Unit)? = null
+    private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        afterNotifications?.invoke()
+        afterNotifications = null
+    }
 
-    private fun launchPicker() = pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-
-    private val imagePicker = ImagePicker {
+    private fun withNotifications(then: () -> Unit) {
         val prefs = getSharedPreferences("ui", MODE_PRIVATE)
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
             !prefs.getBoolean("askedNotifications", false)
         ) {
             prefs.edit().putBoolean("askedNotifications", true).apply()
+            afterNotifications = then
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
-            launchPicker()
+            then()
+        }
+    }
+
+    private fun launchPicker() = pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+
+    private val imagePicker = ImagePicker { withNotifications(::launchPicker) }
+
+    /**
+     * 「同步相册」（docs/mobile.md 5.5）：要读所有照片的权限。只允许了「部分照片」、或者拒绝过不再弹框的，带去系统设置里改
+     */
+    private var pendingAlbumMode = AlbumSync.INVENTORY
+    private val askMedia = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
+        when {
+            MediaIndex.canRead(this) -> startAlbumSync(pendingAlbumMode)
+            MediaIndex.partial(this) -> {
+                Toast.makeText(this, "同步相册要读所有照片：在「照片和视频」里选「全部允许」", Toast.LENGTH_LONG).show()
+                openAppSettings()
+            }
+            else -> {
+                val asked = MediaIndex.permissions().first()
+                if (!shouldShowRequestPermissionRationale(asked)) openAppSettings()
+                Toast.makeText(this, "没有读照片的权限，同步不了相册", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun startAlbumSync(mode: String) {
+        AlbumSync.runNow(this, mode)
+        Toast.makeText(this, if (mode == AlbumSync.INVENTORY) "开始盘点相册，进度在通知栏" else "开始同步相册", Toast.LENGTH_SHORT).show()
+    }
+
+    private val albumSync = AlbumSyncRequest { mode ->
+        withNotifications {
+            if (MediaIndex.canRead(this)) startAlbumSync(mode)
+            else {
+                pendingAlbumMode = mode
+                askMedia.launch(MediaIndex.permissions())
+            }
+        }
+    }
+
+    private fun openAppSettings() {
+        runCatching {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
         }
     }
 
@@ -122,7 +173,7 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) handlePairLink(intent)
         setContent {
             EmakiTheme {
-                App(model, fileChooser, imagePicker, ::setBarIcons)
+                App(model, fileChooser, imagePicker, albumSync, ::setBarIcons)
             }
         }
     }
@@ -132,6 +183,8 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         model.foreground(true)
         watchNetwork(true)
+        // 打开 App 时同步一次相册（有在同步的相册才会）
+        AlbumSync.kick(this)
     }
 
     override fun onPause() {
@@ -197,7 +250,13 @@ private sealed interface Dialog {
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun App(model: AppModel, fileChooser: FileChooser, imagePicker: ImagePicker, setBarIcons: (Boolean) -> Unit) {
+private fun App(
+    model: AppModel,
+    fileChooser: FileChooser,
+    imagePicker: ImagePicker,
+    albumSync: AlbumSyncRequest,
+    setBarIcons: (Boolean) -> Unit,
+) {
     val screen by model.screen.collectAsStateWithLifecycle()
     val deviceName by model.deviceName.collectAsStateWithLifecycle()
     var dialog by remember { mutableStateOf<Dialog?>(null) }
@@ -262,6 +321,7 @@ private fun App(model: AppModel, fileChooser: FileChooser, imagePicker: ImagePic
                 path = s.path,
                 fileChooser = fileChooser,
                 imagePicker = imagePicker,
+                albumSync = albumSync,
                 onPaper = { webPaper = it },
                 onPath = { model.onWebPath(s, it) },
                 onUnpaired = { code -> model.onWebUnpaired(s, code) },
