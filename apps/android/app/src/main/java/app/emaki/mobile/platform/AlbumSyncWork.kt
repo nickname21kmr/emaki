@@ -26,6 +26,8 @@ import app.emaki.mobile.core.AlbumSyncState
 import app.emaki.mobile.core.AlbumSyncer
 import app.emaki.mobile.core.ApiException
 import app.emaki.mobile.core.EmakiApi
+import app.emaki.mobile.core.MediaItem
+import app.emaki.mobile.core.MediaReader
 import app.emaki.mobile.core.ReconnectResult
 import app.emaki.mobile.core.Reconnector
 import app.emaki.mobile.core.SyncProgress
@@ -144,7 +146,10 @@ class AlbumSyncWorker(context: Context, params: WorkerParameters) : CoroutineWor
                 uploads = api.uploads(saved.token),
                 albums = albums,
                 store = db,
-                reader = { MediaIndex.open(ctx, it) },
+                reader = object : MediaReader {
+                    override fun open(item: MediaItem) = MediaIndex.open(ctx, item)
+                    override fun toJpeg(item: MediaItem) = MediaIndex.toJpeg(ctx, item)
+                },
                 batchIdOf = { album -> UUID.nameUUIDFromBytes("$installId|$album|$day".toByteArray()).toString() },
             )
             val items = MediaIndex.images(ctx)

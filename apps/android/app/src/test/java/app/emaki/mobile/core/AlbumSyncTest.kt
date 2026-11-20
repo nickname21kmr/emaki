@@ -55,10 +55,20 @@ private class Phone {
         items += item
         return item
     }
-    val reader = MediaReader { item ->
-        opens++
-        if (item.id in missing) throw FileNotFoundException("没了")
-        ByteArrayInputStream(data.getValue(item.id))
+    /** 转过 JPEG 的（id） */
+    val converted = mutableListOf<Long>()
+    val reader = object : MediaReader {
+        override fun open(item: MediaItem): java.io.InputStream {
+            opens++
+            if (item.id in missing) throw FileNotFoundException("没了")
+            return ByteArrayInputStream(data.getValue(item.id))
+        }
+
+        /** 假的转换：HEIF 的内容前面加上 JPEG 的头 */
+        override fun toJpeg(item: MediaItem): ByteArray? {
+            converted += item.id
+            return byteArrayOf(0xFF.toByte(), 0xD8.toByte()) + data.getValue(item.id)
+        }
     }
 }
 
@@ -199,6 +209,42 @@ class AlbumSyncTest {
         assertEquals(begins + 1, computer.begins.size)
     }
 
+    /** HEIF 的文件头（改成 .jpg 也一样） */
+    private fun heifBytes(seed: Int) = "\u0000\u0000\u0000\u0018ftypheic".toByteArray(Charsets.ISO_8859_1) + bytes(900, seed)
+
+    @Test
+    fun heifIsConvertedToJpegBeforeUploading() = runTest {
+        val heif = heifBytes(1)
+        phone.add(1, "Pictures/weibo", heif, name = "img-1.jpg")
+        phone.add(2, "Pictures/weibo", bytes(1_000, 2))
+        computer.rejectSha += sha(heif) // 电脑读不了原图
+        albums.syncing += "Pictures/weibo"
+        val r = syncer().sync(phone.items)
+        assertEquals("同步了 2 张（1 张 HEIF 转成了 JPG）", r.text())
+        assertEquals(listOf(1L), phone.converted)
+        val sent = computer.begins.single { it.clientKey == "1" }
+        assertEquals("img-1.jpg", sent.fileName)
+        assertEquals(sha(byteArrayOf(0xFF.toByte(), 0xD8.toByte()) + heif), sent.sha256)
+        // 处理过的记的是原图：下次不再转、不再传
+        assertEquals(sha(heif), store.handled[1L])
+        val begins = computer.begins.size
+        assertEquals("没有新图", syncer().sync(phone.items).text())
+        assertEquals(begins, computer.begins.size)
+        assertEquals(listOf(0 to 0), albums.reports.last().albums.map { it.pending to it.rejected })
+    }
+
+    @Test
+    fun heifRejectedByAnOlderAppIsConvertedNow() = runTest {
+        val heif = heifBytes(3)
+        phone.add(1, "Pictures/weibo", heif, name = "x.heic")
+        store.putSha(1, heif.size.toLong(), 1_700_000_000L, sha(heif))
+        store.markHandled(1, AlbumSyncer.REJECTED + sha(heif)) // 0.3.1 记下的「读不了」
+        albums.syncing += "Pictures/weibo"
+        val r = syncer().sync(phone.items)
+        assertEquals(1, r.imported)
+        assertEquals("x.jpg", computer.begins.single().fileName)
+    }
+
     @Test
     fun aCorruptedTransferIsPendingAndRetried() = runTest {
         phone.add(1, "Pictures/bili", bytes(1_000, 1))
@@ -217,6 +263,10 @@ class AlbumSyncTest {
         assertEquals("Download/QQBrowser/1700284633722/图片收藏", AlbumSyncer.albumPath("Download/QQBrowser/1700284633722/图片收藏/"))
         assertNull(AlbumSyncer.albumPath("/"))
         assertNull(AlbumSyncer.albumPath(null))
+        assertTrue(AlbumSyncer.heif("\u0000\u0000\u0000\u0030ftypheic\u0000\u0000".toByteArray(Charsets.ISO_8859_1)))
+        assertFalse(AlbumSyncer.heif(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xE0.toByte(), 0, 0x10, 0x4A, 0x46, 0x49, 0x46, 0, 1)))
+        assertEquals("a.jpg", AlbumSyncer.jpegName("a.heic"))
+        assertEquals("img-1.JPG", AlbumSyncer.jpegName("img-1.JPG"))
         val body = JSONObject(
             Json.albumReportBody(
                 AlbumReport(

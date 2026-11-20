@@ -4,10 +4,13 @@ import android.Manifest
 import android.content.ContentUris
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.ImageDecoder
 import android.os.Build
 import android.provider.MediaStore
 import app.emaki.mobile.core.AlbumSyncer
 import app.emaki.mobile.core.MediaItem
+import java.io.ByteArrayOutputStream
 import java.io.FileNotFoundException
 import java.io.InputStream
 
@@ -86,6 +89,25 @@ object MediaIndex {
             }
         }
         return out
+    }
+
+    /**
+     * HEIF 转成 JPEG（质量 95，按照片里的方向转正）：电脑读不了 HEIF（docs/mobile.md 5.5）。转不了（坏图、内存不够）是 null
+     */
+    fun toJpeg(context: Context, item: MediaItem): ByteArray? = try {
+        val source = ImageDecoder.createSource(context.contentResolver, ContentUris.withAppendedId(uri, item.id))
+        val bitmap = ImageDecoder.decodeBitmap(source) { decoder, _, _ -> decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE }
+        try {
+            ByteArrayOutputStream().use { out ->
+                if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)) null else out.toByteArray()
+            }
+        } finally {
+            bitmap.recycle()
+        }
+    } catch (e: Exception) {
+        null
+    } catch (e: OutOfMemoryError) {
+        null
     }
 
     fun open(context: Context, item: MediaItem): InputStream {

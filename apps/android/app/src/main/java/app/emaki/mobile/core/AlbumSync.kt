@@ -1,6 +1,7 @@
 package app.emaki.mobile.core
 
 import kotlinx.coroutines.ensureActive
+import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.time.Instant
@@ -17,7 +18,10 @@ import kotlin.coroutines.coroutineContext
  *   → 报结果（每个相册还有几张没传上来）。
  * - 网络问题（IOException）、设备被移除（401）原样抛出，交给调用方（WorkManager）重试或停下；做完的都记下了，重跑不会重复。
  * - 读不到的图（同步途中被删了、没权限）跳过，不算网络问题。
- * - 电脑读不了的（422，格式不支持，例如改成 .jpg 的 HEIF）记成 rejected:<sha256>，以后不再传；重新盘点时清掉，再试一次。
+ * - HEIF（看文件头，改成 .jpg 的也算）电脑读不了：传之前在手机上转成 JPEG（一张一张转，转完就传，不占内存）。
+ *   电脑上存的是转过的那份；手机上的原图不动。用户 2026-11-20 同意的（weibo 里存下来的是 HEIF）。
+ * - 电脑读不了的（422，格式不支持）记成 rejected:<sha256>，转过 JPEG 还被拒的记成 rejected-jpeg:<sha256>，以后不再传；
+ *   重新盘点时清掉，再试一次。以前（不会转的版本）记下的 HEIF 会转了再试。
  */
 
 /** 相册里的一张图（MediaStore 的一行） */
@@ -37,6 +41,9 @@ data class MediaItem(
 /** 读手机上的图；测试里换成假的 */
 fun interface MediaReader {
     fun open(item: MediaItem): InputStream
+
+    /** 电脑读不了的格式（HEIF）转成 JPEG；转不了是 null */
+    fun toJpeg(item: MediaItem): ByteArray? = null
 }
 
 /** App 本地记的：算过的 sha256（按 id + 大小 + 修改时间），处理过的（id → 当时的 sha256） */
@@ -107,10 +114,12 @@ data class SyncResult(
     val failed: List<Pair<String, String>>,
     /** 这次新发现电脑读不了的（格式不支持）：记下，以后不再传 */
     val rejected: Int = 0,
+    /** 传上去的里面，从 HEIF 转成 JPEG 的 */
+    val converted: Int = 0,
 ) {
     /** 「同步了 12 张，1 张没传成」「13 张电脑读不了（格式不支持），不再传」「没有新图」 */
     fun text(): String = buildList {
-        if (imported > 0) add("同步了 $imported 张")
+        if (imported > 0) add("同步了 $imported 张" + if (converted > 0) "（$converted 张 HEIF 转成了 JPG）" else "")
         if (failed.size > rejected) add("${failed.size - rejected} 张没传成")
         if (rejected > 0) add("$rejected 张电脑读不了（格式不支持），不再传")
     }.joinToString("，").ifEmpty { "没有新图" }
@@ -197,7 +206,7 @@ class AlbumSyncer(
                 }
                 // 电脑上有了、删过的：以后同步不用再管（内容变了才再看）；以前读不了的再试一次（电脑可能能读了）
                 if (hit.imageId != null || hit.deleted) store.markHandled(item.id, sha)
-                else if (store.handled(item.id)?.startsWith(REJECTED) == true) store.clearHandled(item.id)
+                else if (store.handled(item.id)?.startsWith("rejected") == true) store.clearHandled(item.id)
             }
             val top = folders.entries.sortedWith(compareBy<Map.Entry<String, Int>>({ -it.value }, { it.key })).firstOrNull()
             albumOf(path, list).copy(inventory = AlbumInventory(list.size, have, inTarget, deleted, new, newBytes, top?.key, top?.value ?: 0))
@@ -223,7 +232,9 @@ class AlbumSyncer(
             val handled = store.handled(item.id)
             when {
                 sha == null || handled == sha -> Unit
-                handled == REJECTED + sha -> rejectedIn[item.album] = (rejectedIn[item.album] ?: 0) + 1
+                // 以前读不了的：HEIF 现在会转了，再试；别的（还有转过还被拒的）不再传
+                (handled == REJECTED + sha && !isHeif(item)) || handled == REJECTED_JPEG + sha ->
+                    rejectedIn[item.album] = (rejectedIn[item.album] ?: 0) + 1
                 else -> todo += item to sha
             }
             onProgress(SyncProgress("hash", i + 1, mine.size, item.album))
@@ -232,6 +243,7 @@ class AlbumSyncer(
         var existing = 0
         var skipped = 0
         var rejected = 0
+        var converted = 0
         val failed = mutableListOf<Pair<String, String>>()
         val pending = HashMap<String, Int>()
         if (todo.isNotEmpty()) {
@@ -255,51 +267,76 @@ class AlbumSyncer(
             var done = 0
             if (send.isNotEmpty()) progress("sync", 0, send.size, force = true)
             for ((album, list) in send.groupBy { it.first.album }) {
-                val byKey = list.associateBy { it.first.id.toString() }
-                val files = list.map { (item, sha) ->
-                    UploadFile(
-                        name = item.fileName,
-                        size = item.size,
-                        modifiedAt = item.takenMs?.takeIf { it > 0 }?.let { Instant.ofEpochMilli(it).toString() },
-                        clientKey = item.id.toString(),
-                        sha256 = sha,
-                    ) { reader.open(item) }
-                }
-                val base = done
                 var newlyRejected = 0
-                val summary = Uploader(uploads, chunkSize).run(
-                    batchIdOf(album),
-                    files,
-                    album,
-                    precheck = false,
-                    onFile = { f, status ->
-                        val (item, sha) = byKey.getValue(f.clientKey!!)
-                        when (status) {
-                            "failed" -> Unit
-                            "rejected" -> {
-                                store.markHandled(item.id, REJECTED + sha)
-                                rejectedIn[album] = (rejectedIn[album] ?: 0) + 1
-                                newlyRejected++
-                                rejected++
+                var failedHere = 0
+                // 传一批：entries 是 (手机上的图, 原图的 sha256, 转好的 JPEG 或 null)
+                suspend fun upload(entries: List<Triple<MediaItem, String, ByteArray?>>) {
+                    val byKey = entries.associateBy { it.first.id.toString() }
+                    val files = entries.map { (item, sha, jpeg) ->
+                        UploadFile(
+                            name = if (jpeg != null) jpegName(item.fileName) else item.fileName,
+                            size = jpeg?.size?.toLong() ?: item.size,
+                            modifiedAt = item.takenMs?.takeIf { it > 0 }?.let { Instant.ofEpochMilli(it).toString() },
+                            clientKey = item.id.toString(),
+                            sha256 = if (jpeg != null) Uploader.sha256(ByteArrayInputStream(jpeg)) else sha,
+                        ) { if (jpeg != null) ByteArrayInputStream(jpeg) else reader.open(item) }
+                    }
+                    val base = done
+                    val summary = Uploader(uploads, chunkSize).run(
+                        batchIdOf(album),
+                        files,
+                        album,
+                        precheck = false,
+                        onFile = { f, status ->
+                            val (item, sha, jpeg) = byKey.getValue(f.clientKey!!)
+                            when (status) {
+                                "failed" -> Unit
+                                "rejected" -> {
+                                    // 记的是原图的 sha256（处理过没有按原图算）
+                                    store.markHandled(item.id, (if (jpeg != null) REJECTED_JPEG else REJECTED) + sha)
+                                    rejectedIn[album] = (rejectedIn[album] ?: 0) + 1
+                                    newlyRejected++
+                                    rejected++
+                                }
+                                else -> {
+                                    store.markHandled(item.id, sha)
+                                    if (jpeg != null && status == "imported") converted++
+                                }
                             }
-                            else -> store.markHandled(item.id, sha)
-                        }
-                    },
-                    onProgress = { p ->
-                        onProgress(SyncProgress("upload", base + p.done, send.size, p.current))
-                        progress("sync", base + p.done, send.size)
-                    },
-                )
-                done += files.size
-                imported += summary.imported
-                existing += summary.existing
-                failed += summary.failed
+                        },
+                        onProgress = { p ->
+                            onProgress(SyncProgress("upload", base + p.done, send.size, p.current))
+                            progress("sync", base + p.done, send.size)
+                        },
+                    )
+                    done += files.size
+                    imported += summary.imported
+                    existing += summary.existing
+                    failed += summary.failed
+                    failedHere += summary.failed.size
+                }
+                val (heif, plain) = list.partition { (item, _) -> isHeif(item) }
+                if (plain.isNotEmpty()) upload(plain.map { (item, sha) -> Triple(item, sha, null) })
+                // HEIF：一张一张转、转完就传（不同时占着好几张图的内存）；转不了的记下不再试
+                for ((item, sha) in heif) {
+                    coroutineContext.ensureActive()
+                    val jpeg = reader.toJpeg(item)
+                    if (jpeg == null) {
+                        store.markHandled(item.id, REJECTED_JPEG + sha)
+                        rejectedIn[album] = (rejectedIn[album] ?: 0) + 1
+                        rejected++
+                        failed += item.fileName to "HEIF 转 JPEG 失败"
+                        done++
+                        continue
+                    }
+                    upload(listOf(Triple(item, sha, jpeg)))
+                }
                 // 没传成的里面，电脑读不了的不算「还没传上来」（不会再传）
-                val retry = summary.failed.size - newlyRejected
+                val retry = failedHere - newlyRejected
                 if (retry > 0) pending[album] = retry
             }
         }
-        val result = SyncResult(config, imported, existing, skipped, failed, rejected)
+        val result = SyncResult(config, imported, existing, skipped, failed, rejected, converted)
         val final = albums.report(
             AlbumReport(
                 all.filter { it.path in config.syncing }.map { it.copy(pending = pending[it.path] ?: 0, rejected = rejectedIn[it.path] ?: 0) },
@@ -310,10 +347,41 @@ class AlbumSyncer(
         return result.copy(config = final)
     }
 
+    /** 文件头是 HEIF（电脑读不了，要先转成 JPEG）；读不到算不是 */
+    private fun isHeif(item: MediaItem): Boolean = try {
+        reader.open(item).use { input ->
+            val head = ByteArray(12)
+            var n = 0
+            while (n < head.size) {
+                val r = input.read(head, n, head.size - n)
+                if (r < 0) break
+                n += r
+            }
+            n == head.size && heif(head)
+        }
+    } catch (e: IOException) {
+        false
+    } catch (e: SecurityException) {
+        false
+    }
+
     companion object {
         const val REPORT_EVERY_MS = 10_000L
-        /** 处理过的记号：电脑读不了的记成 rejected:<sha256> */
+        /** 处理过的记号：电脑读不了的记成 rejected:<sha256>，转过 JPEG 还被拒的记成 rejected-jpeg:<sha256> */
         const val REJECTED = "rejected:"
+        const val REJECTED_JPEG = "rejected-jpeg:"
+
+        private val HEIF_BRANDS = setOf("heic", "heix", "hevc", "hevx", "heim", "heis", "mif1", "msf1")
+
+        /** 文件头（前 12 个字节）是不是 HEIF：…ftyp + heic 这类品牌 */
+        fun heif(head: ByteArray): Boolean =
+            head.size >= 12 && String(head, 4, 4, Charsets.ISO_8859_1) == "ftyp" && String(head, 8, 4, Charsets.ISO_8859_1) in HEIF_BRANDS
+
+        /** 转成 JPEG 后的文件名：本来就叫 .jpg 的不改，别的换成 .jpg */
+        fun jpegName(name: String): String {
+            val lower = name.lowercase()
+            return if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) name else name.substringBeforeLast('.', name) + ".jpg"
+        }
 
         private fun albumOf(path: String, list: List<MediaItem>) = ReportedAlbum(
             path = path,
