@@ -3,23 +3,30 @@ import type { Me, Scope } from '@emaki/shared';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import { TooltipProvider } from '@/components/ui/Tooltip';
+import type { AlbumSyncInfo } from '@emaki/shared';
 import { qk } from '@/lib/queries';
-import { SendToComputerButton } from './SendToComputer';
+import { SendToComputerButton, SendToComputerTip, showIntro } from './SendToComputer';
 
 const g = globalThis as { EmakiApp?: unknown };
 afterEach(() => {
   delete g.EmakiApp;
 });
 
-function html(scopes: Scope[]) {
+/** 这台设备的同步相册：syncing 个相册在同步 */
+const albums = (syncing: number) =>
+  ({
+    albums: Array.from({ length: 2 }, (_, i) => ({ path: `A${i}`, sync: i < syncing })),
+    state: { running: null },
+  }) as unknown as AlbumSyncInfo;
+
+function html(scopes: Scope[], opts: { albums?: AlbumSyncInfo; tip?: boolean } = {}) {
   const client = new QueryClient();
   const me: Me = { kind: 'device', deviceId: 'd1', name: '平板', scopes };
   client.setQueryData(qk.me, me);
+  if (opts.albums) client.setQueryData(qk.albumSync(undefined), opts.albums);
   return renderToStaticMarkup(
     <QueryClientProvider client={client}>
-      <TooltipProvider>
-        <SendToComputerButton />
-      </TooltipProvider>
+      <TooltipProvider>{opts.tip ? <SendToComputerTip /> : <SendToComputerButton />}</TooltipProvider>
     </QueryClientProvider>,
   );
 }
@@ -45,5 +52,28 @@ describe('「传到电脑」（docs/mobile.md 5.4、5.5）', () => {
     expect(html(['read', 'upload'])).toBe('');
     g.EmakiApp = { unpaired: () => {} };
     expect(html(['read', 'upload'])).toBe('');
+  });
+});
+
+describe('第一次用的引导', () => {
+  const app = { unpaired: () => {}, pickImages: () => {}, syncAlbums: () => {} };
+
+  it('App 里还没有在同步的相册：图库里一条提示，页头图标上一个小点', () => {
+    g.EmakiApp = app;
+    expect(html(['read', 'upload'], { tip: true, albums: albums(0) })).toContain('去看看');
+    expect(html(['read', 'upload'], { albums: albums(0) })).toContain('bg-shu');
+  });
+
+  it('已经在同步、关掉过提示、浏览器里、没有上传权限：都不出现', () => {
+    g.EmakiApp = app;
+    expect(html(['read', 'upload'], { tip: true, albums: albums(1) })).toBe('');
+    expect(html(['read', 'upload'], { albums: albums(1) })).not.toContain('bg-shu');
+    expect(html(['read'], { tip: true, albums: albums(0) })).toBe('');
+    // 关掉过（renderToStaticMarkup 读不到 zustand 后来改的状态，判断条件单独测）
+    expect(showIntro(true, true, albums(0))).toBe(false);
+    expect(showIntro(true, false, albums(0))).toBe(true);
+    expect(showIntro(true, false, undefined)).toBe(false);
+    delete g.EmakiApp;
+    expect(html(['read', 'upload'], { tip: true, albums: albums(0) })).toBe('');
   });
 });

@@ -5,7 +5,7 @@ import { Link, useNavigate } from 'react-router';
 import { PageBody, PageHeader } from '@/components/layout/PageHeader';
 import { useScrollContainer } from '@/components/layout/ScrollContainer';
 import { ImageGrid, ImageGridSkeleton, SelectButton } from '@/components/media/ImageGrid';
-import { SendToComputerButton } from './components/SendToComputer';
+import { SendToComputerButton, SendToComputerTip } from './components/SendToComputer';
 import { KindBadge } from '@/components/media/KindBadge';
 import { KIND_LABEL, kindTotal } from '@/lib/kinds';
 import { KindIndex } from '@/features/annex/KindIndex';
@@ -211,6 +211,7 @@ export function GalleryPage() {
           />
         </div>
         {onlyIllust && <KindTip annex={(counts?.annex ?? 0)} />}
+        <SendToComputerTip />
       </PageHeader>
 
       <PageBody className="flex-1 pt-2">{body}</PageBody>

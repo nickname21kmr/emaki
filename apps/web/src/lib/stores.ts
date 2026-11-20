@@ -65,6 +65,9 @@ interface PrefsState {
   galleryKindTipSeen: boolean;
   setGalleryKinds: (v: ContentKind[] | 'all') => void;
   dismissGalleryKindTip: () => void;
+  /** App 里「传到电脑」的首次提示（图库里的提示条、页头图标上的小点）已关掉或者用过了 */
+  sendTipSeen: boolean;
+  dismissSendTip: () => void;
   setBlurSensitive: (v: boolean) => void;
   toggleBlurSensitive: () => void;
   setCharactersView: (v: CharactersView) => void;
@@ -101,6 +104,8 @@ export const usePrefs = create<PrefsState>()(
       galleryKindTipSeen: false,
       setGalleryKinds: (galleryKinds) => set({ galleryKinds }),
       dismissGalleryKindTip: () => set({ galleryKindTipSeen: true }),
+      sendTipSeen: false,
+      dismissSendTip: () => set({ sendTipSeen: true }),
       setBlurSensitive: (blurSensitive) => set({ blurSensitive }),
       toggleBlurSensitive: () => set((s) => ({ blurSensitive: !s.blurSensitive })),
       setCharactersView: (charactersView) => set({ charactersView }),
