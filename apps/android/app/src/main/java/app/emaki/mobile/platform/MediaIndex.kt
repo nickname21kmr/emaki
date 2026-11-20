@@ -113,6 +113,22 @@ object MediaIndex {
         null
     }
 
+    /** 按 MediaStore 的编号查原来的文件名和拍摄 / 修改时间（毫秒）；查不到是 null */
+    fun describe(context: Context, id: Long): Pair<String, Long?>? = runCatching {
+        context.contentResolver.query(
+            ContentUris.withAppendedId(uri, id),
+            arrayOf(MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.DATE_TAKEN, MediaStore.MediaColumns.DATE_MODIFIED),
+            null,
+            null,
+            null,
+        )?.use { c ->
+            if (!c.moveToFirst() || c.isNull(0)) return@use null
+            val taken = if (c.isNull(1)) 0L else c.getLong(1)
+            val modified = if (c.isNull(2)) 0L else c.getLong(2) * 1000
+            c.getString(0) to (taken.takeIf { it > 0 } ?: modified.takeIf { it > 0 })
+        }
+    }.getOrNull()
+
     fun open(context: Context, item: MediaItem): InputStream {
         var u = ContentUris.withAppendedId(uri, item.id)
         if (original(context)) u = MediaStore.setRequireOriginal(u)

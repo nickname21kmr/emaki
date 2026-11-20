@@ -195,6 +195,14 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 }
             }
         }
+        // 系统选图界面（Photo Picker）给的地址不带原来的文件名（是「1000023622.png」这样的编号），Pixiv 这类来源就认不出了：
+        // 有读照片的权限时按编号到 MediaStore 查原名和拍摄时间（没有权限时 MainActivity 用系统的文件选择器，它给的是原名）
+        if (uri.authority == MediaStore.AUTHORITY && "picker" in uri.pathSegments && MediaIndex.canRead(applicationContext)) {
+            uri.lastPathSegment?.toLongOrNull()?.let { MediaIndex.describe(applicationContext, it) }?.let { (n, t) ->
+                name = n
+                if (t != null) takenMs = t
+            }
+        }
         val bytes = size ?: runCatching { resolver.openAssetFileDescriptor(uri, "r")?.use { it.length } }.getOrNull()?.takeIf { it > 0 } ?: return null
         val open = { resolver.openInputStream(uri) ?: throw IOException("手机上读不到这张图") }
         if (runCatching { open().close() }.isFailure) return null

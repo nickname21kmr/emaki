@@ -23,7 +23,7 @@ import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import { parseId } from '../../datasource/sqlite/sql.ts';
 import { BadRequestError, ConflictError, NotFoundError, UnsupportedContentError } from '../../http/errors.ts';
 import { ComicAreas } from '../../services/classify/comicAreas.ts';
-import { ROOT_ACTIVE, VISIBLE } from '../../readmodel/terms.ts';
+import { FILE_LIVE, ROOT_ACTIVE, VISIBLE } from '../../readmodel/terms.ts';
 import { importImages } from '../library/import.ts';
 import { albumDir, normalizeAlbumPath } from './albums.ts';
 import { normalizeSubdir } from '../library/move.ts';
@@ -171,7 +171,9 @@ export function beginUpload(ctx: SqliteContext, deviceId: string, input: BeginIn
         Row | undefined)
     : (ctx.db
         .prepare(
-          `${SELECT} WHERE device_id = ? AND album IS ? AND sha256 = ? AND status IN ('imported', 'existing') ORDER BY created_at DESC LIMIT 1`,
+          // 手动上传：传过的那张还在图库里才算传过（在电脑上删掉了又特意选它，就是要再传一次）
+          `${SELECT} WHERE device_id = ? AND album IS ? AND sha256 = ? AND status IN ('imported', 'existing')
+             AND image_id IN (SELECT i.id FROM images i WHERE ${FILE_LIVE('i')}) ORDER BY created_at DESC LIMIT 1`,
         )
         .get(deviceId, album, input.sha256) as Row | undefined);
   if (same && (same.status === 'imported' || same.status === 'existing') && (same.image_id !== null || input.clientKey))
