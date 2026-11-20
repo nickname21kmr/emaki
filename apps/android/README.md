@@ -20,7 +20,7 @@
 | `.../core/Uploads.kt` | 传图（docs/mobile.md 5.4）：算 sha256、先问电脑有没有、分段传、断点续传（`Uploader`），照 `apps/server/scripts/lan-client.ts` 的 upload 写 |
 | `.../platform/UploadWork.kt` | 「从手机添加」选的图排成后台任务（WorkManager）：前台服务通知进度，连不上电脑过一会儿重试，传完通知结果 |
 | `.../core/AlbumSync.kt` | 同步相册（docs/mobile.md 5.5）的规则：盘点（每个相册电脑上有几张、老图在哪）、同步（只传电脑上没有的、删过的不传），和安卓无关，有单元测试 |
-| `.../platform/MediaIndex.kt`、`SyncDb.kt`、`AlbumSyncWork.kt` | 读 MediaStore 的相册和图（要读照片的权限）、手机上记的 sha256 和处理过的、后台任务（用户点的、相册有变化、每 4 小时、打开 App） |
+| `.../platform/MediaIndex.kt`、`SyncDb.kt`、`AlbumSyncWork.kt` | 读 MediaStore 的相册和图（要读照片的权限）、手机上记的 sha256 和处理过的、同步任务（只在 App 开着时：打开 App、开着时相册有新图、用户点的；关掉后正在传的传完） |
 
 网页那边两处配合：`apps/web/src/lib/deviceAuth.ts` 在有 `window.EmakiApp` 时，遇到 401 调 `EmakiApp.unpaired(code)`，
 不显示网页自己的「连接到电脑」页；`apps/web/src/lib/connection.ts` 连不上电脑时调 `EmakiApp.connectionLost()`，不显示网页自己的提示条；

@@ -4,11 +4,15 @@ import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.database.ContentObserver
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.provider.MediaStore
 import android.provider.Settings
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -133,6 +137,7 @@ class MainActivity : ComponentActivity() {
 
     private fun startAlbumSync(mode: String) {
         AlbumSync.runNow(this, mode)
+        watchMedia(true)
         Toast.makeText(this, if (mode == AlbumSync.INVENTORY) "开始盘点相册，进度在通知栏" else "开始同步相册", Toast.LENGTH_SHORT).show()
     }
 
@@ -171,6 +176,8 @@ class MainActivity : ComponentActivity() {
         )
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) handlePairLink(intent)
+        // 只在 App 开着时同步相册：老版本安排过的后台同步撤掉
+        AlbumSync.cancelLegacy(this)
         setContent {
             EmakiTheme {
                 App(model, fileChooser, imagePicker, albumSync, ::setBarIcons)
@@ -183,14 +190,41 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         model.foreground(true)
         watchNetwork(true)
-        // 打开 App 时同步一次相册（有在同步的相册才会）
-        AlbumSync.kick(this)
+        // 打开、回到 App 时同步一次相册（有在同步的相册才会）；开着时相册有新图也同步
+        AlbumSync.syncSoon(this)
+        watchMedia(true)
     }
 
     override fun onPause() {
+        watchMedia(false)
         watchNetwork(false)
         model.foreground(false)
         super.onPause()
+    }
+
+    /**
+     * App 开着时相册有新图（分屏下载、截图、别的 App 存的）：10 秒内没有新变化就同步一次（docs/mobile.md 5.5）。
+     * 到后台就不听了：App 关着不同步
+     */
+    private val mediaHandler = Handler(Looper.getMainLooper())
+    private val syncAfterQuiet = Runnable { AlbumSync.syncSoon(this) }
+    private val mediaObserver = object : ContentObserver(mediaHandler) {
+        override fun onChange(selfChange: Boolean) {
+            mediaHandler.removeCallbacks(syncAfterQuiet)
+            mediaHandler.postDelayed(syncAfterQuiet, MEDIA_QUIET_MS)
+        }
+    }
+    private var watchingMedia = false
+
+    private fun watchMedia(on: Boolean) {
+        if (on && !watchingMedia && MediaIndex.canRead(this)) {
+            runCatching { contentResolver.registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, mediaObserver) }
+                .onSuccess { watchingMedia = true }
+        } else if (!on && watchingMedia) {
+            runCatching { contentResolver.unregisterContentObserver(mediaObserver) }
+            mediaHandler.removeCallbacks(syncAfterQuiet)
+            watchingMedia = false
+        }
     }
 
     /** 手机换了网络（离开 Wi-Fi、换到移动数据）：不等网页报，马上核实 */
@@ -230,6 +264,10 @@ class MainActivity : ComponentActivity() {
     private fun handlePairLink(intent: Intent?) {
         val uri = intent?.data ?: return
         if (uri.scheme == "emaki" && uri.host == "pair") model.onScanned(uri.toString())
+    }
+
+    private companion object {
+        const val MEDIA_QUIET_MS = 10_000L
     }
 
     /** 状态栏、导航栏的图标：浅底用深色图标 */

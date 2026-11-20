@@ -4,19 +4,16 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
-import android.provider.MediaStore
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
-import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
-import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
@@ -42,40 +39,33 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /**
- * 同步相册的后台任务（B2，docs/mobile.md 5.5），规则在 core/AlbumSync.kt。
+ * 同步相册的任务（B2，docs/mobile.md 5.5），规则在 core/AlbumSync.kt。
  *
- * 什么时候跑：
- * - 用户在「同步相册」里点「盘点相册」「现在同步」、改了设置（runNow，加急，只要有网）；
- * - 相册有变化（WorkManager 的内容触发：媒体库变了，1 分钟内没有新变化就跑，最多等 10 分钟）；
- * - 每 4 小时一次兜底（内容触发可能被系统省电吞掉），顺便拿电脑上改过的设置；
- * - 打开 App（kick）。
- * 后台的那几种照电脑上的设置：只在 Wi-Fi、只在充电时。同一时间只跑一个（进程内的锁）。
- * 电脑上把这台设备移除了：全部停掉。
+ * 只在 App 开着时同步（用户 2026-11-20：App 关着不用一直同步）：
+ * - 打开 App、回到 App（syncSoon）；
+ * - App 开着时相册有新图：MainActivity 监听媒体库，10 秒内没有新变化就同步（syncSoon）；
+ * - 用户在「同步相册」里点「盘点相册」「现在同步」、改了设置（runNow）。
+ * 关掉 App 时正在传的会传完（前台服务，通知栏显示进度），但不会自己开始新的。没有定时任务、内容触发
+ * （0.3.0、0.3.1 安排过的，打开 App 时撤掉：cancelLegacy）。
+ * 「只在 Wi-Fi」照电脑上的设置；同一时间只跑一个（进程内的锁）。电脑上把这台设备移除了、App 忘掉了这台电脑：全部停掉。
  */
 object AlbumSync {
     const val KEY_MODE = "mode"
-    const val KEY_TRIGGER = "trigger"
     const val INVENTORY = "inventory"
     const val SYNC = "sync"
     private const val NOW = "album-sync-now"
     private const val OPEN = "album-sync-open"
-    private const val TRIGGER = "album-sync-trigger"
-    private const val PERIODIC = "album-sync-periodic"
+    /** 0.3.0、0.3.1 的后台同步（内容触发、每 4 小时） */
+    private val LEGACY = listOf("album-sync-trigger", "album-sync-periodic")
 
     private fun prefs(context: Context) = context.getSharedPreferences("album-sync", Context.MODE_PRIVATE)
 
-    private fun constraints(wifiOnly: Boolean, chargingOnly: Boolean, trigger: Boolean = false): Constraints =
-        Constraints.Builder()
-            .setRequiredNetworkType(if (wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
-            .setRequiresCharging(chargingOnly)
-            .apply {
-                if (trigger) {
-                    addContentUriTrigger(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true)
-                    setTriggerContentUpdateDelay(1, TimeUnit.MINUTES)
-                    setTriggerContentMaxDelay(10, TimeUnit.MINUTES)
-                }
-            }
-            .build()
+    private fun request(mode: String, wifiOnly: Boolean) = OneTimeWorkRequestBuilder<AlbumSyncWorker>()
+        .setInputData(workDataOf(KEY_MODE to mode))
+        .setConstraints(Constraints.Builder().setRequiredNetworkType(if (wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED).build())
+        .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+        .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+        .build()
 
     /** 这台手机的随机标识：批次 id 用它区分设备（同一天同一个相册进同一批） */
     fun installId(context: Context): String {
@@ -83,74 +73,38 @@ object AlbumSync {
         return p.getString("installId", null) ?: UUID.randomUUID().toString().also { p.edit().putString("installId", it).apply() }
     }
 
-    /** 用户点的：马上跑（加急）；连着点的排在后面 */
+    /** 有在同步的相册（上次同步时电脑说的）：App 才需要监听媒体库 */
+    fun syncing(context: Context): Boolean = prefs(context).getBoolean("syncing", false)
+
+    /** 用户点的：马上跑（只要有网）；连着点的排在后面 */
     fun runNow(context: Context, mode: String) {
-        val request = OneTimeWorkRequestBuilder<AlbumSyncWorker>()
-            .setInputData(workDataOf(KEY_MODE to mode))
-            .setConstraints(constraints(wifiOnly = false, chargingOnly = false))
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
-            .build()
-        WorkManager.getInstance(context).enqueueUniqueWork(NOW, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+        WorkManager.getInstance(context).enqueueUniqueWork(NOW, ExistingWorkPolicy.APPEND_OR_REPLACE, request(mode, wifiOnly = false))
     }
 
-    /** 打开 App：有在同步的相册就同步一次（照设置的条件） */
-    fun kick(context: Context) {
+    /** 打开 App、App 开着时相册有新图：有在同步的相册就同步一次（照「只在 Wi-Fi」）；正在同步的排在它后面 */
+    fun syncSoon(context: Context) {
         val p = prefs(context)
         if (!p.getBoolean("syncing", false) || !MediaIndex.canRead(context)) return
-        val request = OneTimeWorkRequestBuilder<AlbumSyncWorker>()
-            .setInputData(workDataOf(KEY_MODE to SYNC))
-            .setConstraints(constraints(p.getBoolean("wifiOnly", true), p.getBoolean("chargingOnly", false)))
-            .build()
-        WorkManager.getInstance(context).enqueueUniqueWork(OPEN, ExistingWorkPolicy.KEEP, request)
+        WorkManager.getInstance(context)
+            .enqueueUniqueWork(OPEN, ExistingWorkPolicy.APPEND_OR_REPLACE, request(SYNC, p.getBoolean("wifiOnly", true)))
     }
 
-    /**
-     * 每次跑完按电脑的设置安排后台同步：兜底的定时任务；有在同步的相册时再加内容触发。
-     * fromTrigger：是内容触发的那个任务自己在调（它还在跑，下一个排在它后面）
-     */
-    fun schedule(context: Context, config: AlbumConfig, fromTrigger: Boolean) {
-        val p = prefs(context)
-        val changed = !p.getBoolean("enabled", false) ||
-            p.getBoolean("wifiOnly", true) != config.wifiOnly ||
-            p.getBoolean("chargingOnly", false) != config.chargingOnly
-        p.edit()
-            .putBoolean("enabled", true)
-            .putBoolean("syncing", config.syncing.isNotEmpty())
-            .putBoolean("wifiOnly", config.wifiOnly)
-            .putBoolean("chargingOnly", config.chargingOnly)
-            .apply()
+    /** 每次跑完记下电脑的设置：有没有在同步的相册、只在 Wi-Fi */
+    fun remember(context: Context, config: AlbumConfig) {
+        prefs(context).edit().putBoolean("syncing", config.syncing.isNotEmpty()).putBoolean("wifiOnly", config.wifiOnly).apply()
+    }
+
+    /** 0.3.0、0.3.1 安排过的后台同步撤掉（App 关着时不再同步） */
+    fun cancelLegacy(context: Context) {
         val wm = WorkManager.getInstance(context)
-        wm.enqueueUniquePeriodicWork(
-            PERIODIC,
-            if (changed) ExistingPeriodicWorkPolicy.UPDATE else ExistingPeriodicWorkPolicy.KEEP,
-            PeriodicWorkRequestBuilder<AlbumSyncWorker>(4, TimeUnit.HOURS)
-                .setInputData(workDataOf(KEY_MODE to SYNC))
-                .setConstraints(constraints(config.wifiOnly, config.chargingOnly))
-                .build(),
-        )
-        if (config.syncing.isEmpty()) {
-            if (!fromTrigger) wm.cancelUniqueWork(TRIGGER)
-            return
-        }
-        val trigger = OneTimeWorkRequestBuilder<AlbumSyncWorker>()
-            .setInputData(workDataOf(KEY_MODE to SYNC, KEY_TRIGGER to true))
-            .setConstraints(constraints(config.wifiOnly, config.chargingOnly, trigger = true))
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-            .build()
-        val policy = when {
-            fromTrigger -> ExistingWorkPolicy.APPEND_OR_REPLACE
-            changed -> ExistingWorkPolicy.REPLACE
-            else -> ExistingWorkPolicy.KEEP
-        }
-        wm.enqueueUniqueWork(TRIGGER, policy, trigger)
+        for (name in LEGACY) wm.cancelUniqueWork(name)
     }
 
     /** 设备被电脑移除了、忘掉了这台电脑：全部停掉 */
     fun stop(context: Context) {
-        prefs(context).edit().putBoolean("enabled", false).putBoolean("syncing", false).apply()
+        prefs(context).edit().putBoolean("syncing", false).apply()
         val wm = WorkManager.getInstance(context)
-        for (name in listOf(NOW, OPEN, TRIGGER, PERIODIC)) wm.cancelUniqueWork(name)
+        for (name in listOf(NOW, OPEN) + LEGACY) wm.cancelUniqueWork(name)
     }
 }
 
@@ -162,7 +116,6 @@ class AlbumSyncWorker(context: Context, params: WorkerParameters) : CoroutineWor
     private suspend fun work(): Result {
         val ctx = applicationContext
         val mode = inputData.getString(AlbumSync.KEY_MODE) ?: AlbumSync.SYNC
-        val fromTrigger = inputData.getBoolean(AlbumSync.KEY_TRIGGER, false)
         val saved = serverStore(ctx).load() ?: return Result.success()
         val address = when (val r = Reconnector(BuildConfig.VERSION_NAME).run(saved) { Discovery(ctx).find(saved.serverId) }) {
             is ReconnectResult.Online -> r.address
@@ -171,7 +124,7 @@ class AlbumSyncWorker(context: Context, params: WorkerParameters) : CoroutineWor
                 return Result.success()
             }
             is ReconnectResult.Upgrade -> return Result.success()
-            // 电脑关着、不在同一个网络：过一会儿再试（后台的还有定时、内容触发兜着）
+            // 电脑关着、不在同一个网络：过一会儿再试
             is ReconnectResult.Offline -> return if (runAttemptCount < MAX_ATTEMPTS) Result.retry() else Result.success()
         }
         val api = EmakiApi(address, saved.fingerprintBytes)
@@ -198,19 +151,19 @@ class AlbumSyncWorker(context: Context, params: WorkerParameters) : CoroutineWor
             if (mode == AlbumSync.INVENTORY) {
                 foreground(saved.name, "正在盘点相册", SyncProgress("hash", 0, items.size, null))
                 val config = syncer.inventory(items) { p -> progressNotice(saved.name, "正在盘点相册", p) }
-                AlbumSync.schedule(ctx, config, fromTrigger)
+                AlbumSync.remember(ctx, config)
                 done("相册盘点完了", "回到 Emaki 的「同步相册」看看建议同步哪些相册")
             } else {
                 var foregrounded = false
                 val result = syncer.sync(items) { p ->
                     if (p.phase != "upload") return@sync
-                    // 有图要传了才进前台（通知栏显示进度）；后台起不了前台服务就算了，照样传
+                    // 有图要传了才进前台（通知栏显示进度，关掉 App 也传完）；起不了前台服务就算了，照样传
                     if (!foregrounded) {
                         foregrounded = true
                         foreground(saved.name, "正在同步相册", p)
                     } else progressNotice(saved.name, "正在同步相册", p)
                 }
-                AlbumSync.schedule(ctx, result.config, fromTrigger)
+                AlbumSync.remember(ctx, result.config)
                 if (result.imported > 0 || result.failed.isNotEmpty()) done("同步相册", "${result.text()}（「${saved.name}」）")
             }
             Result.success()

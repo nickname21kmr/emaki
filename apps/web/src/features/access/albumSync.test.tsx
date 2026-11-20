@@ -119,7 +119,10 @@ describe('同步相册面板', () => {
     expect(out).toContain('其他相册');
     expect(out).not.toContain('DCIM/Screenshots');
     expect(out).not.toContain('盘点相册');
-    expect(out).toContain('B:\\Users\\zc\\Pictures\\下载图片\\平板导入');
+    // 每个相册写电脑上的完整路径；不再有「只在充电时」
+    expect(out).toContain('B:\\Users\\zc\\Pictures\\下载图片\\平板导入\\下载');
+    expect(out).toContain('App 开着时才同步');
+    expect(out).not.toContain('只在充电时');
   });
 
   it('电脑上还没盘点过：告诉用户去平板上点；App 里有「盘点相册」', () => {

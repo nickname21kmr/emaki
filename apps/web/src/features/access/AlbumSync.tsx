@@ -1,6 +1,6 @@
 /**
  * 同步相册（B2，docs/mobile.md 5.5）：一台设备上的相册、盘点结果（电脑上已有几张、没有几张）、哪些在同步、新图放到哪、
- * 只在 Wi-Fi / 充电时同步。
+ * 只在 Wi-Fi 下同步。App 开着时才同步（打开时同步一次，开着时有新图 10 秒后同步），关掉后不在后台同步。
  * - 电脑上：设置 →「手机访问」每台设备的「同步相册」（给 deviceId）；
  * - 手机上（App 0.3.0 起）：图库页头「从手机添加」→「同步相册」，看、改自己的，还能让 App 盘点、马上同步
  *   （window.EmakiApp.syncAlbums）。
@@ -96,7 +96,8 @@ export function AlbumSyncPanel({ deviceId }: { deviceId?: string }) {
   const others = info.albums.filter((a) => !a.sync && !a.suggested);
   const suggestedOff = info.albums.filter((a) => a.suggested && !a.sync);
   const noneOn = !info.albums.some((a) => a.sync);
-  const target = info.target.rootPath ? displayPath(info.target.rootPath, info.target.dir) : null;
+  // 新图放到电脑上的哪里：完整路径（B:\Users\zc\Pictures\下载图片\平板导入\下载）
+  const where = (a: DeviceAlbum) => (info.target.rootPath ? displayPath(info.target.rootPath, info.target.dir, a.dir) : null);
   const toggle = (a: DeviceAlbum, sync: boolean) => save({ albums: [{ path: a.path, sync }] });
 
   return (
@@ -156,7 +157,14 @@ export function AlbumSyncPanel({ deviceId }: { deviceId?: string }) {
           )}
           <ul className="divide-y divide-line">
             {main.map((a) => (
-              <AlbumRow key={a.path} album={a} busy={isPending} onToggle={(v) => toggle(a, v)} onEditDir={() => setEditing(a)} />
+              <AlbumRow
+                key={a.path}
+                album={a}
+                where={where(a)}
+                busy={isPending}
+                onToggle={(v) => toggle(a, v)}
+                onEditDir={() => setEditing(a)}
+              />
             ))}
           </ul>
           {others.length > 0 && (
@@ -172,7 +180,14 @@ export function AlbumSyncPanel({ deviceId }: { deviceId?: string }) {
               {showOthers && (
                 <ul className="mt-1 divide-y divide-line">
                   {others.map((a) => (
-                    <AlbumRow key={a.path} album={a} busy={isPending} onToggle={(v) => toggle(a, v)} onEditDir={() => setEditing(a)} />
+                    <AlbumRow
+                      key={a.path}
+                      album={a}
+                      where={where(a)}
+                      busy={isPending}
+                      onToggle={(v) => toggle(a, v)}
+                      onEditDir={() => setEditing(a)}
+                    />
                   ))}
                 </ul>
               )}
@@ -189,25 +204,13 @@ export function AlbumSyncPanel({ deviceId }: { deviceId?: string }) {
           disabled={isPending}
           onChange={(wifiOnly) => save({ wifiOnly })}
         />
-        <SettingRow
-          label="只在充电时同步"
-          hint="盘点、手动点的「现在同步」不受影响。"
-          checked={info.chargingOnly}
-          disabled={isPending}
-          onChange={(chargingOnly) => save({ chargingOnly })}
-        />
       </div>
 
       <p className="text-[12px] leading-relaxed text-fg-subtle">
-        {target ? (
-          <>
-            传上来的图放到 <span className="font-mono">{target}</span> 下面各相册的文件夹。
-          </>
-        ) : (
-          '电脑上还没有能放图的图库文件夹。'
-        )}
+        {info.target.rootPath ? '' : '电脑上还没有能放图的图库文件夹。'}
+        App 开着时才同步：打开时同步一次，开着时有新图 10 秒后同步；关掉 App 后正在传的会传完，不在后台同步。
         只增不减：手机上删了图，电脑上不删；电脑上删掉的图不会再被同步回来。
-        {inApp ? '' : '改了的设置，App 下次同步时生效（打开 App 会马上同步）。'}
+        {inApp ? '' : '在电脑上改的，平板上下次打开 Emaki 时生效。'}
       </p>
 
       <DirDialog
@@ -224,11 +227,14 @@ export function AlbumSyncPanel({ deviceId }: { deviceId?: string }) {
 
 function AlbumRow({
   album: a,
+  where,
   busy,
   onToggle,
   onEditDir,
 }: {
   album: DeviceAlbum;
+  /** 电脑上的完整路径；没有能放图的图库文件夹时是 null */
+  where: string | null;
   busy: boolean;
   onToggle: (sync: boolean) => void;
   onEditDir: () => void;
@@ -252,7 +258,9 @@ function AlbumRow({
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12.5px] text-fg-muted">
             <FolderInput className="size-3.5 shrink-0" />
             <span className="shrink-0">放到</span>
-            <span className="truncate font-mono text-[12px] text-fg">{a.dir || '「上传到」本身'}</span>
+            <span className="truncate font-mono text-[12px] text-fg" title={where ?? undefined}>
+              {where ?? (a.dir || '「上传到」本身')}
+            </span>
             <span className="shrink-0 text-fg-subtle compact:hidden">（{a.dirNote}）</span>
             <button
               type="button"
