@@ -1,6 +1,6 @@
 {
- "version": 1,
- "source": "pose-proto full_run 2026-11-20（41821 人，k-medoids，51 类）",
+ "version": 2,
+ "source": "pose-proto full_run 2026-11-20（41821 人，k-medoids，51 类）；人偶图 2026-11-21 用 gpt-image 重画（49 类）",
  "groups": [
   {
    "id": "full",

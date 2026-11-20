@@ -137,7 +137,7 @@ describe('姿势检索', () => {
     const fig = (await ds.ask('pose.figure', { id: 'full_01' })) as { kind: string; contentType: string; body: Buffer };
     expect(fig.contentType).toBe('image/png');
     expect(fig.body.subarray(1, 4).toString()).toBe('PNG');
-    expect(cls.groups[0]!.classes[0]!.figureUrl).toBe('/api/pose/classes/full_01/figure.png?v=1');
+    expect(cls.groups[0]!.classes[0]!.figureUrl).toBe('/api/pose/classes/full_01/figure.png?v=2');
 
     // 按类别筛选：默认按距离近的在前
     const target = rows.find((r) => r.class_id)!.class_id!;

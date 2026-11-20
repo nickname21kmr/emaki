@@ -848,7 +848,7 @@ describe('按姿势找图（实验，注册表：pose.*）', () => {
     const { status, json } = await call('GET', '/api/pose/classes');
     expect(status).toBe(200);
     expect(json.groups.map((g: { id: string }) => g.id)).toEqual(['full', 'mid', 'waist', 'bust']);
-    expect(json.groups[0].classes[0]).toMatchObject({ id: 'full_01', count: 0, figureUrl: '/api/pose/classes/full_01/figure.png?v=1' });
+    expect(json.groups[0].classes[0]).toMatchObject({ id: 'full_01', count: 0, figureUrl: '/api/pose/classes/full_01/figure.png?v=2' });
     const list = await call('GET', '/api/images?poseClass=full_01');
     expect([list.status, list.json.total]).toEqual([200, 0]);
     expect((await call('GET', '/api/images?poseClass=bogus')).status).toBe(400);
@@ -857,7 +857,7 @@ describe('按姿势找图（实验，注册表：pose.*）', () => {
     expect((await call('GET', '/api/pose/classes/full_01/figure.png')).status).toBe(403);
     patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
     ensurePoseClasses(ds.ctx);
-    const { status, res } = await call('GET', '/api/pose/classes/full_01/figure.png?v=1');
+    const { status, res } = await call('GET', '/api/pose/classes/full_01/figure.png?v=2');
     expect([status, res.headers['content-type']]).toEqual([200, 'image/png']);
     expect(res.rawPayload.subarray(1, 4).toString()).toBe('PNG');
     expect((await call('GET', '/api/pose/classes/full_99/figure.png')).status).toBe(404);
