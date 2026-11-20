@@ -58,16 +58,15 @@ describe('「传到电脑」（docs/mobile.md 5.4、5.5）', () => {
 describe('第一次用的引导', () => {
   const app = { unpaired: () => {}, pickImages: () => {}, syncAlbums: () => {} };
 
-  it('App 里还没有在同步的相册：图库里一条提示，页头图标上一个小点', () => {
+  it('App 里还没有在同步的相册：图库里一条提示；页头图标上不加小红点', () => {
     g.EmakiApp = app;
     expect(html(['read', 'upload'], { tip: true, albums: albums(0) })).toContain('去看看');
-    expect(html(['read', 'upload'], { albums: albums(0) })).toContain('bg-shu');
+    expect(html(['read', 'upload'], { albums: albums(0) })).not.toContain('bg-shu');
   });
 
   it('已经在同步、关掉过提示、浏览器里、没有上传权限：都不出现', () => {
     g.EmakiApp = app;
     expect(html(['read', 'upload'], { tip: true, albums: albums(1) })).toBe('');
-    expect(html(['read', 'upload'], { albums: albums(1) })).not.toContain('bg-shu');
     expect(html(['read'], { tip: true, albums: albums(0) })).toBe('');
     // 关掉过（renderToStaticMarkup 读不到 zustand 后来改的状态，判断条件单独测）
     expect(showIntro(true, true, albums(0))).toBe(false);

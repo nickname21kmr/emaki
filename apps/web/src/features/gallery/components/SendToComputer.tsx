@@ -6,8 +6,8 @@
  * - App 0.2.0（只有 pickImages）：直接打开系统的选图界面。
  * 不做悬浮按钮：图库主要是看图，打开同步相册以后手动传图很少用，悬浮按钮会一直挡着图和底部的多选栏。
  *
- * 第一次用的引导（SendToComputerTip）：只在 App 里、还没有在同步的相册、也没关掉过时，图库里一条提示（和「只显示插画」那条一样），
- * 页头图标上一个小点；点「去看看」或者打开过面板、关掉提示，就都不再出现。不做多步的引导：会打断，大多被跳过。
+ * 第一次用的引导（SendToComputerTip）：只在 App 里、还没有在同步的相册、也没关掉过时，图库里一条提示（和「只显示插画」那条一样）；
+ * 点「去看看」、关掉提示、或者打开过面板，就不再出现。不做多步的引导（会打断，大多被跳过），也不在图标上加小红点（用户 2026-11-20：反常识）。
  * 传上来的图入库后图库自己会刷新（SSE）。浏览器里（没有 App）不显示。
  */
 import type { AlbumSyncInfo } from '@emaki/shared';
@@ -77,12 +77,11 @@ export function SendToComputerButton() {
   const open = usePanel((s) => s.open);
   const setPanel = usePanel((s) => s.setOpen);
   const dismiss = usePrefs((s) => s.dismissSendTip);
-  const intro = useIntro();
   if (!can || typeof bridge?.pickImages !== 'function') return null;
   const panel = typeof bridge.syncAlbums === 'function';
   const setOpen = (v: boolean) => {
     setPanel(v);
-    // 打开过面板就算知道了：提示条和小点都不再出现
+    // 打开过面板就算知道了：提示条不再出现
     if (v) dismiss();
   };
   const pick = () => {
@@ -91,9 +90,8 @@ export function SendToComputerButton() {
   };
   return (
     <>
-      <IconButton label="传到电脑" className="relative" onClick={() => (panel ? setOpen(true) : pick())}>
+      <IconButton label="传到电脑" onClick={() => (panel ? setOpen(true) : pick())}>
         <MonitorUp />
-        {intro && <span aria-hidden className="absolute top-1.5 right-1.5 size-2 rounded-full bg-shu ring-2 ring-sheet" />}
       </IconButton>
       {panel && (
         <Dialog open={open} onOpenChange={setOpen} title="传到电脑" width={720}>
