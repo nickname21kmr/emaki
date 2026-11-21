@@ -123,6 +123,9 @@ data class SyncResult(
         if (failed.size > rejected) add("${failed.size - rejected} 张没传成")
         if (rejected > 0) add("$rejected 张电脑读不了（格式不支持），不再传")
     }.joinToString("，").ifEmpty { "没有新图" }
+
+    /** 报给电脑的结果：没有新图、也没出问题的那几次不报（电脑上留着上一次有结果的那句和它的时间） */
+    fun summary(): String? = if (imported == 0 && failed.isEmpty()) null else text()
 }
 
 class AlbumSyncer(
@@ -341,7 +344,7 @@ class AlbumSyncer(
             AlbumReport(
                 all.filter { it.path in config.syncing }.map { it.copy(pending = pending[it.path] ?: 0, rejected = rejectedIn[it.path] ?: 0) },
                 full = false,
-                state = AlbumSyncState(null, summary = result.text()),
+                state = AlbumSyncState(null, summary = result.summary()),
             ),
         )
         return result.copy(config = final)

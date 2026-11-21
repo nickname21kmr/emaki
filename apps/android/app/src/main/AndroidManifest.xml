@@ -49,6 +49,26 @@
             </intent-filter>
         </activity>
 
+        <!-- 「分享到 Emaki」：在别的 App 里分享图片，传到电脑（没有界面，拷一份排进后台上传就关掉） -->
+        <activity
+            android:name=".ShareActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:label="传到电脑"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+        </activity>
+
         <!-- 扫码页：库默认只能横屏，去掉这个限制，跟着手机转 -->
         <activity
             android:name="com.journeyapps.barcodescanner.CaptureActivity"

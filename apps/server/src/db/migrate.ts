@@ -50,6 +50,18 @@ export function legacyPoseRepair(db: Db, version: number): number | null {
 }
 
 /**
+ * 一次性修复（手机端 fork 的旧编号）：device_sync.summary_at 早先在 fork 里是 045_sync_summary_at，
+ * 上游后来把姿势排到 045–050。跑过旧编号的库停在 v45，上游的 045_pose 会被当成已经跑过。
+ * 认法：版本是 45，device_sync 有 summary_at，却没有 045_pose 建的 pose_classes。
+ * 这样的库把版本退回 44：045–050 照常跑，051 因为这一列已经在而跳过（@skip-if-column）。
+ * 不需要修复时返回 null。
+ */
+export function legacySummaryRepair(db: Db, version: number): number | null {
+  if (version !== 45 || !hasTable(db, 'device_sync')) return null;
+  return hasColumn(db, 'device_sync', 'summary_at') && !hasTable(db, 'pose_classes') ? 44 : null;
+}
+
+/**
  * 每次升级都留一份几百 MB 的备份，不清理会越积越多。
  * 版本号比 current 小的只留最新一份，其余删掉；比 current 新的（恢复过旧库时会有）不动。
  * 尽力而为：删不掉只记一行日志，不影响迁移。
@@ -118,8 +130,9 @@ export function migrate(
   if (found > latest) {
     throw new Error(`数据库版本 v${found} 比程序支持的 v${latest} 新，请升级 Emaki`);
   }
-  // 姿势迁移旧编号的库：从 v40 往后跑（见 legacyPoseRepair）
-  const repairTo = legacyPoseRepair(db, found);
+  // 旧编号的库：姿势的从 v40、手机端 fork 的从 v44 往后跑（见 legacyPoseRepair、legacySummaryRepair）
+  const poseRepair = legacyPoseRepair(db, found);
+  const repairTo = poseRepair ?? legacySummaryRepair(db, found);
   const current = repairTo ?? found;
   const pending = migrations.filter((m) => m.version > current);
   if (!pending.length) return { from: found, to: found };
@@ -135,7 +148,11 @@ export function migrate(
   }
   if (repairTo !== null) {
     db.pragma(`user_version = ${repairTo}`);
-    opts.log?.(`数据库 v${found} 用的是姿势迁移的旧编号（041–043），退回 v${repairTo}，补跑上游的 041–044`);
+    opts.log?.(
+      poseRepair !== null
+        ? `数据库 v${found} 用的是姿势迁移的旧编号（041–043），退回 v${repairTo}，补跑上游的 041–044`
+        : `数据库 v${found} 用的是手机端 fork 的旧编号（045_sync_summary_at），退回 v${repairTo}，补跑上游的 045–050`,
+    );
   }
 
   for (const m of pending) {

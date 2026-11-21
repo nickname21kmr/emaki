@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { swipePagerDecision as readerSwipeDecision } from './useSwipePager';
+import { swipePagerDecision as readerSwipeDecision } from './pager/useSwipePager';
 import {
   GESTURE,
   dismissVisual,

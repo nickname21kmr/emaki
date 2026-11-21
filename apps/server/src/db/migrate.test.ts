@@ -275,3 +275,48 @@ describe('姿势迁移的旧编号（本地早先的 041–043）', () => {
     expect(has('image_posewear_members') && has('image_poses')).toBe(true);
   });
 });
+
+describe('手机端 fork 的旧编号（045_sync_summary_at）', () => {
+  let db: Db;
+  let dir: string;
+  let logs: string[];
+  beforeEach(() => {
+    db = openDatabase(':memory:');
+    dir = makeTmpDir('migrate-legacy-summary');
+    logs = [];
+  });
+  afterEach(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const has = (name: string) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+
+  it('停在 fork 的 v45：退回 v44 补跑上游 045–050，051 跳过，summary_at 的数据留着', () => {
+    const all = loadMigrations();
+    const d = path.join(dir, 'fork');
+    mkdirSync(d);
+    copyMigrations(d, 44);
+    const summary = all.find((m) => m.name === '051_sync_summary_at.sql')!;
+    writeFileSync(path.join(d, 'migrations', '045_sync_summary_at.sql'), summary.sql.replace(/^-- @skip-if-column.*$/m, ''));
+    expect(migrate(db, { dir: d })).toEqual({ from: 0, to: 45 });
+    expect(has('pose_classes')).toBe(false);
+    db.exec("INSERT INTO devices (id, name, model, scopes, token_hash, created_at) VALUES ('d1', 'pad', 'm', '[]', 'h', 't')");
+    db.exec("INSERT INTO device_sync (device_id, summary, summary_at) VALUES ('d1', '同步了 2 张', '2026-11-20')");
+
+    expect(migrate(db, { log: (m) => logs.push(m) })).toEqual({ from: 45, to: latest });
+    expect(logs.some((m) => m.includes('退回 v44'))).toBe(true);
+    expect(logs.some((m) => m.includes('051_sync_summary_at.sql') && m.includes('跳过'))).toBe(true);
+    expect(has('pose_classes') && has('image_posewear_members')).toBe(true);
+    expect(db.prepare('SELECT summary, summary_at FROM device_sync').get()).toEqual({ summary: '同步了 2 张', summary_at: '2026-11-20' });
+    expect(migrate(db)).toEqual({ from: latest, to: latest });
+  });
+
+  it('上游的 v45（045_pose）照常往后跑，不退回', () => {
+    mkdirSync(path.join(dir, 'up'));
+    copyMigrations(path.join(dir, 'up'), 45);
+    expect(migrate(db, { dir: path.join(dir, 'up') })).toEqual({ from: 0, to: 45 });
+    expect(migrate(db, { log: (m) => logs.push(m) })).toEqual({ from: 45, to: latest });
+    expect(logs.some((m) => m.includes('退回'))).toBe(false);
+    expect(db.prepare('PRAGMA table_info(device_sync)').all().some((c) => (c as { name: string }).name === 'summary_at')).toBe(true);
+  });
+});

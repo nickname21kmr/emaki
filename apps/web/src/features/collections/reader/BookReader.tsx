@@ -14,14 +14,20 @@ import { useCollection } from '@/lib/queries';
 import { useBlurPrefs, useLightbox, useOverlays, usePrefs } from '@/lib/stores';
 import { readerSpreadFits, useViewport } from '@/lib/viewport';
 import { previousPath } from './previousPath';
-import { useSwipePager } from '@/lib/useSwipePager';
+import { PagerTrack } from '@/lib/pager/PagerTrack';
+import { usePager } from '@/lib/pager/usePager';
+import { useTouchZoom } from '@/lib/pager/useTouchZoom';
+import { useZoomPan, type ZoomBounds } from '@/lib/pager/zoom';
 import { buildSpreads, spreadIndexOf } from './spreads';
-import { useReaderZoom } from './useReaderZoom';
+
+/** 最多放大到适应窗口的几倍（漫画页的原图一般是屏幕的一两倍，4 倍够看清网点） */
+export const READER_MAX_SCALE = 4;
 
 /**
  * 阅读器（T38e）：本子默认双页右开，画集单页左开（按类型记住）；竖屏和窄窗口一律单页（横屏而且宽度 ≥ 840 才双页，A1）。
  * 键盘：← → / 空格 / PageUp PageDown 翻页，Home End 首末页，D 单双页，R 方向，I 看图器，B 模糊，Esc 回扉页。
- * 触屏：左右滑、点两侧翻页，点中间切换顶栏；双指捏合放大（放大后单指拖动是平移，双击还原，useReaderZoom）。
+ * 触屏：左右滑、点两侧翻页，点中间切换顶栏；双指捏合放大（放大后单指拖动是平移，双击还原）。
+ * 翻页、缩放和看图器是同一份（lib/pager）：前后一开并排摆在轨道上，拖动、触控板左右滑跟手，点击、按键、滚轮一格滑一页；跳页直接换。
  * 读到最后一开再往后，出现结尾卡；同系列有下一话时可以直接接着读。
  */
 /** 助手附页并排或覆盖时，阅读器右边让出它的宽度（和 toast 一样） */
@@ -33,7 +39,14 @@ export function BookReader() {
   const setReaderOpen = useOverlays((s) => s.setReaderOpen);
   useEffect(() => {
     setReaderOpen(true);
-    return () => setReaderOpen(false);
+    // 触控板左右滑是翻页：别让浏览器当成「后退 / 前进」
+    const root = document.documentElement.style;
+    const was = root.overscrollBehaviorX;
+    root.overscrollBehaviorX = 'none';
+    return () => {
+      setReaderOpen(false);
+      root.overscrollBehaviorX = was;
+    };
   }, [setReaderOpen]);
   if (!q.data) {
     return (
@@ -42,7 +55,8 @@ export function BookReader() {
       </div>
     );
   }
-  return <Reader data={q.data} />;
+  // 换了合集（结尾卡的「下一话」）就重新开始：显示的页记在 Reader 自己的状态里
+  return <Reader key={q.data.collection.id} data={q.data} />;
 }
 
 const revealKey = (id: string) => `emaki.reader.reveal.${id}`;
@@ -73,7 +87,21 @@ function Reader({ data }: { data: GetCollectionResponse }) {
   const wideEnough = readerSpreadFits(viewport);
   const spreadOn = spreadPref && wideEnough;
   const spreads = useMemo(() => buildSpreads(pages, spreadOn), [pages, spreadOn]);
-  const p = Math.min(n, Math.max(1, Number(params.get('p')) || readProgress.get(c.id) || 1));
+  // 显示的是哪一页先记在这里、立刻换（轨道马上开始滑）；地址栏的 ?p= 等翻完 350ms 再写：
+  // 写地址会让整个路由树重新渲染（无窗口的 Chrome 里约 100ms），放在动画前面就是「点了没反应、再一下子滑过去」
+  const urlP = Number(params.get('p')) || 0;
+  const [shown, setShown] = useState(() => urlP || readProgress.get(c.id) || 1);
+  const written = useRef(urlP);
+  useEffect(() => {
+    // 地址栏的 p 从外面变了（前进后退、手动改地址）：跟过去
+    if (urlP && urlP !== written.current) {
+      written.current = urlP;
+      setShown(urlP);
+    }
+  }, [urlP]);
+  const urlTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(urlTimer.current), []);
+  const p = Math.min(n, Math.max(1, shown));
   const cur = spreadIndexOf(spreads, p);
   const [ended, setEnded] = useState(false);
 
@@ -84,7 +112,12 @@ function Reader({ data }: { data: GetCollectionResponse }) {
       const i = Math.max(0, index);
       const first = spreads[i]![0]!;
       readProgress.set(c.id, first);
-      setParams({ p: String(first) }, { replace: true });
+      setShown(first);
+      window.clearTimeout(urlTimer.current);
+      urlTimer.current = window.setTimeout(() => {
+        written.current = first;
+        setParams({ p: String(first) }, { replace: true });
+      }, 350);
     },
     [spreads, setParams, c.id],
   );
@@ -111,9 +144,9 @@ function Reader({ data }: { data: GetCollectionResponse }) {
   const blurred = (pg: CollectionPage) =>
     !pageRevealed(pg) && shouldBlur({ rating: pg.rating, kind: pg.kind, rated: pg.tagged }, prefs, context);
 
-  // 预读前后一开的原图
+  // 前后一开已经摆在轨道上（PagerTrack 先解码好）；再往前后各预读一开
   useEffect(() => {
-    for (const s of [spreads[cur + 1], spreads[cur - 1]]) {
+    for (const s of [spreads[cur + 2], spreads[cur - 2]]) {
       for (const no of s ?? []) {
         const pg = pages[no - 1];
         if (pg) new Image().src = imageUrl.file(pg.imageId, pg.modifiedAt);
@@ -134,9 +167,43 @@ function Reader({ data }: { data: GetCollectionResponse }) {
     return () => window.clearTimeout(idle.current);
   }, [poke]);
 
-  // 滚轮翻页（250ms 节流）
+  // 轨道：第 pos 格是当前这一开，读完后的结尾卡是最后一格（spreads.length）
+  const pos = ended ? spreads.length : cur;
+  const toggleChrome = () => {
+    window.clearTimeout(idle.current);
+    setChrome((v) => !v);
+  };
+  // 双指捏合放大（真机走查）：放大时一根手指的拖动、点按归缩放，翻页的滑动和两侧热区让开；换一开自动还原
+  const stageRef = useRef<HTMLElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const zoomApi = useZoomPan(`${cur}:${ended}`);
+  // 触屏（A1）：左右滑翻页（跟手，过阈值翻、没过弹回），点两侧三分之一翻页（热区按钮），点中间切换顶栏和胶片条；触控板左右滑也跟手
+  const pager = usePager({
+    pos,
+    layout: spreads,
+    rtl,
+    hasPrev: cur > 0 || ended,
+    hasNext: !ended,
+    disabled: zoomApi.zoomed,
+    onForward: () => next(),
+    onBack: () => prev(),
+  });
+  const zoom = useTouchZoom({
+    zoom: zoomApi,
+    stageRef,
+    bounds: (): ZoomBounds | null => {
+      const stage = stageRef.current;
+      const box = boxRef.current;
+      if (!stage || !box || !box.offsetWidth) return null;
+      return { boxW: box.offsetWidth, boxH: box.offsetHeight, stageW: stage.clientWidth, stageH: stage.clientHeight, maxScale: READER_MAX_SCALE };
+    },
+    onTap: toggleChrome,
+    onPinchStart: pager.cancel,
+  });
+  // 鼠标滚轮一格翻一页（250ms 节流，动画和点击一样）
   const lastWheel = useRef(0);
   const onWheel = (e: React.WheelEvent) => {
+    if (zoomApi.zoomed || pager.onWheel(e)) return;
     const now = performance.now();
     if (now - lastWheel.current < 250 || Math.abs(e.deltaY) < 30) return;
     lastWheel.current = now;
@@ -147,6 +214,7 @@ function Reader({ data }: { data: GetCollectionResponse }) {
   const openLightbox = () => useLightbox.getState().show(pages.map((x) => x.imageId), Math.max(0, p - 1), `reader:${c.id}`);
   // 关掉阅读器不多一条历史：从扉页进来的就退回去，别的地方进来的换成扉页（后退不会又回到阅读器）
   const back = () => {
+    window.clearTimeout(urlTimer.current);
     const detail = `/collections/${c.id}`;
     if (previousPath() === detail) navigate(-1);
     else navigate(detail, { replace: true });
@@ -166,28 +234,9 @@ function Reader({ data }: { data: GetCollectionResponse }) {
     if (!e.defaultPrevented) back();
   }, { enabled: on, preventDefault: false });
 
-  // 触屏（A1）：左右滑翻页（跟手，过阈值翻、没过弹回），点两侧三分之一翻页（热区按钮），点中间切换顶栏和胶片条
-  const toggleChrome = () => {
-    window.clearTimeout(idle.current);
-    setChrome((v) => !v);
-  };
-  const swipe = useSwipePager({
-    hasPrev: cur > 0 || ended,
-    rtl,
-    onForward: next,
-    onBack: prev,
-    onCenterTap: toggleChrome,
-  });
-  // 双指捏合放大（真机走查）：放大时一根手指的拖动、点按归它，翻页的滑动和两侧热区让开；换一开自动还原
-  const stageRef = useRef<HTMLElement>(null);
-  const boxRef = useRef<HTMLDivElement>(null);
-  const zoom = useReaderZoom(`${cur}:${ended}`, stageRef, boxRef, {
-    onTap: toggleChrome,
-    onPinchStart: () => swipe.handlers.onPointerCancel(),
-  });
   // 刚触摸过：浏览器补发的 mousemove 不算「鼠标动了」（不然每点一下顶栏都亮 2.5 秒）
   const onMouseMove = () => {
-    if (!swipe.fromTouch()) poke();
+    if (!pager.fromTouch()) poke();
   };
 
   const group = spreads[cur] ?? [];
@@ -240,95 +289,60 @@ function Reader({ data }: { data: GetCollectionResponse }) {
 
       <main
         ref={stageRef}
-        onPointerDown={(e) => zoom.handlers.onPointerDown(e) || swipe.handlers.onPointerDown(e)}
-        onPointerMove={(e) => zoom.handlers.onPointerMove(e) || swipe.handlers.onPointerMove(e)}
-        onPointerUp={(e) => zoom.handlers.onPointerUp(e) || swipe.handlers.onPointerUp(e)}
-        onPointerCancel={(e) => zoom.handlers.onPointerCancel(e) || swipe.handlers.onPointerCancel()}
-        className={cn('relative flex min-h-0 flex-1 touch-none items-center justify-center px-6 compact:px-2', rtl && 'flex-row-reverse')}
+        onPointerDown={(e) => zoom.handlers.onPointerDown(e) || pager.handlers.onPointerDown(e)}
+        onPointerMove={(e) => zoom.handlers.onPointerMove(e) || pager.handlers.onPointerMove(e)}
+        onPointerUp={(e) => zoom.handlers.onPointerUp(e) || pager.handlers.onPointerUp(e)}
+        onPointerCancel={(e) => zoom.handlers.onPointerCancel(e) || pager.handlers.onPointerCancel()}
+        className="relative min-h-0 flex-1 touch-none overflow-hidden"
       >
-        <AnimatePresence mode="wait" initial={false}>
-          {ended ? (
-            // 叠在两侧翻页热区上面：窗口窄时按钮会落进热区里，点不到
-            <motion.div key="end" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.18 }} className="relative z-10 rounded-[14px] bg-white/5 px-8 py-6 text-center ring-1 ring-white/10">
-              <div className="font-serif-cjk text-[22px] font-semibold tracking-[.08em] text-white/90">读完了</div>
-              <div className="mt-1 text-[12.5px] text-white/50">{displayTitle(c)} · {n} 页</div>
-              <div className="mt-5 flex justify-center gap-2">
-                <Button variant="ghost" className="text-white/80 hover:bg-white/10" onClick={back}>
-                  回到目次
-                </Button>
-                {nextVolume && (
-                  <Button variant="primary" onClick={() => navigate(`/collections/${nextVolume.id}/read?p=1`)}>
-                    下一{unitWord(data.series)}：{displayTitle(nextVolume)}（第 {nextVolume.volumeNo} {unitWord(data.series)}）
-                  </Button>
-                )}
-              </div>
-            </motion.div>
-          ) : (
-            <motion.div
-              key={cur}
-              ref={swipe.layerRef}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.18 }}
-            >
-              {/* 缩放的盒子：适应窗口时的大小就是这一开的大小，放大是在它上面 translate + scale */}
-              <div ref={boxRef} style={zoom.style} className={cn('flex items-center justify-center', rtl && 'flex-row-reverse')}>
-                {group.map((no) => {
-                  const pg = pages[no - 1];
-                  if (!pg) return null;
-                  // 高度扣掉顶栏 48 和底部进度条 + 胶片条 98，不盖住它们；宽度扣掉助手附页让出的那块
-                  const size = 'object-contain max-h-[var(--reader-page-h)]';
-                  const maxWidth = group.length > 1 ? 'calc(50vw - 24px - var(--assistant-right, 0px) / 2)' : 'calc(92vw - var(--assistant-right, 0px))';
-                  return blurred(pg) ? (
-                    <button
-                      key={pg.imageId}
-                      type="button"
-                      aria-label="显示这一页"
-                      onClick={() => setRevealed((s) => new Set(s).add(pg.imageId))}
-                      className="overflow-hidden"
-                      style={{ aspectRatio: `${pg.width} / ${pg.height}`, height: 'var(--reader-page-h)', maxWidth }}
-                    >
-                      <Thumb
-                        image={pageThumb(pg)}
-                        rated={pg.tagged}
-                        blurContext={context}
-                        width={960}
-                        blurBadge="center"
-                        className="size-full"
-                      />
-                    </button>
-                  ) : (
-                    <img
-                      key={pg.imageId}
-                      src={imageUrl.file(pg.imageId, pg.modifiedAt)}
-                      alt=""
-                      draggable={false}
-                      decoding="async"
-                      className={size}
-                      style={{ backgroundColor: pg.dominantColor, maxWidth }}
-                    />
-                  );
-                })}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {/* 轨道：前后一开并排摆着（lib/pager）。结尾卡那一格叠在两侧翻页热区上面：窗口窄时按钮会落进热区里，点不到 */}
+        <PagerTrack
+          pager={pager}
+          pos={pos}
+          count={spreads.length + 1}
+          keyOf={(i) => (i === spreads.length ? 'end' : `s${spreads[i]![0]}`)}
+          className={cn(ended && 'pointer-events-none z-10')}
+          slotClassName="flex items-center justify-center px-6 compact:px-2"
+          render={(i, current) =>
+            i === spreads.length ? (
+              <EndCard
+                title={displayTitle(c)}
+                pages={n}
+                onBack={back}
+                next={nextVolume}
+                unit={unitWord(data.series)}
+                onNext={(v) => navigate(`/collections/${v.id}/read?p=1`)}
+              />
+            ) : (
+              <Spread
+                group={spreads[i]!}
+                boxRef={current ? boxRef : undefined}
+                zoomStyle={current ? zoom.style : undefined}
+                pages={pages}
+                rtl={rtl}
+                blurred={blurred}
+                context={context}
+                onReveal={(pg) => setRevealed((s) => new Set(s).add(pg.imageId))}
+              />
+            )
+          }
+        />
         {/* 点击区：两侧翻页，中间切换顶栏 */}
         {/* 触屏上正好三分之一（中间那块点了切换顶栏）；放大时让开，点按、拖动归缩放 */}
         <button
           type="button"
           aria-label={rtl ? '下一页' : '上一页'}
-          className={cn('absolute inset-y-0 left-0 w-[30%] cursor-w-resize touch:w-1/3', zoom.zoomed && 'pointer-events-none')}
+          className={cn('absolute inset-y-0 left-0 w-[30%] cursor-w-resize touch:w-1/3', zoomApi.zoomed && 'pointer-events-none')}
           onClick={() => (rtl ? next() : prev())}
         />
         <button
           type="button"
           aria-label={rtl ? '上一页' : '下一页'}
-          className={cn('absolute inset-y-0 right-0 w-[30%] cursor-e-resize touch:w-1/3', zoom.zoomed && 'pointer-events-none')}
+          className={cn('absolute inset-y-0 right-0 w-[30%] cursor-e-resize touch:w-1/3', zoomApi.zoomed && 'pointer-events-none')}
           onClick={() => (rtl ? prev() : next())}
         />
         <AnimatePresence>
-          {zoom.zoomed && (
+          {zoomApi.zoomed && (
             <motion.button
               key="zoom"
               type="button"
@@ -336,10 +350,10 @@ function Reader({ data }: { data: GetCollectionResponse }) {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.2 }}
-              onClick={zoom.reset}
+              onClick={zoomApi.reset}
               className="absolute top-[calc(env(safe-area-inset-top)+60px)] left-1/2 z-10 flex h-8 -translate-x-1/2 items-center gap-2 rounded-full bg-black/45 px-3.5 text-xs whitespace-nowrap text-white/85 ring-1 ring-white/10 backdrop-blur-md touch-hit"
             >
-              <span className="font-medium tabular">{Math.round(zoom.zoom.scale * 100)}%</span>
+              <span className="font-medium tabular">{Math.round(zoomApi.zoom.scale * 100)}%</span>
               <span className="text-white/45">点这里或双击还原</span>
             </motion.button>
           )}
@@ -366,6 +380,97 @@ function Reader({ data }: { data: GetCollectionResponse }) {
           onPick={(no) => goTo(spreadIndexOf(spreads, no))}
         />
       </footer>
+    </div>
+  );
+}
+
+/** 轨道上的一开：一页或并排两页。只有当前这一开接缩放（boxRef、zoomStyle） */
+function Spread({
+  group,
+  boxRef,
+  zoomStyle,
+  pages,
+  rtl,
+  blurred,
+  context,
+  onReveal,
+}: {
+  group: number[];
+  boxRef?: React.Ref<HTMLDivElement>;
+  zoomStyle?: React.CSSProperties;
+  pages: CollectionPage[];
+  rtl: boolean;
+  blurred: (pg: CollectionPage) => boolean;
+  context: BlurContext;
+  onReveal: (pg: CollectionPage) => void;
+}) {
+  return (
+    // 缩放的盒子：适应窗口时的大小就是这一开的大小，放大是在它上面 translate + scale
+    <div ref={boxRef} style={zoomStyle} className={cn('flex items-center justify-center', rtl && 'flex-row-reverse')}>
+      {group.map((no) => {
+        const pg = pages[no - 1];
+        if (!pg) return null;
+        // 高度扣掉顶栏 48 和底部进度条 + 胶片条 98，不盖住它们；宽度扣掉助手附页让出的那块
+        const maxWidth = group.length > 1 ? 'calc(50vw - 24px - var(--assistant-right, 0px) / 2)' : 'calc(92vw - var(--assistant-right, 0px))';
+        return blurred(pg) ? (
+          <button
+            key={pg.imageId}
+            type="button"
+            aria-label="显示这一页"
+            onClick={() => onReveal(pg)}
+            className="overflow-hidden"
+            style={{ aspectRatio: `${pg.width} / ${pg.height}`, height: 'var(--reader-page-h)', maxWidth }}
+          >
+            <Thumb image={pageThumb(pg)} rated={pg.tagged} blurContext={context} width={960} blurBadge="center" className="size-full" />
+          </button>
+        ) : (
+          <img
+            key={pg.imageId}
+            src={imageUrl.file(pg.imageId, pg.modifiedAt)}
+            alt=""
+            draggable={false}
+            decoding="async"
+            className="max-h-[var(--reader-page-h)] object-contain"
+            style={{ backgroundColor: pg.dominantColor, maxWidth }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+/** 读完最后一开再往后：结尾卡（同系列有下一话时可以直接接着读） */
+function EndCard({
+  title,
+  pages,
+  onBack,
+  next,
+  unit,
+  onNext,
+}: {
+  title: string;
+  pages: number;
+  onBack: () => void;
+  next: GetCollectionResponse['series'][number] | undefined;
+  unit: string;
+  onNext: (v: GetCollectionResponse['series'][number]) => void;
+}) {
+  return (
+    <div className="pointer-events-auto relative rounded-[14px] bg-white/5 px-8 py-6 text-center ring-1 ring-white/10">
+      <div className="font-serif-cjk text-[22px] font-semibold tracking-[.08em] text-white/90">读完了</div>
+      <div className="mt-1 text-[12.5px] text-white/50">
+        {title} · {pages} 页
+      </div>
+      <div className="mt-5 flex justify-center gap-2">
+        <Button variant="ghost" className="text-white/80 hover:bg-white/10" onClick={onBack}>
+          回到目次
+        </Button>
+        {next && (
+          <Button variant="primary" onClick={() => onNext(next)}>
+            下一{unit}：{displayTitle(next)}（第 {next.volumeNo} {unit}）
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

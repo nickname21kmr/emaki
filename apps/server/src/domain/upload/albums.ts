@@ -118,6 +118,7 @@ interface SyncRow {
   total: number | null;
   error: string | null;
   summary: string | null;
+  summary_at: string | null;
   reported_at: string | null;
   inventoried_at: string | null;
   synced_at: string | null;
@@ -206,6 +207,7 @@ function stateOf(ctx: SqliteContext, s: SyncRow): AlbumSyncState {
     total: alive && s.running ? s.total : null,
     error: s.error,
     summary: s.summary,
+    summaryAt: s.summary_at,
     reportedAt: s.reported_at,
     inventoriedAt: s.inventoried_at,
     syncedAt: s.synced_at,
@@ -336,9 +338,18 @@ export function reportAlbums(ctx: SqliteContext, deviceId: string, input: AlbumR
     if (st)
       ctx.db
         .prepare(
-          `UPDATE device_sync SET running = ?, done = ?, total = ?, error = ?, summary = COALESCE(?, summary), reported_at = ? WHERE device_id = ?`,
+          `UPDATE device_sync SET running = @running, done = @done, total = @total, error = @error, summary = COALESCE(@summary, summary),
+             summary_at = CASE WHEN @summary IS NULL THEN summary_at ELSE @at END, reported_at = @at WHERE device_id = @id`,
         )
-        .run(st.running, st.done ?? null, st.total ?? null, st.error ?? null, st.summary ?? null, at, deviceId);
+        .run({
+          running: st.running,
+          done: st.done ?? null,
+          total: st.total ?? null,
+          error: st.error ?? null,
+          summary: st.summary ?? null,
+          at,
+          id: deviceId,
+        });
     else ctx.db.prepare('UPDATE device_sync SET reported_at = ? WHERE device_id = ?').run(at, deviceId);
     if (inventoried && input.full) ctx.db.prepare('UPDATE device_sync SET inventoried_at = ? WHERE device_id = ?').run(at, deviceId);
     if (synced) ctx.db.prepare('UPDATE device_sync SET synced_at = ? WHERE device_id = ?').run(at, deviceId);

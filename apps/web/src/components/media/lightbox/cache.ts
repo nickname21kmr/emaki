@@ -75,7 +75,7 @@ function warm(src: string) {
   img.src = src;
 }
 
-/** 预加载相邻图片：下一张的缩略图 + 原图 + 详情，上一张的缩略图 */
+/** 预加载相邻图片：下一张的缩略图 + 原图 + 详情，上一张的缩略图（详情不在缓存里时也拿） */
 export function preloadNeighbors(client: QueryClient, ids: ID[], index: number) {
   const next = ids[index + 1];
   const prev = ids[index - 1];
@@ -86,7 +86,11 @@ export function preloadNeighbors(client: QueryClient, ids: ID[], index: number) 
     warm(imageUrl.file(next, version));
     void client.prefetchQuery({ queryKey: qk.image(next), queryFn: () => api.image(next), staleTime: 30_000 });
   }
-  if (prev) warm(imageUrl.thumb(prev, 960, findCachedImage(client,prev)?.modifiedAt));
+  if (prev) {
+    warm(imageUrl.thumb(prev, 960, findCachedImage(client,prev)?.modifiedAt));
+    // 上一张也摆在轨道上（lib/pager）：信息不在列表缓存里时（收拢的组图展开的成员）也拿一份，往回滑时它已经在
+    if (!findCachedImage(client, prev)) void client.prefetchQuery({ queryKey: qk.image(prev), queryFn: () => api.image(prev), staleTime: 30_000 });
+  }
   if (after) warm(imageUrl.thumb(after, 960, findCachedImage(client,after)?.modifiedAt));
 }
 

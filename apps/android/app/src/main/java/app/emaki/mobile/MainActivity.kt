@@ -112,7 +112,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun launchPicker() = pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    /**
+     * 有读照片的权限（打开过同步相册）：系统的选图界面，原来的文件名按编号查得到（UploadWork 的 contentFile）；
+     * 没有：系统的文件选择器，它给的就是原来的文件名（选图界面不给，Pixiv 这类来源就认不出了）
+     */
+    private fun launchPicker() {
+        if (MediaIndex.canRead(this)) pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        else pickDocuments.launch(arrayOf("image/*"))
+    }
+
+    private val pickDocuments = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isEmpty()) return@registerForActivityResult
+        UploadQueue.enqueue(this, uris)
+        Toast.makeText(this, "开始传 ${uris.size} 张，进度在通知栏", Toast.LENGTH_SHORT).show()
+    }
 
     private val imagePicker = ImagePicker { withNotifications(::launchPicker) }
 

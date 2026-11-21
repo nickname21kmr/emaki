@@ -313,8 +313,15 @@ describe('盘点 → 建议同步、新图放到哪', () => {
       albums: [{ path: 'Download', name: 'Download', count: 9, bytes: 9, pending: 1 }],
       state: { running: null, summary: '同步了 8 张，1 张没传成', error: null },
     });
-    expect((await info()).state).toMatchObject({ running: null, summary: '同步了 8 张，1 张没传成', syncedAt: expect.any(String) });
+    const first = (await info()).state;
+    expect(first).toMatchObject({ running: null, summary: '同步了 8 张，1 张没传成', summaryAt: expect.any(String), syncedAt: expect.any(String) });
     expect(await album('Download')).toMatchObject({ pending: 1, syncedAt: expect.any(String) });
+    // 后来一次没有新图的同步：不报结果，上一次的结果和时间留着，「上次同步」往后走
+    now += 60_000;
+    await report({ albums: [{ path: 'Download', name: 'Download', count: 9, bytes: 9, pending: 0 }], state: { running: null } });
+    const later = (await info()).state;
+    expect(later).toMatchObject({ summary: '同步了 8 张，1 张没传成', summaryAt: first.summaryAt });
+    expect(later.syncedAt! > first.syncedAt!).toBe(true);
   });
 });
 

@@ -215,6 +215,16 @@ describe('同一个文件、同名、重复', () => {
     expect([fa.rel, fb.rel]).toEqual(['收件箱/手机/小米平板/手动上传/same.png', '收件箱/手机/小米平板/手动上传/same (1).png']);
   });
 
+  it('手动上传：传过、又在电脑上删掉的，再特意选它一次就照样传上来（同步相册不这样，见下一条）', async () => {
+    const bytes = await png('#3a5');
+    const first = await upload(bytes, { fileName: 'again.png' });
+    await run('library.trash', { ids: [first.complete!.json().imageId] });
+    const again = await upload(bytes, { fileName: 'again.png' });
+    expect(again.begin.status).toBe('receiving');
+    expect(again.complete!.json()).toMatchObject({ status: 'imported' });
+    expect(again.complete!.json().imageId).not.toBe(first.complete!.json().imageId);
+  });
+
   it('相册同步（clientKey）：同一个相册文件只传一次，电脑上删了也不会再传；内容改了算新文件；相册进同名子文件夹', async () => {
     const v1 = await png('#456');
     const first = await upload(v1, { album: 'Download', clientKey: 'media:42', fileName: 'a.png' });

@@ -91,8 +91,12 @@ describe('排法的规则', () => {
 
   it('阅读器横屏而且够宽才双页；页头在手机横屏不吸顶', () => {
     expect([PHONE, PHONE_LAND, TABLET, TABLET_LAND, DESKTOP].map(readerSpreadFits)).toEqual([false, true, false, true, true]);
-    // 窄的电脑窗口：竖着的单页
+    // 窄的电脑窗口：竖着的单页；电脑上 840–1099 宽的窗口照原来的规则也是单页，1100 起双页
     expect(readerSpreadFits(viewportOf(820, 900, false))).toBe(false);
+    expect(readerSpreadFits(viewportOf(1000, 700, false))).toBe(false);
+    expect(readerSpreadFits(viewportOf(1100, 700, false))).toBe(true);
+    // 触屏横屏够 expanded 就双页（平板横屏 1000 宽也是）
+    expect(readerSpreadFits(viewportOf(1000, 700, true))).toBe(true);
     expect([PHONE, PHONE_LAND, TABLET, DESKTOP].map(stickyHeaderFits)).toEqual([true, false, true, true]);
   });
 });

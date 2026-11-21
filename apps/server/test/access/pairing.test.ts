@@ -189,6 +189,22 @@ describe('扫码的一次性口令', () => {
     expect(Date.parse(t.expiresAt) - NOW).toBe(2 * 60_000);
   });
 
+  it('凭证发出去了但手机没收到（回答丢了）：半小时还没来过的设备删掉；来过的留着', async () => {
+    await f.ds.registry.execute('access.configure', { enabled: true });
+    const { uri } = await f.ds.registry.execute<{ uri: string }>('access.createTicket', {});
+    // 扫码直接批准，手机却没收到这次回答
+    const lost = await f.app.inject({ method: 'POST', url: '/api/v1/pair', payload: { name: '丢了回答的手机', ticket: new URL(uri).searchParams.get('t')! } });
+    expect(lost.statusCode).toBe(200);
+    // 另一台正常连上了
+    const { uri: uri2 } = await f.ds.registry.execute<{ uri: string }>('access.createTicket', {});
+    const ok = await f.app.inject({ method: 'POST', url: '/api/v1/pair', payload: { name: '正常的手机', ticket: new URL(uri2).searchParams.get('t')! } });
+    await f.app.inject({ method: 'GET', url: '/api/v1/me', headers: { authorization: `Bearer ${ok.json().token}` } });
+    f.setNow(NOW + 29 * 60_000);
+    expect(f.ds.access.status().devices.map((d) => d.name).sort()).toEqual(['丢了回答的手机', '正常的手机'].sort());
+    f.setNow(NOW + 31 * 60_000);
+    expect(f.ds.access.status().devices.map((d) => d.name)).toEqual(['正常的手机']);
+  });
+
   it('带口令直接批准（默认权限），用一次就失效；过期的也不行', async () => {
     await f.ds.registry.execute('access.configure', { enabled: true });
     const ticketOf = async () => {

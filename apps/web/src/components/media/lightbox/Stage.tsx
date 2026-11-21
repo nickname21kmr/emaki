@@ -6,14 +6,28 @@ import { Spinner, Tooltip } from '@/components/ui';
 import { imageUrl } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { useImageRetry } from '@/lib/connection';
+import { GESTURE, dismissVisual, dragDecision } from '@/lib/gestures';
 import { isTypingTarget } from '@/lib/hotkeys';
-import { clampPan, zoomAround, type ZoomApi, type ZoomBounds } from './useZoomPan';
 import { EASE_OUT } from '@/lib/motion';
+import { PagerTrack } from '@/lib/pager/PagerTrack';
+import { usePager } from '@/lib/pager/usePager';
+import { useTouchZoom } from '@/lib/pager/useTouchZoom';
+import { clampPan, zoomAround, type Zoom, type ZoomApi, type ZoomBounds } from '@/lib/pager/zoom';
 import type { LightboxRect } from '@/lib/stores';
 import { stagePadding, useViewport } from '@/lib/viewport';
-import { useTouchGestures } from './useTouchGestures';
 
 export type StageMeta = Pick<ImageItem, 'width' | 'height' | 'rating' | 'dominantColor' | 'fileName'> & Partial<Pick<ImageItem,'modifiedAt'>>;
+
+/** 轨道上的一张：当前这张和前后各一张（前后的用缓存里现成的信息，没有就先空着） */
+export interface StageSlide {
+  id: ID;
+  meta: StageMeta | undefined;
+  /** 是否模糊（敏感分级 + 偏好 + 没点过「显示」） */
+  blurred: boolean;
+  /** 模糊原因：分级名 / 照片 / 文字 */
+  blurLabel: string;
+  onReveal: () => void;
+}
 
 const EASE = EASE_OUT;
 /** 从格子里拿起到居中的时长（秒） */
@@ -21,18 +35,24 @@ const LIFT_S = 0.46;
 const plateTransform = ({ x, y, scale }: { x: number; y: number; scale: number }) =>
   `translate3d(${x}px, ${y}px, 0) scale(${scale})`;
 
+/** 「适应窗口」的尺寸：不放大小图（最多 1:1） */
+function fitBox(meta: StageMeta | undefined, availW: number, availH: number) {
+  const fit = meta && availW > 0 && availH > 0 ? Math.min(availW / meta.width, availH / meta.height, 1) : 0;
+  return { fit, boxW: meta ? Math.round(meta.width * fit) : 0, boxH: meta ? Math.round(meta.height * fit) : 0 };
+}
+
 /**
  * 看图器的舞台：居中显示图片，先 960 缩略图再换原图；滚轮 / 双击缩放，放大后拖动平移。
  * 点击图片外的空白处关闭。
- * 触屏（A1，useTouchGestures）：左右滑切换、下滑关闭、捏合 / 双击缩放、放大后拖动平移、单击切换界面；
+ * 翻页和触屏缩放和阅读器是同一份（lib/pager）：前后一张摆在轨道上，←→、箭头、拖动、触控板左右滑都是轨道滑一格，胶片条跳页直接换；
+ * 捏合 / 双击缩放、放大后拖动平移、单击切换界面（useTouchZoom）。看图器自己的：下滑关闭（跟手缩小变淡，过阈值放回网格）、
+ * 上滑展开信息（窄屏的底部面板）、从格子里拿起和放回、放映时交叉淡化（这时不摆前后张）、鼠标滚轮缩放和拖动平移。
  * 图片四周的留白按窗口和输入方式定（lib/viewport.ts 的 stagePadding：电脑上左右给箭头留 84、上下 68，触屏窄屏铺满宽度）。
  */
 export function Stage({
-  id,
-  meta,
-  blurred,
-  blurLabel,
-  onReveal,
+  index,
+  count,
+  slide,
   zoomApi,
   direction,
   hasPrev,
@@ -49,15 +69,13 @@ export function Stage({
   onDismissDrag,
   onSwipeUp,
 }: {
-  id: ID;
-  meta: StageMeta | undefined;
-  /** 当前是否模糊（敏感分级 + 偏好 + 没点过「显示」） */
-  blurred: boolean;
-  /** 模糊原因：分级名 / 照片 / 文字 */
-  blurLabel: string;
-  onReveal: () => void;
+  /** 当前是第几张、一共几张（轨道的格子） */
+  index: number;
+  count: number;
+  /** 第 i 张：当前这张一定有，前后的没有就先空着 */
+  slide: (i: number) => StageSlide | undefined;
   zoomApi: ZoomApi;
-  /** 切换方向（-1 / 0 / 1），决定入场从哪边滑进来 */
+  /** 切换方向（-1 / 0 / 1）：前后张没摆在轨道上时（跳页、信息还没到），新图从哪边进来 */
   direction: number;
   hasPrev: boolean;
   hasNext: boolean;
@@ -82,18 +100,17 @@ export function Stage({
   onSwipeUp?: () => void;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
-  // 触屏手势里跟手移动的那一层（切图时左右、下滑关闭时往下缩小）
-  const layerRef = useRef<HTMLDivElement>(null);
+  // 下滑关闭时跟手往下缩小的那一层（只包着当前这张）
+  const dismissRef = useRef<HTMLDivElement | null>(null);
   const size = useElementSize(stageRef);
   const { zoom, setZoom, reset, zoomed } = zoomApi;
   const pad = stagePadding(useViewport());
+  const current = slide(index);
+  const meta = current?.meta;
 
-  // 「适应窗口」的尺寸：不放大小图（最多 1:1）
   const availW = Math.max(0, size.w - pad.x * 2);
   const availH = Math.max(0, size.h - pad.y * 2);
-  const fit = meta && availW > 0 && availH > 0 ? Math.min(availW / meta.width, availH / meta.height, 1) : 0;
-  const boxW = meta ? Math.round(meta.width * fit) : 0;
-  const boxH = meta ? Math.round(meta.height * fit) : 0;
+  const { fit, boxW, boxH } = fitBox(meta, availW, availH);
   // 至少能放到 4 倍，大图至少能看到原始像素的 200%
   const maxScale = fit > 0 ? Math.max(4, 2 / fit) : 4;
   const bounds: ZoomBounds = { boxW, boxH, stageW: size.w, stageH: size.h, maxScale };
@@ -106,19 +123,78 @@ export function Stage({
     return { px: clientX - rect.left - rect.width / 2, py: clientY - rect.top - rect.height / 2 };
   };
 
-  // 滚轮缩放：需要 non-passive 监听才能阻止页面默认行为
+  // 下滑关闭（看图器自己的）：方向锁定和翻页是同一处（useSwipePager 的 vertical）
+  const setDismiss = (transform: string, ms = 0) => {
+    const el = dismissRef.current;
+    if (!el) return;
+    el.style.transition = ms ? `transform ${ms}ms var(--ease-out-soft)` : 'none';
+    el.style.transform = transform;
+  };
+  const pager = usePager({
+    pos: index,
+    hasPrev,
+    hasNext,
+    disabled: zoomed || !!returnRect || !!slideshow,
+    onForward: onNext,
+    onBack: onPrev,
+    vertical: {
+      move: (dx, dy) => {
+        if (dy <= 0) return;
+        const v = dismissVisual(dy, boundsRef.current.stageH);
+        setDismiss(`translate3d(${dx * 0.5}px, ${dy}px, 0) scale(${v.scale})`);
+        onDismissDrag?.(v.progress);
+      },
+      end: (dy, vy) => {
+        if (dy > 0 && dragDecision(dy, vy, boundsRef.current.stageH)) {
+          // 跟手层缩回原位的同时，图片飞回网格（putBack）；背景保持淡着，交给关闭时的淡出
+          setDismiss('', 300);
+          onDismiss?.();
+        } else if (dy > 0) {
+          setDismiss('', 220);
+          onDismissDrag?.(null);
+        } else if (dy < -GESTURE.dismissMax / 2) onSwipeUp?.();
+      },
+      cancel: () => {
+        setDismiss('', 220);
+        onDismissDrag?.(null);
+      },
+    },
+  });
+
+  // 双击放到原始像素 100%（小图至少 2.5 倍），放大着就还原
+  const zoomToggle = (px: number, py: number) => {
+    if (!fit) return;
+    if (zoomed) return reset();
+    setZoom((z: Zoom) => zoomAround(z, Math.max(2.5, 1 / fit), px, py, boundsRef.current, true));
+  };
+  const touchZoom = useTouchZoom({
+    zoom: zoomApi,
+    stageRef,
+    bounds: () => (boundsRef.current.boxW ? boundsRef.current : null),
+    onTap: () => onTap?.(),
+    onDoubleTap: (p) => zoomToggle(p.x, p.y),
+    onPinchStart: pager.cancel,
+  });
+  /** 最近一次触摸的时间：随后浏览器补发的 click / dblclick 不当成鼠标点击 */
+  const touchedAt = useRef(0);
+  const fromTouch = () => performance.now() - touchedAt.current < 700;
+
+  // 滚轮：触控板左右滑是翻页（和阅读器同一份），其余是缩放。要 non-passive 监听才能阻止页面默认行为
+  const wheelPage = useRef(pager.onWheel);
+  wheelPage.current = zoomed ? () => false : pager.onWheel;
   useEffect(() => {
     const el = stageRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      if (wheelPage.current(e)) return;
       const b = boundsRef.current;
       if (!b.boxW) return;
       const rect = el.getBoundingClientRect();
       const px = e.clientX - rect.left - rect.width / 2;
       const py = e.clientY - rect.top - rect.height / 2;
       const delta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
-      setZoom((z) => zoomAround(z, z.scale * Math.exp(-delta * 0.0022), px, py, b, false));
+      setZoom((z: Zoom) => zoomAround(z, z.scale * Math.exp(-delta * 0.0022), px, py, b, false));
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -129,8 +205,8 @@ export function Stage({
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || isTypingTarget(e.target)) return;
       const b = boundsRef.current;
-      if (e.key === '+' || e.key === '=') setZoom((z) => zoomAround(z, z.scale * 1.4, 0, 0, b, true));
-      else if (e.key === '-' || e.key === '_') setZoom((z) => zoomAround(z, z.scale / 1.4, 0, 0, b, true));
+      if (e.key === '+' || e.key === '=') setZoom((z: Zoom) => zoomAround(z, z.scale * 1.4, 0, 0, b, true));
+      else if (e.key === '-' || e.key === '_') setZoom((z: Zoom) => zoomAround(z, z.scale / 1.4, 0, 0, b, true));
       else if (e.key === '0') reset();
       else return;
       e.preventDefault();
@@ -139,25 +215,25 @@ export function Stage({
     return () => window.removeEventListener('keydown', onKey);
   }, [setZoom, reset]);
 
-  // 拖动平移
+  // 鼠标拖动平移（放大时）
   const drag = useRef<{ sx: number; sy: number; x0: number; y0: number; moved: boolean } | null>(null);
   const suppressClick = useRef(false);
   const [dragging, setDragging] = useState(false);
 
-  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+  const onMouseDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || !zoomed) return;
     if ((e.target as Element).closest('button')) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     drag.current = { sx: e.clientX, sy: e.clientY, x0: zoom.x, y0: zoom.y, moved: false };
     setDragging(true);
   };
-  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+  const onMouseMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const d = drag.current;
     if (!d) return;
     const dx = e.clientX - d.sx;
     const dy = e.clientY - d.sy;
     if (!d.moved && Math.hypot(dx, dy) > 3) d.moved = true;
-    setZoom((z) => clampPan({ ...z, x: d.x0 + dx, y: d.y0 + dy, smooth: false }, boundsRef.current));
+    setZoom((z: Zoom) => clampPan({ ...z, x: d.x0 + dx, y: d.y0 + dy, smooth: false }, boundsRef.current));
   };
   const endDrag = () => {
     if (!drag.current) return;
@@ -165,38 +241,22 @@ export function Stage({
     drag.current = null;
     setDragging(false);
   };
-
-  // 双击放到原始像素 100%（小图至少 2.5 倍），放大着就还原
-  const zoomToggle = (px: number, py: number) => {
-    if (!fit) return;
-    if (zoomed) return reset();
-    setZoom((z) => zoomAround(z, Math.max(2.5, 1 / fit), px, py, boundsRef.current, true));
-  };
   const onDoubleClick = (e: React.MouseEvent) => {
     // 触屏的双击由手势处理，浏览器补发的 dblclick 不再算一次
-    if (touch.fromTouch()) return;
+    if (fromTouch()) return;
     const { px, py } = toStage(e.clientX, e.clientY);
     zoomToggle(px, py);
   };
-
-  const touch = useTouchGestures(stageRef, layerRef, {
-    zoom,
-    bounds,
-    hasPrev,
-    hasNext,
-    setZoom,
-    onPrev,
-    onNext,
-    onDismiss: () => onDismiss?.(),
-    onDismissDrag: (p) => onDismissDrag?.(p),
-    onTap: () => onTap?.(),
-    onDoubleTap: zoomToggle,
-    onSwipeUp,
-  });
+  /** 触屏先给缩放（捏合、放大后的拖动、点按），剩下的一根手指的滑动给翻页和下滑关闭；鼠标走上面的拖动平移 */
+  const route = (e: React.PointerEvent<HTMLDivElement>, touch: () => void, mouse: () => void) => {
+    if (e.pointerType !== 'touch') return mouse();
+    touchedAt.current = performance.now();
+    touch();
+  };
 
   const percent = Math.round(zoom.scale * fit * 100);
 
-  // 从格子里「拿起」：第一张从格子的位置和大小放大到居中（SEL-12）；切换时照旧左右滑入
+  // 从格子里「拿起」：第一张从格子的位置和大小放大到居中（SEL-12）
   const stageRect = stageRef.current?.getBoundingClientRect();
   const toRect = (r: LightboxRect) =>
     stageRect && boxW > 0
@@ -227,51 +287,65 @@ export function Stage({
   }, [originRect]);
   const holding = !!from && liftedFor !== originRect;
   const lifting = !!originRect && landedFor !== originRect;
-  const initial = from
-    ? { opacity: 1, ...from }
-    : slideshow
-      ? { opacity: 0, x: 0, y: 0, scale: 1 }
-      : { opacity: 0, x: direction * 28, y: 0, scale: direction ? 1 : 0.985 };
   const idle = !!slideshow?.idle;
-  const target = back ?? { x: 0, y: 0, scale: returnRect ? 0.96 : 1 };
 
-  const plate =
-    meta && fit > 0 ? (
+  /** 第 i 张的图版。当前这张接拿起 / 放回、缩放、双击；前后张只是摆着（滑进来时还是同一个元素，不重新加载） */
+  const plate = (i: number, isCurrent: boolean) => {
+    const sl = slide(i);
+    if (!sl?.meta) return null;
+    const box = isCurrent ? { fit, boxW, boxH } : fitBox(sl.meta, availW, availH);
+    if (!(box.fit > 0)) return null;
+    // 挂上来时就是当前这张（打开、跳页、前后张没摆上）：从格子里拿起，或者从切换的方向淡入；作为前后张挂上来的直接在位
+    const initial = !isCurrent
+      ? { opacity: 1, x: 0, y: 0, scale: 1 }
+      : from
+        ? { opacity: 1, ...from }
+        : slideshow
+          ? { opacity: 0, x: 0, y: 0, scale: 1 }
+          : { opacity: 0, x: direction * 28, y: 0, scale: direction ? 1 : 0.985 };
+    const target = isCurrent ? (back ?? { x: 0, y: 0, scale: returnRect ? 0.96 : 1 }) : { x: 0, y: 0, scale: 1 };
+    const hold = isCurrent && holding;
+    return (
       <motion.div
-        key={id}
+        key={sl.id}
         // A single transform lets Motion use the browser's compositor animation.
         // Separate x/y/scale values require JS frames and stall when detail UI mounts.
         initial={{ opacity: initial.opacity, transform: plateTransform(initial) }}
-        animate={{ opacity: holding ? initial.opacity : returnRect && !back ? 0 : 1, transform: plateTransform(holding ? initial : target) }}
+        animate={{ opacity: hold ? initial.opacity : isCurrent && returnRect && !back ? 0 : 1, transform: plateTransform(hold ? initial : target) }}
         exit={{ opacity: 0 }}
-        transition={{ duration: returnRect ? 0.3 : originRect ? LIFT_S : (slideshow?.crossfade ?? 0.42), ease: slideshow ? 'linear' : EASE }}
+        transition={{ duration: isCurrent && returnRect ? 0.3 : isCurrent && originRect ? LIFT_S : (slideshow?.crossfade ?? 0.42), ease: slideshow ? 'linear' : EASE }}
         className="pointer-events-auto absolute"
-        style={{ left: (size.w - boxW) / 2, top: (size.h - boxH) / 2, width: boxW, height: boxH }}
+        style={{ left: (size.w - box.boxW) / 2, top: (size.h - box.boxH) / 2, width: box.boxW, height: box.boxH }}
       >
         <div
-          className={cn('size-full', !zoomed && !idle && 'cursor-zoom-in')}
-          onDoubleClick={onDoubleClick}
-          style={{
-            transform: `translate3d(${zoom.x}px, ${zoom.y}px, 0) scale(${zoom.scale})`,
-            transition: zoom.smooth ? 'transform 320ms var(--ease-out-soft)' : 'none',
-            willChange: 'transform',
-          }}
+          className={cn('size-full', isCurrent && !zoomed && !idle && 'cursor-zoom-in')}
+          onDoubleClick={isCurrent ? onDoubleClick : undefined}
+          style={
+            isCurrent
+              ? {
+                  transform: `translate3d(${zoom.x}px, ${zoom.y}px, 0) scale(${zoom.scale})`,
+                  transition: zoom.smooth ? 'transform 320ms var(--ease-out-soft)' : 'none',
+                  willChange: 'transform',
+                }
+              : undefined
+          }
         >
           <StageImage
-            key={`${id}:${meta.modifiedAt??''}`}
-            id={id}
-            meta={meta}
-            blurred={blurred}
-            blurLabel={blurLabel}
-            onReveal={onReveal}
-            placeholder={originRect?.thumb}
-            flat={!!returnRect}
+            key={`${sl.id}:${sl.meta.modifiedAt ?? ''}`}
+            id={sl.id}
+            meta={sl.meta}
+            blurred={sl.blurred}
+            blurLabel={sl.blurLabel}
+            onReveal={sl.onReveal}
+            placeholder={isCurrent ? originRect?.thumb : undefined}
+            flat={isCurrent && !!returnRect}
             slide={!!slideshow}
-            holdFull={lifting}
+            holdFull={isCurrent && lifting}
           />
         </div>
       </motion.div>
-    ) : null;
+    );
+  };
 
   return (
     <div
@@ -280,13 +354,13 @@ export function Stage({
         'group/stage relative min-h-0 min-w-0 flex-1 touch-none overflow-hidden select-none',
         zoomed ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : idle && 'cursor-none',
       )}
-      onPointerDown={(e) => touch.onPointerDown(e) || onPointerDown(e)}
-      onPointerMove={(e) => touch.onPointerMove(e) || onPointerMove(e)}
-      onPointerUp={(e) => touch.onPointerUp(e) || endDrag()}
-      onPointerCancel={(e) => touch.onPointerCancel(e) || endDrag()}
+      onPointerDown={(e) => route(e, () => void (touchZoom.handlers.onPointerDown(e) || pager.handlers.onPointerDown(e)), () => onMouseDown(e))}
+      onPointerMove={(e) => route(e, () => void (touchZoom.handlers.onPointerMove(e) || pager.handlers.onPointerMove(e)), () => onMouseMove(e))}
+      onPointerUp={(e) => route(e, () => void (touchZoom.handlers.onPointerUp(e) || pager.handlers.onPointerUp(e)), endDrag)}
+      onPointerCancel={(e) => route(e, () => void (touchZoom.handlers.onPointerCancel(e) || pager.handlers.onPointerCancel()), endDrag)}
       onClick={(e) => {
         // 触屏的点按由手势处理（单击切换界面，不关闭）
-        if (touch.fromTouch()) return;
+        if (fromTouch()) return;
         if (suppressClick.current) {
           suppressClick.current = false;
           return;
@@ -294,12 +368,28 @@ export function Stage({
         if (e.target === e.currentTarget && !zoomed) onBackdropClick();
       }}
     >
-      {/* 放映时旧图留在原位淡出，新图同时淡入（交叉淡化）；平时直接换。
-          外面一层是触屏手势的跟手层，自己不接点击（点空白处还是点在舞台上） */}
-      <div ref={layerRef} className="pointer-events-none absolute inset-0">
-        {slideshow ? <AnimatePresence>{plate}</AnimatePresence> : plate}
-      </div>
-      {!plate && (
+      {/* 放映时旧图留在原位淡出，新图同时淡入（交叉淡化），不摆前后张；平时是轨道（lib/pager）。
+          轨道和每一格自己不接点击（点空白处还是点在舞台上），图版接 */}
+      {slideshow ? (
+        <div className="pointer-events-none absolute inset-0">
+          <AnimatePresence>{plate(index, true)}</AnimatePresence>
+        </div>
+      ) : (
+        <PagerTrack
+          pager={pager}
+          pos={index}
+          count={count}
+          keyOf={(i) => slide(i)?.id ?? `#${i}`}
+          className="pointer-events-none"
+          render={(i, isCurrent) => (
+            // 下滑关闭跟手的那一层：每一格都包一层（结构一样，滑到当前时还是同一个元素），只有当前这格接 ref
+            <div ref={isCurrent ? dismissRef : undefined} className="pointer-events-none absolute inset-0">
+              {plate(i, isCurrent)}
+            </div>
+          )}
+        />
+      )}
+      {!(meta && fit > 0) && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <Spinner className="size-5 text-white/50" />
         </div>

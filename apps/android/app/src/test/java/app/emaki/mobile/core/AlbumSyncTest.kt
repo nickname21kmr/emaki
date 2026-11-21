@@ -142,6 +142,8 @@ class AlbumSyncTest {
         val opens = phone.opens
         val r = syncer().sync(phone.items)
         assertEquals("没有新图", r.text())
+        // 没有新图的那次不报结果：电脑上留着上一次的「同步了 1 张」
+        assertNull(albums.reports.last().state?.summary)
         assertEquals(opens, phone.opens)
         assertEquals(1, computer.begins.size)
     }

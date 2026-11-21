@@ -64,6 +64,9 @@ export function useCapabilities(): Capabilities {
 
 export const useCan = (need: Need): boolean => useCapabilities().can(need);
 
+/** 不在组件里时（toast 这类）：按缓存里的 /api/me 判断；还没取到时按本机入口算 */
+export const canWith = (client: QueryClient, need: Need): boolean => allows(capabilitiesOf(client.getQueryData<Me>(qk.me)), need);
+
 /** 列表里能用的那些 */
 export function useAllowed<T extends { need: Need }>(items: readonly T[]): T[] {
   const { caps } = useCapabilities();

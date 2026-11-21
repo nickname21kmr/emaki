@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 
 /**
- * 看图器的缩放 / 平移状态。
+ * 播放器（看图器、阅读器）的缩放 / 平移状态和数学，lib/pager 的底层件。
  *
  * 坐标约定：图片盒子（按「适应窗口」算好的尺寸）以舞台中心为原点，
  * transform = translate(x, y) scale(scale)，transform-origin 在盒子中心。

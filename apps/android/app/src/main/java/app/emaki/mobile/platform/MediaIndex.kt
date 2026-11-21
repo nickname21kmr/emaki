@@ -94,9 +94,12 @@ object MediaIndex {
     /**
      * HEIF 转成 JPEG（质量 95，按照片里的方向转正）：电脑读不了 HEIF（docs/mobile.md 5.5）。转不了（坏图、内存不够）是 null
      */
-    fun toJpeg(context: Context, item: MediaItem): ByteArray? = try {
-        val source = ImageDecoder.createSource(context.contentResolver, ContentUris.withAppendedId(uri, item.id))
-        val bitmap = ImageDecoder.decodeBitmap(source) { decoder, _, _ -> decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE }
+    fun toJpeg(context: Context, item: MediaItem): ByteArray? = toJpeg(context, ContentUris.withAppendedId(uri, item.id))
+
+    /** 同上，按地址（选图界面、分享给的 content://，或者拷在 App 里的 file://） */
+    fun toJpeg(context: Context, source: android.net.Uri): ByteArray? = try {
+        val src = if (source.scheme == "file") ImageDecoder.createSource(java.io.File(source.path!!)) else ImageDecoder.createSource(context.contentResolver, source)
+        val bitmap = ImageDecoder.decodeBitmap(src) { decoder, _, _ -> decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE }
         try {
             ByteArrayOutputStream().use { out ->
                 if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)) null else out.toByteArray()
@@ -109,6 +112,22 @@ object MediaIndex {
     } catch (e: OutOfMemoryError) {
         null
     }
+
+    /** 按 MediaStore 的编号查原来的文件名和拍摄 / 修改时间（毫秒）；查不到是 null */
+    fun describe(context: Context, id: Long): Pair<String, Long?>? = runCatching {
+        context.contentResolver.query(
+            ContentUris.withAppendedId(uri, id),
+            arrayOf(MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.DATE_TAKEN, MediaStore.MediaColumns.DATE_MODIFIED),
+            null,
+            null,
+            null,
+        )?.use { c ->
+            if (!c.moveToFirst() || c.isNull(0)) return@use null
+            val taken = if (c.isNull(1)) 0L else c.getLong(1)
+            val modified = if (c.isNull(2)) 0L else c.getLong(2) * 1000
+            c.getString(0) to (taken.takeIf { it > 0 } ?: modified.takeIf { it > 0 })
+        }
+    }.getOrNull()
 
     fun open(context: Context, item: MediaItem): InputStream {
         var u = ContentUris.withAppendedId(uri, item.id)

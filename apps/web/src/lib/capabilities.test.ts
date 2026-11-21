@@ -8,6 +8,7 @@ import { DEVICE_DEFAULT_SCOPES, DEVICE_GRANTABLE_SCOPES, SCOPES, type Me, type S
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  canWith,
   ALL_CAPABILITIES,
   allowed,
   allowedActions,
@@ -153,5 +154,17 @@ describe('什么时候重新取 /api/me', () => {
     stop = watchForbidden(t.client);
     noteResponse(403, 'forbidden', '/assistant/sessions');
     expect(t.invalid()).toBe(false);
+  });
+});
+
+describe('不在组件里的判断（toast 的撤销按钮）', () => {
+  it('按缓存里的 /api/me：没有 history 的设备不能撤销；本机入口、还没取到时都能', () => {
+    const client = new QueryClient();
+    expect(canWith(client, 'history')).toBe(true);
+    client.setQueryData(qk.me, { kind: 'device', deviceId: 'd', name: '手机', scopes: ['read', 'curate'] } satisfies Me);
+    expect(canWith(client, 'history')).toBe(false);
+    expect(canWith(client, 'curate')).toBe(true);
+    client.setQueryData(qk.me, { kind: 'local', scopes: Object.keys(SCOPES) as Scope[] } satisfies Me);
+    expect(canWith(client, 'history')).toBe(true);
   });
 });
