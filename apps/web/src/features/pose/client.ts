@@ -32,6 +32,8 @@ export const poseApi = {
   cancelDownload: () => request<PoseActionResult>('DELETE', '/pose/models/download'),
   copy: (path: string) => request<PoseActionResult>('POST', '/pose/models/copy', { path }),
   extract: () => request<Job>('POST', '/pose/extract', {}),
+  /** 重新匹配姿势：不给 all 只补要重新匹配的，all 全部重算 */
+  rematch: (all: boolean) => request<Job>('POST', '/pose/rematch', all ? { all: true } : {}),
   /** 用新的找人模型重新提取旧版本的 */
   reextract: () => request<PoseActionResult & { count: number }>('POST', '/pose/reextract', {}),
   /** 补充姿势标签（识别过的旧图重跑识别模型，只收低分） */
@@ -42,8 +44,8 @@ export const poseApi = {
   classes: () => request<PoseClassesResponse>('GET', '/pose/classes'),
   similar: (id: ID, cursor?: string, limit = 60) =>
     request<PoseSimilarResponse>('GET', `/pose/similar/${encodeURIComponent(id)}?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`),
-  // PoseWear 姿势库
-  importPoseWear: (body: { path: string; viewsPath?: string }) => request<PoseWearImportResult>('POST', '/pose/posewear/import', body),
+  // PoseWear 姿势库：目录随包，导入的只是封面（线稿）
+  importPoseWear: (body: { path: string }) => request<PoseWearImportResult>('POST', '/pose/posewear/import', body),
   importPoseWearMatches: (body: { assignmentsPath?: string; pairsPath?: string }) => request<PoseWearAssignResult>('POST', '/pose/posewear/matches', body),
   posewear: (all: boolean) => request<PoseWearCatalogResponse>('GET', `/pose/posewear${all ? '?all=1' : ''}`),
   posewearOf: (id: ID) => request<PoseWearOfResponse>('GET', `/pose/posewear-match/${encodeURIComponent(id)}`),
@@ -86,12 +88,15 @@ export function usePoseWearOf(id: ID | undefined, enabled: boolean) {
   return useQuery({ queryKey: ['pose', 'posewear-of', id], queryFn: () => poseApi.posewearOf(id!), enabled: enabled && !!id, staleTime: 60_000 });
 }
 
-/** 状态：下载或提取进行中时两秒一次（下载没有 SSE 事件） */
+/** 状态：下载、提取、匹配、补标签进行中时两秒一次（下载没有 SSE 事件，张数也跟着走） */
 export function usePoseStatus() {
   return useQuery({
     queryKey: ['pose', 'status'],
     queryFn: poseApi.status,
-    refetchInterval: (q) => (q.state.data?.models.download.state === 'running' || q.state.data?.job ? 2000 : false),
+    refetchInterval: (q) => {
+      const d = q.state.data;
+      return d && (d.models.download.state === 'running' || d.job || d.posewear.match.job || d.tags.job) ? 2000 : false;
+    },
   });
 }
 

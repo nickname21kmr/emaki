@@ -1,4 +1,5 @@
 import { POSEWEAR_SET_LABEL, type PoseWearMatch, type PoseWearOfResponse, type PoseWearPose, type PoseWearSet, type PoseWearSetGroup } from '@emaki/shared';
+import { useQueryClient } from '@tanstack/react-query';
 import { PersonStanding, X } from 'lucide-react';
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
@@ -7,26 +8,13 @@ import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import { useBlurPrefs, usePrefs } from '@/lib/stores';
 import { findPoseWear, usePoseWear, usePoseWearOf } from './client';
+import { PoseWearCover } from './mannequin';
 import { moveFocus } from './ui';
 
 /**
  * PoseWear 姿势库（实验）的界面零件：图库工具条里的入口 / 已选的 chip、挑姿势的对话框、看图器信息里的「姿势」一行。
- * 线稿是 PoseWear 的图，用户导入后从本机数据目录取（不随软件分发）。
+ * 姿势目录随包；封面（PoseWear 的线稿）不随软件分发，用户放进 pose-covers/ 或导入，没有的按骨架画小木偶（mannequin.tsx）。
  */
-
-/** 线稿：白底黑线，放在一小块白纸上（深色主题里也是白纸） */
-export function PoseWearArt({ src, className }: { src: string; className?: string }) {
-  return (
-    <img
-      src={src}
-      alt=""
-      loading="lazy"
-      decoding="async"
-      draggable={false}
-      className={cn('aspect-[3/4] shrink-0 bg-white object-contain', className)}
-    />
-  );
-}
 
 // ------------------------------------------------------------------ 工具条入口
 
@@ -55,7 +43,7 @@ export function PoseWearEntry({ pose, onPick, onClear }: PoseWearEntryProps) {
             className="inline-flex h-full items-center gap-1.5 rounded-l-full pr-1 pl-1"
           >
             {p ? (
-              <img src={p.thumbUrl} alt="" draggable={false} className="h-5 w-[15px] rounded-[3px] bg-white object-contain" />
+              <PoseWearCover pose={p} src={p.thumbUrl} hasCover={p.hasCover} mini className="h-5 w-[15px] rounded-[3px]" />
             ) : (
               <span className="size-5 rounded-full bg-fg-inverse/20" />
             )}
@@ -152,6 +140,12 @@ export function PoseWearBrowser({
   const adultOk = !useBlurPrefs().blurSensitive;
   const sets = useMemo(() => withoutAdult(catalog.data?.sets ?? [], adultOk), [catalog.data, adultOk]);
 
+  // 每次打开都重新拉一次目录（工具条 chip 用的那份也一起）：用户可能刚往 pose-covers/ 里放了封面
+  const client = useQueryClient();
+  useEffect(() => {
+    if (open) void client.invalidateQueries({ queryKey: ['pose', 'posewear'] });
+  }, [open, client]);
+
   // 打开时：焦点落到当前选中的那格
   const loaded = !!catalog.data;
   useEffect(() => {
@@ -191,7 +185,7 @@ export function PoseWearBrowser({
       onOpenChange={onOpenChange}
       width={880}
       title="按姿势"
-      description="PoseWear 姿势库，按骨架和标签匹配。点一个姿势只看这个姿势的图，最像的排在前面。"
+      description="PoseWear 的姿势目录，Emaki 按骨架和标签自动匹配。点一个姿势只看这个姿势的图，最像的排在前面。"
     >
       <div className="mb-4 flex flex-wrap items-center gap-3">
         {sets.length > 1 && <Segmented size="sm" value={tab} onChange={setTab} options={options} />}
@@ -222,11 +216,9 @@ export function PoseWearBrowser({
           </div>
         ) : catalog.isError ? (
           <p className="px-1 text-[13px] text-danger">{catalog.error.message}</p>
-        ) : catalog.data.poses === 0 ? (
-          <p className="px-1 py-6 text-center text-[13px] text-fg-muted">还没有导入 PoseWear 姿势库：设置 → 姿势检索 → 导入。</p>
         ) : shown.length === 0 ? (
           <p className="px-1 py-6 text-center text-[13px] text-fg-muted">
-            {term ? `没有叫「${search.trim()}」的姿势。` : '还没有图匹配到姿势：设置 → 姿势检索 → 导入姿势匹配结果。'}
+            {term ? `没有叫「${search.trim()}」的姿势。` : '还没有图匹配到姿势。提取姿势时会顺便匹配，进度在设置 → 姿势检索。'}
           </p>
         ) : (
           shown.map((s) => (
@@ -258,7 +250,12 @@ export function PoseWearBrowser({
                               n === 0 && 'opacity-55',
                             )}
                           >
-                            <PoseWearArt src={p.thumbUrl} className={cn('w-full rounded-[6px] ring-1 ring-line', selected && 'ring-2 ring-ink')} />
+                            <PoseWearCover
+                              pose={p}
+                              src={p.thumbUrl}
+                              hasCover={p.hasCover}
+                              className={cn('w-full rounded-[6px] ring-1 ring-line', selected && 'ring-2 ring-ink')}
+                            />
                             <span className="mt-1.5 line-clamp-2 text-[12px] leading-snug font-medium">{p.name}</span>
                             <span className="text-[11px] text-fg-subtle tabular">
                               {formatCount(n)} 张
@@ -276,8 +273,9 @@ export function PoseWearBrowser({
         )}
       </div>
       <p className="mt-5 border-t border-line pt-3 text-[11.5px] leading-relaxed text-fg-subtle">
-        线稿来自 PoseWear（MIT）。一张图像几个姿势就在几个姿势下都有；按骨架和标签的加权分排；「低」是标签对不太上、主要靠骨架匹配的，可以只看可靠的。
-        双人按互动类型分，同一组差分只出现一张{adultOk ? '' : '；成人的几类要先关掉顶栏的模糊才显示'}。新加的图要重新跑匹配、再导入匹配结果才会出现在这里。
+        一张图像几个姿势就在几个姿势下都有，按骨架和标签的加权分排；「低」是标签对不太上、主要靠骨架匹配的，可以只看可靠的。
+        双人按互动类型分，同一组差分只出现一张{adultOk ? '' : '；成人的几类要先关掉顶栏的模糊才显示'}。新加的图提取姿势后自动匹配。
+        姿势目录来自 PoseWear（MIT），姿势参考出自 AI Pose Gallery；没有封面的姿势按骨架画小人。
       </p>
     </Dialog>
   );
@@ -341,7 +339,14 @@ export function PoseWearInfoRow({ imageId, onNavigate }: { imageId: string; onNa
           title={`${POSEWEAR_SET_LABEL[primary.pose.set]} · ${primary.pose.category}：看这个姿势的 ${primary.pose.count} 张`}
           className="group/pw flex items-center gap-2.5"
         >
-          <PoseWearArt src={primary.viewThumbUrl} className="w-9 rounded-[3px] ring-1 ring-line transition-shadow group-hover/pw:ring-ink" />
+          <PoseWearCover
+            pose={primary.pose}
+            src={primary.viewThumbUrl}
+            hasCover={primary.viewHasCover}
+            view={primary.view}
+            mini
+            className="w-9 rounded-[3px] ring-1 ring-line transition-shadow group-hover/pw:ring-ink"
+          />
           <span className="min-w-0">
             <span className="block text-[12.5px] leading-snug text-fg transition-colors group-hover/pw:text-shu">
               {primary.pose.name}

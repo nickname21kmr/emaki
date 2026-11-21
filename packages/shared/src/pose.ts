@@ -192,13 +192,13 @@ export interface PoseWearPose {
   /** 成人（双人的成人一类）：模糊敏感图时不显示 */
   adult: boolean;
   /** 代表视角有线稿（用户导入的或放在 pose-covers/ 里的）；没有时 thumbUrl、imageUrl 是 404，按 skeletonUrl 的骨架画小人 */
-  hasCover?: boolean;
+  hasCover: boolean;
   /** 线稿小图（300×400 webp） */
   thumbUrl: string;
   /** 线稿大图（900×1200 webp，代表视角） */
   imageUrl: string;
   /** 代表视角的骨架（PoseWearSkeleton），画小人用 */
-  skeletonUrl?: string;
+  skeletonUrl: string;
 }
 
 /** COCO 身体 17 点 + 脚 6 点里要连的线（画小人用） */
@@ -259,11 +259,11 @@ export interface PoseWearMatch {
   /** 在这个姿势里的名次 */
   rank: number;
   /** 匹配上的视角（没有记视角时用代表视角） */
-  view?: string;
+  view: string;
   /** 匹配上的那个视角的小图（没有记视角时用代表视角） */
   viewThumbUrl: string;
   /** 那个视角有线稿；没有时按 pose.skeletonUrl + ?view= 画小人 */
-  viewHasCover?: boolean;
+  viewHasCover: boolean;
 }
 
 /** GET /api/pose/posewear-match/:id：这张图的主要姿势和其他也匹配上的姿势（单人在前，双人在后） */
