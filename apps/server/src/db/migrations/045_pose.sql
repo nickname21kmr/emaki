@@ -1,6 +1,7 @@
 -- 按姿势找图（实验，默认关）：姿势类别和每张图的主要人物姿势。主人是姿势模块（domain/pose/）。
 -- 类别随仓库分发（apps/server/assets/pose/classes.json），启动或打开功能时按版本同步进来；size 是本图库里归到这一类的张数。
-CREATE TABLE pose_classes (
+-- 早先按 041 编号跑过的库表已经在，IF NOT EXISTS 什么都不做。
+CREATE TABLE IF NOT EXISTS pose_classes (
   id TEXT PRIMARY KEY,                  -- full_01 这样：取景组 + 序号
   grp TEXT NOT NULL CHECK (grp IN ('full', 'mid', 'waist', 'bust')),
   name TEXT NOT NULL,
@@ -19,7 +20,7 @@ CREATE TABLE pose_classes (
 );
 
 -- 每张图一行（跑过就有，没找到能用的人物也记一行，免得反复跑）
-CREATE TABLE image_poses (
+CREATE TABLE IF NOT EXISTS image_poses (
   image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
   -- ok，或者没有可用人物的原因（few_points、no_person、crowd_or_panels、decode_error……）
   status TEXT NOT NULL,
@@ -36,5 +37,5 @@ CREATE TABLE image_poses (
   version INTEGER NOT NULL,
   updated_at TEXT NOT NULL
 );
-CREATE INDEX idx_image_poses_class ON image_poses (class_id, distance);
-CREATE INDEX idx_image_poses_nearest ON image_poses (nearest_id);
+CREATE INDEX IF NOT EXISTS idx_image_poses_class ON image_poses (class_id, distance);
+CREATE INDEX IF NOT EXISTS idx_image_poses_nearest ON image_poses (nearest_id);

@@ -2,7 +2,7 @@
  * PoseWear 姿势库（实验）：姿势目录和每张图的匹配。posewear_poses、image_posewear_members 只在这里写
  * （test/architecture/owners.ts）；写入在调用方的事务（ctx.apply）里，写完由调用方声明 pose.changed。
  * 线稿图片在 <数据目录>/pose/posewear/{t,i}/（services/pose/posewear.ts 复制），这里只管表。
- * 一张图在每个匹配上的姿势下都有一行（迁移 043）；低置信 = lowtag+skel。双人的差分（variant_of）不单独出现。
+ * 一张图在每个匹配上的姿势下都有一行（迁移 047）；低置信 = lowtag+skel。双人的差分（variant_of）不单独出现。
  * 张数按口径（计入统计的插画，和 51 类一样）现算。
  */
 import {

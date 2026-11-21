@@ -27,7 +27,7 @@ const items = JSON.parse(readFileSync(path.join(FIX, 'agreement.json'), 'utf8'))
 const refs = classRefs(loadPoseAsset());
 const NOW = Date.parse('2026-11-20T12:00:00.000Z');
 
-describe('迁移 041', () => {
+describe('迁移 045', () => {
   it('建两张表；删图时姿势跟着删，删类别时图上的类别置空', () => {
     const db = openDatabase(':memory:');
     migrate(db, {});

@@ -4,7 +4,8 @@
 -- 2. image_posewear（主要匹配）和 image_posewear_candidates（前三个候选）合成一张 image_posewear_members：
 --    每个（图, 姿势）一行，带这个姿势里的名次、方法、是不是主要的、低置信（lowtag+skel）、差分归到哪张（双人用）。
 --    旧数据搬过来：主要匹配照搬；过了阈值的其他候选没有名次，排在这个姿势的最后。重新导入匹配结果后整批替换。
--- 注意：上游 main 也有 042–044（uploads、album_sync、upload_rejected），合并时本地的 041–043 要往后挪。
+-- 本地早先按 041–043 编号跑过的库，这一版已经做过（image_posewear_members 在、旧表已删），整份跳过（迁移器看下面这行）。
+-- @skip-if-table image_posewear_members
 
 CREATE TABLE posewear_poses_new (
   id TEXT PRIMARY KEY,                  -- full_single_P001、pair_P054 这样：套 + 编号（双人是代表线稿的编号）

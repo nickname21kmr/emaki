@@ -176,3 +176,102 @@ describe('升级前备份', () => {
     expect(readdirSync(dataDir).sort()).toEqual([...others, ...[10, 11, 12, 13, 14, 15, 16].map(bak)].sort());
   });
 });
+
+describe('姿势迁移的旧编号（本地早先的 041–043）', () => {
+  let db: Db;
+  let dir: string;
+  let logs: string[];
+  beforeEach(() => {
+    db = openDatabase(':memory:');
+    dir = makeTmpDir('migrate-legacy-pose');
+    logs = [];
+  });
+  afterEach(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const has = (name: string) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+  /** 旧编号的迁移目录：v1–v40 + 045–047 按旧的 041–043 命名（旧文件没有 IF NOT EXISTS） */
+  function legacyDir(upTo: 42 | 43): string {
+    const all = loadMigrations();
+    const d = path.join(dir, `legacy-${upTo}`);
+    mkdirSync(d);
+    copyMigrations(d, 40);
+    const old = [
+      ['041_pose.sql', all[44]!],
+      ['042_posewear.sql', all[45]!],
+      ['043_posewear_multi.sql', all[46]!],
+    ] as const;
+    for (const [name, m] of old.slice(0, upTo - 40)) {
+      expect(m.name.slice(4)).toBe(name.slice(4));
+      writeFileSync(path.join(d, 'migrations', name), m.sql.replace(/ IF NOT EXISTS/g, '').replace(/^-- @skip-if-table.*$/m, ''));
+    }
+    return d;
+  }
+  function seed() {
+    db.exec("INSERT INTO library_roots (id, path) VALUES (1, 'X:/p')");
+    for (const id of [1, 2, 3])
+      db.exec(`INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
+               VALUES (${id}, 1, '${id}.png', '${id}.png', 10, 10, 1, 'png', 's${id}', 't', 't')`);
+    db.exec("INSERT INTO pose_classes (id, grp, name, description, sort, medoid, cut, figure, version) VALUES ('full_01', 'full', 'n', 'd', 0, x'00', 0.1, x'00', 1)");
+    db.exec("INSERT INTO image_poses (image_id, status, class_id, nearest_id, version, updated_at) VALUES (1, 'ok', 'full_01', 'full_01', 1, 't'), (2, 'no_person', NULL, NULL, 1, 't')");
+    for (const p of ['full_single_P001', 'full_single_P002'])
+      db.exec(`INSERT INTO posewear_poses (id, set_id, number, name, category, sort, views, best_view, version)
+               VALUES ('${p}', 'full_single', 'P00${p.at(-1)}', 'n', 'c', 0, '["front"]', 'front', 1)`);
+  }
+
+  it('停在旧 v42：先备份，退回 v40 补跑上游 041–044，姿势数据留着，PoseWear 搬进 image_posewear_members', () => {
+    expect(migrate(db, { dir: legacyDir(42) })).toEqual({ from: 0, to: 42 });
+    expect(has('devices')).toBe(false);
+    seed();
+    db.exec("INSERT INTO image_posewear (image_id, pose_id, method, rank, distance, updated_at) VALUES (1, 'full_single_P001', 'tags+skel', 0, 0.2, 't'), (2, 'full_single_P002', 'tag_only', 3, NULL, 't')");
+    db.exec(`INSERT INTO image_posewear_candidates (image_id, ord, pose_id, accepted, method) VALUES
+             (1, 0, 'full_single_P001', 1, 'tags+skel'), (1, 1, 'full_single_P002', 1, 'lowtag+skel'), (2, 0, 'full_single_P002', 1, 'tag_only')`);
+
+    const backupDir = path.join(dir, 'data');
+    mkdirSync(backupDir);
+    expect(migrate(db, { backupDir, log: (m) => logs.push(m) })).toEqual({ from: 42, to: latest });
+    expect(db.pragma('user_version', { simple: true })).toBe(latest);
+    // 备份是退回版本之前的库
+    const bak = openDatabase(path.join(backupDir, 'emaki.v42.bak.sqlite'));
+    expect([bak.pragma('user_version', { simple: true }), bak.prepare('SELECT COUNT(*) FROM image_posewear').pluck().get()]).toEqual([42, 2]);
+    bak.close();
+    expect(logs.some((m) => m.includes('退回 v40'))).toBe(true);
+    for (const t of ['lan_access', 'devices', 'upload_batches', 'uploads', 'device_albums', 'device_sync']) expect(has(t)).toBe(true);
+    expect(db.prepare('SELECT image_id, status, class_id FROM image_poses ORDER BY image_id').all()).toEqual([
+      { image_id: 1, status: 'ok', class_id: 'full_01' },
+      { image_id: 2, status: 'no_person', class_id: null },
+    ]);
+    expect(db.prepare('SELECT COUNT(*) FROM posewear_poses').pluck().get()).toBe(2);
+    expect(db.prepare('SELECT image_id, pose_id, rank, is_primary, low FROM image_posewear_members ORDER BY image_id, pose_id').all()).toEqual([
+      { image_id: 1, pose_id: 'full_single_P001', rank: 0, is_primary: 1, low: 0 },
+      { image_id: 1, pose_id: 'full_single_P002', rank: 1_000_001, is_primary: 0, low: 1 },
+      { image_id: 2, pose_id: 'full_single_P002', rank: 3, is_primary: 1, low: 0 },
+    ]);
+    expect(has('image_posewear') || has('image_posewear_candidates')).toBe(false);
+    expect(migrate(db)).toEqual({ from: latest, to: latest });
+  });
+
+  it('停在旧 v43（已经合成 image_posewear_members）：046、047 跳过，不建回空的旧表，adult 留着', () => {
+    expect(migrate(db, { dir: legacyDir(43) })).toEqual({ from: 0, to: 43 });
+    seed();
+    db.exec(`INSERT INTO posewear_poses (id, set_id, number, name, category, sort, views, best_view, adult, version)
+             VALUES ('pair_P054', 'pair', 'P054', 'n', '双人', 0, '["front"]', 'front', 1, 1)`);
+    db.exec("INSERT INTO image_posewear_members (image_id, pose_id, rank, is_primary, method, low, updated_at) VALUES (3, 'pair_P054', 0, 1, 'tag_only', 0, 't')");
+    expect(migrate(db)).toEqual({ from: 43, to: latest });
+    expect(has('devices') && has('uploads')).toBe(true);
+    expect(has('image_posewear') || has('image_posewear_candidates')).toBe(false);
+    expect(db.prepare("SELECT adult FROM posewear_poses WHERE id = 'pair_P054'").pluck().get()).toBe(1);
+    expect(db.prepare('SELECT COUNT(*) FROM image_posewear_members').pluck().get()).toBe(1);
+  });
+
+  it('上游的 v42（没有姿势的表）照常往后跑，不退回', () => {
+    mkdirSync(path.join(dir, 'up'));
+    copyMigrations(path.join(dir, 'up'), 42);
+    expect(migrate(db, { dir: path.join(dir, 'up') })).toEqual({ from: 0, to: 42 });
+    expect(migrate(db, { log: (m) => logs.push(m) })).toEqual({ from: 42, to: latest });
+    expect(logs.some((m) => m.includes('退回'))).toBe(false);
+    expect(has('image_posewear_members') && has('image_poses')).toBe(true);
+  });
+});

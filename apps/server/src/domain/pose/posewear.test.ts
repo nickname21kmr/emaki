@@ -1,5 +1,5 @@
 /**
- * PoseWear 姿势库（实验）：迁移 043（旧的主要匹配和候选搬进 image_posewear_members）、导入姿势库（假的小 PoseWear 文件夹，
+ * PoseWear 姿势库（实验）：迁移 047（旧的主要匹配和候选搬进 image_posewear_members）、导入姿势库（假的小 PoseWear 文件夹，
  * 单人三套 + 双人几类）、导入单人匹配（assignments_multi.json 和旧的 assignments.json）、双人匹配（按类型合并、去差分）、
  * 目录 / 线稿 / 每张图的匹配、按姿势筛选（低置信在后、只看可靠的）。真实引擎（内存库）。
  */
@@ -62,14 +62,14 @@ const pc = (pose: string, method: 'tags+skel' | 'tag_only', x: number, accepted 
     ? { pose: `pair60_${pose}`, method, accepted, strength: 1, nclause: 2, tag_score: 0.6, distance: x * 0.4, dist_norm: x }
     : { pose: `pair60_${pose}`, method, accepted, strength: 2, nclause: 2, tag_score: x };
 
-describe('迁移 043', () => {
+describe('迁移 047', () => {
   it('旧的主要匹配和过了阈值的候选搬进 image_posewear_members；双人能存；删图、删姿势时跟着删', () => {
     const db = openDatabase(':memory:');
-    const dir = makeTmpDir('migrate-043');
+    const dir = makeTmpDir('migrate-047');
     copyFileSync(path.join(import.meta.dirname, '../../db/schema.sql'), path.join(dir, 'schema.sql'));
     mkdirSync(path.join(dir, 'migrations'));
-    for (const m of loadMigrations().slice(1, 42)) writeFileSync(path.join(dir, 'migrations', m.name), m.sql);
-    expect(migrate(db, { dir })).toEqual({ from: 0, to: 42 });
+    for (const m of loadMigrations().slice(1, 46)) writeFileSync(path.join(dir, 'migrations', m.name), m.sql);
+    expect(migrate(db, { dir })).toEqual({ from: 0, to: 46 });
     db.exec("INSERT INTO library_roots (id, path) VALUES (1, 'X:/p')");
     for (const id of [1, 2])
       db.exec(`INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
@@ -82,7 +82,7 @@ describe('迁移 043', () => {
              (1, 0, 'full_single_P001', 1, 'lowtag+skel'), (1, 1, 'full_single_P002', 1, 'tags+skel'), (1, 2, 'full_single_P002', 0, 'near_miss')`);
     rmSync(dir, { recursive: true, force: true });
 
-    expect(migrate(db, {})).toMatchObject({ from: 42 });
+    expect(migrate(db, {})).toMatchObject({ from: 46 });
     const rows = db.prepare('SELECT image_id, pose_id, rank, is_primary, method, low, distance FROM image_posewear_members ORDER BY pose_id').all();
     expect(rows).toEqual([
       { image_id: 1, pose_id: 'full_single_P001', rank: 4, is_primary: 1, method: 'lowtag+skel', low: 1, distance: 0.3 },
