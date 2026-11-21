@@ -167,6 +167,23 @@ describe('PoseWear 匹配（Emaki 里自己做）', () => {
     expect((await status()).match).toMatchObject({ matched: 3, pending: 0 });
   });
 
+  it('导入原型的低分姿势标签：收了低分的图自动重新匹配，不用再点', async () => {
+    const WD = 'SmilingWolf/wd-eva02-large-tagger-v3';
+    for (const id of [1, 2]) {
+      addImage(id, { standing: 0.9 });
+      scenes.set(id, single('full_single_P018', 'front'));
+    }
+    ds.ctx.db.prepare('UPDATE images SET tagger_model = ? WHERE id IN (1, 2)').run(WD);
+    await ds.updateSettings({ pose: { enabled: true } });
+    await done('pose');
+    expect((await status()).match.pending).toBe(0);
+    expect((await ds.listJobs()).some((j) => j.kind === 'pose-match')).toBe(false);
+    const r = (await ds.run('pose.importTagsLow', { path: path.resolve(import.meta.dirname, '../../../test/fixtures/pose/pose_tags_low.npz') })) as { imported: number };
+    expect(r.imported).toBe(2);
+    await done('pose-match');
+    expect((await status()).match).toMatchObject({ matched: 2, pending: 0 });
+  });
+
   it('取消「重新匹配姿势」后不再自动排，点了接着做；以前提取的行（没记人数）当一个人，没有两人骨架时双人按标签', async () => {
     addImage(41, { standing: 0.9, hands_on_own_hips: 0.8, '2girls': 0.9, princess_carry: 0.8 });
     patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });

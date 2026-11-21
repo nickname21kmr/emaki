@@ -327,6 +327,8 @@ export const poseCommands = [
       if (!existsSync(input.path)) throw new BadRequestError(`找不到文件：${input.path}`);
       try {
         const r = await importPoseTagsLow(e.ctx, input.path);
+        // 收了低分的图按新的标签重新匹配（和「补充姿势标签」跑完一样）
+        if (r.imported > 0) e.pipeline.requestPoseMatch();
         const skip = [r.missing && `图库里没有的 ${r.missing} 张`, r.skipped && `已经收过的 ${r.skipped} 张`].filter(Boolean);
         return { ...r, message: `导入了 ${r.imported} 张的姿势标签低分（${r.withTags} 张有，共 ${r.tags} 条）${skip.length ? `；${skip.join('、')}跳过` : ''}` };
       } catch (err) {
