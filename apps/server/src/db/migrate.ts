@@ -6,6 +6,7 @@
  * - 升级前（已有库）用 VACUUM INTO 备份一份；成功后只留这份和之前最近的一份，更早的 emaki.v<N>.bak.sqlite 删掉。
  * - 迁移文件第一行是 `-- @foreign-keys-off` 时，在事务外关掉外键（重建表时需要），跑完做 foreign_key_check。
  * - 迁移文件里有一行 `-- @skip-if-table 表名` 时，这张表已经在就不执行这份 SQL（只记版本号），给能重复跑的迁移用。
+ * - `-- @skip-if-column 表名.列名` 同理：这一列已经在就跳过（补列用，ALTER TABLE ADD COLUMN 不能写 IF NOT EXISTS）。
  */
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
@@ -18,11 +19,17 @@ export interface Migration {
   foreignKeysOff: boolean;
   /** 这张表已经在就跳过（`-- @skip-if-table`） */
   skipIfTable: string | null;
+  /** 这一列已经在就跳过（`-- @skip-if-column 表.列`） */
+  skipIfColumn?: { table: string; column: string } | null;
 }
 
 const FILE_RE = /^(\d{3})_.+\.sql$/;
 const BACKUP_RE = /^emaki\.v(\d+)\.bak\.sqlite$/;
 const SKIP_RE = /^-- @skip-if-table (\w+)\s*$/m;
+const SKIP_COL_RE = /^-- @skip-if-column (\w+)\.(\w+)\s*$/m;
+
+const hasColumn = (db: Db, table: string, column: string): boolean =>
+  (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === column);
 
 const hasTable = (db: Db, name: string): boolean =>
   !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
@@ -86,6 +93,7 @@ export function loadMigrations(dir = import.meta.dirname): Migration[] {
         sql,
         foreignKeysOff: sql.trimStart().startsWith('-- @foreign-keys-off'),
         skipIfTable: SKIP_RE.exec(sql)?.[1] ?? null,
+        skipIfColumn: (([, table, column]) => (table && column ? { table, column } : null))(SKIP_COL_RE.exec(sql) ?? []),
       });
     }
   }
@@ -134,6 +142,11 @@ export function migrate(
     if (m.skipIfTable && hasTable(db, m.skipIfTable)) {
       db.pragma(`user_version = ${m.version}`);
       opts.log?.(`数据库迁移：v${m.version} ${m.name}（${m.skipIfTable} 已经在，跳过）`);
+      continue;
+    }
+    if (m.skipIfColumn && hasColumn(db, m.skipIfColumn.table, m.skipIfColumn.column)) {
+      db.pragma(`user_version = ${m.version}`);
+      opts.log?.(`数据库迁移：v${m.version} ${m.name}（${m.skipIfColumn.table}.${m.skipIfColumn.column} 已经在，跳过）`);
       continue;
     }
     if (m.foreignKeysOff) db.pragma('foreign_keys = OFF');
