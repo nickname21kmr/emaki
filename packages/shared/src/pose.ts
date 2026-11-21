@@ -101,7 +101,12 @@ export interface PoseStatus {
     low: number;
     /** 双人：类型数、有匹配的图、去掉差分后显示的图 */
     pair: { types: number; images: number; shown: number };
+    /** 本机的导入捷径（开发机上找得到才给；正常用不到：目录随包、匹配在 Emaki 里自己做） */
     defaults: { folder: string | null; assignmentsPath: string | null; viewsPath: string | null; pairsPath: string | null };
+    /** Emaki 自己的匹配：提取过姿势的插画里匹配过、还要匹配的（骨架、标签换过或姿势库升级了），正在跑或排队的「重新匹配姿势」 */
+    match: { version: number; eligible: number; matched: number; pending: number; job: Job | null };
+    /** 线稿：有线稿的姿势数（代表视角）、姿势总数、放线稿的文件夹（pose-covers/）；没有线稿的网页按骨架画小人 */
+    covers: { found: number; total: number; dir: string };
   };
 }
 
@@ -186,10 +191,42 @@ export interface PoseWearPose {
   low: number;
   /** 成人（双人的成人一类）：模糊敏感图时不显示 */
   adult: boolean;
+  /** 代表视角有线稿（用户导入的或放在 pose-covers/ 里的）；没有时 thumbUrl、imageUrl 是 404，按 skeletonUrl 的骨架画小人 */
+  hasCover?: boolean;
   /** 线稿小图（300×400 webp） */
   thumbUrl: string;
   /** 线稿大图（900×1200 webp，代表视角） */
   imageUrl: string;
+  /** 代表视角的骨架（PoseWearSkeleton），画小人用 */
+  skeletonUrl?: string;
+}
+
+/** COCO 身体 17 点 + 脚 6 点里要连的线（画小人用） */
+export const POSE_SKELETON_EDGES: readonly (readonly [number, number])[] = [
+  [0, 1], [0, 2], [1, 3], [2, 4],
+  [5, 6], [5, 7], [7, 9], [6, 8], [8, 10],
+  [5, 11], [6, 12], [11, 12],
+  [11, 13], [13, 15], [12, 14], [14, 16],
+  [15, 17], [15, 18], [15, 19], [16, 20], [16, 21], [16, 22],
+];
+
+/**
+ * GET /api/pose/posewear-skeleton/:id（?view=）：姿势在一个视角线稿上的骨架。
+ * 单人 persons 一个、双人两个；每个人 23 个点 [x, y, 置信度]，坐标按线稿长边归一（0–1），置信度不到 minConfidence 的点看不清、不画。
+ * 没有骨架的姿势（线稿上没检测到人）persons 是空的
+ */
+export interface PoseWearSkeleton {
+  poseId: string;
+  /** 用的视角；没有骨架时是 null */
+  view: string | null;
+  /** 有骨架的视角 */
+  views: string[];
+  /** 线稿的宽、高（按长边归一，竖图 w < 1、h = 1） */
+  w: number;
+  h: number;
+  persons: { points: [number, number, number][] }[];
+  edges: readonly (readonly [number, number])[];
+  minConfidence: number;
 }
 
 export interface PoseWearCategory {
@@ -221,8 +258,12 @@ export interface PoseWearMatch {
   low: boolean;
   /** 在这个姿势里的名次 */
   rank: number;
+  /** 匹配上的视角（没有记视角时用代表视角） */
+  view?: string;
   /** 匹配上的那个视角的小图（没有记视角时用代表视角） */
   viewThumbUrl: string;
+  /** 那个视角有线稿；没有时按 pose.skeletonUrl + ?view= 画小人 */
+  viewHasCover?: boolean;
 }
 
 /** GET /api/pose/posewear-match/:id：这张图的主要姿势和其他也匹配上的姿势（单人在前，双人在后） */

@@ -1,18 +1,24 @@
 /**
- * PoseWear 姿势库（实验）：迁移 047（旧的主要匹配和候选搬进 image_posewear_members）、导入姿势库（假的小 PoseWear 文件夹，
- * 单人三套 + 双人几类）、导入单人匹配（assignments_multi.json 和旧的 assignments.json）、双人匹配（按类型合并、去差分）、
- * 目录 / 线稿 / 每张图的匹配、按姿势筛选（低置信在后、只看可靠的）。真实引擎（内存库）。
+ * PoseWear 姿势库（实验）：迁移 047（旧的主要匹配和候选搬进 image_posewear_members）、姿势目录随包（不用导入）、
+ * 线稿导入（假的小 PoseWear 文件夹）和 pose-covers/、骨架接口、导入原型的单人匹配（assignments_multi.json 和旧的 assignments.json）、
+ * 双人匹配（按类型合并、去差分）、目录 / 线稿 / 每张图的匹配、按姿势筛选（低置信在后、只看可靠的）。真实引擎（内存库）。
  */
 import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { ImageItem, Page, PoseStatus, PoseWearCatalogResponse, PoseWearLowResponse, PoseWearOfResponse } from '@emaki/shared';
+import type { ImageItem, Page, PoseStatus, PoseWearCatalogResponse, PoseWearLowResponse, PoseWearOfResponse, PoseWearSkeleton } from '@emaki/shared';
 import { EventBus } from '../../core/events.ts';
 import { openDatabase } from '../../db/connection.ts';
 import { loadMigrations, migrate } from '../../db/migrate.ts';
 import { patchSettingsInternal } from '../../datasource/sqlite/settings.ts';
+import { findCover } from '../../services/pose/covers.ts';
+import { ensurePoseWearCatalog } from '../../services/pose/posewearMatch.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
 import { SqliteDataSource } from '../../../test/helpers/client.ts';
+import { loadPoseWearAsset } from './posewearAsset.ts';
+
+const asset = loadPoseWearAsset();
+const meta = (id: string) => asset.byId.get(id)!;
 
 const NOW = Date.parse('2026-11-21T12:00:00.000Z');
 const VIEWS = ['front', 'high', 'low', 'side', 'diag'];
@@ -134,7 +140,114 @@ describe('PoseWear 姿势库', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('关着时 403；导入姿势库（单人三套 + 双人几类）、单人的多姿势匹配，每个姿势下都有，照原型的名次排（低置信的不往后挪），可以只看可靠的', async () => {
+  it('姿势目录随包：关着时 403；打开后同步进库（不用导入），名字、分类、代表视角照资产；没有线稿时 hasCover 是 false，骨架接口给小人用的点', async () => {
+    await forbidden(ds.ask('pose.posewear', {}));
+    await forbidden(ds.ask('pose.posewearSkeleton', { id: 'full_single_P001' }));
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    ensurePoseWearCatalog(ds.ctx);
+    // 再同步一次不写（版本不动）
+    ensurePoseWearCatalog(ds.ctx);
+    const rows = ds.ctx.db.prepare('SELECT id, set_id, name, category, best_view, adult, version FROM posewear_poses ORDER BY sort').all() as {
+      id: string;
+      set_id: string;
+      name: string;
+      category: string;
+      best_view: string;
+      adult: number;
+      version: number;
+    }[];
+    expect(rows).toHaveLength(asset.poses.length);
+    expect(rows.filter((r) => r.set_id === 'pair').map((r) => r.id)).toEqual(asset.pairs.map((p) => p.id));
+    const p1 = meta('full_single_P001');
+    expect(rows.find((r) => r.id === p1.id)).toEqual({ id: p1.id, set_id: 'full_single', name: p1.name, category: p1.category, best_view: p1.bestView, adult: 0, version: 1 });
+    expect(rows.find((r) => r.id === 'pair_P023')).toMatchObject({ name: '面对面跨坐', category: '成人', adult: 1 });
+
+    const all = await catalog(true);
+    expect(all.poses).toBe(asset.poses.length);
+    expect(all.sets.map((s) => s.id)).toEqual(['full_single', 'full_sexy', 'upper80v2', 'pair']);
+    // 还没有匹配：默认只给有图的，一个也没有
+    expect((await catalog()).sets).toEqual([]);
+    const pose = all.sets[0]!.categories[0]!.poses[0]!;
+    expect(pose).toMatchObject({ id: p1.id, hasCover: false, skeletonUrl: `/api/pose/posewear-skeleton/${p1.id}`, thumbUrl: `/api/pose/posewear/t/${p1.id}_${p1.bestView}.webp?v=1` });
+    await expect(ds.ask('pose.posewearFile', { size: 't', file: `${p1.id}_${p1.bestView}.webp` })).rejects.toMatchObject({ statusCode: 404 });
+
+    // 骨架：代表视角，23 个点，坐标按长边归一；双人两个人；没有骨架的双人类型 persons 为空
+    const sk = (await ds.ask('pose.posewearSkeleton', { id: p1.id })) as PoseWearSkeleton;
+    expect(sk).toMatchObject({ poseId: p1.id, view: p1.bestView, minConfidence: 0.3 });
+    expect(sk.persons).toHaveLength(1);
+    expect(sk.persons[0]!.points).toHaveLength(23);
+    expect(sk.persons[0]!.points.every(([x, y, c]) => x >= -0.5 && x <= 1.5 && y >= -0.5 && y <= 1.5 && c >= 0 && c <= 1)).toBe(true);
+    expect(Math.max(sk.w, sk.h)).toBe(1);
+    const side = (await ds.ask('pose.posewearSkeleton', { id: p1.id, view: 'side' })) as PoseWearSkeleton;
+    expect(side.view).toBe('side');
+    const pair = (await ds.ask('pose.posewearSkeleton', { id: 'pair_P054' })) as PoseWearSkeleton;
+    expect(pair.persons).toHaveLength(2);
+    expect(((await ds.ask('pose.posewearSkeleton', { id: 'pair_P057' })) as PoseWearSkeleton).persons).toEqual([]);
+    await expect(ds.ask('pose.posewearSkeleton', { id: 'full_single_P999' })).rejects.toMatchObject({ statusCode: 404 });
+    await badRequest(ds.ask('pose.posewearSkeleton', { id: '../x' }));
+
+    // 状态：匹配、线稿
+    const st = ((await ds.ask('pose.status', {})) as PoseStatus).posewear;
+    expect(st.covers).toMatchObject({ found: 0, total: asset.poses.length });
+    expect(st.match).toMatchObject({ eligible: 0, matched: 0, pending: 0, job: null });
+  });
+
+  it('线稿：从 PoseWear 文件夹导入（小图全部视角、大图代表视角），之后 hasCover、地址版本加 1；没有线稿的文件夹 400；平铺的文件也认', async () => {
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    await badRequest(ds.run('pose.importPoseWear', { path: path.join(dir, 'nope') }));
+    mkdirSync(path.join(dir, 'empty'));
+    await badRequest(ds.run('pose.importPoseWear', { path: path.join(dir, 'empty') }));
+    const r = (await ds.run('pose.importPoseWear', { path: folder, viewsPath })) as { poses: number; pairTypes: number; files: number };
+    // 单人 4 个，双人 3 类（公主抱、坐在腿上用代表 P009、成人的面对面跨坐；P010 不是代表，P001 不收）；每个 5 张小图 + 1 张大图
+    expect(r).toMatchObject({ poses: 4, pairTypes: 3, files: 42 });
+    const all = await catalog(true);
+    const p1 = meta('full_single_P001');
+    const pose = all.sets[0]!.categories[0]!.poses[0]!;
+    expect(pose).toMatchObject({ id: p1.id, hasCover: true, thumbUrl: `/api/pose/posewear/t/${p1.id}_${p1.bestView}.webp?v=2` });
+    expect(all.sets.flatMap((s) => s.categories.flatMap((c) => c.poses)).filter((p) => p.hasCover).map((p) => p.id).sort()).toEqual(
+      ['full_sexy_P001', 'full_single_P001', 'full_single_P002', 'pair_P009', 'pair_P023', 'pair_P054', 'upper80v2_P001'].sort(),
+    );
+    const out = path.join(dir, 'data', 'pose', 'posewear');
+    const f = (await ds.ask('pose.posewearFile', { size: 'i', file: `${p1.id}_${p1.bestView}.webp` })) as { filePath: string };
+    expect(f.filePath).toBe(path.join(out, 'i', `${p1.id}_${p1.bestView}.webp`));
+    // 双人用代表 pair60 的线稿，存成 pair_P054
+    expect((await ds.ask('pose.posewearFile', { size: 't', file: 'pair_P054_side.webp' })) as { filePath: string }).toMatchObject({
+      filePath: path.join(out, 't', 'pair_P054_side.webp'),
+    });
+    // 大图只有代表视角：别的视角用小图顶上
+    expect(((await ds.ask('pose.posewearFile', { size: 'i', file: `${p1.id}_side.webp` })) as { filePath: string }).filePath).toBe(path.join(out, 't', `${p1.id}_side.webp`));
+    await expect(ds.ask('pose.posewearFile', { size: 'i', file: 'full_sexy_P002_side.webp' })).rejects.toMatchObject({ statusCode: 404 });
+    await badRequest(ds.ask('pose.posewearFile', { size: 't', file: '../emaki.sqlite' }));
+    expect(((await ds.ask('pose.status', {})) as PoseStatus).posewear.covers.found).toBe(7);
+
+    // 平铺的文件夹（线稿直接放在里面）
+    const flat = path.join(dir, 'flat');
+    mkdirSync(flat);
+    writeFileSync(path.join(flat, 'full_sexy_P002_side.webp'), 'x');
+    expect(await ds.run('pose.importPoseWear', { path: flat })).toMatchObject({ poses: 1, pairTypes: 0, files: 1 });
+    expect((await catalog(true)).sets[0]!.categories[0]!.poses[0]!.thumbUrl).toContain('?v=3');
+  });
+
+  it('pose-covers/：PoseWear 的文件名原样放进去（平铺或 t、i、p/t、p/i 下），导入的优先；双人按 pair60 的名字找', () => {
+    const covers = path.join(dir, 'pose-covers');
+    const imported = path.join(dir, 'imported');
+    mkdirSync(path.join(covers, 'i'), { recursive: true });
+    mkdirSync(path.join(covers, 'p', 't'), { recursive: true });
+    mkdirSync(path.join(imported, 't'), { recursive: true });
+    writeFileSync(path.join(covers, 'full_single_P017_side.webp'), 'flat');
+    writeFileSync(path.join(covers, 'i', 'full_single_P017_front.webp'), 'big');
+    writeFileSync(path.join(covers, 'p', 't', 'pair60_P054_front.webp'), 'pair');
+    writeFileSync(path.join(imported, 't', 'full_single_P017_side.webp'), 'imported');
+    const dirs = { imported, covers };
+    expect(findCover(dirs, 't', 'full_single_P017', 'side')).toBe(path.join(imported, 't', 'full_single_P017_side.webp'));
+    expect(findCover(dirs, 'i', 'full_single_P017', 'front')).toBe(path.join(covers, 'i', 'full_single_P017_front.webp'));
+    // 只有大图时小图也用它
+    expect(findCover(dirs, 't', 'full_single_P017', 'front')).toBe(path.join(covers, 'i', 'full_single_P017_front.webp'));
+    expect(findCover(dirs, 't', 'pair_P054', 'front')).toBe(path.join(covers, 'p', 't', 'pair60_P054_front.webp'));
+    expect(findCover(dirs, 't', 'full_single_P017', 'low')).toBeNull();
+  });
+
+  it('导入原型的单人匹配（本机的捷径）：每个姿势下都有，照原型的名次排（低置信的不往后挪），可以只看可靠的；导入后记成匹配过', async () => {
     for (const id of [11, 12, 13, 14, 15]) addImage(id);
     const matches = path.join(dir, 'assignments_multi.json');
     writeFileSync(
@@ -150,38 +263,22 @@ describe('PoseWear 姿势库', () => {
         '99': { framing: 'full', poses: [mp('full_single_P002', 0, 'tags+skel', true)] },
       }),
     );
-    await forbidden(ds.run('pose.importPoseWear', { path: folder }));
-    await forbidden(ds.ask('pose.posewear', {}));
     await forbidden(ds.ask('images.list', { posewearPose: 'full_single_P001' }));
     await forbidden(ds.ask('pose.posewearOf', { id: '11' }));
     await forbidden(ds.ask('pose.posewearLow', { pose: 'full_single_P001' }));
     patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
-
-    // 先导匹配结果：还没有姿势库；两份都没给
-    await badRequest(ds.run('pose.importPoseWearMatches', { assignmentsPath: matches }));
     await badRequest(ds.run('pose.importPoseWearMatches', {}));
-    await badRequest(ds.run('pose.importPoseWear', { path: path.join(dir, 'nope') }));
-
-    const r = (await ds.run('pose.importPoseWear', { path: folder, viewsPath })) as { poses: number; pairTypes: number; files: number };
-    // 单人 4 个，双人 3 类（公主抱、坐在腿上、成人的面对面跨坐；P010 并进坐在腿上，P001 不收）；每个 5 张小图 + 1 张大图
-    expect(r).toMatchObject({ poses: 4, pairTypes: 3, files: 42 });
-    const rows = ds.ctx.db.prepare('SELECT id, set_id, name, category, best_view, adult FROM posewear_poses ORDER BY sort').all();
-    expect(rows).toEqual([
-      { id: 'full_single_P001', set_id: 'full_single', name: '后仰坐', category: '坐姿', best_view: 'high', adult: 0 },
-      { id: 'full_single_P002', set_id: 'full_single', name: '站立', category: '站姿', best_view: 'front', adult: 0 },
-      { id: 'full_sexy_P001', set_id: 'full_sexy', name: 'S形站姿', category: '站姿', best_view: 'front', adult: 0 },
-      { id: 'upper80v2_P001', set_id: 'upper80v2', name: '比心', category: '可爱', best_view: 'front', adult: 0 },
-      { id: 'pair_P054', set_id: 'pair', name: '公主抱', category: '双人', best_view: 'front', adult: 0 },
-      { id: 'pair_P009', set_id: 'pair', name: '坐在腿上', category: '双人', best_view: 'front', adult: 0 },
-      { id: 'pair_P023', set_id: 'pair', name: '面对面跨坐', category: '成人', best_view: 'front', adult: 1 },
-    ]);
+    // 和库里提取过的姿势一起：导入后这些图记成匹配过，自动的「重新匹配姿势」不马上盖掉
+    for (const id of [11, 12, 13])
+      ds.ctx.db.prepare("INSERT INTO image_poses (image_id, status, grp, version, updated_at) VALUES (?, 'few_points', NULL, 2, 't')").run(id);
 
     const m = await ds.run('pose.importPoseWearMatches', { assignmentsPath: matches });
     expect(m).toMatchObject({ imported: 4, memberships: 6, low: 2, missing: 1, unknownPose: 1, pairImages: 0 });
+    expect(((await ds.ask('pose.status', {})) as PoseStatus).posewear.match).toMatchObject({ eligible: 3, matched: 3, pending: 0 });
 
     // 每个姿势下都有：P002 有 12（主要）和 11（也像，低置信）；严格按名次，低置信的 13 在最前
     expect(await ids({ posewearPose: 'full_single_P001' })).toEqual(['13', '11', '15']);
-    expect(ds.ctx.db.prepare("SELECT score FROM image_posewear_members WHERE image_id = 13").pluck().get()).toBe(0.99);
+    expect(ds.ctx.db.prepare('SELECT score FROM image_posewear_members WHERE image_id = 13').pluck().get()).toBe(0.99);
     expect(await ids({ posewearPose: 'full_single_P002' })).toEqual(['12', '11']);
     expect(await ids({ posewearPose: 'upper80v2_P001' })).toEqual(['15']);
     // 只看可靠的：低置信去掉
@@ -194,53 +291,28 @@ describe('PoseWear 姿势库', () => {
 
     // 目录：张数、低置信张数
     const cat = await catalog();
-    expect(cat.poses).toBe(7);
+    expect(cat.poses).toBe(asset.poses.length);
     expect(cat.sets.map((s) => [s.id, s.name, s.count])).toEqual([
       ['full_single', '全身', 5],
       ['upper80v2', '上半身', 1],
     ]);
-    expect(cat.sets[0]!.categories[0]!.poses[0]).toEqual({
-      id: 'full_single_P001',
-      set: 'full_single',
-      number: 'P001',
-      name: '后仰坐',
-      category: '坐姿',
-      count: 3,
-      low: 1,
-      adult: false,
-      thumbUrl: '/api/pose/posewear/t/full_single_P001_high.webp?v=1',
-      imageUrl: '/api/pose/posewear/i/full_single_P001_high.webp?v=1',
-    });
-    expect((await catalog(true)).sets.map((s) => s.id)).toEqual(['full_single', 'full_sexy', 'upper80v2', 'pair']);
-
-    // 线稿（双人也有）
-    const out = path.join(dir, 'data', 'pose', 'posewear');
-    const f = (await ds.ask('pose.posewearFile', { size: 'i', file: 'full_single_P001_high.webp' })) as { filePath: string };
-    expect(f.filePath).toBe(path.join(out, 'i', 'full_single_P001_high.webp'));
-    expect((await ds.ask('pose.posewearFile', { size: 't', file: 'pair_P054_side.webp' })) as { filePath: string }).toMatchObject({
-      filePath: path.join(out, 't', 'pair_P054_side.webp'),
-    });
-    await expect(ds.ask('pose.posewearFile', { size: 'i', file: 'full_single_P001_side.webp' })).rejects.toMatchObject({ statusCode: 404 });
-    await badRequest(ds.ask('pose.posewearFile', { size: 't', file: '../emaki.sqlite' }));
+    expect(cat.sets[0]!.categories[0]!.poses[0]).toMatchObject({ id: 'full_single_P001', count: 3, low: 1, adult: false, hasCover: false });
 
     // 一张图的匹配：主要的 + 其他全部（低置信标出来），匹配视角的小图
     const of = (await ds.ask('pose.posewearOf', { id: '11' })) as PoseWearOfResponse;
-    expect(of.primary).toMatchObject({ pose: { id: 'full_single_P001' }, rank: 3, low: false, viewThumbUrl: '/api/pose/posewear/t/full_single_P001_side.webp?v=1' });
+    expect(of.primary).toMatchObject({ pose: { id: 'full_single_P001' }, rank: 3, low: false, view: 'side', viewHasCover: false, viewThumbUrl: '/api/pose/posewear/t/full_single_P001_side.webp?v=1' });
     expect(of.related.map((x) => [x.pose.id, x.low])).toEqual([['full_single_P002', true]]);
     expect((await ds.ask('pose.posewearOf', { id: '14' })) as PoseWearOfResponse).toEqual({ imageId: '14', primary: null, related: [] });
 
     // 状态
     const st = (await ds.ask('pose.status', {})) as PoseStatus;
-    expect(st.posewear).toMatchObject({ poses: 4, assigned: 4, pairs: 6, low: 2, pair: { types: 3, images: 0, shown: 0 } });
+    expect(st.posewear).toMatchObject({ poses: 233, assigned: 4, pairs: 6, low: 2, pair: { types: 11, images: 0, shown: 0 } });
 
-    // 再导一次结果不变；姿势库重导版本加 1，匹配留着
+    // 再导一次结果不变
     const dump = () => ds.ctx.db.prepare('SELECT * FROM image_posewear_members ORDER BY image_id, pose_id').all().map((x) => ({ ...(x as object), updated_at: 0 }));
     const before = dump();
     await ds.run('pose.importPoseWearMatches', { assignmentsPath: matches });
     expect(dump()).toEqual(before);
-    await ds.run('pose.importPoseWear', { path: folder, viewsPath });
-    expect(dump()).toEqual(before);
-    expect((await catalog()).sets[0]!.categories[0]!.poses[0]!.thumbUrl).toContain('?v=2');
 
     // 文件不在了的图不算
     ds.ctx.db.prepare('UPDATE images SET missing = 1 WHERE id = 15').run();
@@ -250,7 +322,6 @@ describe('PoseWear 姿势库', () => {
   it('旧的 assignments.json（主要姿势 + 候选）也认：过了阈值的候选也算在那个姿势下，排在最后', async () => {
     for (const id of [11, 12]) addImage(id);
     patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
-    await ds.run('pose.importPoseWear', { path: folder, viewsPath });
     const v1 = path.join(dir, 'assignments.json');
     writeFileSync(
       v1,
@@ -274,7 +345,6 @@ describe('PoseWear 姿势库', () => {
     ds.ctx.db.exec("INSERT INTO duplicate_groups (id, kind, similarity, created_at) VALUES (1, 'similar', 0.9, 't')");
     ds.ctx.db.exec('INSERT INTO duplicate_members (group_id, image_id) VALUES (1, 21), (1, 25)');
     patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
-    await ds.run('pose.importPoseWear', { path: folder, viewsPath });
     const pairs = path.join(dir, 'pairs.json');
     writeFileSync(
       pairs,
@@ -301,7 +371,7 @@ describe('PoseWear 姿势库', () => {
     expect(await ids({ posewearPose: 'pair_P054' })).toEqual(['23']);
     expect(await ids({ posewearPose: 'pair_P023' })).toEqual(['23']);
     expect(await ids({ posewearPose: 'full_single_P001' })).toEqual(['26']);
-    const variants = ds.ctx.db.prepare("SELECT image_id, variant_of FROM image_posewear_members WHERE variant_of IS NOT NULL ORDER BY image_id").all();
+    const variants = ds.ctx.db.prepare('SELECT image_id, variant_of FROM image_posewear_members WHERE variant_of IS NOT NULL ORDER BY image_id').all();
     expect(variants).toEqual([
       { image_id: 22, variant_of: 21 },
       { image_id: 24, variant_of: 23 },
@@ -324,25 +394,10 @@ describe('PoseWear 姿势库', () => {
     const of23 = (await ds.ask('pose.posewearOf', { id: '23' })) as PoseWearOfResponse;
     expect([of23.primary?.pose.id, of23.related.map((x) => x.pose.id)]).toEqual(['pair_P054', ['pair_P023']]);
 
-    expect(((await ds.ask('pose.status', {})) as PoseStatus).posewear).toMatchObject({ assigned: 1, pairs: 1, pair: { types: 3, images: 6, shown: 3 } });
+    expect(((await ds.ask('pose.status', {})) as PoseStatus).posewear).toMatchObject({ assigned: 1, pairs: 1, pair: { types: 11, images: 6, shown: 3 } });
 
     // 再导单人：双人不动
     await ds.run('pose.importPoseWearMatches', { assignmentsPath: single });
     expect(await ids({ posewearPose: 'pair_P009' })).toEqual(['26', '21']);
-  });
-
-  it('根目录的 poses.json 也认（原型 refs 那份）；没有姿势列表 400；没有双人线稿时导双人 400', async () => {
-    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
-    const alt = path.join(dir, 'alt');
-    mkdirSync(path.join(alt, 'p', 't'), { recursive: true });
-    writeFileSync(path.join(alt, 'poses.json'), JSON.stringify([{ id: 'full_sexy_P002', no: 'P002', zh: 'x', cat: '坐姿', angles: [{ t: 'p/t/full_sexy_P002_side.webp', i: 'p/i/full_sexy_P002_side.webp' }] }]));
-    writeFileSync(path.join(alt, 'p', 't', 'full_sexy_P002_side.webp'), 'x');
-    // 没有大图：用小图顶上
-    expect(await ds.run('pose.importPoseWear', { path: alt })).toMatchObject({ poses: 1, pairTypes: 0, files: 2 });
-    expect(ds.ctx.db.prepare('SELECT best_view FROM posewear_poses').pluck().all()).toEqual(['side']);
-    const pairs = path.join(dir, 'pairs.json');
-    writeFileSync(pairs, '{}');
-    await badRequest(ds.run('pose.importPoseWearMatches', { pairsPath: pairs }));
-    await badRequest(ds.run('pose.importPoseWear', { path: path.join(dir, 'data') }));
   });
 });

@@ -129,6 +129,19 @@ export const JOB_KINDS = {
     verb: '补充中',
     glyph: '标',
   },
+  // PoseWear 姿势匹配（按姿势找图，实验）：提取姿势时顺便匹配，这个任务只补骨架、标签换过的图和姿势库升级后的整库重算；
+  // 有要补的就自动排上，取消后等用户点「重新匹配姿势」（pose.rematch）
+  'pose-match': {
+    label: '重新匹配姿势',
+    lane: 'io',
+    priority: 9,
+    cancellable: true,
+    startable: false,
+    pausable: true,
+    network: false,
+    verb: '匹配中',
+    glyph: '配',
+  },
 } as const satisfies Record<string, JobKindSpec>;
 
 /** artists：给还没识别过画师的图补跑 PixAI，只记画师（2026-10-04） */

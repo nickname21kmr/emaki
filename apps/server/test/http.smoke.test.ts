@@ -944,6 +944,24 @@ describe('按姿势找图（实验，注册表：pose.*）', () => {
     expect(await call('GET', '/api/pose/posewear-low/pair_P054')).toMatchObject({ status: 200, json: { ids: [] } });
     expect((await call('GET', '/api/pose/posewear-low/pair60_P054')).status).toBe(400);
   });
+  // Emaki 自己匹配 PoseWear 姿势（细节在 services/pose/posewearMatch.test.ts）
+  route('GET /api/pose/posewear-skeleton/:id', async () => {
+    expect((await call('GET', '/api/pose/posewear-skeleton/full_single_P001')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const { status, json } = await call('GET', '/api/pose/posewear-skeleton/pair_P054?view=front');
+    expect([status, json.poseId, json.persons.length, json.persons[0].points.length]).toEqual([200, 'pair_P054', 2, 23]);
+    expect((await call('GET', '/api/pose/posewear-skeleton/full_single_P999')).status).toBe(404);
+    expect((await call('GET', '/api/pose/posewear-skeleton/full_single_P001?view=top')).status).toBe(400);
+  });
+  route('POST /api/pose/rematch', async () => {
+    expect((await call('POST', '/api/pose/rematch')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const r = await call('POST', '/api/pose/rematch', { all: true });
+    expect([r.status, r.json.kind]).toEqual([200, 'pose-match']);
+    expect(r.res.headers['x-emaki-undo']).toBe('barrier');
+    // 目录随包，「重新匹配」时同步进库
+    expect((await call('GET', '/api/pose/posewear?all=1')).json.poses).toBeGreaterThan(200);
+  });
 });
 
 describe('手机访问（注册表：access.*、devices.*，只在本机入口；局域网入口本身见 test/access/）', () => {

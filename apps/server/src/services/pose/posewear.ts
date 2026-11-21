@@ -1,32 +1,26 @@
 /**
- * 导入 PoseWear 姿势库和姿势匹配结果（实验）。
- * - 姿势库：用户本机的 PoseWear 文件夹（assets/poses.*.json + p/t、p/i 线稿）。单人的三套照导；双人的 pair60 只导
- *   PAIR_TYPES 里几类的代表线稿，存成 pair_P054 这样。每个姿势复制全部视角的小图和代表视角的大图到 <数据目录>/pose/posewear/。
- *   PoseWear 的图不进仓库。
- * - 单人匹配：原型 posewear_final 的 assignments_multi_weighted.json（图片 id → 取景、全部过了阈值的姿势，每个带名次、加权分、方法、是不是主要的；
- *   名次按 0.6·骨架相似 + 0.4·标签分排，低置信的不另外往后挪，这里照用）；
- *   旧的 posewear_v1 assignments.json（主要姿势 + 前三个候选）也认。
- * - 双人匹配：pose-pair tags_v1 的 assignments.json（图片 id → 前三个 pair60 候选）：按 PAIR_TYPES 并成互动类型，
- *   一类里按「骨架过了的在前（距离近的先），只靠标签的在后（强度、子句数、标签分）」排名次，再去差分。
- * 只导本图库里有的图。
- * TODO 新图的 PoseWear 匹配还没做：要重跑原型再导一次匹配结果。
+ * PoseWear 姿势库的线稿导入，和原型匹配结果的导入（实验，本机的捷径；正常用不到）。
+ * - 姿势目录、配方、骨架随包分发（assets/pose/posewear/，services/pose/posewearMatch.ts 同步进库、匹配），不再要 PoseWear 文件夹。
+ * - 线稿（封面）：用户本机的 PoseWear 文件夹（p/t、p/i，或者平铺的 webp）。每个姿势复制全部视角的小图和代表视角的大图
+ *   到 <数据目录>/pose/posewear/；双人类型用代表那张 pair60 的线稿，存成 pair_P054 这样。PoseWear 的图不进仓库。
+ *   不导也行：放进 pose-covers/（services/pose/covers.ts），或者网页按骨架画小人。
+ * - 原型的匹配结果（只给这台开发机）：单人 posewear_final 的 assignments_multi_weighted.json（旧的 assignments.json 也认），
+ *   双人 pose-pair tags_v1 的 assignments.json（按 PAIR_TYPES 并成互动类型，排名次，去差分）。导入后这些图记成「匹配过」，
+ *   骨架、标签换了或者姿势库升级时照常由 Emaki 重新匹配。只导本图库里有的图。
  */
-import { PAIR_ADULT_CATEGORY, PAIR_TYPES, POSEWEAR_SINGLE_SETS, type PoseWearSet } from '@emaki/shared';
+import { PAIR_TYPES } from '@emaki/shared';
 import { existsSync, readdirSync } from 'node:fs';
 import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
-import {
-  LOW_METHOD,
-  markPairVariants,
-  posewearPoseIds,
-  replacePoseWearMembers,
-  writePoseWearPoses,
-  type PoseWearMemberRow,
-  type PoseWearPoseRow,
-} from '../../domain/pose/posewear.ts';
+import { LOW_METHOD, markPairVariants, posewearPoseIds, replacePoseWearMembers, type PoseWearMemberRow } from '../../domain/pose/posewear.ts';
+import { loadPoseWearAsset } from '../../domain/pose/posewearAsset.ts';
+import { bumpPoseWearVersion, markAllMatched, matchVersion } from '../../domain/pose/posewearStore.ts';
+import { forgetCoverListing } from './covers.ts';
+import { ensurePoseWearCatalog } from './posewearMatch.ts';
 
 const VIEWS = ['front', 'high', 'low', 'side', 'diag'] as const;
+const viewOf = (file: string) => VIEWS.find((v) => file.endsWith(`_${v}.webp`)) ?? null;
 
 /** 开发机上的默认位置（找得到才给） */
 const FOLDER_CANDIDATES = ['F:/CodexArchive/Documents/Codex/2026-11-20/https-posewear-pages-dev-pose-https/outputs/PoseWear'];
@@ -64,77 +58,48 @@ export function findPoseList(folder: string): string | null {
   return existsSync(root) ? root : null;
 }
 
-interface SourcePose {
-  id: string;
-  no: string;
-  zh: string;
-  cat: string;
-  angles: { t: string; i: string }[];
-}
-
-const viewOf = (file: string) => VIEWS.find((v) => file.endsWith(`_${v}.webp`)) ?? null;
-
-export async function importPoseWear(ctx: SqliteContext, folder: string, viewsPath?: string): Promise<{ poses: number; pairTypes: number; files: number }> {
-  const listPath = findPoseList(folder);
-  if (!listPath) throw new Error(`${folder} 里没有姿势列表（assets/poses.*.json 或 poses.json），不是 PoseWear 的文件夹？`);
-  const list = JSON.parse(await readFile(listPath, 'utf8')) as SourcePose[];
-  if (!Array.isArray(list)) throw new Error(`${listPath} 不是姿势列表`);
-  // 原型挑的代表视角（匹配时最好用的那一张）；没有就用正面
-  const best = new Map<string, string>();
-  if (viewsPath) {
-    const v = JSON.parse(await readFile(viewsPath, 'utf8')) as Record<string, { best_view?: string | null }>;
-    for (const [id, p] of Object.entries(v)) if (p.best_view) best.set(id, p.best_view.slice(id.length + 1));
-  }
-
+/**
+ * 从 PoseWear 文件夹复制线稿：姿势和视角按随包的目录，文件按 PoseWear 的名字（full_single_P001_front.webp、双人是 pair60_P054_front.webp）
+ * 在 p/t、p/i（网站的结构）、t、i 或者文件夹本身里找。小图复制全部视角，大图只复制代表视角（没有大图用小图顶上）。
+ * 返回有线稿的单人姿势数、双人类型数、复制的文件数
+ */
+export async function importPoseWear(ctx: SqliteContext, folder: string): Promise<{ poses: number; pairTypes: number; files: number }> {
+  const asset = loadPoseWearAsset();
+  const find = (size: 't' | 'i', name: string) =>
+    [path.join(folder, 'p', size, name), path.join(folder, size, name), path.join(folder, name)].find((f) => existsSync(f)) ?? null;
   const out = posewearDir(ctx);
   await mkdir(path.join(out, 't'), { recursive: true });
   await mkdir(path.join(out, 'i'), { recursive: true });
   let files = 0;
-  /** 复制一个姿势的小图（全部视角）和大图（代表视角），存成 id_视角.webp；返回有的视角和代表视角 */
-  const copyArt = async (p: SourcePose, id: string, want: string | undefined) => {
-    const views: string[] = [];
-    for (const a of p.angles ?? []) {
-      const v = viewOf(a.t);
-      const src = path.join(folder, a.t);
-      if (!v || !existsSync(src)) continue;
-      await copyFile(src, path.join(out, 't', `${id}_${v}.webp`));
+  let poses = 0;
+  let pairTypes = 0;
+  for (const p of asset.poses) {
+    const src = p.set === 'pair' ? `pair60_${p.number}` : p.id;
+    let got = 0;
+    for (const v of p.views) {
+      const t = find('t', `${src}_${v}.webp`);
+      if (!t) continue;
+      await copyFile(t, path.join(out, 't', `${p.id}_${v}.webp`));
       files++;
-      views.push(v);
+      got++;
     }
-    if (!views.length) return null;
-    const bestView = want && views.includes(want) ? want : views.includes('front') ? 'front' : views[0]!;
-    const big = path.join(folder, 'p', 'i', `${p.id}_${bestView}.webp`);
-    // 大图不在就用小图顶上
-    await copyFile(existsSync(big) ? big : path.join(out, 't', `${id}_${bestView}.webp`), path.join(out, 'i', `${id}_${bestView}.webp`));
-    files++;
-    return { views, bestView };
-  };
-
-  const rows: PoseWearPoseRow[] = [];
-  for (const [sort, p] of list.entries()) {
-    const set = POSEWEAR_SINGLE_SETS.find((s) => p.id === `${s}_${p.no}`) as PoseWearSet | undefined;
-    if (!set || !/^P\d{3}$/.test(p.no)) continue;
-    const art = await copyArt(p, p.id, best.get(p.id));
-    if (!art) continue;
-    rows.push({ id: p.id, set, number: p.no, name: p.zh, category: p.cat, sort, ...art, adult: false });
+    const big = find('i', `${src}_${p.bestView}.webp`) ?? find('t', `${src}_${p.bestView}.webp`);
+    if (big) {
+      await copyFile(big, path.join(out, 'i', `${p.id}_${p.bestView}.webp`));
+      files++;
+      got++;
+    }
+    if (got) p.set === 'pair' ? pairTypes++ : poses++;
   }
-  const singles = rows.length;
-  if (!singles) throw new Error(`${listPath} 里没有单人姿势（full_single、full_sexy、upper80v2）`);
-  // 双人：每类用代表那张 pair60 的线稿；排在单人后面
-  const byId = new Map(list.map((p) => [p.id, p]));
-  for (const [k, t] of PAIR_TYPES.entries()) {
-    const src = byId.get(`pair60_${t.rep}`);
-    if (!src) continue;
-    const id = `pair_${t.rep}`;
-    const art = await copyArt(src, id, undefined);
-    if (!art) continue;
-    rows.push({ id, set: 'pair', number: t.rep, name: t.name, category: t.adult ? PAIR_ADULT_CATEGORY : '双人', sort: 100_000 + k, ...art, adult: t.adult });
-  }
+  if (!files) throw new Error(`${folder} 里没有 PoseWear 的线稿（p/t、p/i 里的 full_single_P001_front.webp 这样的文件）`);
+  ensurePoseWearCatalog(ctx, asset);
+  forgetCoverListing();
   ctx.apply(() => {
-    writePoseWearPoses(ctx.db, rows);
+    // 线稿换了：地址带的版本加 1，浏览器重新取
+    bumpPoseWearVersion(ctx.db);
     ctx.changed({ type: 'pose.changed', ids: [] });
   });
-  return { poses: singles, pairTypes: rows.length - singles, files };
+  return { poses, pairTypes, files };
 }
 
 // ------------------------------------------------------------------ 匹配结果
@@ -303,8 +268,9 @@ export interface PoseWearAssignCounts {
 
 /** 导入匹配结果：给了哪份换哪份（单人、双人各自整批替换） */
 export async function importPoseWearAssignments(ctx: SqliteContext, files: { assignmentsPath?: string; pairsPath?: string }): Promise<PoseWearAssignCounts> {
+  const asset = loadPoseWearAsset();
+  ensurePoseWearCatalog(ctx, asset);
   const known = posewearPoseIds(ctx.db);
-  if (!known.size) throw new Error('还没有导入 PoseWear 姿势库：先导入姿势库');
   const r: PoseWearAssignCounts = { imported: 0, memberships: 0, low: 0, pairImages: 0, pairVariants: 0, missing: 0, unknownPose: 0 };
   let singles: PoseWearMemberRow[] | null = null;
   let pairs: PoseWearMemberRow[] | null = null;
@@ -326,7 +292,6 @@ export async function importPoseWearAssignments(ctx: SqliteContext, files: { ass
     r.low = singles.filter((m) => m.method === LOW_METHOD).length;
   }
   if (files.pairsPath) {
-    if (![...known].some((id) => id.startsWith('pair_'))) throw new Error('姿势库里还没有双人：重新导入一次 PoseWear 姿势库');
     const data = await readMap<SourcePair>(files.pairsPath);
     const ids = Object.keys(data).map(Number).filter(Number.isInteger);
     pairs = markPairVariants(ctx.db, pairMembers(data, existing(ctx, ids), known));
@@ -339,6 +304,8 @@ export async function importPoseWearAssignments(ctx: SqliteContext, files: { ass
     const touched = new Set<number>();
     if (singles) for (const id of [...replacePoseWearMembers(ctx.db, 'single', singles, now), ...singles.map((m) => m.imageId)]) touched.add(id);
     if (pairs) for (const id of [...replacePoseWearMembers(ctx.db, 'pair', pairs, now), ...pairs.map((m) => m.imageId)]) touched.add(id);
+    // 照原型的结果算「匹配过」：自动的「重新匹配姿势」不马上盖掉它，骨架、标签换了或者姿势库升级时才重新匹配
+    markAllMatched(ctx.db, matchVersion(asset), now);
     ctx.changed({ type: 'pose.changed', ids: [...touched] });
   });
   return r;

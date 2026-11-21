@@ -3,6 +3,7 @@
  * 挑主要人物、分取景、归到最近的姿势类别（domain/pose/features.ts），写进 image_poses。
  * 旧版本（旧的找人模型）提取的不自动重跑：用户点了「用新的找人模型重新提取」（pending_work 的 pose-rerun）才一起跑，
  * 旧的都重提完了清掉这个标记。新的在前；可以随时取消，下次接着跑；有更急的任务时让出。设置里关着时不跑。
+ * 每写完一批顺便匹配 PoseWear 姿势（services/pose/posewearMatch.ts），记下全部人物算出的人数和两人骨架。
  */
 import { formatEta } from '@emaki/shared';
 import type { JobContext } from '../../core/jobs.ts';
@@ -17,6 +18,8 @@ import { toAbs } from '../fs/paths.ts';
 import { spawnPoseDetector } from './client.ts';
 import { poseModelPaths, poseModelsReady, readDetThreshold } from './models.ts';
 import type { PoseDetectorFactory, PoseItemResult } from './protocol.ts';
+import { loadPoseWearAsset } from '../../domain/pose/posewearAsset.ts';
+import { ensurePoseWearCatalog, matchImages } from './posewearMatch.ts';
 
 /** 一次发给子进程的张数 */
 const BATCH = 8;
@@ -70,6 +73,8 @@ export function createPoseStage(deps: PoseStageDeps) {
         return '提取姿势：没有需要提取的图';
       }
       const refs = classRefsFromDb(db);
+      const posewear = loadPoseWearAsset();
+      ensurePoseWearCatalog(ctx, posewear);
       const device = readSettings(db).tagger.device;
       job.setMessage(device === 'dml' ? '提取姿势：加载模型到显卡…' : '提取姿势：加载模型…');
       const paths = poseModelPaths(deps.modelsDir);
@@ -125,6 +130,7 @@ export function createPoseStage(deps: PoseStageDeps) {
               nearestId: a.nearestId,
               distance: a.distance,
               mirror: a.mirror,
+              detected: { persons: r.persons, w: r.w, h: r.h },
             });
           }
           const now = new Date(ctx.clock()).toISOString();
@@ -132,6 +138,8 @@ export function createPoseStage(deps: PoseStageDeps) {
             writePoses(db, out, now);
             ctx.changed({ type: 'pose.changed', ids: out.map((o) => o.imageId) });
           });
+          // 顺便匹配 PoseWear 姿势（单人 + 双人），不用再跑别的
+          matchImages(ctx, out.map((o) => o.imageId), posewear);
           done += rows.length;
           const rate = done / ((performance.now() - t0) / 1000);
           const left = (total - done) / rate;

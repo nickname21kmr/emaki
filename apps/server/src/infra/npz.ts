@@ -8,6 +8,8 @@ export interface NpyArray {
   dtype: string;
   shape: number[];
   data: Float64Array | Float32Array | Int32Array | Int16Array | Int8Array | Uint8Array | BigInt64Array;
+  /** 字符串数组（numpy 的 <U）：data 是空的，值在这里 */
+  strings?: string[];
 }
 
 function zip64Extra(extra: Buffer, want: { size: boolean; csize: boolean; offset: boolean }) {
@@ -107,6 +109,22 @@ export function parseNpy(buf: Buffer): NpyArray {
   const ab = body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
   const dtype = descr.replace(/^[<|=]/, '');
   if (descr.startsWith('>')) throw new Error('不支持大端');
+  // 定长 Unicode（UTF-32LE，每个 n 个字符，右边补 0）
+  const u = /^U(\d+)$/.exec(dtype);
+  if (u) {
+    const w = Number(u[1]) * 4;
+    const strings: string[] = [];
+    for (let i = 0; i < n; i++) {
+      let s = '';
+      for (let p = i * w; p < (i + 1) * w; p += 4) {
+        const c = body.readUInt32LE(p);
+        if (!c) break;
+        s += String.fromCodePoint(c);
+      }
+      strings.push(s);
+    }
+    return { dtype, shape, data: new Uint8Array(0), strings };
+  }
   let data: NpyArray['data'];
   switch (dtype) {
     case 'f8': data = new Float64Array(ab, 0, n); break;

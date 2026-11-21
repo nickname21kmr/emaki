@@ -1,11 +1,12 @@
 /**
- * PoseWear 姿势库（实验）：姿势目录和每张图的匹配。posewear_poses、image_posewear_members 只在这里写
- * （test/architecture/owners.ts）；写入在调用方的事务（ctx.apply）里，写完由调用方声明 pose.changed。
- * 线稿图片在 <数据目录>/pose/posewear/{t,i}/（services/pose/posewear.ts 复制），这里只管表。
+ * PoseWear 姿势库（实验）：姿势目录和每张图的匹配。posewear_poses、image_posewear_members 只在 domain/pose/ 里写
+ * （test/architecture/owners.ts；Emaki 自己匹配的写入在 posewearStore.ts）；写入在调用方的事务（ctx.apply）里，写完由调用方声明 pose.changed。
+ * 目录随包（posewearAsset.ts）；线稿用户自己给（services/pose/covers.ts），没有时网页按骨架（posewearSkeleton）画小人。
  * 一张图在每个匹配上的姿势下都有一行（迁移 047）；低置信 = lowtag+skel。双人的差分（variant_of）不单独出现。
  * 张数按口径（计入统计的插画，和 51 类一样）现算。
  */
 import {
+  POSE_SKELETON_EDGES,
   POSEWEAR_SET_LABEL,
   POSEWEAR_SETS,
   type PoseWearCatalogResponse,
@@ -13,9 +14,12 @@ import {
   type PoseWearOfResponse,
   type PoseWearPose,
   type PoseWearSet,
+  type PoseWearSkeleton,
 } from '@emaki/shared';
 import type { Db } from '../../db/connection.ts';
 import { parseId } from '../../datasource/sqlite/sql.ts';
+import { THR } from './features.ts';
+import type { PoseWearAsset } from './posewearAsset.ts';
 import { POSE_ELIGIBLE } from './read.ts';
 
 export interface PoseWearPoseRow {
@@ -171,7 +175,10 @@ const LOW_SQL = `(SELECT COUNT(*) FROM image_posewear_members a ${ELIGIBLE_JOIN}
   WHERE a.pose_id = p.id AND a.variant_of IS NULL AND a.low = 1 AND ${POSE_ELIGIBLE})`;
 const POSE_COLS = `p.*, ${COUNT_SQL} AS n, ${LOW_SQL} AS nlow`;
 
-function toPose(r: PoseDbRow): PoseWearPose {
+/** 这个姿势、视角有没有线稿（services/pose/covers.ts 看文件）；不给时当作有 */
+export type CoverCheck = (poseId: string, view: string) => boolean;
+
+function toPose(r: PoseDbRow, cover?: CoverCheck): PoseWearPose {
   return {
     id: r.id,
     set: r.set_id,
@@ -181,20 +188,22 @@ function toPose(r: PoseDbRow): PoseWearPose {
     count: r.n,
     low: r.nlow,
     adult: r.adult === 1,
+    hasCover: cover ? cover(r.id, r.best_view) : true,
     thumbUrl: posewearFileUrl('t', r.id, r.best_view, r.version),
     imageUrl: posewearFileUrl('i', r.id, r.best_view, r.version),
+    skeletonUrl: `/api/pose/posewear-skeleton/${r.id}`,
   };
 }
 
 /** 姿势目录：按套（固定顺序，双人在最后）、分类（PoseWear 里的顺序）分组；默认只给有图的姿势 */
-export function posewearCatalog(db: Db, all = false): PoseWearCatalogResponse {
+export function posewearCatalog(db: Db, all = false, cover?: CoverCheck): PoseWearCatalogResponse {
   const rows = db.prepare(`SELECT ${POSE_COLS} FROM posewear_poses p ORDER BY p.sort`).all() as PoseDbRow[];
   const sets = POSEWEAR_SETS.map((id) => {
     const cats = new Map<string, PoseWearPose[]>();
     for (const r of rows) {
       if (r.set_id !== id || (!all && r.n === 0)) continue;
       const list = cats.get(r.category) ?? [];
-      list.push(toPose(r));
+      list.push(toPose(r, cover));
       cats.set(r.category, list);
     }
     const categories = [...cats].map(([name, poses]) => ({ name, count: poses.reduce((s, p) => s + p.count, 0), poses }));
@@ -207,7 +216,7 @@ export function posewearCatalog(db: Db, all = false): PoseWearCatalogResponse {
  * 一张图匹配到的姿势：主要的一个（单人的主要姿势；没有单人匹配时用双人的）+ 其他全部匹配上的姿势。
  * 其他的排法：单人在前、双人在后，各自主要的在前，再按方法（低置信最后）、距离（这里只是看图器里列的顺序，不影响筛图的名次）。
  */
-export function posewearOf(db: Db, imageId: string): PoseWearOfResponse {
+export function posewearOf(db: Db, imageId: string, cover?: CoverCheck): PoseWearOfResponse {
   const id = parseId(imageId);
   const empty = { imageId, primary: null, related: [] };
   if (id === null) return empty;
@@ -231,7 +240,9 @@ export function posewearOf(db: Db, imageId: string): PoseWearOfResponse {
   const matches: PoseWearMatch[] = rows.map((r) => {
     const v = r.m_view && (JSON.parse(r.views) as string[]).includes(r.m_view) ? r.m_view : r.best_view;
     return {
-      pose: toPose(r),
+      pose: toPose(r, cover),
+      viewHasCover: cover ? cover(r.id, v) : true,
+      view: v,
       distance: r.m_distance,
       tagScore: r.m_tag_score,
       method: r.m_method,
@@ -280,4 +291,26 @@ export function posewearCounts(db: Db): {
 /** 已导入的姿势 id */
 export function posewearPoseIds(db: Db): Set<string> {
   return new Set(db.prepare('SELECT id FROM posewear_poses').pluck().all() as string[]);
+}
+
+/**
+ * 一个姿势在某个视角线稿上的骨架（随包的资产，画小人用）：默认代表视角，那个视角没有骨架时用点最多的视角。
+ * 不认识的姿势是 null
+ */
+export function posewearSkeleton(asset: PoseWearAsset, poseId: string, view?: string): PoseWearSkeleton | null {
+  const p = asset.byId.get(poseId);
+  if (!p) return null;
+  const want = view ?? p.bestView;
+  const pts = (kp: readonly number[], ks: readonly number[]) => ks.map((s, i) => [kp[2 * i]!, kp[2 * i + 1]!, s] as [number, number, number]);
+  const base = { poseId, edges: POSE_SKELETON_EDGES, minConfidence: THR };
+  if (p.set === 'pair') {
+    const vs = asset.pairViews.filter((v) => v.pose === p.number && v.persons.length >= 2);
+    const v = vs.find((x) => x.view === want) ?? vs[0];
+    if (!v) return { ...base, view: null, views: [], w: 0.75, h: 1, persons: [] };
+    return { ...base, view: v.view, views: vs.map((x) => x.view), w: v.w, h: v.h, persons: v.persons.map((q) => ({ points: pts(q.kp, q.ks) })) };
+  }
+  const vs = asset.allViews.filter((v) => v.pose === poseId && v.nv > 0);
+  const v = vs.find((x) => x.view === want) ?? [...vs].sort((a, b) => Number(b.usable) - Number(a.usable) || b.nv - a.nv)[0];
+  if (!v) return { ...base, view: null, views: [], w: 0.75, h: 1, persons: [] };
+  return { ...base, view: v.view, views: vs.map((x) => x.view), w: v.w, h: v.h, persons: [{ points: pts(v.kp, v.ks) }] };
 }

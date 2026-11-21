@@ -611,10 +611,17 @@ export const PoseImportInput = z.object({
   keypointsPath: z.string().min(1).max(1000).describe('原型的 keypoints_lib.npz'),
   assignmentsPath: z.string().min(1).max(1000).describe('原型的 assignments.json'),
 });
-/** 导入 PoseWear 姿势库（本机的 PoseWear 文件夹；线稿复制进数据目录，不进仓库） */
+/** 导入 PoseWear 的线稿（本机的 PoseWear 文件夹；复制进数据目录，不进仓库）。姿势目录随包，不用导 */
 export const PoseWearImportInput = z.object({
-  path: z.string().min(1).max(1000).describe('PoseWear 文件夹（里面有 assets/poses.*.json 和 p/t、p/i）'),
-  viewsPath: z.string().min(1).max(1000).optional().describe('posewear_v1 的 poses.json：每个姿势的代表视角；不给就用正面'),
+  path: z.string().min(1).max(1000).describe('PoseWear 文件夹（p/t、p/i 里的线稿，或者平铺的 full_single_P001_front.webp 这样的文件）'),
+  viewsPath: z.string().min(1).max(1000).optional().describe('不再需要（代表视角随包）；给了也不用'),
+});
+/** 重新匹配 PoseWear 姿势：默认只补骨架、标签换过的图；all 全部重算 */
+export const PoseRematchInput = z.object({ all: qBool.optional() });
+/** 一个 PoseWear 姿势的骨架（画小人用）；view 不给就用代表视角 */
+export const PoseWearSkeletonInput = z.object({
+  id: z.string().regex(POSEWEAR_POSE_ID),
+  view: z.enum(['front', 'high', 'low', 'side', 'diag']).optional(),
 });
 /** 导入姿势匹配结果：单人、双人各自整批替换，至少给一个（命令里检查） */
 export const PoseWearAssignInput = z.object({

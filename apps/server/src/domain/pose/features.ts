@@ -101,9 +101,13 @@ export type Selection =
  * 一张图里挑主要人物，并按取景屏蔽不可靠的点（腿低于 LEG_THR 的置 0，胸像的髋置 0）。
  * person 的点是原样的，ks 是屏蔽之后的
  */
+/** 像样的人数（不是兜底框、分数 > 0.3、至少 5 个身体点）：PoseWear 单人匹配只要 1 个人的图 */
+export function countRealPersons(persons: readonly DetectedPerson[]): number {
+  return persons.filter((p) => !p.fallback && p.score > 0.3 && p.ks.slice(0, 17).filter((s) => s > THR).length >= 5).length;
+}
+
 export function selectPerson(persons: readonly DetectedPerson[], w: number, h: number): Selection {
-  const real = persons.filter((p) => !p.fallback && p.score > 0.3 && p.ks.slice(0, 17).filter((s) => s > THR).length >= 5);
-  if (real.length > 4) return { ok: false, reason: 'crowd_or_panels' };
+  if (countRealPersons(persons) > 4) return { ok: false, reason: 'crowd_or_panels' };
   let why = 'no_person';
   let best: { s: number; i: number } | null = null;
   persons.forEach((p, i) => {

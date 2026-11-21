@@ -157,7 +157,7 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
 | 变更传播（P2） | `propagation/` | `pending_work`（排队状态和用户的暂停，迁移 033）、`derived_versions`（派生数据的版本，P4a，迁移 037） | |
 | 设备与访问（手机端 N，docs/mobile.md 第 2 节） | `access/` | `lan_access`（局域网入口的配置）、`devices`（批准过的设备、凭证的哈希），迁移 041 | |
 | 手机上传（B1、B2，docs/mobile.md 5.4、5.5） | `domain/upload/` | `upload_batches`（一批上传）、`uploads`（每个文件的进度和结果），迁移 042；`device_albums`（手机报的相册、盘点、同步开关、放到哪）、`device_sync`（同步设置和 App 的状态），迁移 043；`devices` 的落点两列照旧由 `access/` 写 | 入库走图库与文件的导入（`domain/library/import.ts`） |
-| 姿势（实验） | `domain/pose/` | `pose_classes`、`image_poses`（按姿势找图，迁移 045）；`posewear_poses`（PoseWear 姿势库，迁移 046）、`image_posewear_members`（每张图的主要匹配和候选，迁移 047） | |
+| 姿势（实验） | `domain/pose/` | `pose_classes`、`image_poses`（按姿势找图，迁移 045）；`posewear_poses`（PoseWear 姿势库，迁移 046）、`image_posewear_members`（每张图的主要匹配和候选，迁移 047）；`posewear_match_state`（每张图按哪一版随包姿势库、哪份骨架和标签匹配过，迁移 050；`image_poses` 同时多了像样的人数和两人骨架）。PoseWear 的目录、配方、骨架随包（`assets/pose/posewear/`），匹配在 `domain/pose/posewearMatch.ts`（纯函数），提取姿势时顺便做，「重新匹配姿势」任务（`JOB_KINDS['pose-match']`）补换过输入的图 | |
 
 - 永久例外只有 `demo/`：演示数据直接灌进空的一次性库，不经过命令。
 - P2 已搬进主人目录的：合集（原 `services/collections/` → `domain/collections/`）、可见性（原 `datasource/sqlite/exclusions.ts` → `domain/visibility/`）；

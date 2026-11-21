@@ -27,6 +27,11 @@ lan-client.json
 # 免安装版打包输出
 release/
 
+# 用户自己放的 PoseWear 线稿：只提交说明
+/pose-covers/**
+!/pose-covers/
+!/pose-covers/README.md
+
 # 只在本机用的：设计过程文档（含个人图库信息）、npm 缓存位置
 docs/design/
 .npmrc

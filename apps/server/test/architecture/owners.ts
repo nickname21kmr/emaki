@@ -128,6 +128,8 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   // PoseWear 姿势库（实验，迁移 046；047 把主要匹配和候选合成 image_posewear_members）
   posewear_poses: 'pose',
   image_posewear_members: 'pose',
+  // 每张图按哪一版姿势库、哪份骨架和标签匹配过（迁移 050，Emaki 自己匹配）
+  posewear_match_state: 'pose',
 };
 
 /**

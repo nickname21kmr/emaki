@@ -94,7 +94,8 @@ export async function importPrototype(ctx: SqliteContext, keypointsPath: string,
     }
     const w = num(A.img_w!, n);
     const h = num(A.img_h!, n);
-    const sel = selectPerson(persons(n), w, h);
+    const found = persons(n);
+    const sel = selectPerson(found, w, h);
     const classId = a.class !== 'unclassified' && known.has(a.class) ? a.class : null;
     const nearestId = a.nearest_class && known.has(a.nearest_class) ? a.nearest_class : null;
     rows.push({
@@ -106,6 +107,8 @@ export async function importPrototype(ctx: SqliteContext, keypointsPath: string,
       nearestId,
       distance: a.distance ?? null,
       mirror: !!a.mirror,
+      // PoseWear 匹配要：像样的人数、两人骨架
+      detected: { persons: found, w, h },
     });
   }
   const now = new Date(ctx.clock()).toISOString();

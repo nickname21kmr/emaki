@@ -4,7 +4,8 @@
  */
 import type { Db } from '../../db/connection.ts';
 import type { PoseAsset } from './asset.ts';
-import { packMedoid, packPerson, type Group, type Person } from './features.ts';
+import { countRealPersons, packMedoid, packPerson, type DetectedPerson, type Group, type Person } from './features.ts';
+import { packPair, selectPair, YOLOX_PAIR, type PairOptions } from './pairs.ts';
 
 /**
  * 提取和归类的版本：检测、筛选或类别的规则改了就加 1。
@@ -57,18 +58,22 @@ export interface PoseRow {
   nearestId: string | null;
   distance: number | null;
   mirror: boolean;
+  /** 检测到的全部人物（PoseWear 匹配要：像样的人数、双人挑出的两个人）；不给时这两列是 NULL（单人当 1 个人算） */
+  detected?: { persons: readonly DetectedPerson[]; w: number; h: number } | null;
 }
 
 /** 写一批图的姿势（替换旧的）。必须在事务里调用 */
 export function writePoses(db: Db, rows: readonly PoseRow[], now: string, version = POSE_VERSION): void {
   const st = db.prepare(
-    `INSERT INTO image_poses (image_id, status, grp, keypoints, class_id, nearest_id, distance, mirror, version, updated_at)
-     VALUES (@imageId, @status, @grp, @keypoints, @classId, @nearestId, @distance, @mirror, @version, @now)
+    `INSERT INTO image_poses (image_id, status, grp, keypoints, class_id, nearest_id, distance, mirror, version, updated_at, npers, pair)
+     VALUES (@imageId, @status, @grp, @keypoints, @classId, @nearestId, @distance, @mirror, @version, @now, @npers, @pair)
      ON CONFLICT(image_id) DO UPDATE SET status = excluded.status, grp = excluded.grp, keypoints = excluded.keypoints,
        class_id = excluded.class_id, nearest_id = excluded.nearest_id, distance = excluded.distance, mirror = excluded.mirror,
-       version = excluded.version, updated_at = excluded.updated_at`,
+       version = excluded.version, updated_at = excluded.updated_at, npers = excluded.npers, pair = excluded.pair`,
   );
-  for (const r of rows)
+  for (const r of rows) {
+    const d = r.detected;
+    const pair = d ? selectPair(d.persons, d.w, d.h, pairOptions(version)) : null;
     st.run({
       imageId: r.imageId,
       status: r.status,
@@ -80,7 +85,15 @@ export function writePoses(db: Db, rows: readonly PoseRow[], now: string, versio
       mirror: r.mirror ? 1 : 0,
       version,
       now,
+      npers: d ? countRealPersons(d.persons) : null,
+      pair: pair && d ? packPair(pair, d.w, d.h) : null,
     });
+  }
+}
+
+/** 双人挑人的门槛按找人模型：YOLOX（原型的 lib_pairs.py）和动漫人物检测（pairs.py）分数分布不一样 */
+export function pairOptions(version: number): PairOptions {
+  return version === POSE_VERSION_YOLOX ? YOLOX_PAIR : { scoreMin: 0.348, minPoints: 8 };
 }
 
 /** 每一类在本图库里有多少张（全部行，不看可见性；界面上的数按口径现算，见 read.ts） */

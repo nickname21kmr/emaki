@@ -5,6 +5,8 @@
  * 模型要用户自己准备：同意后下载（pose.downloadModels），或者从本机文件夹复制（pose.copyModels）。
  * 换了找人模型后旧的结果照常用，要重跑点「用新的找人模型重新提取」（pose.reextract）；
  * 姿势标签的低分识别时顺便收，识别过的旧图点「补充姿势标签」（pose.backfillTags）补，或者导入原型算好的（pose.importTagsLow）。
+ * PoseWear 姿势目录随包，「提取姿势」时顺便匹配；骨架、标签换过和姿势库升级后「重新匹配姿势」自动补（pose.rematch 手动、all 全部重算）。
+ * 线稿用户自己给（导入或 pose-covers/），没有时网页按 pose.posewearSkeleton 的骨架画小人。
  * 都是设置类（scope settings），不给 AI 助手；查询是 read。
  */
 import type { PoseActionResult, PoseStatus, PoseTagsImportResult, PoseTagsStatus, PoseWearAssignResult, PoseWearImportResult, PoseWearLowResponse } from '@emaki/shared';
@@ -15,6 +17,7 @@ import {
   PoseCopyInput,
   PoseDownloadInput,
   PoseImportInput,
+  PoseRematchInput,
   PoseSimilarInput,
   PoseTagsImportInput,
   PoseWearAssignInput,
@@ -23,12 +26,17 @@ import {
   PoseWearImportInput,
   PoseWearLowInput,
   PoseWearOfInput,
+  PoseWearSkeletonInput,
 } from '@emaki/shared/schemas';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { config } from '../config.ts';
 import { readSettings } from '../datasource/sqlite/settings.ts';
-import { posewearCatalog, posewearCounts, posewearLowIds, posewearOf } from '../domain/pose/posewear.ts';
+import { posewearCatalog, posewearCounts, posewearLowIds, posewearOf, posewearSkeleton, type CoverCheck } from '../domain/pose/posewear.ts';
+import { loadPoseWearAsset } from '../domain/pose/posewearAsset.ts';
+import { matchCounts, matchVersion } from '../domain/pose/posewearStore.ts';
+import { findCover, hasCover, type CoverDirs } from '../services/pose/covers.ts';
+import { ensurePoseWearCatalog, resetMatchState } from '../services/pose/posewearMatch.ts';
 import { poseTagsCounts } from '../domain/evidence/poseTags.ts';
 import { poseClasses, poseCounts, poseFigure, similarPoses } from '../domain/pose/read.ts';
 import { BadRequestError, HttpError, NotFoundError } from '../http/errors.ts';
@@ -49,7 +57,26 @@ export function requirePose(e: Engine): void {
   if (!poseEnabled(e)) throw new HttpError(403, 'forbidden', '姿势检索没有打开（设置 → 实验功能）');
 }
 
-const activeJob = (e: Engine, kind: 'pose' | 'pose-tags') => e.ctx.jobs.list().find((j) => j.kind === kind && (j.status === 'running' || j.status === 'queued')) ?? null;
+const activeJob = (e: Engine, kind: 'pose' | 'pose-tags' | 'pose-match') =>
+  e.ctx.jobs.list().find((j) => j.kind === kind && (j.status === 'running' || j.status === 'queued')) ?? null;
+
+/** 线稿在哪找：导入的（数据目录）、用户放的（pose-covers/） */
+const coverDirs = (e: Engine): CoverDirs => ({ imported: posewearDir(e.ctx), covers: config.poseCoversDir });
+const coverCheck = (e: Engine): CoverCheck => {
+  const dirs = coverDirs(e);
+  return (id, view) => hasCover(dirs, id, view);
+};
+
+/** PoseWear 匹配和线稿的状态 */
+function posewearMatchStatus(e: Engine): Pick<PoseStatus['posewear'], 'match' | 'covers'> {
+  const asset = loadPoseWearAsset();
+  const version = matchVersion(asset);
+  const dirs = coverDirs(e);
+  return {
+    match: { version, ...matchCounts(e.ctx.db, version), job: activeJob(e, 'pose-match') },
+    covers: { found: asset.poses.filter((p) => hasCover(dirs, p.id, p.bestView)).length, total: asset.poses.length, dir: config.poseCoversDir },
+  };
+}
 
 /** 姿势标签低分的状态：要补多少张、补完大约多久（每张约 0.5 秒），模型不在本机的单列 */
 export function poseTagsStatus(e: Engine): PoseTagsStatus {
@@ -87,7 +114,7 @@ export function poseStatus(e: Engine): PoseStatus {
     tags: poseTagsStatus(e),
     prototype: localPrototype(),
     job,
-    posewear: { ...posewearCounts(e.ctx.db), defaults: localPoseWear() },
+    posewear: { ...posewearCounts(e.ctx.db), defaults: localPoseWear(), ...posewearMatchStatus(e) },
   };
 }
 
@@ -98,11 +125,16 @@ export function checkPoseToggle(e: Engine, enabled: boolean | undefined): void {
 export function afterPoseToggle(e: Engine, before: boolean, enabled: boolean | undefined): void {
   if (enabled === true && !before) {
     ensurePoseClasses(e.ctx);
+    // PoseWear 姿势目录随包：同步进库；提取姿势时顺便匹配，以前提取过的（骨架、标签换过或姿势库升级了）接着补
+    ensurePoseWearCatalog(e.ctx);
     e.pipeline.noteManualStart('pose');
+    e.pipeline.noteManualStart('pose-match');
     e.pipeline.requestPose();
+    e.pipeline.requestPoseMatch();
   }
   if (enabled === false && before) {
-    for (const j of e.ctx.jobs.list()) if ((j.kind === 'pose' || j.kind === 'pose-tags') && (j.status === 'queued' || j.status === 'running')) e.ctx.jobs.cancel(j.id);
+    for (const j of e.ctx.jobs.list())
+      if ((j.kind === 'pose' || j.kind === 'pose-tags' || j.kind === 'pose-match') && (j.status === 'queued' || j.status === 'running')) e.ctx.jobs.cancel(j.id);
   }
 }
 
@@ -161,14 +193,15 @@ export const poseCommands = [
       requirePose(e);
       for (const p of [input.keypointsPath, input.assignmentsPath]) if (!existsSync(p)) throw new BadRequestError(`找不到文件：${p}`);
       const r = await importPrototype(e.ctx, input.keypointsPath, input.assignmentsPath);
-      // 原型没处理过的图留给任务
+      // 原型没处理过的图留给任务；导进来的图接着匹配 PoseWear 姿势
       e.pipeline.requestPose();
+      e.pipeline.requestPoseMatch();
       return { ...r, message: `导入了 ${r.imported} 张的姿势（归了类的 ${r.classified} 张）；图库里没有的 ${r.missing} 张、原型没处理过的 ${r.skipped} 张跳过` };
     },
   }),
   defineCommand({
     name: 'pose.importPoseWear',
-    summary: '导入 PoseWear 姿势库：读本机 PoseWear 文件夹的姿势列表，单人的三套姿势、双人几类互动的代表线稿复制进数据目录（再导一次会替换）',
+    summary: '导入 PoseWear 的线稿（可选）：从本机 PoseWear 文件夹把单人姿势、双人几类互动的代表线稿复制进数据目录（再导一次会替换）；姿势目录随包，不导也能用',
     input: PoseWearImportInput,
     scope: 'settings',
     undoable: false,
@@ -178,10 +211,9 @@ export const poseCommands = [
       requirePose(e);
       const dir = path.resolve(input.path);
       if (!existsSync(dir)) throw new BadRequestError(`找不到文件夹：${dir}`);
-      if (input.viewsPath && !existsSync(input.viewsPath)) throw new BadRequestError(`找不到文件：${input.viewsPath}`);
       try {
-        const r = await importPoseWear(e.ctx, dir, input.viewsPath);
-        return { ...r, message: `导入了 ${r.poses} 个单人姿势、${r.pairTypes} 类双人（线稿 ${r.files} 张）` };
+        const r = await importPoseWear(e.ctx, dir);
+        return { ...r, message: `导入了 ${r.poses} 个单人姿势、${r.pairTypes} 类双人的线稿（${r.files} 张）` };
       } catch (err) {
         throw new BadRequestError((err as Error).message);
       }
@@ -225,6 +257,23 @@ export const poseCommands = [
       if (!modelsReady(e)) throw new BadRequestError('姿势模型还没准备好');
       e.pipeline.noteManualStart('pose');
       return e.ctx.jobs.enqueue('pose');
+    },
+  }),
+  defineCommand({
+    name: 'pose.rematch',
+    summary:
+      '开始「重新匹配姿势」后台任务：按随包的 PoseWear 姿势库给提取过姿势的插画重新匹配（平时提取时就顺便匹配了；骨架、标签换过和姿势库升级后会自动补）；all=true 全部重算',
+    input: PoseRematchInput,
+    scope: 'settings',
+    undoable: false,
+    idempotent: true,
+    http: [{ method: 'POST', path: '/api/pose/rematch' }],
+    run(e, input) {
+      requirePose(e);
+      ensurePoseWearCatalog(e.ctx);
+      if (input.all) resetMatchState(e.ctx);
+      e.pipeline.noteManualStart('pose-match');
+      return e.ctx.jobs.enqueue('pose-match', { requeueIfRunning: true });
     },
   }),
   defineCommand({
@@ -322,26 +371,40 @@ export const poseQueries = [
   }),
   defineQuery({
     name: 'pose.posewear',
-    summary: 'PoseWear 姿势库：按套、分类分好组，每个姿势计入统计的张数和线稿地址；默认只给有图的姿势（all=1 全给）',
+    summary: 'PoseWear 姿势库：按套、分类分好组，每个姿势计入统计的张数、线稿地址（hasCover：有没有线稿）和骨架地址；默认只给有图的姿势（all=1 全给）',
     input: PoseWearCatalogInput,
     scope: 'read',
     http: [{ method: 'GET', path: '/api/pose/posewear' }],
     run(e, q) {
       requirePose(e);
-      return posewearCatalog(e.ctx.db, q.all ?? false);
+      return posewearCatalog(e.ctx.db, q.all ?? false, coverCheck(e));
     },
   }),
   defineQuery({
     name: 'pose.posewearFile',
-    summary: 'PoseWear 姿势的线稿（webp；t 小图、i 大图）',
+    summary: 'PoseWear 姿势的线稿（webp；t 小图、i 大图）：导入的，或者放在 pose-covers/ 里的；都没有 404',
     input: PoseWearFileInput,
     scope: 'read',
     http: [{ method: 'GET', path: '/api/pose/posewear/:size/:file' }],
     run(e, q): FileResponse {
       requirePose(e);
-      const filePath = path.join(posewearDir(e.ctx), q.size, q.file);
-      if (!existsSync(filePath)) throw new NotFoundError('这张线稿');
+      const m = /^(.+)_(front|high|low|side|diag)\.webp$/.exec(q.file)!;
+      const filePath = findCover(coverDirs(e), q.size, m[1]!, m[2]!);
+      if (!filePath) throw new NotFoundError('这张线稿');
       return { kind: 'path', contentType: 'image/webp', filePath };
+    },
+  }),
+  defineQuery({
+    name: 'pose.posewearSkeleton',
+    summary: 'PoseWear 姿势在一个视角线稿上的骨架（随包，画小人用）：单人一个人、双人两个人，每人 23 个点 [x, y, 置信度]，坐标按线稿长边归一；view 不给用代表视角',
+    input: PoseWearSkeletonInput,
+    scope: 'read',
+    http: [{ method: 'GET', path: '/api/pose/posewear-skeleton/:id' }],
+    run(e, q) {
+      requirePose(e);
+      const s = posewearSkeleton(loadPoseWearAsset(), q.id, q.view);
+      if (!s) throw new NotFoundError('这个姿势');
+      return s;
     },
   }),
   defineQuery({
@@ -352,7 +415,7 @@ export const poseQueries = [
     http: [{ method: 'GET', path: '/api/pose/posewear-match/:id' }],
     run(e, q) {
       requirePose(e);
-      return posewearOf(e.ctx.db, q.id);
+      return posewearOf(e.ctx.db, q.id, coverCheck(e));
     },
   }),
   defineQuery({

@@ -52,6 +52,8 @@ export const config = {
   webDist: path.join(repoRoot, 'apps/web/dist'),
   /** 随仓库分发的数据文件（离线对照表、词库） */
   assetsDir: path.join(repoRoot, 'apps/server/assets'),
+  /** 用户自己放的 PoseWear 线稿（按姿势找图的封面）：免安装包的根目录、开发时仓库根目录下的 pose-covers/ */
+  poseCoversDir: process.env.EMAKI_POSE_COVERS_DIR ? path.resolve(repoRoot, process.env.EMAKI_POSE_COVERS_DIR) : path.join(repoRoot, 'pose-covers'),
   /** 模型文件目录；多个开发库可共用一份 */
   modelsDir: process.env.EMAKI_MODELS_DIR ? path.resolve(repoRoot, process.env.EMAKI_MODELS_DIR) : path.join(dataDir, 'models'),
   /** 模型下载源（逗号分隔），会并行测速，选最快的 */
