@@ -134,7 +134,7 @@ function Detail({ data }: { data: GetCollectionResponse }) {
                 继续读 · 第 {progress} 页
               </Button>
             )}
-            <Button variant="primary" size="sm" icon={<BookOpenText className="size-3.5" />} onClick={() => navigate(`/collections/${c.id}/read?p=1`)}>
+            <Button variant="outline" size="sm" icon={<BookOpenText className="size-3.5" />} onClick={() => navigate(`/collections/${c.id}/read?p=1`)}>
               从头读
             </Button>
             {(menu.edit || menu.reveal) && <Menu
@@ -328,7 +328,7 @@ function GroupDetail({ data }: { data: GetCollectionResponse }) {
               添加图片…
             </Button>
             <Button
-              variant="primary"
+              variant="outline"
               size="sm"
               icon={<Play className="size-3.5" />}
               loading={pending}
