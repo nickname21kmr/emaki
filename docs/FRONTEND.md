@@ -166,7 +166,7 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
   只在悬停时出现的按钮，触屏上要常显（`touch:opacity-100`）或者有别的入口（长按、底部面板、看图器里）。键盘提示在触屏上不显示：`Kbd` 自己带 `touch:hidden`（帮助对话框这种说明快捷键本身的地方传 `doc`），菜单项的快捷键也是；
   整行都是按键说明的（「↑↓ 选择 · ↵ 确认 · Esc 关闭」「Ctrl / ⌘ 点击多选」）那一行自己 `touch:hidden`，需要的话换一句触屏的说法（`touch:inline`）。
 - **手势**只认 `pointerType === 'touch'`，鼠标、键盘的行为不经过它们；判定是 `lib/gestures.ts` 里的纯函数（方向锁定、滑动的距离 / 速度阈值、下滑关闭、捏合缩放的中心、点按 / 双击），阈值都在 `GESTURE`：
-  看图器 `lightbox/useTouchGestures.ts`、左右翻页 `lib/useSwipePager.ts`（阅读器、未识别）、长按 `lib/useLongPress.ts`（网格、未识别队列：进入多选并选中）。
+  看图器 `lightbox/useTouchGestures.ts`、左右翻页 `lib/useSwipePager.ts`（阅读器、未识别）、阅读器的翻页轨道 `lib/usePageTrack.ts`（前后一开并排，拖动和触控板左右滑跟手，点击、按键、滚轮一格滑一页）、长按 `lib/useLongPress.ts`（网格、未识别队列：进入多选并选中）。
   跟手的位移直接写 style，不走 React 状态。没有引入手势库。
 - **多选**：电脑上照旧悬停勾选圈、Ctrl / Shift 点击；触屏上长按一张进入多选，页头有「选择」（`SelectButton`，`useSelection.start(scope)` 进入还没选图的多选模式，`isSelecting` 判断）。
 

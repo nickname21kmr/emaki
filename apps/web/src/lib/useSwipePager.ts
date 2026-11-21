@@ -1,6 +1,7 @@
 /**
  * 左右滑翻一页（A1）：阅读器翻页、未识别里跳过 / 上一张。跟手移动「跟手层」（layerRef），过阈值翻、没过弹回，第一页再往回有阻尼；
  * 没滑动的点按（不在按钮上）交给 onCenterTap（阅读器：切换顶栏和胶片条）。按钮上的点按照常是按钮自己的 click。
+ * 给了 settle 时翻页的动画交给调用方（阅读器的轨道：相邻的一开跟着露出来、松手顺势滑到位）。
  * rtl（本子右开）时方向反过来：往右滑是下一页。只认 pointerType === 'touch'，竖着的滑动交给浏览器滚动；判定都在 lib/gestures.ts。
  */
 import { useRef, type PointerEvent as ReactPointerEvent } from 'react';
@@ -27,6 +28,11 @@ export function useSwipePager(o: {
   onForward: () => void;
   onBack: () => void;
   onCenterTap?: () => void;
+  /**
+   * 松手决定翻页时由调用方接着动（阅读器：轨道从手指停的位置滑到下一开，lib/usePageTrack.ts，位移它自己从跟手层上读）。
+   * 不给时照旧：往手指的方向滑出去一点再换页。
+   */
+  settle?: (go: 'forward' | 'back') => void;
 }) {
   const opts = useRef(o);
   opts.current = o;
@@ -77,6 +83,7 @@ export function useSwipePager(o: {
       }
       const go = swipePagerDecision({ dx: g.dx, vx: velocityOf(g.samples).vx, width: g.width, rtl: !!O.rtl, hasPrev: O.hasPrev, hasNext: O.hasNext });
       if (!go) return void setLayer(0, 220);
+      if (O.settle) return O.settle(go);
       // 往手指的方向滑出去一点再换页（新的一页淡入）
       setLayer(Math.sign(g.dx) * g.width * 0.6, 140);
       window.setTimeout(() => {

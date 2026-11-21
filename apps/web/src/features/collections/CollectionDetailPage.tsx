@@ -296,7 +296,7 @@ function KindSub({ kind, onChange }: { kind: CollectionKind; onChange: (kind: Co
 
 /**
  * 组图（kind=group）：收在一起的散图。结构和本子的扉页一致：页头、扇形封面 + 细线表、出场角色、图片网格。
- * 不进阅读器：点图打开看图器，「放映」整组播放。
+ * 点图和本子一样进阅读器（默认单页、左开，按组图这个类型记住），从点的那张开始；「放映」整组播放。
  */
 function GroupDetail({ data }: { data: GetCollectionResponse }) {
   const c = data.collection;
@@ -681,7 +681,8 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
           hasMore={list.hasNextPage}
           loadingMore={list.isFetchingNextPage}
           onLoadMore={loadMore}
-          onOpen={group ? undefined : (img) => navigate(`/collections/${c.id}/read?p=${pageNo.get(img.id) ?? 1}`)}
+          // 本子、画集、组图都一样：点哪一页就从哪一页读（阅读器顶栏的 ⓘ / I 再转到看图器看这张的角色、分级）
+          onOpen={(img) => navigate(`/collections/${c.id}/read?p=${pageNo.get(img.id) ?? 1}`)}
           rated={(img) => !!tagged.get(img.id)}
           blurContext={bookBlurContext(c.kind)}
           renderBadges={
