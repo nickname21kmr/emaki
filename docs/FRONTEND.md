@@ -124,7 +124,7 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - `components/media`：`Thumb`（所有插画都用它：主色占位、淡入、按分级 / 类型模糊，`blurBadge` 按尺寸自动选、`revealOnHover` 默认关）`ImageGrid`（虚拟化等高行网格 + 无限滚动 + 多选 + 点开看图器；行高按窗口缩放，触屏长按多选；页头放 `SelectButton`）`CharacterCover`（`variant="overlay"` Top 卡 / `"plate"` 书架图版）`CoverFan`（全站唯一的扇形叠放，1 / 2 / 3 / 5 张）`AvatarTile` + `RecentStrip`（圆头像「卡纸框」+ 图注）`BookPlate`（本子、画集的书）`CollectionsStrip`（「收录于」，只列本子和画集）`CollectionControls`（组图：`GroupBadge` 收拢格的张数角标、`CollapseGroupsMenu` 收拢菜单（自动 / 总是收拢 / 总是逐张）、`AddToGroupDialog` 收进组图；书架上的组图用 `CoverFan`，见 [collections.md](collections.md)）`KindBadge.tsx`（`KindBadge` 类型小印、`AnimatedMark` / `AnimatedGlyph` 动图标记、`TileMarks` 格子左下角那一行）`KindMenu` `CardGrid`
 - `lib/queries.ts`：全部数据 hook；修改一律用 `useMutate(fn)`，自动结果 toast + 撤销 + 刷新。界面上显示的计数读 `useSummary()`（汇总接口，见下面「数字从哪来」）
 - `lib/stores.ts`：`usePrefs`（本机偏好：模糊开关与范围、照片 / 文字模糊、悬停显示、底色、网格密度、书架 / 列表、行高、图库类型、收拢组图、阅读器单双页与翻页方向）`useLightbox`（`show(ids, index)` 打开看图器）`useSelection`（多选）`useOverlays` `useUndoStore`
-- `lib/viewport.ts`（`useViewport` 和排法规则）、`lib/gestures.ts`（触屏手势的判定）、`lib/useLongPress.ts`、`lib/useSwipePager.ts`（见下面「窗口分级和触控」）
+- `lib/viewport.ts`（`useViewport` 和排法规则）、`lib/gestures.ts`（触屏手势的判定）、`lib/useLongPress.ts`、`lib/pager/`（播放器的翻页和缩放，见下面「播放器」）
 - `lib/motion.ts`、`lib/viewTransition.ts`、`lib/kinds.ts`（类型的图标、`ANIMATED_LABEL`；类型名、印章字、说明转自 `packages/shared`）、`lib/blur.ts`（转出 `packages/shared` 的 `blurReason`）、`lib/format.ts`（`formatCount` `formatCompact` `formatBytes` `formatRelative` `formatDate`；`RATING_LABEL` 转自 shared）、`lib/hotkeys.ts`（`useHotkey('mod+k', fn)`）、`lib/events.ts`（SSE：`changed` 按变化类型只让相关的 query 失效（`REFRESH`），写操作等自己那条事件的刷新（`settleRefresh`），助手的可撤销修改进撤销栈；识别进行中排名类列表最多一分钟重拉一次，未识别列表只标记过期）、`lib/urlPrefs.ts`（收拢组图的模式进 URL）
 - `blocks/`：页面区块注册表 `registry.ts` 和按注册表渲染的 `PageBlocks`（见下面「页面区块」）
 
@@ -166,8 +166,25 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
   只在悬停时出现的按钮，触屏上要常显（`touch:opacity-100`）或者有别的入口（长按、底部面板、看图器里）。键盘提示在触屏上不显示：`Kbd` 自己带 `touch:hidden`（帮助对话框这种说明快捷键本身的地方传 `doc`），菜单项的快捷键也是；
   整行都是按键说明的（「↑↓ 选择 · ↵ 确认 · Esc 关闭」「Ctrl / ⌘ 点击多选」）那一行自己 `touch:hidden`，需要的话换一句触屏的说法（`touch:inline`）。
 - **手势**只认 `pointerType === 'touch'`，鼠标、键盘的行为不经过它们；判定是 `lib/gestures.ts` 里的纯函数（方向锁定、滑动的距离 / 速度阈值、下滑关闭、捏合缩放的中心、点按 / 双击），阈值都在 `GESTURE`：
-  看图器 `lightbox/useTouchGestures.ts`、左右翻页 `lib/useSwipePager.ts`（阅读器、未识别）、阅读器的翻页轨道 `lib/usePageTrack.ts`（前后一开并排，拖动和触控板左右滑跟手，点击、按键、滚轮一格滑一页）、长按 `lib/useLongPress.ts`（网格、未识别队列：进入多选并选中）。
+  翻页和缩放在 `lib/pager/`（见下面「播放器」）、长按 `lib/useLongPress.ts`（网格、未识别队列：进入多选并选中）。
   跟手的位移直接写 style，不走 React 状态。没有引入手势库。
+
+### 播放器：翻页和缩放只有一份（`lib/pager/`）
+
+看图器（`components/media/Lightbox.tsx`）和阅读器（`features/collections/reader/BookReader.tsx`）是两个播放器，各自只有一个，到处复用：
+任何页面打开一张图都是 `useLightbox.show(ids, index)`，打开合集都是 `/collections/:id/read?p=`（本子、画集、组图同一个）。
+两者用途不同（看和整理一张图 / 按顺序读），不合并；但它们底下的**翻一张**和**缩放**只有一份实现，在 `lib/pager/`：
+
+- `usePager`：翻页。当前格前后各摆一张在轨道上（`PagerTrack`，按 key 认格子，翻过去还是同一个元素，不重新加载、不闪）。
+  改 pos 就翻：±1 时轨道从当前画面接着滑（`usePageTrack`，先换状态再动，连按不排队），更远（胶片条、Home / End）直接换，「减少动态效果」也直接换。
+  触屏拖动跟手（`useSwipePager`），触控板左右滑跟手（`useTrackpadPager`），点击、按键、鼠标滚轮只要改 pos。竖着的拖动用 `vertical` 接进来（看图器的下滑关闭、上滑展开信息）。
+- `useTouchZoom`：触屏的捏合缩放、放大后平移、点按（单击切换界面、双击放大 / 还原）。只有这一处认点按。缩放的状态和数学在 `zoom.ts`（`useZoomPan`、`clampPan`、`zoomAround`）。
+- 播放器自己只管自己特有的：阅读器的单双页、右开、胶片条、结尾卡；看图器的拿起 / 放回、下滑关闭的样子、放映的交叉淡化（这时不摆前后张）、鼠标滚轮缩放和拖动平移。
+- 「未识别」的大图是处理队列，不是播放器：换图带盖章的动画（`PreviewStage`），只用底层的 `useSwipePager` 认左右滑。
+
+**规矩**：翻页、缩放、点按、长按这类交互只能有一个实现。新的地方要「左右翻一张」「捏合放大」就用 `lib/pager`，要不一样的手感就改 `lib/pager`（所有播放器一起变），
+不在页面里另写一套。这也是以后 mod 的前提（core-architecture.md 第 10.2 节）：同一个行为只在一处，改它只要改一处。
+验收：没有端到端测试（纯函数的部分有单元测试：`lib/gestures.test.ts`、`lib/pager/usePageTrack.test.ts`）；改 `lib/pager` 后在电脑（点击、按键、滚轮、触控板）和触屏（拖动、捏合、双击、下滑关闭）上把阅读器和看图器都走一遍。
 - **多选**：电脑上照旧悬停勾选圈、Ctrl / Shift 点击；触屏上长按一张进入多选，页头有「选择」（`SelectButton`，`useSelection.start(scope)` 进入还没选图的多选模式，`isSelecting` 判断）。
 
 ### 数字从哪来（P5）
@@ -222,7 +239,7 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - 全屏深色 scrim，图片居中 `object-contain`；先显示 960 宽缩略图（`imageUrl.thumb(id, 960)`）再换原图，避免白屏。
 - 右侧可折叠信息面板（320px，按 `I` 切换）：文件名、尺寸、体积、格式、入库时间、来源（pixiv 链接等）、分级（可改）、类型（六枚类型印，动图另起一行写依据，见「动图」）、角色（chip 列表，可移除，可添加——带搜索的弹出框，调用 `api.updateImage`）、tagger 建议（`characterSuggestions`，一键采纳）、标签（按 category 分组，score 用细进度条表示）、操作：收藏（F）、在资源管理器中显示、排除（E）、移到回收站。
 - 顶部：`index / total`、关闭。左右方向键切换，滚轮 / 双击放大（简单的 transform scale + 拖动即可）。
-- 触屏（A1）：左右滑切换、下滑关闭、捏合 / 双击缩放、放大后拖动平移、单击切换界面（`lightbox/useTouchGestures.ts`）；窄屏（< 840）信息面板是贴底的 `InfoSheet`（平时只露出操作那一排，上拉展开），不显示胶片条。
+- 触屏（A1）：左右滑切换、下滑关闭、捏合 / 双击缩放、放大后拖动平移、单击切换界面（翻页和缩放是 `lib/pager`，和阅读器同一份）；窄屏（< 840）信息面板是贴底的 `InfoSheet`（平时只露出操作那一排，上拉展开），不显示胶片条。
 - 敏感图片默认模糊，中间一个「显示」按钮（只对当前这张生效）。
 - 切换图片时预加载下一张。
 

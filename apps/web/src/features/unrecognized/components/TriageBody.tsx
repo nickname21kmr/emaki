@@ -7,7 +7,7 @@ import { Button, EmptyState, ErrorState } from '@/components/ui';
 import { formatCount } from '@/lib/format';
 import { useHotkey } from '@/lib/hotkeys';
 import { useLightbox } from '@/lib/stores';
-import { useSwipePager } from '@/lib/useSwipePager';
+import { useSwipePager } from '@/lib/pager/useSwipePager';
 import { cn } from '@/lib/cn';
 import { digitIndex, usePriorityKeys, useTriageKeysEnabled } from '../hooks';
 import { useTriage } from '../useTriage';
@@ -42,7 +42,7 @@ export function TriageBody({
 }) {
   const navigate = useNavigate();
   const triage = useTriage(bucket, artKind);
-  // 触屏（A1）：大图左滑跳过（下一张）、右滑上一张（lib/useSwipePager.ts）
+  // 触屏（A1）：大图左滑跳过（下一张）、右滑上一张（lib/pager/useSwipePager.ts；这里是处理队列，换图的动画在 PreviewStage）
   const swipe = useSwipePager({ hasPrev: triage.index > 0, onForward: triage.next, onBack: triage.prev });
   const { query, items, current, batch } = triage;
   const searchRef = useRef<HTMLInputElement>(null);

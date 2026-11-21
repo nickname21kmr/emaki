@@ -1,15 +1,15 @@
 /**
- * 阅读器的翻页轨道：上一开、这一开、下一开并排摆在一条轨道上（每格错开「宽度 + GAP」），翻页就是轨道滑一格。
+ * 播放器的翻页轨道（usePager 用）：上一张、这一张、下一张并排摆在一条轨道上（每格错开「宽度 + GAP」），翻页就是轨道滑一格。
  *
  * - 先换状态再动（FLIP）：pos 变了 ±1 时，轨道先瞬间挪到「看起来还是刚才那样」的位置（手指停在哪、上一次动画走到哪都接得上），
  *   再滑回 0。按住方向键、连点、滚轮连着翻时，每次都从当前画面接着滑，不排队、不拖慢。
  * - 跳页（胶片条、Home / End、切单双页）和「减少动态效果」直接换，不滑。
  * - 跟手：触屏拖动由 useSwipePager 写同一个元素（layerRef 就是轨道），松手翻页时交给这里（settle）；
  *   触控板左右滑（横向的 wheel，deltaMode 像素）也跟手，过 35% 宽度立刻翻，停下 140ms 后按和触屏同一个阈值决定翻还是弹回。
- * 位移直接写 style.translate，不走 React 状态（每帧重渲染整个阅读器太贵）。
+ * 位移直接写 style.translate，不走 React 状态（每帧重渲染整个播放器太贵）。
  */
 import { useLayoutEffect, useRef, type RefObject } from 'react';
-import { swipeOffset } from './gestures';
+import { swipeOffset } from '../gestures';
 import { swipePagerDecision } from './useSwipePager';
 
 /** 相邻两格之间的空隙（px），和 slotStyle 里的一致 */
@@ -115,7 +115,7 @@ export function useTrackpadPager(o: {
     else O.onBack();
   };
 
-  return (e: React.WheelEvent): boolean => {
+  return (e: Pick<WheelEvent, 'deltaX' | 'deltaY' | 'deltaMode'>): boolean => {
     const O = opts.current;
     if (Math.abs(e.deltaX) <= Math.abs(e.deltaY) || e.deltaMode !== 0) return false;
     if (O.disabled) return true;

@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Pause, PanelRight, Play, Shapes, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Dialog as D } from 'radix-ui';
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useLocation, useNavigate, useNavigationType } from 'react-router';
 import { imageUrl } from '@/lib/api';
 import { blurLabel, blurReason } from '@/lib/blur';
@@ -12,7 +12,7 @@ import { isTypingTarget, modKeyLabel, useHotkey } from '@/lib/hotkeys';
 import { useImage } from '@/lib/queries';
 import { useBlurPrefs, useLightbox } from '@/lib/stores';
 import { findCachedImage, preloadAhead, preloadNeighbors, whenDecoded } from './lightbox/cache';
-import { useCachedImage } from './lightbox/useCachedImages';
+import { useCachedImage, useCachedImages } from './lightbox/useCachedImages';
 import { Filmstrip } from './lightbox/Filmstrip';
 import { entryKey, isLightboxEntry, markLightboxEntry, popAction, setLightboxPopHandler } from './lightbox/history';
 import { InfoPanel } from './lightbox/InfoPanel';
@@ -21,9 +21,9 @@ import { KindMenu } from './KindMenu';
 import { LbButton } from './lightbox/LbButton';
 import { cn } from '@/lib/cn';
 import { PANEL_W, SIDE_BY_SIDE_MIN, useLightboxPrefs } from './lightbox/prefs';
-import { Stage } from './lightbox/Stage';
+import { Stage, type StageSlide } from './lightbox/Stage';
 import { useImageActions } from './lightbox/useImageActions';
-import { useZoomPan } from './lightbox/useZoomPan';
+import { useZoomPan } from '@/lib/pager/zoom';
 import { EASE_OUT } from '@/lib/motion';
 import { AssistantDarkroomSlot, AssistantLightboxButton } from '@/features/assistant/AssistantLauncher';
 import { closeAssistant, useAssistantDock, useViewportWidth } from '@/features/assistant/dock';
@@ -349,6 +349,34 @@ function LightboxView({
   const reason = rating && !revealed.has(id) ? blurReason({ rating, kind: base?.kind }, blurPrefs) : null;
   const blurred = reason !== null;
 
+  // 轨道上的前后一张（lib/pager）：信息用缓存里现成的（网格、列表已经拉过），没有就先空着，翻过去时再拿
+  const prevId = ids[index - 1];
+  const nextId = ids[index + 1];
+  const neighborIds = useMemo(() => [prevId, nextId].filter((x): x is ID => !!x), [prevId, nextId]);
+  const neighborMeta = useCachedImages(neighborIds);
+  const slideAt = (i: number): StageSlide | undefined => {
+    const sid = ids[i];
+    if (!sid) return undefined;
+    if (i === index)
+      return {
+        id,
+        meta: base,
+        blurred,
+        blurLabel: reason && rating ? blurLabel(reason, rating) : '',
+        onReveal: () => setRevealed((s) => new Set(s).add(id)),
+      };
+    if (i !== index - 1 && i !== index + 1) return undefined;
+    const m = neighborMeta[neighborIds.indexOf(sid)];
+    const r = m && !revealed.has(sid) ? blurReason({ rating: m.rating, kind: m.kind }, blurPrefs) : null;
+    return {
+      id: sid,
+      meta: m,
+      blurred: r !== null,
+      blurLabel: r && m ? blurLabel(r, m.rating) : '',
+      onReveal: () => setRevealed((s) => new Set(s).add(sid)),
+    };
+  };
+
   const leave = () => putBack();
   const searchTag = (tag: string) => {
     close();
@@ -397,11 +425,9 @@ function LightboxView({
         />
 
         <Stage
-          id={id}
-          meta={base}
-          blurred={blurred}
-          blurLabel={reason && rating ? blurLabel(reason, rating) : ''}
-          onReveal={() => setRevealed((s) => new Set(s).add(id))}
+          index={index}
+          count={ids.length}
+          slide={slideAt}
           zoomApi={zoomApi}
           direction={direction}
           hasPrev={index > 0}
