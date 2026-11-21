@@ -52,6 +52,14 @@ export class Audit {
     return new Date(this.ctx.clock()).toISOString();
   }
 
+  /** 这个撤销令牌是谁的操作给出的（没记录是 null）。手机只能撤销自己的操作（commands/system.ts 的 history.undo） */
+  actorOfUndoToken(token: string): string | null {
+    const row = this.ctx.db.prepare('SELECT actor FROM command_log WHERE undo_token = ? ORDER BY id DESC LIMIT 1').get(token) as
+      | { actor: string }
+      | undefined;
+    return row?.actor ?? null;
+  }
+
   /** 启动时：上次进程中途退出、没做完的标成 interrupted（结果不确定）；只留最近 AUDIT_KEEP 行 */
   open(): void {
     const db = this.ctx.db;

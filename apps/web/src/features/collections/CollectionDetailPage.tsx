@@ -71,6 +71,7 @@ import { SelectionBar, type SelectionAction } from '@/features/characters/detail
 import { useScopedSelection } from '@/features/characters/detail/useScopedSelection';
 import { CollectionImagePicker } from './components/CollectionImagePicker';
 import { PageBlocks } from '@/blocks/PageBlocks';
+import { useAllowedActions, type Need } from '@/lib/capabilities';
 
 const RATINGS: Rating[] = ['general', 'sensitive', 'questionable', 'explicit'];
 
@@ -78,6 +79,16 @@ const RATINGS: Rating[] = ['general', 'sensitive', 'questionable', 'explicit'];
  * 一本合集（T38d）：扉页（书 + 奥付）→ 01 出场角色 → 02 目次。
  * 点目次里的一页进阅读器；多选可以归到角色、设分级，只选一张时能设为封面。
  */
+/**
+ * 页头「更多」菜单里各项需要的能力（lib/capabilities.ts）：改名、类型、页序、系列、解散是 collections，
+ * 整理到子文件夹会移动文件（organize-files），在资源管理器中显示是在电脑屏幕上弹窗（desktop）
+ */
+const COLLECTION_MENU_NEEDS = {
+  edit: 'collections',
+  organize: 'organize-files',
+  reveal: 'desktop',
+} as const satisfies Record<string, Need>;
+
 export function CollectionDetailPage() {
   const { id = '' } = useParams();
   const q = useCollection(id);
@@ -95,6 +106,7 @@ function Detail({ data }: { data: GetCollectionResponse }) {
   const update = useMutate((body: Parameters<typeof api.updateCollection>[1]) => api.updateCollection(c.id, body));
   const addCandidate = useMutate((danbooruTag: string) => api.bulkCollections({ ids: [c.id], action: { type: 'addCharacterTag', danbooruTag } }));
   const dismiss = useMutate(() => api.deleteCollection(c.id), { onSuccess: () => navigate('/collections') });
+  const menu = useAllowedActions(COLLECTION_MENU_NEEDS);
   const progress = readProgress.get(c.id);
   const [adding, setAdding] = useState(false);
   // 按文件夹成册的跟着文件夹走：不能加别处的图（手选的组图改成本子 / 画集后可以）
@@ -125,7 +137,7 @@ function Detail({ data }: { data: GetCollectionResponse }) {
             <Button variant="primary" size="sm" icon={<BookOpenText className="size-3.5" />} onClick={() => navigate(`/collections/${c.id}/read?p=1`)}>
               从头读
             </Button>
-            <Menu
+            {(menu.edit || menu.reveal) && <Menu
               width={220}
               trigger={
                 <Button variant="ghost" size="sm" aria-label="更多">
@@ -133,6 +145,7 @@ function Detail({ data }: { data: GetCollectionResponse }) {
                 </Button>
               }
             >
+              {menu.edit && <>
               <MenuItem icon={<PencilLine />} onSelect={() => setDialog('rename')}>
                 改名…
               </MenuItem>
@@ -155,17 +168,22 @@ function Detail({ data }: { data: GetCollectionResponse }) {
               <MenuItem icon={<Layers />} onSelect={() => setDialog('series')}>
                 归入系列…
               </MenuItem>
-              <MenuItem
-                icon={<FolderOpen />}
-                onSelect={() => data.pages[0] && void api.revealImage(data.pages[0].imageId).catch(() => undefined)}
-              >
-                在资源管理器中显示
-              </MenuItem>
+              </>}
+              {menu.reveal && (
+                <MenuItem
+                  icon={<FolderOpen />}
+                  onSelect={() => data.pages[0] && void api.revealImage(data.pages[0].imageId).catch(() => undefined)}
+                >
+                  在资源管理器中显示
+                </MenuItem>
+              )}
+              {menu.edit && <>
               <MenuSeparator />
               <MenuItem icon={<CircleOff />} danger onSelect={() => dismiss.mutate()}>
                 {folder ? '不成册' : '解散（图片都还在）'}
               </MenuItem>
-            </Menu>
+              </>}
+            </Menu>}
           </>
         }
       />
@@ -288,6 +306,7 @@ function GroupDetail({ data }: { data: GetCollectionResponse }) {
   const update = useMutate((body: Parameters<typeof api.updateCollection>[1]) => api.updateCollection(c.id, body));
   const organize = useMutate(() => api.updateCollection(c.id, { organizeFiles: true }), { onSuccess: () => setDialog(null) });
   const dismiss = useMutate(() => api.deleteCollection(c.id), { onSuccess: () => navigate('/collections?kind=group') });
+  const menu = useAllowedActions(COLLECTION_MENU_NEEDS);
   const { start, pending } = useSlideshow();
   const names = data.cast.slice(0, 2).map((x) => x.character.name);
   const castLine = names.length ? names.join('、') + (data.cast.length > 2 ? ` 等 ${data.cast.length} 位` : '') : null;
@@ -317,7 +336,7 @@ function GroupDetail({ data }: { data: GetCollectionResponse }) {
             >
               放映
             </Button>
-            <Menu
+            {(menu.edit || menu.organize || menu.reveal) && <Menu
               width={220}
               trigger={
                 <Button variant="ghost" size="sm" aria-label="更多">
@@ -325,24 +344,32 @@ function GroupDetail({ data }: { data: GetCollectionResponse }) {
                 </Button>
               }
             >
+              {menu.edit && <>
               <MenuItem icon={<PencilLine />} onSelect={() => setDialog('rename')}>
                 改名…
               </MenuItem>
               <KindSub kind={c.kind} onChange={(kind) => update.mutate({ kind })} />
-              <MenuItem icon={<FolderInput />} onSelect={() => setDialog('organize')}>
-                整理到子文件夹…
-              </MenuItem>
-              <MenuItem
-                icon={<FolderOpen />}
-                onSelect={() => data.pages[0] && void api.revealImage(data.pages[0].imageId).catch(() => undefined)}
-              >
-                在资源管理器中显示
-              </MenuItem>
+              </>}
+              {menu.organize && (
+                <MenuItem icon={<FolderInput />} onSelect={() => setDialog('organize')}>
+                  整理到子文件夹…
+                </MenuItem>
+              )}
+              {menu.reveal && (
+                <MenuItem
+                  icon={<FolderOpen />}
+                  onSelect={() => data.pages[0] && void api.revealImage(data.pages[0].imageId).catch(() => undefined)}
+                >
+                  在资源管理器中显示
+                </MenuItem>
+              )}
+              {menu.edit && <>
               <MenuSeparator />
               <MenuItem icon={<CircleOff />} danger onSelect={() => dismiss.mutate()}>
                 解散组图（图片都还在）
               </MenuItem>
-            </Menu>
+              </>}
+            </Menu>}
           </>
         }
       />
@@ -568,12 +595,22 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
 
   const actions: SelectionAction[] = [
     ...(selection.count === 1
-      ? [{ key: 'cover', label: '设为封面', icon: <ImageUp />, loading: cover.isPending, onClick: () => cover.mutate(selection.ids[0]!) }]
+      ? [
+          {
+            key: 'cover',
+            label: '设为封面',
+            icon: <ImageUp />,
+            need: 'collections' as const,
+            loading: cover.isPending,
+            onClick: () => cover.mutate(selection.ids[0]!),
+          },
+        ]
       : []),
-    { key: 'assign', label: '归到角色…', icon: <UserRoundPlus />, onClick: () => setPickerOpen(true) },
-    { key: 'artist', label: '画师…', icon: <Palette />, onClick: () => setArtistOpen(true) },
+    { key: 'assign', label: '归到角色…', icon: <UserRoundPlus />, need: 'curate', onClick: () => setPickerOpen(true) },
+    { key: 'artist', label: '画师…', icon: <Palette />, need: 'curate', onClick: () => setArtistOpen(true) },
     {
       key: 'favorite',
+      need: 'curate',
       label: allFavorite ? '取消收藏' : '收藏',
       icon: allFavorite ? <HeartOff /> : <Heart />,
       loading: favorite.isPending,
@@ -582,12 +619,27 @@ function TableOfContents({ data }: { data: GetCollectionResponse }) {
     ...RATINGS.slice(0, 3).map((r) => ({
       key: `rating-${r}`,
       label: RATING_LABEL[r],
+      need: 'curate' as const,
       icon: <ShieldHalf />,
       onClick: () => rating.mutate({ ids: selection.ids, value: r }),
     })),
-    ...(group ? [{ key: 'split', label: '另建组图…', icon: <Layers />, onClick: () => setSplitting(true) }] : []),
-    { key: 'remove', label: group ? '移出组图' : '移出这本', icon: <CircleMinus />, loading: remove.isPending, onClick: () => remove.mutate(selection.ids) },
-    { key: 'trash', label: '移到回收站', icon: <Trash2 />, loading: trash.isPending, onClick: () => trash.mutate(selection.ids) },
+    ...(group ? [{ key: 'split', label: '另建组图…', icon: <Layers />, need: 'collections' as const, onClick: () => setSplitting(true) }] : []),
+    {
+      key: 'remove',
+      label: group ? '移出组图' : '移出这本',
+      icon: <CircleMinus />,
+      need: 'collections',
+      loading: remove.isPending,
+      onClick: () => remove.mutate(selection.ids),
+    },
+    {
+      key: 'trash',
+      label: '移到回收站',
+      icon: <Trash2 />,
+      need: 'organize-files',
+      loading: trash.isPending,
+      onClick: () => trash.mutate(selection.ids),
+    },
   ];
 
   return (

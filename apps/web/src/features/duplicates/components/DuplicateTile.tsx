@@ -129,7 +129,7 @@ export function DuplicateTile({
               e.stopPropagation();
               onOpen();
             }}
-            className="absolute right-2 bottom-2 flex size-7 items-center justify-center rounded-full bg-black/40 text-white opacity-0 ring-1 ring-white/15 backdrop-blur-md transition-opacity duration-200 group-hover/dup:opacity-100 hover:bg-black/60 focus-visible:opacity-100"
+            className="absolute right-2 bottom-2 flex size-7 items-center justify-center rounded-full bg-black/40 text-white opacity-0 ring-1 ring-white/15 backdrop-blur-md transition-opacity duration-200 group-hover/dup:opacity-100 hover:bg-black/60 focus-visible:opacity-100 touch:opacity-100"
           >
             <Maximize2 className="size-3.5" />
           </button>

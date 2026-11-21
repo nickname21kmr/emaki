@@ -119,15 +119,56 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 
 ## 可用积木（先用这些，不够再加）
 
-- `components/ui`：`Button` `IconButton`（必须有 label，自带 tooltip）`Chip` `ChipAvatar` `Badge` `CountBubble` `Segmented` `Input` `SearchInput` `Kbd` `Tooltip` `Dialog` `DialogFooter` `Menu*` `Switch` `Slider` `Progress` `Field` `Skeleton` `EmptyState` `ErrorState` `SectionTitle` `Seal` `RollingNumber`；另有 `Emblem.tsx`、`Toast.tsx`（不从 index 导出）
-- `components/layout`：`PageHeader`（右侧自带全局操作：跳到角色 ⌘K / 模糊开关 / 撤销 / 帮助）`PageBody` `useScrollContainer` `ThemeSync` `chapters.ts`
-- `components/media`：`Thumb`（所有插画都用它：主色占位、淡入、按分级 / 类型模糊，`blurBadge` 按尺寸自动选、`revealOnHover` 默认关）`ImageGrid`（虚拟化等高行网格 + 无限滚动 + 多选 + 点开看图器）`CharacterCover`（`variant="overlay"` Top 卡 / `"plate"` 书架图版）`CoverFan`（全站唯一的扇形叠放，1 / 2 / 3 / 5 张）`AvatarTile` + `RecentStrip`（圆头像「卡纸框」+ 图注）`BookPlate`（本子、画集的书）`CollectionsStrip`（「收录于」，只列本子和画集）`CollectionControls`（组图：`GroupBadge` 收拢格的张数角标、`CollapseGroupsMenu` 收拢菜单（自动 / 总是收拢 / 总是逐张）、`AddToGroupDialog` 收进组图；书架上的组图用 `CoverFan`，见 [collections.md](collections.md)）`KindBadge.tsx`（`KindBadge` 类型小印、`AnimatedMark` / `AnimatedGlyph` 动图标记、`TileMarks` 格子左下角那一行）`KindMenu` `CardGrid`
+- `components/ui`：`Button` `IconButton`（必须有 label，自带 tooltip）`Chip` `ChipAvatar` `Badge` `CountBubble` `Segmented` `Input` `SearchInput` `Kbd` `Tooltip` `Dialog`（compact 下是底部面板）`DialogFooter` `Sheet`（底部面板） `Menu*` `Switch` `Slider` `Progress` `Field` `Skeleton` `EmptyState` `ErrorState` `SectionTitle` `Seal` `RollingNumber`；另有 `Emblem.tsx`、`Toast.tsx`（不从 index 导出）
+- `components/layout`：`PageHeader`（右侧自带全局操作：跳到角色 ⌘K / 模糊开关 / 撤销 / 帮助；手机竖屏收成放大镜 +「…」）`PageBody` `useScrollContainer` `ThemeSync` `chapters.ts` `TabBar`（手机竖屏的底部标签栏）
+- `components/media`：`Thumb`（所有插画都用它：主色占位、淡入、按分级 / 类型模糊，`blurBadge` 按尺寸自动选、`revealOnHover` 默认关）`ImageGrid`（虚拟化等高行网格 + 无限滚动 + 多选 + 点开看图器；行高按窗口缩放，触屏长按多选；页头放 `SelectButton`）`CharacterCover`（`variant="overlay"` Top 卡 / `"plate"` 书架图版）`CoverFan`（全站唯一的扇形叠放，1 / 2 / 3 / 5 张）`AvatarTile` + `RecentStrip`（圆头像「卡纸框」+ 图注）`BookPlate`（本子、画集的书）`CollectionsStrip`（「收录于」，只列本子和画集）`CollectionControls`（组图：`GroupBadge` 收拢格的张数角标、`CollapseGroupsMenu` 收拢菜单（自动 / 总是收拢 / 总是逐张）、`AddToGroupDialog` 收进组图；书架上的组图用 `CoverFan`，见 [collections.md](collections.md)）`KindBadge.tsx`（`KindBadge` 类型小印、`AnimatedMark` / `AnimatedGlyph` 动图标记、`TileMarks` 格子左下角那一行）`KindMenu` `CardGrid`
 - `lib/queries.ts`：全部数据 hook；修改一律用 `useMutate(fn)`，自动结果 toast + 撤销 + 刷新。界面上显示的计数读 `useSummary()`（汇总接口，见下面「数字从哪来」）
 - `lib/stores.ts`：`usePrefs`（本机偏好：模糊开关与范围、照片 / 文字模糊、悬停显示、底色、网格密度、书架 / 列表、行高、图库类型、收拢组图、阅读器单双页与翻页方向）`useLightbox`（`show(ids, index)` 打开看图器）`useSelection`（多选）`useOverlays` `useUndoStore`
+- `lib/viewport.ts`（`useViewport` 和排法规则）、`lib/gestures.ts`（触屏手势的判定）、`lib/useLongPress.ts`、`lib/useSwipePager.ts`（见下面「窗口分级和触控」）
 - `lib/motion.ts`、`lib/viewTransition.ts`、`lib/kinds.ts`（类型的图标、`ANIMATED_LABEL`；类型名、印章字、说明转自 `packages/shared`）、`lib/blur.ts`（转出 `packages/shared` 的 `blurReason`）、`lib/format.ts`（`formatCount` `formatCompact` `formatBytes` `formatRelative` `formatDate`；`RATING_LABEL` 转自 shared）、`lib/hotkeys.ts`（`useHotkey('mod+k', fn)`）、`lib/events.ts`（SSE：`changed` 按变化类型只让相关的 query 失效（`REFRESH`），写操作等自己那条事件的刷新（`settleRefresh`），助手的可撤销修改进撤销栈；识别进行中排名类列表最多一分钟重拉一次，未识别列表只标记过期）、`lib/urlPrefs.ts`（收拢组图的模式进 URL）
 - `blocks/`：页面区块注册表 `registry.ts` 和按注册表渲染的 `PageBlocks`（见下面「页面区块」）
 
+### 按能力显示入口（docs/mobile.md 4.4）
+
+手机（局域网入口上的设备）只看得到自己能用的入口；电脑上什么都不隐藏。规则集中在 `lib/capabilities.ts`（`useCapabilities`、`useCan`、`useAllowed`、`useAllowedActions`），
+各处**声明需要的能力**（`need`：某个 scope、`assistant`，或者 `null` = 谁都能用），不在组件里判断是不是手机：
+- 新页面先在 `src/pages.ts` 登记（路径、标题、need），`router.tsx` 用 `page()` 挂上，没权限时 `PageGate` 显示说明页；链接到别的页用 `useCanVisit()` 判断；
+- 侧栏的项写目标地址，need 取那一页的；设置的新分区在 `features/settings/sections.ts` 写 need；命令面板的命令、看图器和多选栏的操作各自写 need；
+- 页面里改东西的按钮按它调的命令的 scope 判断（`useCan`），能读不能改的页面照常显示、改的入口隐藏；
+- 会发出请求的（助手设置、手机访问状态这类设备上必然 403 的）用 `known(need)`：确定是电脑上才发。
+
 页面的筛选状态放在 URL 查询参数（`useSearchParams`），刷新后保留。会影响列表里有哪些图的本机偏好也写进 URL：图库的类型 `?kind=`、收拢组图 `?collapse=`（没写时把偏好补进去，写了以 URL 为准），AI 助手拿到的页面地址和用户看到的一致。
+
+### 窗口分级和触控（A1，docs/mobile.md 4.2）
+
+手机、平板、电脑是同一套页面，按**窗口尺寸和输入方式**排；判断依据只有这两样，不判断「是不是手机」「是不是 App」。**电脑上（宽屏 + 鼠标）一个像素都不变**：改排法时先拍 1440×900 的截图，改完逐像素对比。
+
+| 分级 | 条件 | Tailwind 变体 | 典型设备 |
+| --- | --- | --- | --- |
+| 宽度 compact | < 600 | `compact:` | 手机竖屏 |
+| 宽度 medium | 600–839 | `medium:` | 平板竖屏 |
+| 宽度 compact + medium | < 840 | `narrow:` | 「窄屏」：看图器的底部信息面板、未识别的网格 |
+| 宽度 expanded | ≥ 840 | （不写，默认样式） | 平板横屏、电脑、手机横屏 |
+| 高度 compact | 高 < 480 | `short:` | 手机横屏 |
+| 触屏 | `pointer: coarse` | `touch:`（= 内置的 `pointer-coarse:`） | 手机、平板（横屏也是） |
+| 触屏而且矮 | 触屏、高 < 820 | `touch-low:` | 平板横屏（720 高）：侧栏收掉徽记、收紧间距。只认触屏，768 高的笔记本不受影响 |
+
+- **桌面优先**：组件里照旧写电脑上的样式，再用上面的变体覆盖；变体都是媒体查询，宽屏 + 鼠标时一条都不生效。`compact:` 定义在 `narrow:` 后面，同一属性上盖过它。
+  只在某一级出现的元素外面包 `hidden compact:contents`（或 `touch:contents`），电脑上整个不占位。
+- **要在 JS 里算的**（网格行高、虚拟列表、看图器留白、阅读器单双页、页头吸顶、渲染哪个组件）用 `useViewport()`（`lib/viewport.ts`：`width` / `height` / `orientation` / `touch` / `hover`），
+  规则写成 `viewport.ts` 里的函数：`gridRowHeight`（compact 160、medium 220、手机横屏最多 160，expanded 照用户的设置）、`gridGap`、`balancedRows`（窄屏的两端对齐行用 `justify(…, { balance })`）、
+  `cardMinWidth`、`stagePadding`、`readerSpreadFits`（横屏而且 expanded 才双页）、`stickyHeaderFits`（手机横屏不吸顶）、`isNarrow`。
+  组件里不读 `innerWidth`、不写宽高或指针的 `matchMedia`（`viewport.test.ts` 扫源码检查，助手附页的 `dock.ts` 例外）。
+- **外框**：compact 时纸铺满屏幕、侧栏换成底部标签栏（`TabBar`，项来自 `tabBarItems`，和侧栏同一套计数、能力过滤）；页头标题变小、副标题换到下面整行，
+  全局操作只剩放大镜和「…」。`index.html` 有 `viewport-fit=cover`：贴底的东西（标签栏、底部面板、多选栏、看图器的信息面板）加 `pb-[env(safe-area-inset-bottom)]`，手机横屏的侧栏让出左边刘海。
+- **弹层**：`Dialog` 在 compact 下自动排成底部面板；只在手机上出现的面板用 `Sheet`（`components/ui/Sheet.tsx`，把手往下拖收起）。菜单、弹出框最宽是窗口减边距。
+- **触控目标**：触屏上可点的至少 44×44。`IconButton`、看图器按钮已经带 `touch-hit`（透明的 `::after` 把点击区域扩到 44，视觉尺寸不变）；自己写的小按钮也加它。
+  只在悬停时出现的按钮，触屏上要常显（`touch:opacity-100`）或者有别的入口（长按、底部面板、看图器里）。键盘提示在触屏上不显示：`Kbd` 自己带 `touch:hidden`（帮助对话框这种说明快捷键本身的地方传 `doc`），菜单项的快捷键也是；
+  整行都是按键说明的（「↑↓ 选择 · ↵ 确认 · Esc 关闭」「Ctrl / ⌘ 点击多选」）那一行自己 `touch:hidden`，需要的话换一句触屏的说法（`touch:inline`）。
+- **手势**只认 `pointerType === 'touch'`，鼠标、键盘的行为不经过它们；判定是 `lib/gestures.ts` 里的纯函数（方向锁定、滑动的距离 / 速度阈值、下滑关闭、捏合缩放的中心、点按 / 双击），阈值都在 `GESTURE`：
+  看图器 `lightbox/useTouchGestures.ts`、左右翻页 `lib/useSwipePager.ts`（阅读器、未识别）、长按 `lib/useLongPress.ts`（网格、未识别队列：进入多选并选中）。
+  跟手的位移直接写 style，不走 React 状态。没有引入手势库。
+- **多选**：电脑上照旧悬停勾选圈、Ctrl / Shift 点击；触屏上长按一张进入多选，页头有「选择」（`SelectButton`，`useSelection.start(scope)` 进入还没选图的多选模式，`isSelecting` 判断）。
 
 ### 数字从哪来（P5）
 
@@ -181,6 +222,7 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - 全屏深色 scrim，图片居中 `object-contain`；先显示 960 宽缩略图（`imageUrl.thumb(id, 960)`）再换原图，避免白屏。
 - 右侧可折叠信息面板（320px，按 `I` 切换）：文件名、尺寸、体积、格式、入库时间、来源（pixiv 链接等）、分级（可改）、类型（六枚类型印，动图另起一行写依据，见「动图」）、角色（chip 列表，可移除，可添加——带搜索的弹出框，调用 `api.updateImage`）、tagger 建议（`characterSuggestions`，一键采纳）、标签（按 category 分组，score 用细进度条表示）、操作：收藏（F）、在资源管理器中显示、排除（E）、移到回收站。
 - 顶部：`index / total`、关闭。左右方向键切换，滚轮 / 双击放大（简单的 transform scale + 拖动即可）。
+- 触屏（A1）：左右滑切换、下滑关闭、捏合 / 双击缩放、放大后拖动平移、单击切换界面（`lightbox/useTouchGestures.ts`）；窄屏（< 840）信息面板是贴底的 `InfoSheet`（平时只露出操作那一排，上拉展开），不显示胶片条。
 - 敏感图片默认模糊，中间一个「显示」按钮（只对当前这张生效）。
 - 切换图片时预加载下一张。
 
@@ -249,13 +291,18 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 
 左侧小目录（sticky）+ 右侧分组卡片，分组：
 
+每节在 `sections.ts` 声明需要的能力，这台设备没有的整节不显示、编号往前补（手机访问 devices、AI 助手 assistant、后台任务 jobs，外观和关于不要，其余 settings）。
+
 1. **图库文件夹**：列表（路径、张数、上次扫描、启用 `Switch`、移除），「添加文件夹」（输入绝对路径的 Dialog），「立即扫描」按钮。
 2. **识别**：模型（只读文本 + 说明）、运行设备（`Segmented` CPU / GPU(DirectML)）、角色阈值 / 通用标签阈值 / 自动采纳阈值（`Slider` + 数值）、批大小。「对全部未识别图片运行识别」。
 3. **Danbooru**：启用联网同步 `Switch`、用户名、API Key（password 输入，只写不读，显示「已设置」）、上次同步时间、「立即同步」。
 4. **查重**：候选搜索范围 `Slider`（0–16，范围越大，参与原图核对的候选越多）、「重新查找」。
 5. **外观**：主题（跟随系统 / 浅色 / 深色，三张小预览卡片可选；图库设置，存在服务端）、默认模糊敏感图片、网格密度（这两项和底色、封面裁剪一样是本机偏好，只存在这台设备上，P5）。
 6. **后台任务**：最近任务列表（`useJobs` + `useLiveJobs`）：类型、状态 Badge、进度条、开始时间、取消按钮。
-7. **关于**：版本、数据目录、快捷键入口。
+7. **手机访问**（`features/access/PhoneAccessSection`，[mobile.md](mobile.md) 第 2 节）：开关「让手机连接这台电脑」（默认关）；打开后是状态（监听的端口、局域网地址，`error` 红底醒目写出，Windows 防火墙要允许「专用网络」的提醒）、
+   电脑名称、端口、「用二维码添加」（`uqr` 编码后画成 SVG，包一层 `data-theme="light"`，深色主题下也是浅底深码）；下面「等你批准的请求」（大号 3 + 3 校验码、剩余时间、批准 / 拒绝，权限默认折叠）和「已连接的设备」（编辑名称和权限、移除先确认）。
+   数据是查询 `access.status`（`useAccessStatus`，局域网入口上 403 时为 null），SSE 的 `access` 事件让它重新取。这些命令不可撤销、不占撤销栈（`useMutate(…, { undo: false })`）。
+8. **关于**：版本、数据目录、快捷键入口。
 
 设置修改即时保存（`api.updateSettings`，toast「已保存」），滑块松手时才保存。
 
@@ -267,6 +314,26 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - `useSearch(q)`，输入为空时显示「最近访问的角色」（localStorage 记录最近 8 个）和常用命令。
 - 选中角色 → 导航 `/characters/:id`；作品 → `/works/:id`；标签 → `/gallery?tags=tag`（按中文名、别名也能搜到）。
 - 底部一行快捷键提示：↑↓ 选择 · ↵ 打开 · Esc 关闭。
+
+### 批准提示（`features/access/AccessPrompts.tsx`）
+
+手机发来连接请求（SSE `access` 的 `requested`）时，本机入口的任何页面（AppShell 和首次使用引导）右上角、页头全局操作下面弹出一叠卡片，一条请求一张，不会自动消失：
+「Pixel 7 请求连接这台电脑」、校验码、剩余时间，「批准」（默认权限）「拒绝」「设置…」（跳到设置 →「手机访问」并展开这条的权限）。
+不用 sonner：toast 是操作结果（几秒烧完、底部正中、最多叠 3 条），这里是要做决定的请求。数据只认 `GET /api/access` 的 `requests`：过期、在设置页或别的标签页处理掉后自动收起；
+设置页里「等你批准的请求」那一段在屏幕上时不弹（那里已经列着，浮着的还会盖住开关）。
+
+### 连接到电脑（`features/access/PairingPage.tsx`，局域网入口）
+
+手机浏览器打开局域网入口、还没有凭证时：任何请求收到 401 `unauthorized` / `device_revoked`（`lib/api.ts` 的 `request()` 记进 `lib/deviceAuth.ts`；SSE 被关掉时探一次 `/api/health`），
+`main.tsx` 整页换成它（懒加载）。设备名称从 UA 猜，照 `apps/server/src/access/pairing.ts` 的协议走（`features/access/pairing.ts`），校验码大号显示，批准后服务端 Set-Cookie，页面重新加载。
+sha256 有 `crypto.subtle` 就用，没有时用 `lib/sha256.ts` 的纯 JS 实现（非安全上下文也能配对）。本机入口没有这两种 401，不会出现这个页面。
+
+### 连不上电脑（`features/access/ConnectionBanner.tsx`，局域网入口）
+
+连接状态在 `lib/connection.ts`（docs/mobile.md 3.6）：SSE 出错、请求网络错误或 10 秒没回应、图片加载失败时探一次 `/api/health`，探不通就是 offline。
+offline 时顶部正中一枚墨色胶囊「连不上电脑，可能电脑关机了或者不在同一个网络」+「重试」，不会自己消失，连上了自己收起（`main.tsx` 挂在 `Root` 旁边）。
+只在局域网入口的浏览器里显示：安卓 App 里交给 `window.EmakiApp.connectionLost()`（App 换到原生页面），本机入口不显示。
+重新连上后所有查询重新取；图片要用 `Thumb`（或 `useImageRetry`）才会在重新连上后重新加载失败过的那几张。
 
 ### 帮助面板（`HelpDialog.tsx`）
 

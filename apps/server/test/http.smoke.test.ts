@@ -5,9 +5,11 @@
  * （i1 / c1 / w1 …），call() 负责把请求里的夹具 id 换成库里的 id、把响应里的 id 换回夹具 id。
  * 最后一条用例列出全部路由（命令 / 查询注册表里的地址，加上 src/app.ts、src/http/*.ts 里手写的），确保这里每个都测到了（新增路由忘了补冒烟会失败）。
  */
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
+import { SCOPES } from '@emaki/shared';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { EventBus } from '../src/core/events.ts';
@@ -530,6 +532,12 @@ describe('设置、文件夹、任务、SSE、撤销（注册表：settings.*、
     expect(existsSync(path.join(dataState.dir, 'assistant'))).toBe(false);
   });
 
+  route('GET /api/me', async () => {
+    // 本机入口：local，全部范围（局域网入口上的见 test/access/lan.test.ts）
+    const { status, json } = await call('GET', '/api/me');
+    expect([status, json]).toEqual([200, { kind: 'local', scopes: Object.keys(SCOPES) }]);
+  });
+
   route('GET /api/settings/source-mode', async () => {
     const { status, json } = await call('GET', '/api/settings/source-mode?mode=broad');
     expect([status, json]).toEqual([200, { mode: 'broad', changed: 0, suggestionsDropped: 0, requeued: 0, cached: 0 }]);
@@ -909,6 +917,141 @@ describe('按姿势找图（实验，注册表：pose.*）', () => {
     patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
     expect(await call('GET', '/api/pose/posewear-low/pair_P054')).toMatchObject({ status: 200, json: { ids: [] } });
     expect((await call('GET', '/api/pose/posewear-low/pair60_P054')).status).toBe(400);
+  });
+});
+
+describe('手机访问（注册表：access.*、devices.*，只在本机入口；局域网入口本身见 test/access/）', () => {
+  /** 手机那一侧：直接调配对（提交、公开随机数），返回本机页面看到的请求 */
+  const pairRequest = () => {
+    const nonce = randomBytes(32);
+    const commit = createHash('sha256').update(nonce).digest('hex');
+    const { id: key } = ds.access.pairing.start({ name: 'Pixel 7', model: 'Pixel 7', commit }, '192.168.1.20') as { id: string };
+    ds.access.pairing.reveal(key, nonce.toString('hex'));
+    return { key, info: ds.access.status().requests.at(-1)! };
+  };
+  const status = { enabled: false, port: 5175, listening: false, error: null, requests: [], devices: [] };
+
+  route('GET /api/access', async () => {
+    const { status: code, json } = await call('GET', '/api/access');
+    expect(code).toBe(200);
+    expect(json).toMatchObject({
+      ...status,
+      name: null,
+      defaultName: expect.any(String),
+      serverId: expect.stringMatching(/^[0-9a-f]{32}$/),
+      fingerprint: null,
+    });
+    expect(json.addresses).toEqual(expect.any(Array));
+  });
+
+  route('PATCH /api/access', async () => {
+    const { status: code, json, res } = await call('PATCH', '/api/access', { enabled: true, port: 5299, name: '书房' });
+    expect(code).toBe(200);
+    // 测试里没有局域网入口的控制器：存下了，但没在监听
+    expect(json).toMatchObject({ ok: true, status: { enabled: true, port: 5299, name: '书房', listening: false } });
+    expect(res.headers['x-emaki-undo']).toBe('none');
+    expect((await call('PATCH', '/api/access', { port: 80 })).status).toBe(400);
+    expect((await call('PATCH', '/api/access', { name: null })).json.status.name).toBeNull();
+  });
+
+  route('POST /api/access/tickets', async () => {
+    expect((await call('POST', '/api/access/tickets')).status).toBe(409);
+    await call('PATCH', '/api/access', { enabled: true });
+    const { status: code, json } = await call('POST', '/api/access/tickets');
+    expect(code).toBe(200);
+    const uri = /^emaki:\/\/pair\?id=[0-9a-f]{32}&fp=[0-9a-f]{64}&p=5175&h=[^&]*&t=/;
+    expect(json).toEqual({ uri: expect.stringMatching(uri), expiresAt: expect.any(String) });
+  });
+
+  route('POST /api/access/requests/:id/approve', async () => {
+    const { key, info } = pairRequest();
+    expect(info).toMatchObject({ code: expect.stringMatching(/^\d{6}$/), name: 'Pixel 7', address: '192.168.1.20' });
+    const approve = (id: string, body?: object) => call('POST', `/api/access/requests/${id}/approve`, body);
+    const { status: code, json } = await approve(info.id, { scopes: ['read', 'settings'], name: '我的手机' });
+    const device = expect.objectContaining({ name: '我的手机', scopes: ['read', 'settings'] });
+    expect([code, json]).toEqual([200, { ok: true, message: '已批准「我的手机」', device }]);
+    expect(await ds.access.pairing.status(key)).toMatchObject({ status: 'approved', token: expect.any(String) });
+    expect((await approve(info.id)).status).toBe(404);
+    // 设备永远拿不到的范围
+    expect((await approve(pairRequest().info.id, { scopes: ['devices'] })).status).toBe(400);
+  });
+
+  route('POST /api/access/requests/:id/reject', async () => {
+    const { key, info } = pairRequest();
+    const rejected = await call('POST', `/api/access/requests/${info.id}/reject`);
+    expect(rejected).toMatchObject({ status: 200, json: { ok: true, message: '已拒绝' } });
+    expect((await call('GET', '/api/access')).json.requests).toEqual([]);
+    expect(await ds.access.pairing.status(key)).toEqual({ status: 'rejected' });
+  });
+
+  route('PATCH /api/devices/:id', async () => {
+    const { device } = ds.access.devices.create({ name: 'Pixel 7', model: null, scopes: ['read'] });
+    const { status: code, json } = await call('PATCH', `/api/devices/${device.id}`, { name: '旧手机', scopes: ['read', 'curate'] });
+    expect([code, json.device]).toEqual([200, expect.objectContaining({ id: device.id, name: '旧手机', scopes: ['read', 'curate'] })]);
+    expect((await call('PATCH', `/api/devices/${device.id}`, { scopes: ['desktop'] })).status).toBe(400);
+    expect((await call('PATCH', '/api/devices/nope', { name: 'x' })).status).toBe(404);
+  });
+
+  route('DELETE /api/devices/:id', async () => {
+    const { device, token } = ds.access.devices.create({ name: 'Pixel 7', model: null, scopes: ['read'] });
+    const removed = await call('DELETE', `/api/devices/${device.id}`);
+    expect(removed).toMatchObject({ status: 200, json: { ok: true, message: '已移除「Pixel 7」' } });
+    expect(ds.access.devices.authenticate(token)).toEqual({ error: 'device_revoked' });
+    expect((await call('GET', '/api/access')).json.devices).toEqual([]);
+    expect((await call('DELETE', `/api/devices/${device.id}`)).status).toBe(404);
+  });
+});
+
+describe('手机上传（注册表：upload.*、devices.setUpload；http/uploads.ts）：本机入口上没有设备，传不了；整套流程见 test/upload/', () => {
+  const sha = 'a'.repeat(64);
+  route('POST /api/uploads/check', async () => {
+    const { status, json } = await call('POST', '/api/uploads/check', { files: [{ sha256: sha, size: 10 }] });
+    expect([status, json]).toEqual([200, { results: [{ sha256: sha, imageId: null, deleted: false, dir: null }] }]);
+    expect((await call('POST', '/api/uploads/check', { files: [{ sha256: 'xyz', size: 10 }] })).status).toBe(400);
+  });
+  route('POST /api/uploads', async () => {
+    const begin = { batchId: '7f1d6f0a-1c2b-4c5d-8e9f-0a1b2c3d4e5f', sha256: sha, size: 10, fileName: 'a.png' };
+    const { status, json } = await call('POST', '/api/uploads', begin);
+    expect([status, json]).toEqual([400, apiError('bad_request')]);
+  });
+  route('PUT /api/uploads/:id', async () => {
+    const res = await app.inject({ method: 'PUT', url: '/api/uploads/u1?offset=0', payload: Buffer.from('abc'), headers: { 'content-type': 'application/octet-stream' } });
+    expect([res.statusCode, res.json()]).toEqual([400, apiError('bad_request')]);
+  });
+  route('POST /api/uploads/:id/complete', async () => {
+    expect((await call('POST', '/api/uploads/u1/complete')).status).toBe(400);
+  });
+  route('GET /api/uploads/batches', async () => {
+    expect(await call('GET', '/api/uploads/batches')).toMatchObject({ status: 200, json: [] });
+  });
+  route('POST /api/uploads/batches/:id/undo', async () => {
+    expect(await call('POST', '/api/uploads/batches/nope/undo')).toMatchObject({ status: 404, json: apiError('not_found') });
+  });
+  route('GET /api/uploads/targets', async () => {
+    expect(await call('GET', '/api/uploads/targets')).toMatchObject({ status: 200, json: [] });
+  });
+  route('PATCH /api/devices/:id/upload', async () => {
+    expect(await call('PATCH', '/api/devices/nope/upload', { rootId: null })).toMatchObject({ status: 404, json: apiError('not_found') });
+  });
+  // 同步相册（docs/mobile.md 5.5）：本机入口上要给 deviceId；报相册只有设备能调
+  route('GET /api/uploads/albums', async () => {
+    expect(await call('GET', '/api/uploads/albums')).toMatchObject({ status: 400, json: apiError('bad_request') });
+    expect(await call('GET', '/api/uploads/albums?deviceId=nope')).toMatchObject({ status: 404, json: apiError('not_found') });
+    const { device } = ds.access.devices.create({ name: 'Pixel 7', model: null, scopes: ['upload'] });
+    const { status, json } = await call('GET', `/api/uploads/albums?deviceId=${device.id}`);
+    expect([status, json]).toEqual([200, expect.objectContaining({ deviceId: device.id, albums: [], wifiOnly: true, chargingOnly: false })]);
+  });
+  route('POST /api/uploads/albums', async () => {
+    expect(await call('POST', '/api/uploads/albums', { albums: [] })).toMatchObject({ status: 400, json: apiError('bad_request') });
+  });
+  route('PATCH /api/uploads/albums', async () => {
+    const { device } = ds.access.devices.create({ name: 'Pixel 7', model: null, scopes: ['upload'] });
+    const { status, json } = await call('PATCH', '/api/uploads/albums', { deviceId: device.id, wifiOnly: false });
+    expect([status, json.info.wifiOnly]).toEqual([200, false]);
+    expect(await call('PATCH', '/api/uploads/albums', { deviceId: device.id, albums: [{ path: 'Download', sync: true }] })).toMatchObject({
+      status: 404,
+      json: apiError('not_found'),
+    });
   });
 });
 

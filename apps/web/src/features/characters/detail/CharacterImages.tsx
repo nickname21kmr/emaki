@@ -19,6 +19,8 @@ import { ImagesToolbar } from './ImagesToolbar';
 import { SelectionBar, type SelectionAction } from './SelectionBar';
 import { useImageFilters } from './useImageFilters';
 import { useScopedSelection } from './useScopedSelection';
+import { useCan } from '@/lib/capabilities';
+import { useCanVisit } from '@/pages';
 
 /**
  * 角色详情的「全部插画」：工具条 + 虚拟化网格 + 多选操作栏。
@@ -62,6 +64,8 @@ export function CharacterImages({
 
   const scope = `character:${character.id}`;
   const [moving, setMoving] = useState(false);
+  const canRestore = useCan('rules');
+  const canVisit = useCanVisit();
   const [artistOpen, setArtistOpen] = useState(false);
   const [grouping, setGrouping] = useState(false);
   const selection = useScopedSelection(scope, images, dialogOpen || moving || artistOpen);
@@ -94,6 +98,8 @@ export function CharacterImages({
       ? [
           {
             key: 'cover',
+            // 改的是角色的封面（catalog.updateCharacter）
+            need: 'catalog' as const,
             label: '设为封面',
             icon: <ImageUp />,
             loading: setCover.isPending,
@@ -104,16 +110,19 @@ export function CharacterImages({
       : []),
     {
       key: 'favorite',
+      need: 'curate',
       label: allFavorite ? '取消收藏' : '收藏',
       icon: allFavorite ? <HeartOff /> : <Heart />,
       loading: favorite.isPending,
       disabled: busy,
       onClick: () => favorite.mutate({ ids: selection.ids, value: !allFavorite }),
     },
-    { key: 'artist', label: '画师…', icon: <Palette />, disabled: busy, onClick: () => setArtistOpen(true) },
-    { key: 'group', label: '组图…', icon: <Layers />, disabled: busy, onClick: () => setGrouping(true) },
+    { key: 'artist', label: '画师…', icon: <Palette />, need: 'curate', disabled: busy, onClick: () => setArtistOpen(true) },
+    { key: 'group', label: '组图…', icon: <Layers />, need: 'collections', disabled: busy, onClick: () => setGrouping(true) },
     {
       key: 'move',
+      // 磁盘上真的移动
+      need: 'organize-files',
       label: '移动到文件夹',
       icon: <FolderInput />,
       disabled: busy,
@@ -121,6 +130,7 @@ export function CharacterImages({
     },
     {
       key: 'unassign',
+      need: 'curate',
       label: '从该角色移除',
       icon: <UserRoundMinus />,
       loading: unassign.isPending,
@@ -141,9 +151,12 @@ export function CharacterImages({
         title="这个角色已排除"
         description={`TA 的 ${formatCount(excluded.imageCount)} 张插画已从图库和统计里隐藏，文件还在。恢复后会重新出现在这里。`}
         action={
-          <Button variant="primary" size="sm" loading={excluded.restoring} onClick={excluded.onRestore}>
-            恢复这个角色
-          </Button>
+          // 恢复是删掉排除规则（rules）
+          canRestore && (
+            <Button variant="primary" size="sm" loading={excluded.restoring} onClick={excluded.onRestore}>
+              恢复这个角色
+            </Button>
+          )
         }
       />
     ) : filters.rating.length || filters.theme || filters.custom ? (
@@ -163,9 +176,11 @@ export function CharacterImages({
         title={`${character.name}还没有插画`}
         description="把图片归到这个角色后会出现在这里。可以去「未识别」里快速归类。"
         action={
-          <Button variant="primary" size="sm" onClick={() => navigate('/unrecognized')}>
-            去归类
-          </Button>
+          canVisit('/unrecognized') && (
+            <Button variant="primary" size="sm" onClick={() => navigate('/unrecognized')}>
+              去归类
+            </Button>
+          )
         }
       />
     );

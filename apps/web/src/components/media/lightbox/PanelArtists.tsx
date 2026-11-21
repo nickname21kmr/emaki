@@ -4,6 +4,7 @@ import { Link } from 'react-router';
 import { ArtistPicker } from '@/features/gallery/ArtistPicker';
 import { Section } from './PanelParts';
 import type { ImageActions } from './useImageActions';
+import { cn } from '@/lib/cn';
 
 /**
  * 画师：识别出的（或手动改的）画师 chip，点名字看这位画师的图，× 去掉；「添加」从认出过的画师里挑，或者直接输入名字。
@@ -22,6 +23,8 @@ export function PanelArtists({
   onNavigate: () => void;
 }) {
   const busy = actions.busy.artist;
+  // 改画师要 curate（IMAGE_ACTION_NEEDS）：没有时只看
+  const editable = actions.allow.artists;
   return (
     <Section title="画师" meta={artists.length > 1 ? `${artists.length} 位` : undefined}>
       <div className="flex flex-wrap gap-1.5">
@@ -38,18 +41,24 @@ export function PanelArtists({
             >
               {a.name}
             </Link>
-            <button
-              type="button"
-              aria-label={`去掉画师「${a.name}」`}
-              disabled={busy}
-              onClick={() => actions.removeArtist(a.tags)}
-              className="flex size-6 shrink-0 items-center justify-center rounded-full text-fg-subtle opacity-60 transition-[opacity,background-color,color] group-hover/chip:opacity-100 hover:bg-hover hover:text-fg focus-visible:opacity-100 disabled:opacity-30"
-            >
-              <X className="size-3" />
-            </button>
+            {editable && (
+              <button
+                type="button"
+                aria-label={`去掉画师「${a.name}」`}
+                disabled={busy}
+                onClick={() => actions.removeArtist(a.tags)}
+                className={cn(
+                  'flex size-6 shrink-0 items-center justify-center rounded-full text-fg-subtle opacity-60 disabled:opacity-30',
+                  'transition-[opacity,background-color,color] group-hover/chip:opacity-100',
+                  'hover:bg-hover hover:text-fg focus-visible:opacity-100',
+                )}
+              >
+                <X className="size-3" />
+              </button>
+            )}
           </span>
         ))}
-        <ArtistPicker
+        {editable && <ArtistPicker
           side="left"
           align="start"
           title="添加画师"
@@ -69,10 +78,12 @@ export function PanelArtists({
             <Plus className="size-3.5" />
             {artists.length ? '添加' : '添加画师'}
           </button>
-        </ArtistPicker>
+        </ArtistPicker>}
       </div>
       <p className="mt-2 text-[11px] leading-relaxed text-fg-subtle">
-        {manual ? (
+        {manual && !editable ? (
+          '手动改过的，识别不会再动它'
+        ) : manual ? (
           <>
             你手动改的，识别不会再动它 ·{' '}
             <button

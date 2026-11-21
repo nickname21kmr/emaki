@@ -18,6 +18,7 @@ export {
 } from './Menu';
 export { RollingNumber } from './RollingNumber';
 export { Segmented, type SegmentedOption } from './Segmented';
+export { Sheet } from './Sheet';
 export { EmptyState, ErrorState, SectionTitle, Skeleton } from './States';
 export { Tooltip, TooltipProvider } from './Tooltip';
 export { Seal } from './Seal';

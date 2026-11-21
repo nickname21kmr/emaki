@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react';
 import type { ReactNode } from 'react';
 import { Kbd, RollingNumber, Spinner } from '@/components/ui';
+import { useAllowed, type Need } from '@/lib/capabilities';
 import { cn } from '@/lib/cn';
 import { EASE_OUT } from '@/lib/motion';
 
@@ -8,6 +9,8 @@ export interface BarAction {
   key: string;
   label: string;
   icon: ReactNode;
+  /** 需要的能力（lib/capabilities.ts）：这台设备没有的不画 */
+  need: Need;
   onClick: () => void;
   loading?: boolean;
   shortcut?: string;
@@ -17,7 +20,8 @@ export interface BarAction {
  * 多选后在底部浮起的墨色胶囊。
  * 用 sticky 贴在滚动容器（「纸」）底部，所以相对纸居中而不是相对整个窗口；要放在页面内容最后。
  */
-export function SelectionBar({ count, actions }: { count: number; actions: BarAction[] }) {
+export function SelectionBar({ count, actions: all }: { count: number; actions: BarAction[] }) {
+  const actions = useAllowed(all);
   return (
     // assistant-cover-shift：助手附页覆盖在纸上时，在露出的那块里居中（index.css）
     <div className="assistant-cover-shift pointer-events-none sticky bottom-6 z-30 h-0 @container/bar">

@@ -27,7 +27,8 @@ export function SingleImagesSection({
   selection: SinglesSelection;
   /** 正在恢复的排除记录 id */
   busyId: ID | null;
-  onRestore: (e: Exclusion) => void;
+  /** 单张恢复（删掉这条排除记录，rules）；没有这项能力时不给 */
+  onRestore?: (e: Exclusion) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const showLightbox = useLightbox((s) => s.show);
@@ -54,7 +55,7 @@ export function SingleImagesSection({
             busy={busyId === ex.id}
             onClick={(e) => onTileClick(e, ex.target, i)}
             onToggle={() => selection.toggle(ex.target)}
-            onRestore={() => onRestore(ex)}
+            onRestore={onRestore && (() => onRestore(ex))}
           />
         ))}
       </div>
@@ -84,7 +85,7 @@ function SingleTile({
   busy: boolean;
   onClick: (e: React.MouseEvent) => void;
   onToggle: () => void;
-  onRestore: () => void;
+  onRestore?: () => void;
 }) {
   // 列表只给了图片 id；取详情是为了主色占位和分级（敏感图遵守模糊偏好）
   const { data: image, isError } = useImage(exclusion.target);
@@ -128,14 +129,14 @@ function SingleTile({
           'absolute top-2 left-2 flex size-6 items-center justify-center rounded-full transition-all duration-200',
           selected
             ? 'bg-shu text-white opacity-100'
-            : 'bg-black/20 text-transparent opacity-0 ring-2 ring-white/90 backdrop-blur-sm group-hover/tile:opacity-100 hover:bg-black/40 hover:text-white/80',
+            : 'bg-black/20 text-transparent opacity-0 ring-2 ring-white/90 backdrop-blur-sm group-hover/tile:opacity-100 hover:bg-black/40 hover:text-white/80 touch:opacity-100',
           selecting && !selected && 'opacity-100',
         )}
       >
         <Check className="size-3.5" strokeWidth={3} />
       </button>
 
-      {!selecting && (
+      {!selecting && onRestore && (
         <Tooltip content="恢复这张">
           <button
             type="button"
@@ -145,7 +146,7 @@ function SingleTile({
               e.stopPropagation();
               onRestore();
             }}
-            className="absolute top-2 right-2 flex size-7 items-center justify-center rounded-full bg-black/40 text-white opacity-0 ring-1 ring-white/15 backdrop-blur-md transition-[opacity,background-color] duration-200 group-hover/tile:opacity-100 hover:bg-black/60 focus-visible:opacity-100"
+            className="absolute top-2 right-2 flex size-7 items-center justify-center rounded-full bg-black/40 text-white opacity-0 ring-1 ring-white/15 backdrop-blur-md transition-[opacity,background-color] duration-200 group-hover/tile:opacity-100 hover:bg-black/60 focus-visible:opacity-100 touch:opacity-100"
           >
             <RotateCcw className="size-3.5" />
           </button>

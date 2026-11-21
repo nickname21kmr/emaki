@@ -9,9 +9,11 @@ import { useWorks } from '@/lib/queries';
 import { splitBytes } from '../utils';
 import { WeekBars } from './WeekBars';
 
-// 第一格要放迷你柱状图，给它多一点宽度
-const GRID = 'grid grid-cols-[minmax(0,1.55fr)_repeat(3,minmax(0,1fr))] border-y border-line';
-const NUMERAL = 'numeral text-[52px] text-fg';
+// 第一格要放迷你柱状图，给它多一点宽度；手机竖屏排成 2×2（A1）
+const GRID = 'grid grid-cols-[minmax(0,1.55fr)_repeat(3,minmax(0,1fr))] border-y border-line compact:grid-cols-2';
+const NUMERAL = 'numeral text-[52px] text-fg compact:text-[40px]';
+/** 2×2 时每格的边线和留白：右边一列有竖线，第二行有横线 */
+const CELL_2X2 = ['compact:pr-4', 'compact:pr-0 compact:pl-4', 'compact:border-t compact:border-l-0 compact:pr-4 compact:pl-0', 'compact:border-t compact:pl-4'];
 
 /**
  * 统计条：四个大号斜体数字横排，像杂志刊头，上下两道细线，不用卡片。
@@ -100,9 +102,10 @@ function StatCell({
   children: ReactNode;
 }) {
   const className = cn(
-    'group relative min-w-0 py-6 animate-rise',
+    'group relative min-w-0 py-6 animate-rise compact:py-4',
     index === 0 ? 'pr-6' : 'border-l border-line px-6',
     index === 3 && 'pr-0',
+    CELL_2X2[index],
   );
   const style: CSSProperties = { animationDelay: `${index * 60}ms` };
 
@@ -110,10 +113,16 @@ function StatCell({
     <>
       <div className="flex items-end justify-between gap-4">
         <div className="flex min-w-0 items-baseline whitespace-nowrap">{children}</div>
-        {aside}
+        {/* 手机竖屏的格子窄，放不下迷你柱状图 */}
+        {aside != null && <div className="contents compact:hidden">{aside}</div>}
       </div>
       {/* 有柱状图时右边让出「近 7 天」那行字的位置，格子变窄（比如开着助手）时说明不会压上去 */}
-      <div className={cn('mt-3.5 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[13px]', aside != null && 'pr-12')}>
+      <div
+        className={cn(
+          'mt-3.5 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[13px] compact:mt-2 compact:text-[12.5px]',
+          aside != null && 'pr-12 compact:pr-0',
+        )}
+      >
         <span className="shrink-0 font-medium text-fg">{label}</span>
         {hint && <span className="line-clamp-2 min-w-0 text-fg-subtle">{hint}</span>}
         {to && (
@@ -142,7 +151,7 @@ export function StatsStripSkeleton() {
   return (
     <section aria-hidden className={GRID}>
       {[0, 1, 2, 3].map((i) => (
-        <div key={i} className={cn('py-6', i === 0 ? 'pr-6' : 'border-l border-line px-6', i === 3 && 'pr-0')}>
+        <div key={i} className={cn('py-6', i === 0 ? 'pr-6' : 'border-l border-line px-6', i === 3 && 'pr-0', CELL_2X2[i])}>
           <div className="flex h-[47px] items-end justify-between gap-4">
             <Skeleton className={cn('h-10', i === 0 ? 'w-32' : 'w-16')} />
             {i === 0 && <Skeleton className="h-11 w-[79px]" />}

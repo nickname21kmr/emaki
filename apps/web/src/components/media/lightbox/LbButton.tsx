@@ -23,7 +23,7 @@ export const LbButton = forwardRef<
         aria-label={label}
         aria-pressed={active}
         className={cn(
-          'flex size-9 shrink-0 items-center justify-center rounded-full text-white/70 transition-[background-color,color,transform] duration-150',
+          'flex size-9 shrink-0 items-center justify-center rounded-full text-white/70 transition-[background-color,color,transform] duration-150 touch-hit',
           'hover:bg-white/12 hover:text-white active:scale-[0.92] disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-[18px]',
           active && 'bg-white/14 text-white',
           className,

@@ -8,7 +8,8 @@ import { KIND_META, ruleDetail, ruleTitle } from '../utils';
 import { PhotoStack } from './PhotoStack';
 
 /** 一条排除规则：预览照片堆（带类型徽章）· 标题 / 说明 · 影响张数 · 恢复 */
-export const RuleRow = forwardRef<HTMLLIElement, { rule: Exclusion; busy: boolean; onRestore: () => void }>(
+/** onRestore：删掉这条规则（rules）；没有这项能力时不给，行里没有「恢复」 */
+export const RuleRow = forwardRef<HTMLLIElement, { rule: Exclusion; busy: boolean; onRestore?: () => void }>(
   function RuleRow({ rule, busy, onRestore }, ref) {
     const meta = KIND_META[rule.kind];
     const Icon = meta.icon;
@@ -58,17 +59,19 @@ export const RuleRow = forwardRef<HTMLLIElement, { rule: Exclusion; busy: boolea
           <span className="ml-1 text-[12px] text-fg-muted">张</span>
         </div>
 
-        <Button
-          variant="secondary"
-          size="sm"
-          icon={<RotateCcw className="size-3.5" />}
-          loading={busy}
-          onClick={onRestore}
-          aria-label={`恢复：${ruleTitle(rule)}`}
-          className="opacity-70 transition-opacity group-hover/rule:opacity-100"
-        >
-          恢复
-        </Button>
+        {onRestore && (
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<RotateCcw className="size-3.5" />}
+            loading={busy}
+            onClick={onRestore}
+            aria-label={`恢复：${ruleTitle(rule)}`}
+            className="opacity-70 transition-opacity group-hover/rule:opacity-100"
+          >
+            恢复
+          </Button>
+        )}
       </motion.li>
     );
   },

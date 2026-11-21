@@ -20,6 +20,8 @@ export type ModuleId =
   | 'settings'
   | 'commands'
   | 'propagation'
+  | 'access'
+  | 'upload'
   | 'pose';
 
 /** 模块的中文名和目录（相对 apps/server/src，以 / 结尾） */
@@ -37,7 +39,11 @@ export const MODULES: Record<ModuleId, { name: string; dir: string }> = {
   commands: { name: '命令层', dir: 'commands/' },
   // 变更传播（P2）：变化集、反应注册表；排队状态（pending_work）
   propagation: { name: '变更传播', dir: 'propagation/' },
-  // 按姿势找图（实验，迁移 041）：姿势类别、每张图的主要人物姿势
+  // 设备与访问（docs/mobile.md 第 2 节）：局域网入口、配对、设备凭证
+  access: { name: '设备与访问', dir: 'access/' },
+  // 手机上传（docs/mobile.md 5.4）：上传的批次和每个文件的进度；入库走图库与文件的导入
+  upload: { name: '手机上传', dir: 'domain/upload/' },
+  // 按姿势找图（实验，迁移 045）：姿势类别、每张图的主要人物姿势
   pose: { name: '姿势', dir: 'domain/pose/' },
 };
 
@@ -105,10 +111,18 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   // 变更传播：交给后台任务、还没做完的工作和用户的暂停（迁移 033）；派生数据的版本（迁移 037）
   pending_work: 'propagation',
   derived_versions: 'propagation',
-  // 姿势（实验，迁移 041）
+  // 设备与访问：局域网入口的配置（迁移 041）、批准过的设备和凭证的哈希
+  lan_access: 'access',
+  devices: 'access',
+  // 手机上传（迁移 042）、同步相册（迁移 043）
+  upload_batches: 'upload',
+  uploads: 'upload',
+  device_albums: 'upload',
+  device_sync: 'upload',
+  // 姿势（实验，迁移 045）
   pose_classes: 'pose',
   image_poses: 'pose',
-  // PoseWear 姿势库（实验，迁移 042；043 把主要匹配和候选合成 image_posewear_members）
+  // PoseWear 姿势库（实验，迁移 046；047 把主要匹配和候选合成 image_posewear_members）
   posewear_poses: 'pose',
   image_posewear_members: 'pose',
 };

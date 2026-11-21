@@ -2,6 +2,7 @@ import type { BulkImageAction, ContentKind, ID, Rating } from '@emaki/shared';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
+import { useAllowedActions, type Need } from '@/lib/capabilities';
 import { errorMessage, useMutate } from '@/lib/queries';
 import { useLightbox, useUndoStore } from '@/lib/stores';
 
@@ -16,6 +17,24 @@ export interface CurrentImage {
   characterIds: ID[];
 }
 
+/**
+ * 看图器里每个操作需要的能力（docs/mobile.md 4.4，lib/capabilities.ts）：按它实际调的命令定。
+ * 信息面板的按钮、快捷键、各栏的编辑入口都按 allow 显示，手机上默认没有「定位」（desktop）和「回收站」（organize-files）
+ */
+export const IMAGE_ACTION_NEEDS = {
+  favorite: 'curate',
+  original: 'curate',
+  rating: 'curate',
+  kind: 'curate',
+  characters: 'curate',
+  artists: 'curate',
+  source: 'curate',
+  exclude: 'curate',
+  trash: 'organize-files',
+  reveal: 'desktop',
+  collection: 'collections',
+} as const satisfies Record<string, Need>;
+
 /** 排除 / 删除后把这张从看图器列表里拿掉，自动显示下一张（列表空了看图器会自己关） */
 function dropFromLightbox(id: ID) {
   const s = useLightbox.getState();
@@ -26,6 +45,7 @@ function dropFromLightbox(id: ID) {
 export const LEAVE_HOLD_MS = 800;
 
 export function useImageActions(current: CurrentImage | undefined) {
+  const allow = useAllowedActions(IMAGE_ACTION_NEEDS);
   // 刚排除 / 移到回收站的那张：原地变暗、写着可以撤销，停一会儿再拿掉
   const [leaving, setLeaving] = useState<{ id: ID; kind: 'exclude' | 'trash' } | null>(null);
   const leavingRef = useRef(false);
@@ -91,6 +111,8 @@ export function useImageActions(current: CurrentImage | undefined) {
   const characterIds = pendingFor(characters)?.characterIds ?? current?.characterIds ?? [];
 
   return {
+    /** 这台设备能用哪些操作（IMAGE_ACTION_NEEDS） */
+    allow,
     favorite: favoriteValue,
     original: originalValue,
     rating: ratingValue,

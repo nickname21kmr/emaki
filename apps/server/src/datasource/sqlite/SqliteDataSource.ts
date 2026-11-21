@@ -62,6 +62,7 @@ import { SearchQueries } from './search.ts';
 import { DedupeService } from '../../services/dedupe/DedupeService.ts';
 import { PendingTrash } from '../../domain/library/pendingTrash.ts';
 import { resolvePorts, type EnginePorts } from '../../infra/ports.ts';
+import { Access } from '../../access/access.ts';
 import { CharacterMutations } from '../../domain/catalog/characters.ts';
 import { UnrecognizedQueries } from './unrecognized.ts';
 import { createContext } from './context.ts';
@@ -389,6 +390,8 @@ export class SqliteDataSource {
   readonly exclusions: ExclusionQueries;
   /** 最近的改动：自动关联、Pixiv 补充、移动到文件夹（重启后也能撤回） */
   readonly changes: ChangeLog;
+  /** 设备与访问（docs/mobile.md 第 2 节）：局域网入口的配置、配对、设备凭证 */
+  readonly access: Access;
 
   protected constructor(db: Db, bus: EventBus, dataDir: string, opts: SqliteOpenOptions) {
     this.ports = resolvePorts(opts);
@@ -438,6 +441,7 @@ export class SqliteDataSource {
     this.characters = new CharacterMutations(this.ctx, this.derived, () => this.danbooru, () => this.makeCatalog().catalog);
     this.exclusions = new ExclusionQueries(this.ctx);
     this.changes = new ChangeLog(this.ctx);
+    this.access = new Access({ db, bus, dataDir, clock: this.ctx.clock });
     this.duplicates = new DuplicateQueries(this.ctx, this.pendingTrash);
     this.searchQueries = new SearchQueries(db, this.derived);
     this.dedupe = new DedupeService({
@@ -570,6 +574,7 @@ export class SqliteDataSource {
     await this.pendingTrash.flushAll();
     await shutdownTagger(); // 关掉推理子进程，释放显存
     clearInterval(this.optimizeTimer);
+    this.access.close();
     this.danbooru?.offlineCharacters?.close();
     closeDatabase(this.ctx.db);
   }

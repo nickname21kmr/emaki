@@ -235,7 +235,7 @@ function GroupNotePanel({
 }) {
   const meta = theme ? THEME_META[theme] : null;
   return (
-    <PanelShell footer={<SessionNote count={0} idle="悬停勾选 · Ctrl+A 全选已加载 · [ ] 换组" />}>
+    <PanelShell footer={<SessionNote count={0} idle="悬停勾选 · Ctrl+A 全选已加载 · [ ] 换组" touchIdle="长按一张进入多选，再点按勾选" />}>
       {mode !== 'shelved' && no >= 0 && (
         <div className="kicker">
           <span className="text-shu">目次</span>

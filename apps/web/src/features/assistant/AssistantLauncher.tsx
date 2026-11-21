@@ -13,6 +13,7 @@ import { DARKROOM_MIN, LEAF_WIDTH, sheetForm, useAssistantDock, useViewportWidth
 const loadRoot = () => import('./AssistantRoot').then(module => ({ default: module.AssistantRoot }));
 const Root = lazy(() => loadRoot().catch(loadRoot));
 
+// 手机上（局域网入口）没有助手：useAssistantSettings 不去读，这里也就一直是 false（lib/capabilities.ts 的 assistant）
 const useEnabled = () => useAssistantSettings().data?.enabled ?? false;
 
 /** 助手那一包没加载出来或者渲染出错：只丢掉助手，不让整页换成路由的错误页 */

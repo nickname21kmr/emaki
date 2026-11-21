@@ -8,6 +8,7 @@ import { useSaveSettings } from '../hooks';
 import { CommitSlider } from './CommitSlider';
 import { JobAction } from './JobAction';
 import { SettingsCard, SettingsSection } from './SettingsSection';
+import { useCanVisit } from '@/pages';
 
 /** 汉明距离翻译成人话：数字本身对用户没有意义 */
 function describe(h: number): string {
@@ -25,6 +26,8 @@ export function DedupeSection({
   groupCount?: number;
 }) {
   const save = useSaveSettings();
+  // 「重复」页要 organize-files（src/pages.ts）：去不了时不给链接
+  const canVisit = useCanVisit();
   const [draft, setDraft] = useState<number | null>(null);
   const shown = draft ?? Math.min(16, dedupe.hammingThreshold);
 
@@ -55,7 +58,7 @@ export function DedupeSection({
         <Field
           label="重新查找"
           hint={
-            groupCount ? (
+            groupCount && canVisit('/duplicates') ? (
               <>
                 改了阈值后，重新查找才会生效。当前有{' '}
                 <Link

@@ -96,7 +96,7 @@ export function PreviewStage({
               {blurred && (
                 <button
                   onClick={() => setRevealedId(image.id)}
-                  className="absolute bottom-4 left-1/2 flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/40 px-3.5 text-[12.5px] font-medium text-white ring-1 ring-white/15 backdrop-blur-md transition-colors hover:bg-black/55"
+                  className="absolute bottom-4 left-1/2 flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-full whitespace-nowrap bg-black/40 px-3.5 text-[12.5px] font-medium text-white ring-1 ring-white/15 backdrop-blur-md transition-colors hover:bg-black/55"
                 >
                   <Eye className="size-3.5" />
                   显示这张
@@ -109,7 +109,10 @@ export function PreviewStage({
 
       <div className="pointer-events-none absolute inset-x-0 bottom-3.5 flex justify-center">
         <span className="flex items-center gap-1.5 text-[11.5px] text-fg-subtle">
-          <Kbd>空格</Kbd>查看大图
+          <Kbd>空格</Kbd>
+          <span>
+            <span className="hidden touch:inline">点按</span>查看大图
+          </span>
         </span>
       </div>
     </div>

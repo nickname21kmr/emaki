@@ -178,7 +178,7 @@ function TargetPicker({ character, onPick }: { character: Character; onPick: (c:
           </>
         )}
       </Command.List>
-      <div className="mt-3 flex items-center gap-3 border-t border-line pt-3 text-[11.5px] text-fg-subtle">
+      <div className="mt-3 flex items-center gap-3 border-t border-line pt-3 text-[11.5px] text-fg-subtle touch:hidden">
         <span className="inline-flex items-center gap-1">
           <Kbd>↑</Kbd>
           <Kbd>↓</Kbd> 选择

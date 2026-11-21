@@ -107,7 +107,7 @@ export function SheetBatchPanel({
           {mode !== 'annex' && (
             <p className="mt-3 text-[11.5px] leading-relaxed text-fg-subtle">放下 = 不找角色了：图还在图库里，只是不再出现在未识别；「放下的」里可以放回来。</p>
           )}
-          <SessionNote count={sheet.doneCount} idle="悬停勾选 · Ctrl+A 全选已加载 · [ ] 换组" />
+          <SessionNote count={sheet.doneCount} idle="悬停勾选 · Ctrl+A 全选已加载 · [ ] 换组" touchIdle="长按一张进入多选，再点按勾选" />
         </>
       }
     >

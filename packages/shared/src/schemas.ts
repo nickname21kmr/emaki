@@ -16,6 +16,7 @@ import {
   UNRECOGNIZED_BUCKETS,
   UNRECOGNIZED_THEMES,
 } from './api.ts';
+import { DEVICE_GRANTABLE_SCOPES, type Scope } from './commands.ts';
 import {
   CONTENT_KINDS,
   type CharacterSource,
@@ -380,6 +381,125 @@ export const UndoInput = z.object({ token: z.string().min(1) });
 /** 一次最多问 500 个，一个会话的勘误条够用了 */
 export const UndoStatusInput = z.object({ tokens: qList(z.string().min(1).max(100)).pipe(z.array(z.string()).max(500)) });
 export const EmptyInput = z.object({});
+
+// ------------------------------------------------------------------ 设备与访问（docs/mobile.md 第 2 节）
+
+/** 设备名称、电脑名称 */
+const deviceName = z.string().trim().min(1).max(60);
+/** 32 字节随机数的 hex（配对的 commit、nonce） */
+const hex32 = z.string().regex(/^[0-9a-f]{64}$/i, '要 64 位 hex').transform((s) => s.toLowerCase());
+/** 能授予设备的范围（devices、desktop 不在里面，传了就是 400）；去重 */
+export const DeviceScopes = z
+  .array(z.enum(DEVICE_GRANTABLE_SCOPES as readonly [Scope, ...Scope[]]))
+  .max(30)
+  .transform((a) => [...new Set(a)]);
+
+/** POST /api/v1/pair（局域网入口，不要凭证）：普通请求带 commit；扫码带 ticket，不用 commit */
+export const PairStartInput = z
+  .object({
+    name: deviceName,
+    model: z.string().trim().max(100).optional(),
+    commit: hex32.optional(),
+    ticket: z.string().min(1).max(100).optional(),
+  })
+  .refine((b) => !!b.commit || !!b.ticket, '要带 commit（sha256(nonceA) 的 hex）或 ticket');
+/** POST /api/v1/pair/:id/reveal：手机公开自己的随机数 nonceA（hex） */
+export const PairRevealInput = z.object({ nonce: hex32 });
+
+/** PATCH /api/access：打开 / 关闭局域网入口、改端口、改电脑名称（null 恢复成计算机名） */
+export const AccessConfigureInput = z.object({
+  enabled: z.boolean().optional(),
+  port: z.number().int().min(1024).max(65535).optional(),
+  name: deviceName.nullable().optional(),
+});
+/** 批准一个请求：scopes 不给就是默认的（DEVICE_DEFAULT_SCOPES），name 可以改掉手机报的名字 */
+export const DeviceApproveInput = z.object({ id: Id, scopes: DeviceScopes.optional(), name: deviceName.optional() });
+/** 改设备的名称、权限 */
+export const DeviceUpdateInput = z.object({ id: Id, name: deviceName.optional(), scopes: DeviceScopes.optional() });
+/** 改设备传上来的图放到哪：rootId 为 null 恢复默认（收件箱/手机/<设备名>） */
+export const DeviceUploadInput = z.object({ id: Id, rootId: Id.nullable(), dir: z.string().max(400).default('') });
+
+// ------------------------------------------------------------------ 手机上传（B1，docs/mobile.md 5.4）
+
+const Sha256 = z.string().regex(/^[0-9a-f]{64}$/, 'sha256 要是 64 位小写十六进制');
+/** 每个文件最多 128 MiB（和导入图片一样） */
+export const UPLOAD_MAX_BYTES = 128 * 1024 * 1024;
+/** 一段最多 8 MiB（PUT /api/uploads/:id 的请求体） */
+export const UPLOAD_CHUNK_MAX = 8 * 1024 * 1024;
+export const UploadCheckInput = z.object({ files: z.array(z.object({ sha256: Sha256, size: z.number().int().min(1).max(UPLOAD_MAX_BYTES) })).min(1).max(500) });
+export const UploadBeginInput = z.object({
+  batchId: z.string().uuid(),
+  sha256: Sha256,
+  size: z.number().int().min(1).max(UPLOAD_MAX_BYTES),
+  fileName: z.string().min(1).max(200),
+  /** 手机上的修改时间（ISO），入库后的文件照这个时间 */
+  modifiedAt: z.string().datetime({ offset: true }).optional(),
+  /** 同步的相册：手机上的文件夹路径（'Download'、'Pictures/bili'）；手动上传不给 */
+  album: z.string().min(1).max(300).optional(),
+  /** 手机上这个文件的标识（相册同步用 MediaStore 的 id） */
+  clientKey: z.string().min(1).max(200).optional(),
+});
+export const UploadBatchesInput = z.object({ limit: qNumber.min(1).max(100).optional() });
+
+// ------------------------------------------------------------------ 同步相册（B2，docs/mobile.md 5.5）
+
+/** 手机上的相册路径（MediaStore 的 RELATIVE_PATH）：服务端去掉两头的斜杠、反斜杠换成正斜杠 */
+const AlbumPath = z.string().min(1).max(300);
+const Count = z.number().int().min(0).max(100_000_000);
+const Bytes = z.number().int().min(0);
+/** 一台设备的同步相册：设备自己问不用给 deviceId；电脑上（本机入口）要给 */
+export const AlbumsQueryInput = z.object({ deviceId: Id.optional() });
+/** App 报相册（full = 这是手机上全部的相册，没列出的标成「手机上没有了」）、盘点结果、同步状态 */
+export const AlbumReportInput = z.object({
+  albums: z
+    .array(
+      z.object({
+        path: AlbumPath,
+        name: z.string().min(1).max(200),
+        count: Count,
+        bytes: Bytes,
+        latestAt: z.string().datetime({ offset: true }).optional(),
+        inventory: z
+          .object({
+            total: Count,
+            have: Count,
+            inTarget: Count,
+            deleted: Count,
+            new: Count,
+            newBytes: Bytes,
+            folder: z.string().max(400).nullable(),
+            folderCount: Count,
+          })
+          .optional(),
+        /** 这次同步完还没传上来的（会再试） */
+        pending: Count.optional(),
+        /** 电脑读不了的（不再传） */
+        rejected: Count.optional(),
+      }),
+    )
+    .max(2000)
+    .default([]),
+  full: z.boolean().default(false),
+  state: z
+    .object({
+      running: z.enum(['inventory', 'sync']).nullable(),
+      done: Count.optional(),
+      total: Count.optional(),
+      error: z.string().max(500).nullable().optional(),
+      summary: z.string().max(500).nullable().optional(),
+    })
+    .optional(),
+});
+/** 改同步设置：哪些相册同步、新图放到哪（dir 为 null 恢复自动）；只在 Wi-Fi、只在充电 */
+export const AlbumSetInput = z.object({
+  deviceId: Id.optional(),
+  albums: z
+    .array(z.object({ path: AlbumPath, sync: z.boolean().optional(), dir: z.string().max(400).nullable().optional() }))
+    .max(2000)
+    .default([]),
+  wifiOnly: z.boolean().optional(),
+  chargingOnly: z.boolean().optional(),
+});
 
 // ------------------------------------------------------------------ 查询
 

@@ -1,3 +1,4 @@
+import { LanEntry } from './access/lan.ts';
 import { buildApp } from './app.ts';
 import { killAgentTreesSync } from './assistant/rpc.ts';
 import { config } from './config.ts';
@@ -22,6 +23,9 @@ async function openEngine(bus: EventBus): Promise<SqliteDataSource> {
 const bus = new EventBus();
 const ds = await openEngine(bus);
 const app = await buildApp(ds, bus);
+// 局域网入口（手机访问，docs/mobile.md 第 2 节）：默认关，设置里打开后立即生效；本机入口关掉时一起关
+const lan = new LanEntry(ds, bus, { log: (m) => app.log.info(m) });
+app.addHook('onClose', () => lan.close());
 // 后台任务运行时不让电脑休眠（设置 → 识别里可关）；演示数据不需要
 const awake =
   config.dataSource === 'sqlite'
@@ -31,6 +35,8 @@ const awake =
 try {
   await app.listen({ host: config.host, port: config.port });
   app.log.info(`Emaki 后端已启动：http://${config.host}:${config.port}（数据源：${config.dataSource}）`);
+  // 打不开（端口被占用等）不影响本机入口，原因记在「手机访问」的状态里
+  await lan.start();
   // 优雅退出：关掉 HTTP 再关数据库（WAL 落盘）
   const signals: NodeJS.Signals[] = process.platform === 'win32' ? ['SIGINT', 'SIGTERM', 'SIGHUP'] : ['SIGINT', 'SIGTERM'];
   for (const sig of signals) {

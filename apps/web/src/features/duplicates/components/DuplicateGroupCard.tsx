@@ -39,7 +39,8 @@ export const DuplicateGroupCard = forwardRef<
     onActivate: () => void;
     onToggle: (imageId: ID) => void;
     onResolve: () => void;
-    onIgnore: () => void;
+    /** 「不是重复」（duplicates.ignore，duplicates）；这台设备没有这项能力时不给 */
+    onIgnore?: () => void;
     onOpen: (imageIndex: number) => void;
     /** 放大对比（TR-5，只对相似组） */
     lensOn: boolean;
@@ -191,9 +192,11 @@ export const DuplicateGroupCard = forwardRef<
           )}
         </p>
         <div className="ml-auto flex items-center gap-1.5">
-          <Button variant="ghost" size="sm" onClick={onIgnore} disabled={busy || guarded}>
+{onIgnore && (
+                      <Button variant="ghost" size="sm" onClick={onIgnore} disabled={busy || guarded}>
             不是重复
           </Button>
+          )}
           {/* 会移到回收站的用危险样式、Shift+Enter；全部保留的照旧黑色、Enter */}
           <Button
             variant={trashCount > 0 ? 'danger' : 'primary'}

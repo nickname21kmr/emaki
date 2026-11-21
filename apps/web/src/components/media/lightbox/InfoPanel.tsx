@@ -31,6 +31,8 @@ const RATINGS = Object.keys(RATING_LABEL) as Rating[];
 /**
  * 看图器右侧的信息面板：一张「纸」浮在深色背景上，和应用主体的纸是同一种材质。
  * 详情没回来之前，头部先用列表里缓存的基本信息顶上。
+ * variant="sheet"（窄屏的底部面板，A1，InfoSheet.tsx）：操作那一排排在最前面（平时只露出它），展开后才是头部和其余信息；
+ * 外面的纸和滚动由 InfoSheet 管。
  */
 export function InfoPanel({
   base,
@@ -40,6 +42,8 @@ export function InfoPanel({
   actions,
   onNavigate,
   onTagClick,
+  variant = 'side',
+  expanded = true,
 }: {
   /** 详情或缓存里的基本信息 */
   base: ImageItem | undefined;
@@ -49,103 +53,147 @@ export function InfoPanel({
   actions: ImageActions;
   onNavigate: () => void;
   onTagClick: (tag: string) => void;
+  variant?: 'side' | 'sheet';
+  /** sheet：展开了（没展开时只有操作那一排） */
+  expanded?: boolean;
 }) {
   const artistsOn = useSettings().data?.tagger.artists ?? false;
+  const body = detail ? (
+    <>
+      <PanelCharacters
+        characterIds={actions.characterIds}
+        links={detail.characterLinks}
+        suggestions={detail.characterSuggestions}
+        actions={actions}
+        onNavigate={onNavigate}
+      />
+
+      {/* 没开画师识别、也没改过的图不占地方 */}
+      {(artistsOn || detail.artists.length > 0 || detail.artistsManual) && (
+        <PanelArtists artists={detail.artists} manual={detail.artistsManual} actions={actions} onNavigate={onNavigate} />
+      )}
+
+      <Section title="分级">
+        {actions.allow.rating ? (
+          <Segmented<Rating>
+            size="sm"
+            value={actions.rating ?? detail.rating}
+            onChange={actions.setRating}
+            options={RATINGS.map((r) => ({ value: r, label: RATING_LABEL[r] }))}
+          />
+        ) : (
+          <span className="text-[13px]">{RATING_LABEL[actions.rating ?? detail.rating]}</span>
+        )}
+      </Section>
+
+      <KindSection detail={detail} actions={actions} />
+
+      <Details detail={detail} actions={actions} onNavigate={onNavigate} />
+      <PanelTags tags={detail.tags} onTagClick={onTagClick} />
+    </>
+  ) : error ? (
+    <div className="border-t border-line px-5 py-10 text-center">
+      <div className="text-[13px] font-medium">读不到这张图的详情</div>
+      <p className="mt-1 text-xs leading-relaxed text-fg-subtle">
+        它可能刚被排除、移到了回收站，或者文件已经不在原来的位置。
+      </p>
+      <Button size="sm" variant="outline" className="mt-4" onClick={onRetry}>
+        重试
+      </Button>
+    </div>
+  ) : (
+    <PanelSkeleton />
+  );
+
+  if (variant === 'sheet')
+    return (
+      <>
+        <ActionTiles base={base} actions={actions} />
+        {expanded && (
+          <div key={base?.id} className="animate-fade-in">
+            <Header base={base} artists={detail?.artists} collection={detail?.collection} />
+            {body}
+          </div>
+        )}
+      </>
+    );
+
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-[20px] bg-sheet text-fg shadow-pop ring-1 ring-line">
       <div key={base?.id} className="min-h-0 flex-1 animate-fade-in overflow-y-auto overscroll-contain scrollbar-thin">
         <Header base={base} artists={detail?.artists} collection={detail?.collection} />
 
-        <div className="grid grid-cols-5 gap-1 px-3 pb-4">
-          <ActionTile
-            icon={<Heart />}
-            label={actions.favorite ? '已收藏' : '收藏'}
-            tooltip={actions.favorite ? '取消收藏' : '收藏'}
-            shortcut="F"
-            active={actions.favorite}
-            disabled={!base}
-            onClick={actions.toggleFavorite}
-          />
-          <ActionTile
-            icon={<Sparkles />}
-            label={actions.original ? '已归原创' : '归为原创'}
-            tooltip={actions.original ? '移出原创' : '归为原创：画师自己的原创角色，不再出现在未识别'}
-            shortcut="O"
-            active={actions.original}
-            disabled={!base || (base.kind !== 'illustration' && base.kind !== 'comic')}
-            onClick={actions.toggleOriginal}
-          />
-          <ActionTile
-            icon={<FolderOpen />}
-            label="定位"
-            tooltip="在资源管理器中显示"
-            disabled={!base}
-            onClick={actions.reveal}
-          />
-          <ActionTile
-            icon={<Ban />}
-            label="排除"
-            tooltip="排除：不再出现在图库和统计里，文件不会被删除"
-            shortcut="E"
-            pending={actions.busy.exclude}
-            disabled={!base || !!actions.leaving}
-            onClick={actions.exclude}
-          />
-          <ActionTile
-            icon={<Trash2 />}
-            label="回收站"
-            tooltip={TRASH_HINT}
-            danger
-            pending={actions.busy.trash}
-            // 刚排除 / 移走的那张还停在原地：连点不会落到下一张
-            disabled={!base || !!actions.leaving}
-            onClick={actions.trash}
-          />
-        </div>
+        <ActionTiles base={base} actions={actions} />
 
-        {detail ? (
-          <>
-            <PanelCharacters
-              characterIds={actions.characterIds}
-              links={detail.characterLinks}
-              suggestions={detail.characterSuggestions}
-              actions={actions}
-              onNavigate={onNavigate}
-            />
-
-            {/* 没开画师识别、也没改过的图不占地方 */}
-            {(artistsOn || detail.artists.length > 0 || detail.artistsManual) && (
-              <PanelArtists artists={detail.artists} manual={detail.artistsManual} actions={actions} onNavigate={onNavigate} />
-            )}
-
-            <Section title="分级">
-              <Segmented<Rating>
-                size="sm"
-                value={actions.rating ?? detail.rating}
-                onChange={actions.setRating}
-                options={RATINGS.map((r) => ({ value: r, label: RATING_LABEL[r] }))}
-              />
-            </Section>
-
-            <KindSection detail={detail} actions={actions} />
-
-            <Details detail={detail} onNavigate={onNavigate} />
-            <PanelTags tags={detail.tags} onTagClick={onTagClick} />
-          </>
-        ) : error ? (
-          <div className="border-t border-line px-5 py-10 text-center">
-            <div className="text-[13px] font-medium">读不到这张图的详情</div>
-            <p className="mt-1 text-xs leading-relaxed text-fg-subtle">
-              它可能刚被排除、移到了回收站，或者文件已经不在原来的位置。
-            </p>
-            <Button size="sm" variant="outline" className="mt-4" onClick={onRetry}>
-              重试
-            </Button>
-          </div>
-        ) : (
-          <PanelSkeleton />
-        )}
+        {body}
       </div>
+    </div>
+  );
+}
+
+/**
+ * 信息面板顶上的一排操作。每个按钮的能力在 IMAGE_ACTION_NEEDS 里，这台设备没有的不画，剩下的平分一行
+ * （手机上默认是收藏、归为原创、排除三个）。
+ */
+function ActionTiles({ base, actions }: { base: ImageItem | undefined; actions: ImageActions }) {
+  const tiles = [
+    actions.allow.favorite && (
+      <ActionTile
+        key="favorite"
+        icon={<Heart />}
+        label={actions.favorite ? '已收藏' : '收藏'}
+        tooltip={actions.favorite ? '取消收藏' : '收藏'}
+        shortcut="F"
+        active={actions.favorite}
+        disabled={!base}
+        onClick={actions.toggleFavorite}
+      />
+    ),
+    actions.allow.original && (
+      <ActionTile
+        key="original"
+        icon={<Sparkles />}
+        label={actions.original ? '已归原创' : '归为原创'}
+        tooltip={actions.original ? '移出原创' : '归为原创：画师自己的原创角色，不再出现在未识别'}
+        shortcut="O"
+        active={actions.original}
+        disabled={!base || (base.kind !== 'illustration' && base.kind !== 'comic')}
+        onClick={actions.toggleOriginal}
+      />
+    ),
+    actions.allow.reveal && (
+      <ActionTile key="reveal" icon={<FolderOpen />} label="定位" tooltip="在资源管理器中显示" disabled={!base} onClick={actions.reveal} />
+    ),
+    actions.allow.exclude && (
+      <ActionTile
+        key="exclude"
+        icon={<Ban />}
+        label="排除"
+        tooltip="排除：不再出现在图库和统计里，文件不会被删除"
+        shortcut="E"
+        pending={actions.busy.exclude}
+        disabled={!base || !!actions.leaving}
+        onClick={actions.exclude}
+      />
+    ),
+    actions.allow.trash && (
+      <ActionTile
+        key="trash"
+        icon={<Trash2 />}
+        label="回收站"
+        tooltip={TRASH_HINT}
+        danger
+        pending={actions.busy.trash}
+        // 刚排除 / 移走的那张还停在原地：连点不会落到下一张
+        disabled={!base || !!actions.leaving}
+        onClick={actions.trash}
+      />
+    ),
+  ].filter(Boolean);
+  if (!tiles.length) return null;
+  return (
+    <div className="grid gap-1 px-3 pb-4" style={{ gridTemplateColumns: `repeat(${tiles.length}, minmax(0, 1fr))` }}>
+      {tiles}
     </div>
   );
 }
@@ -167,7 +215,7 @@ function KindSection({ detail, actions }: { detail: ImageDetail; actions: ImageA
               type="button"
               aria-pressed={k === kind}
               aria-label={KIND_LABEL[k]}
-              disabled={actions.kindBusy}
+              disabled={actions.kindBusy || !actions.allow.kind}
               onClick={() => k !== kind && actions.setKind(k)}
               className={cn('rounded-[4px] transition-opacity duration-150', k === kind ? 'opacity-100' : 'opacity-70 hover:opacity-100')}
             >
@@ -186,10 +234,19 @@ function KindSection({ detail, actions }: { detail: ImageDetail; actions: ImageA
       <p className="mt-2 text-[11px] leading-relaxed text-fg-subtle">
         {manual ? (
           <>
-            你手动归的 ·{' '}
-            <button type="button" onClick={() => actions.setKind('auto')} className="text-fg-muted underline-offset-2 hover:text-fg hover:underline">
-              恢复自动判断
-            </button>
+            你手动归的
+            {actions.allow.kind && (
+              <>
+                {' · '}
+                <button
+                  type="button"
+                  onClick={() => actions.setKind('auto')}
+                  className="text-fg-muted underline-offset-2 hover:text-fg hover:underline"
+                >
+                  恢复自动判断
+                </button>
+              </>
+            )}
           </>
         ) : (
           <>自动判断{detail.kindReason ? ` · ${detail.kindReason}` : ''}</>
@@ -300,7 +357,7 @@ function HeadAvatar({ id, className }: { id: string; className?: string }) {
   return <CharacterAvatar character={data.character} size={36} shape="circle" className={cn('ring-2 ring-sheet', className)} />;
 }
 
-function Details({ detail: d, onNavigate }: { detail: ImageDetail; onNavigate: () => void }) {
+function Details({ detail: d, actions, onNavigate }: { detail: ImageDetail; actions: ImageActions; onNavigate: () => void }) {
   const megapixels = (d.width * d.height) / 1_000_000;
   const copyPath = () => {
     copyText(d.absPath)
@@ -324,9 +381,10 @@ function Details({ detail: d, onNavigate }: { detail: ImageDetail; onNavigate: (
         </Row>
         <Row label="修改">{formatDateTime(d.modifiedAt)}</Row>
         <Row label="来源">
-          <PanelSource key={d.id} detail={d} />
+          <PanelSource key={d.id} detail={d} editable={actions.allow.source} />
         </Row>
-        {(d.collection || d.relPath.includes('/')) && (
+        {/* 不在合集里时这一行是「收进组图…」「成册…」（collections）：没有这项能力就不占地方 */}
+        {(d.collection || (actions.allow.collection && d.relPath.includes('/'))) && (
           <Row label={d.collection ? '收录于' : '合集'}>
             <PanelCollection detail={d} onNavigate={onNavigate} />
           </Row>

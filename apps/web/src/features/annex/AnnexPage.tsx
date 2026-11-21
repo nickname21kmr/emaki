@@ -82,7 +82,7 @@ function AnnexView({ scope, count }: { scope: AnnexScope | null; count: number |
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
     const sel = useSelection.getState();
-    if (sel.scope === SCOPE && sel.ids.size) sel.clear();
+    if (sel.scope === SCOPE && (sel.ids.size || sel.on)) sel.clear();
   }, [key, scrollRef]);
 
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = list;

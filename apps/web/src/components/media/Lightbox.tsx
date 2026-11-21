@@ -4,7 +4,7 @@ import { Pause, PanelRight, Play, Shapes, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Dialog as D } from 'radix-ui';
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { useLocation, useNavigate } from 'react-router';
+import { useLocation, useNavigate, useNavigationType } from 'react-router';
 import { imageUrl } from '@/lib/api';
 import { blurLabel, blurReason } from '@/lib/blur';
 import { formatCount } from '@/lib/format';
@@ -16,6 +16,7 @@ import { useCachedImage } from './lightbox/useCachedImages';
 import { Filmstrip } from './lightbox/Filmstrip';
 import { entryKey, isLightboxEntry, markLightboxEntry, popAction, setLightboxPopHandler } from './lightbox/history';
 import { InfoPanel } from './lightbox/InfoPanel';
+import { InfoSheet } from './lightbox/InfoSheet';
 import { KindMenu } from './KindMenu';
 import { LbButton } from './lightbox/LbButton';
 import { cn } from '@/lib/cn';
@@ -26,6 +27,7 @@ import { useZoomPan } from './lightbox/useZoomPan';
 import { EASE_OUT } from '@/lib/motion';
 import { AssistantDarkroomSlot, AssistantLightboxButton } from '@/features/assistant/AssistantLauncher';
 import { closeAssistant, useAssistantDock, useViewportWidth } from '@/features/assistant/dock';
+import { isNarrow, useViewport } from '@/lib/viewport';
 
 const EASE = EASE_OUT;
 
@@ -79,6 +81,7 @@ export function Lightbox() {
             文档本身不滚、看图器铺满全屏，那把锁用不上；淡出仍由 Portal 的 Presence 按 data-state 等动画放完 */}
         <div
           data-state={open ? 'open' : 'closed'}
+          data-lb-backdrop
           className={cn(
             'fixed inset-0 z-50 bg-stage transition-opacity duration-300 data-[state=closed]:animate-[fade-in_180ms_ease-in_reverse_both] data-[state=open]:animate-fade-in',
             returning && 'opacity-0',
@@ -155,7 +158,9 @@ let reloadChecked = false;
  * popstate 在路由之前接住（见 lightbox/history.ts），看图器那条和前面那条之间来回不让路由知道。
  */
 function useLightboxHistory(open: boolean) {
-  const { key } = useLocation();
+  const { key, pathname } = useLocation();
+  const navType = useNavigationType();
+  const lastPath = useRef(pathname);
   // 路由当前显示的那条记录的 key
   const routerKey = useRef(key);
   const opened = useRef(false);
@@ -198,11 +203,20 @@ function useLightboxHistory(open: boolean) {
     return () => window.clearTimeout(t);
   }, [open]);
 
-  // 换了页面就关掉，不然看图器会浮在新页面上继续翻旧列表
+  // 换了页面就关掉，不然看图器会浮在新页面上继续翻旧列表。
+  // 同一页里只是 replace 了查询参数（页面刚打开时把类型、收拢偏好补进地址，A1 在平板上点得快时撞上过）：不关，
+  // 路由换掉的正是看图器推的那条记录，重新标成看图器那条，关的时候照旧退掉它
   useEffect(() => {
     routerKey.current = key;
+    const samePage = navType === 'REPLACE' && pathname === lastPath.current;
+    lastPath.current = pathname;
     const s = useLightbox.getState();
-    if (s.open) s.close();
+    if (!s.open) return;
+    if (samePage) {
+      if (!isLightboxEntry(window.history.state)) window.history.replaceState(markLightboxEntry(window.history.state), '');
+      return;
+    }
+    s.close();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在换页时执行
   }, [key]);
 }
@@ -248,6 +262,27 @@ function LightboxView({
   const [paused, setPaused] = useState(false);
   const idle = useIdle(slideshow && open, 2000);
   const pageHidden = usePageHidden();
+  // 触屏（A1）：单击图片切换界面（顶栏、信息面板）；窄屏的信息面板是底部面板（InfoSheet），平时只露出一排操作
+  const [chromeHidden, setChromeHidden] = useState(false);
+  const hideChrome = idle || chromeHidden;
+  const sheetMode = isNarrow(useViewport());
+  const [sheetExpanded, setSheetExpanded] = useState(false);
+  const toggleSheet = () => {
+    setChromeHidden(false);
+    setSheetExpanded((v) => !v);
+  };
+  const rootRef = useRef<HTMLDivElement>(null);
+  // 下滑关闭的过程中背景、柔光和界面跟着变淡；null = 复原（直接写 style，不重渲染）
+  const fade = (p: number | null) => {
+    const o = p === null ? '' : String(1 - p);
+    const backdrop = document.querySelector<HTMLElement>('[data-lb-backdrop]');
+    if (backdrop) backdrop.style.opacity = o;
+    const root = rootRef.current;
+    if (!root) return;
+    root.style.backgroundColor = p === null ? '' : 'transparent';
+    root.querySelectorAll<HTMLElement>('[data-lb-chrome]').forEach((el) => (el.style.opacity = o));
+    root.querySelectorAll<HTMLElement>('[data-lb-glow]').forEach((el) => (el.style.opacity = String(0.2 * (1 - (p ?? 0)))));
+  };
 
   const detailQuery = useImage(id);
   const detail = detailQuery.data?.id === id ? detailQuery.data : undefined;
@@ -287,12 +322,13 @@ function LightboxView({
   };
   useHotkey('arrowleft', guard(() => go(-1)), { repeat: true });
   useHotkey('arrowright', guard(() => go(1)), { repeat: true });
-  useHotkey('i', guard(toggleInfo));
-  useHotkey('f', guard(actions.toggleFavorite));
-  useHotkey('e', guard(actions.exclude));
-  useHotkey('o', guard(actions.toggleOriginal));
+  useHotkey('i', guard(sheetMode ? toggleSheet : toggleInfo));
+  // 改动的快捷键和信息面板的按钮一样按这台设备的能力（IMAGE_ACTION_NEEDS）
+  useHotkey('f', guard(actions.toggleFavorite), { enabled: actions.allow.favorite });
+  useHotkey('e', guard(actions.exclude), { enabled: actions.allow.exclude });
+  useHotkey('o', guard(actions.toggleOriginal), { enabled: actions.allow.original });
   const [kindOpen, setKindOpen] = useState(false);
-  useHotkey('c', guard(() => setKindOpen(true)), { enabled: !!base && !kindOpen });
+  useHotkey('c', guard(() => setKindOpen(true)), { enabled: !!base && !kindOpen && actions.allow.kind });
   useHotkey('space', guard(() => setPaused((p) => !p)), { enabled: slideshow });
 
   // 引信烧完：等下一张的 960 缩略图解码好再前进，最后一张之后绕回开头
@@ -322,6 +358,7 @@ function LightboxView({
   return (
     // 再叠一层黑，亮色主题下也足够暗（看图器始终是深色的）
     <div
+      ref={rootRef}
       className={cn('group/lb relative flex size-full transition-colors duration-300', returning ? 'bg-transparent' : 'bg-black/30')}
       data-returning={returning ? '' : undefined}
       data-slideshow={slideshow ? (halted ? 'paused' : 'playing') : undefined}
@@ -332,6 +369,7 @@ function LightboxView({
           <div
             key={id}
             aria-hidden
+            data-lb-glow
             className="pointer-events-none absolute inset-0 animate-fade-in transition-opacity duration-300 group-data-returning/lb:opacity-0!"
             style={{
               background: `radial-gradient(52% 58% at 50% 50%, ${base.dominantColor} 0%, transparent 72%)`,
@@ -344,13 +382,15 @@ function LightboxView({
           index={index}
           total={total ?? ids.length}
           fileName={base?.fileName}
-          panelOpen={infoShown}
-          onTogglePanel={toggleInfo}
+          panelOpen={sheetMode ? sheetExpanded : infoShown}
+          onTogglePanel={sheetMode ? toggleSheet : toggleInfo}
+          sheet={sheetMode}
           onClose={leave}
-          idle={idle}
+          idle={hideChrome}
           playing={slideshow ? !paused : undefined}
           onTogglePlay={() => setPaused((p) => !p)}
-          kind={base ? (actions.kind ?? base.kind) : undefined}
+          // 顶栏的「归入…」也要 curate：没有时不画
+          kind={base && actions.allow.kind ? (actions.kind ?? base.kind) : undefined}
           kindOpen={kindOpen}
           onKindOpenChange={setKindOpen}
           onSetKind={actions.setKind}
@@ -373,6 +413,17 @@ function LightboxView({
           onNext={() => go(1)}
           onBackdropClick={leave}
           slideshow={slideshow ? { crossfade: reduce ? 0.15 : 0.8, idle } : null}
+          onTap={() => setChromeHidden((v) => !v)}
+          onDismiss={leave}
+          onDismissDrag={fade}
+          onSwipeUp={
+            sheetMode
+              ? () => {
+                  setChromeHidden(false);
+                  setSheetExpanded(true);
+                }
+              : undefined
+          }
         />
 
         {/* 刚排除 / 移到回收站：原地变暗停一下再换下一张（减少动态时不渐变） */}
@@ -396,8 +447,8 @@ function LightboxView({
         <Filmstrip
           ids={ids}
           index={index}
-          // 放大时整块画面都要拖动、滚轮缩放，底边也不能让给胶片条
-          hidden={slideshow || !!returning || zoomApi.zoomed}
+          // 放大时整块画面都要拖动、滚轮缩放，底边也不能让给胶片条；窄屏的底边是信息面板
+          hidden={slideshow || !!returning || zoomApi.zoomed || sheetMode}
           // 跳到别处：之前在等下一页时按的「下一张」作废，不然下一页到了会被往后挪一张
           onPick={(i) => useLightbox.setState({ index: i, originRect: null, pendingNext: false })}
         />
@@ -432,10 +483,25 @@ function LightboxView({
             </AnimatePresence>
           </>
         )}
+        {sheetMode && (
+          <InfoSheet expanded={sheetExpanded} onExpandedChange={setSheetExpanded} hidden={hideChrome || !!returning}>
+            <InfoPanel
+              variant="sheet"
+              expanded={sheetExpanded}
+              base={base}
+              detail={detail}
+              error={detailQuery.isError ? detailQuery.error : null}
+              onRetry={() => void detailQuery.refetch()}
+              actions={actions}
+              onNavigate={leave}
+              onTagClick={searchTag}
+            />
+          </InfoSheet>
+        )}
       </div>
 
       <AnimatePresence initial={false}>
-        {infoShown && (
+        {infoShown && !sheetMode && (
           <motion.aside
             key="panel"
             initial={{ width: 0, opacity: 0 }}
@@ -447,7 +513,7 @@ function LightboxView({
           >
             <div
               data-lb-chrome
-              className={cn('absolute inset-y-3 right-3 w-[320px] transition-opacity duration-300', idle && 'pointer-events-none opacity-0')}
+              className={cn('absolute inset-y-3 right-3 w-[320px] transition-opacity duration-300', hideChrome && 'pointer-events-none opacity-0')}
             >
               <InfoPanel
                 base={base}
@@ -477,6 +543,7 @@ function TopBar({
   fileName,
   panelOpen,
   onTogglePanel,
+  sheet,
   onClose,
   idle,
   playing,
@@ -491,8 +558,10 @@ function TopBar({
   fileName: string | undefined;
   panelOpen: boolean;
   onTogglePanel: () => void;
+  /** 窄屏：信息是底部面板，按钮是展开 / 收起它 */
+  sheet?: boolean;
   onClose: () => void;
-  /** 放映时鼠标 2 秒不动：淡出 300ms */
+  /** 放映时鼠标 2 秒不动、触屏单击图片：淡出 300ms */
   idle?: boolean;
   /** 放映中：true 在放 / false 暂停；undefined = 不是放映 */
   playing?: boolean;
@@ -508,15 +577,17 @@ function TopBar({
       data-lb-chrome
       className={cn(
         'pointer-events-none absolute inset-x-0 top-0 z-20 flex h-16 items-center justify-between gap-6 bg-linear-to-b from-black/30 to-transparent pr-4 pl-6 transition-opacity group-data-returning/lb:opacity-0',
+        // 触屏让出状态栏；手机竖屏收窄、不写文件名（信息面板里有）
+        'touch:box-content touch:pt-[env(safe-area-inset-top)] compact:gap-2 compact:pr-2 compact:pl-4',
         idle ? 'opacity-0 duration-300 [&_*]:pointer-events-none!' : 'duration-200',
       )}
     >
       <div className="pointer-events-auto flex min-w-0 items-baseline gap-4 text-white">
         <span className="flex shrink-0 items-baseline gap-1.5">
-          <span className="numeral text-[30px] leading-none tabular">{index + 1}</span>
+          <span className="numeral text-[30px] leading-none tabular compact:text-[26px]">{index + 1}</span>
           <span className="text-[13px] text-white/40 tabular">/ {formatCount(total)}</span>
         </span>
-        {fileName && <span className="truncate text-[13px] text-white/55">{fileName}</span>}
+        {fileName && <span className="truncate text-[13px] text-white/55 compact:hidden">{fileName}</span>}
       </div>
       <div className="pointer-events-auto flex shrink-0 items-center gap-1">
         {playing !== undefined && (
@@ -540,7 +611,7 @@ function TopBar({
           />
         )}
         <AssistantLightboxButton />
-        <LbButton label={panelOpen ? '收起信息' : '显示信息'} shortcut="I" active={panelOpen} onClick={onTogglePanel}>
+        <LbButton label={sheet ? (panelOpen ? '收起信息' : '展开信息') : panelOpen ? '收起信息' : '显示信息'} shortcut="I" active={panelOpen} onClick={onTogglePanel}>
           <PanelRight />
         </LbButton>
         <LbButton label="关闭" shortcut="Esc" onClick={onClose}>

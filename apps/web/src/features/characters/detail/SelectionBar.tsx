@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useRef, type ReactNode } from 'react';
 import { useSonner } from 'sonner';
 import { Kbd, Menu, MenuItem, RollingNumber, Spinner } from '@/components/ui';
+import { useAllowed, type Need } from '@/lib/capabilities';
 import { cn } from '@/lib/cn';
 import { EASE_OUT } from '@/lib/motion';
 
@@ -10,6 +11,8 @@ export interface SelectionAction {
   key: string;
   label: string;
   icon: ReactNode;
+  /** 需要的能力（lib/capabilities.ts），按实际调的命令定：这台设备没有的不画 */
+  need: Need;
   onClick: () => void;
   disabled?: boolean;
   loading?: boolean;
@@ -25,13 +28,15 @@ export interface SelectionAction {
  */
 export function SelectionBar({
   count,
-  actions,
+  actions: all,
   onClear,
 }: {
   count: number;
   actions: SelectionAction[];
   onClear: () => void;
 }) {
+  // 这台设备用不了的操作不画（各自声明了 need）
+  const actions = useAllowed(all);
   // 有 toast 时（底部居中）抬高一截给它让位，和图库的工具栏一样
   const lifted = useSonner().toasts.length > 0;
   // 菜单关掉、不还焦点以后再执行，接着打开的对话框不会被焦点抢走

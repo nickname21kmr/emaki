@@ -16,6 +16,13 @@ import { TriageBody } from './components/TriageBody';
 import { TriageSkeleton } from './components/TriageSkeleton';
 import { useTagJob } from './useTagJob';
 import { useUnrecognizedParams } from './useUnrecognizedParams';
+import { useAllowedActions, type Need } from '@/lib/capabilities';
+
+/**
+ * 页头按钮需要的能力（lib/capabilities.ts）：Pixiv 补角色是后台任务（jobs），重认没认出的是整库按规则改（rules）；
+ * 「识别新图」（RunTaggerButton）、「补采纳」（PromoteSuggestionsButton）各自判断
+ */
+const HEADER_NEEDS = { pixiv: 'jobs', retag: 'rules' } as const satisfies Record<string, Need>;
 
 /**
  * 未识别（T34b）：两个大类页签。
@@ -30,6 +37,7 @@ export function UnrecognizedPage() {
   const pendingBooks = stats?.pendingCollectionCount ?? 0;
   const p = useUnrecognizedParams(pendingBooks);
   const viewKey = `${p.bucket}:${p.artKind ?? 'all'}`;
+  const allow = useAllowedActions(HEADER_NEEDS);
 
   let body: React.ReactNode;
   if (p.area === 'annex') body = <SheetLayout key="annex" mode="annex" p={p} summary={p.summary} />;
@@ -40,12 +48,14 @@ export function UnrecognizedPage() {
   else body = <SheetLayout key={viewKey} mode={p.bucket} p={p} summary={p.summary} />;
 
   return (
-    <div className="flex h-full min-h-[620px] flex-col">
+    // 手机竖屏、手机横屏（A1）：整页正常往下滚。平板竖屏（medium）和电脑一样是固定高度、各栏自己滚：
+    // 队列有几百张，整页滚的话决策面板的操作键会被队列撑到页面最底下（2026-11-19 平板实测）
+    <div className="flex h-full min-h-[620px] flex-col compact:h-auto compact:min-h-0 short:h-auto short:min-h-0">
       <PageHeader title="未识别" subtitle={<Subtitle />} actions={
-          <div className="flex items-center gap-2">
-            {p.area === 'art' && <PixivTagsButton />}
+          <div className="flex items-center gap-2 compact:flex-wrap">
+            {p.area === 'art' && allow.pixiv && <PixivTagsButton />}
             {p.kind && <PromoteSuggestionsButton kind={p.kind} />}
-            <RetagButton />
+            {allow.retag && <RetagButton />}
             <RunTaggerButton variant="outline" tip="给还没识别过的图认角色：认得出的直接归入，拿不准的进「有建议」。" />
           </div>
         } className="shrink-0">
@@ -59,7 +69,7 @@ export function UnrecognizedPage() {
           )}
         </div>
       </PageHeader>
-      <div className="flex min-h-0 flex-1 gap-6 px-8 pt-4 pb-6">{body}</div>
+      <div className="flex min-h-0 flex-1 gap-6 px-8 pt-4 pb-6 narrow:px-5 compact:px-4">{body}</div>
     </div>
   );
 }

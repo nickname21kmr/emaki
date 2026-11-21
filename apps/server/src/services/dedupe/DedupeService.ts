@@ -247,9 +247,16 @@ export class DedupeService {
     return version !== JSON.stringify(COMPARISON_VERSION);
   }
 
+  /** post_siblings：同一个文件夹里同一投稿的其他图有几张（推荐保留哪张时用，见 pickKeep） */
   loadRows(): DedupeRow[] {
     return this.d.db
-      .prepare('SELECT i.id, i.sha256, i.dhash, i.width, i.height, i.bytes, i.added_at, i.file_name, i.collection_id FROM v_counted_images i')
+      .prepare(
+        `SELECT i.id, i.sha256, i.dhash, i.width, i.height, i.bytes, i.added_at, i.file_name, i.collection_id,
+                CASE WHEN i.source_post_id IS NULL OR i.source_post_id = '' THEN 0
+                     ELSE COUNT(*) OVER (PARTITION BY i.root_id, substr(i.rel_path, 1, length(i.rel_path) - length(i.file_name)),
+                                                      i.source_site, i.source_post_id) - 1 END AS post_siblings
+         FROM v_counted_images i`,
+      )
       .all() as DedupeRow[];
   }
 

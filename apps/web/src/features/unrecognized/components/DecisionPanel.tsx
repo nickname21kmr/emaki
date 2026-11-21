@@ -149,7 +149,9 @@ export function DecisionPanel({
 /** 面板外壳：内容区独立滚动，操作键固定在底部 */
 export function PanelShell({ children, footer }: { children: ReactNode; footer: ReactNode }) {
   return (
-    <section className="flex min-h-0 w-[300px] shrink-0 flex-col xl:w-[340px] 2xl:w-[380px]">
+    // 窄屏（A1）：在大图下面，宽度跟着网格。平板竖屏高度由网格给（内容区自己滚）；手机内容多长就多高（整页滚），
+    // 手机横屏占满第二行（队列只在第一行）
+    <section className="flex min-h-0 w-[300px] shrink-0 flex-col xl:w-[340px] 2xl:w-[380px] narrow:w-auto short:col-span-2 short:w-auto compact:order-2">
       {/* 左右各留 12px：卡片描边、hover 阴影和输入框的焦点光圈不会被滚动容器裁掉 */}
       <div className="-mx-3 min-h-0 flex-1 overflow-y-auto px-3 pt-1 pb-6 scrollbar-thin">{children}</div>
       <div className="shrink-0 border-t border-line pt-4">{footer}</div>
@@ -163,7 +165,8 @@ function ImageMeta({ image, position, total }: { image: ImageItem; position: num
     <div>
       <div className="flex items-end justify-between gap-3">
         <div className="flex items-baseline gap-1.5">
-          <span className="numeral text-[48px] text-fg">{formatCount(position)}</span>
+          {/* 窄屏（平板竖屏）上决策面板和大图上下分一列的高度，序号小一点，把地方留给建议 */}
+          <span className="numeral text-[48px] text-fg narrow:text-[34px]">{formatCount(position)}</span>
           <span className="text-[13px] text-fg-subtle tabular">/ {formatCount(total)}</span>
         </div>
         {image.rating !== 'general' && (
@@ -173,7 +176,7 @@ function ImageMeta({ image, position, total }: { image: ImageItem; position: num
         )}
       </div>
 
-      <div className="mt-4 truncate text-[14.5px] font-semibold tracking-tight" title={image.relPath}>
+      <div className="mt-4 truncate text-[14.5px] font-semibold tracking-tight narrow:mt-2" title={image.relPath}>
         {image.fileName}
       </div>
       <div className="mt-1 text-[12.5px] text-fg-muted tabular">
@@ -238,15 +241,32 @@ function NoSuggestion({ tagged }: { tagged: boolean }) {
     <div className="rounded-[14px] border border-dashed border-line-strong px-4 py-4">
       <div className="text-[13px] font-medium">{tagged ? 'tagger 没认出熟悉的角色' : '这张还没跑过识别'}</div>
       <p className="mt-1 text-[12.5px] leading-relaxed text-fg-muted">
-        {tagged ? '可以在下面搜索角色手动归类，或者按 J 先跳过。' : '运行识别后，tagger 的建议会出现在这里。'}
+        {tagged ? (
+          <>
+            可以在下面搜索角色手动归类，或者<span className="touch:hidden">按 J </span>先跳过。
+          </>
+        ) : (
+          '运行识别后，tagger 的建议会出现在这里。'
+        )}
       </p>
       {!tagged && <RunTaggerButton size="sm" className="mt-3" />}
     </div>
   );
 }
 
-/** 本次会话的小计：给一点「在推进」的感觉 */
-export function SessionNote({ count, idle }: { count: number; idle?: ReactNode }) {
+/**
+ * 本次会话的小计：给一点「在推进」的感觉。还没处理过时显示操作提示：idle 是键盘的（触屏上不显示），
+ * touchIdle 是触屏上的（A1）
+ */
+export function SessionNote({
+  count,
+  idle = '数字键采纳 · / 搜索 · X 多选',
+  touchIdle = '左右滑大图换一张 · 长按队列多选',
+}: {
+  count: number;
+  idle?: ReactNode;
+  touchIdle?: ReactNode;
+}) {
   return (
     <div className="mt-3 flex h-4 items-center justify-center gap-1.5 text-[11.5px] text-fg-subtle tabular">
       {count > 0 ? (
@@ -255,7 +275,10 @@ export function SessionNote({ count, idle }: { count: number; idle?: ReactNode }
           本次已处理 {formatCount(count)} 张
         </>
       ) : (
-        (idle ?? '数字键采纳 · / 搜索 · X 多选')
+        <>
+          <span className="touch:hidden">{idle}</span>
+          <span className="hidden touch:inline">{touchIdle}</span>
+        </>
       )}
     </div>
   );

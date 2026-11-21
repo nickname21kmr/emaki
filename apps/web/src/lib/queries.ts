@@ -7,6 +7,7 @@
  */
 import { showResultToast, undoViaToast } from '@/components/ui/Toast';
 import type {
+  AccessStatus,
   UndoTokenStatus,
   Character,
   CustomTheme,
@@ -73,6 +74,13 @@ export const qk = {
   taggerModels: ['tagger-models'] as const,
   jobs: ['jobs'] as const,
   health: ['health'] as const,
+  /** 设置 →「手机访问」和批准提示（GET /api/access）；null = 这个入口上看不了（局域网入口的设备没有 devices 权限） */
+  access: ['access'] as const,
+  uploadTargets: ['uploads', 'targets'] as const,
+  uploadBatches: ['uploads', 'batches'] as const,
+  albumSync: (deviceId?: string) => ['uploads', 'albums', deviceId ?? 'self'] as const,
+  /** 谁在调用（GET /api/me）：网页按它隐藏用不了的入口（lib/capabilities.ts） */
+  me: ['me'] as const,
 };
 
 // ------------------------------------------------------------------ 读取
@@ -217,8 +225,8 @@ export const useUnrecognizedSummary = (artKind?: UnrecognizedArtKind) =>
     staleTime: 5_000,
   });
 
-export const useDuplicates = (resolved = false) =>
-  useQuery({ queryKey: qk.duplicates(resolved), queryFn: () => api.duplicates({ resolved }) });
+export const useDuplicates = (resolved = false, enabled = true) =>
+  useQuery({ queryKey: qk.duplicates(resolved), queryFn: () => api.duplicates({ resolved }), enabled });
 
 export const useExclusions = () => useQuery({ queryKey: qk.exclusions, queryFn: api.exclusions });
 
@@ -264,6 +272,58 @@ export function useCustomThemes(): CustomTheme[] {
 export const useTaggerModels = () => useQuery({ queryKey: qk.taggerModels, queryFn: api.taggerModels });
 
 export const useJobs = () => useQuery({ queryKey: qk.jobs, queryFn: api.jobs });
+
+/** 每台设备传上来的图放到哪（设置 →「手机访问」） */
+export const useUploadTargets = (enabled = true) => useQuery({ queryKey: qk.uploadTargets, queryFn: api.uploadTargets, enabled });
+/** 最近从手机传上来的批次：传图时 upload.* 的命令事件让它重新取（lib/events.ts） */
+export const useUploadBatches = (enabled = true) => useQuery({ queryKey: qk.uploadBatches, queryFn: api.uploadBatches, enabled });
+/**
+ * 一台设备的同步相册（电脑上给 deviceId，手机上看自己的）。App 在盘点、同步时（或者刚让 App 开始，poll）每 3 秒重新取：
+ * 电脑上有 upload.reportAlbums 的命令事件，手机上收不到命令事件
+ */
+export const useAlbumSync = (deviceId?: string, opts: { enabled?: boolean; poll?: boolean } = {}) =>
+  useQuery({
+    queryKey: qk.albumSync(deviceId),
+    queryFn: () => api.albumSync(deviceId),
+    enabled: opts.enabled ?? true,
+    refetchInterval: (q) => (opts.poll || q.state.data?.state.running ? 3000 : false),
+  });
+
+/**
+ * 手机访问的状态：开关、端口、地址、等批准的请求、已批准的设备。变化靠 SSE 的 access 事件（lib/events.ts）。
+ * 只有本机入口能看：局域网入口上的设备调用是 403，这时返回 null（不报错、不重试，批准提示也就不出现）
+ */
+export const useAccessStatus = (enabled = true) =>
+  useQuery({
+    queryKey: qk.access,
+    queryFn: async (): Promise<AccessStatus | null> => {
+      try {
+        return await api.accessStatus();
+      } catch (err) {
+        if (err instanceof ApiRequestError && err.status === 403) return null;
+        throw err;
+      }
+    },
+    enabled,
+  });
+
+/**
+ * 谁在调用（GET /api/me）：本机入口 local、全部范围；局域网入口是这台设备和它真正生效的范围。能力的计算在 lib/capabilities.ts。
+ * 权限变了由服务端推 me 事件（lib/events.ts）、请求回 403 forbidden 时重新取（watchForbidden），所以不过期；
+ * 设备上窗口重新获得焦点时也取一次（手机从后台切回来）。连不上时少重试几次：取不到按本机入口处理，页面不一直等它
+ */
+export const useMe = () =>
+  useQuery({
+    queryKey: qk.me,
+    queryFn: api.me,
+    staleTime: Infinity,
+    refetchOnWindowFocus: (q) => q.state.data?.kind === 'device',
+    retry: meRetry,
+    retryDelay: 500,
+  });
+
+/** /api/me 只在连不上时重试两次（401 是没配对，交给配对页；别的错误重试也没用） */
+export const meRetry = (count: number, err: unknown) => err instanceof ApiRequestError && err.code === 'network' && count < 2;
 
 /** 后端版本、数据源（demo / sqlite）、数据目录；进程内不会变 */
 export const useHealth = () => useQuery({ queryKey: qk.health, queryFn: api.health, staleTime: Infinity });

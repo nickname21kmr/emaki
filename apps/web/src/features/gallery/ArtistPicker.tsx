@@ -60,7 +60,7 @@ export function ArtistPicker({
           sideOffset={10}
           collisionPadding={16}
           className={cn(
-            'z-[70] w-[340px] overflow-hidden rounded-xl bg-raised text-fg shadow-pop ring-1 ring-line',
+            'z-[70] w-[340px] max-w-[calc(100vw-32px)] overflow-hidden rounded-xl bg-raised text-fg shadow-pop ring-1 ring-line',
             'origin-[var(--radix-popover-content-transform-origin)] data-[state=open]:animate-rise',
           )}
         >
@@ -229,7 +229,7 @@ export function ArtistPickerPanel({
         </div>
       ) : null}
 
-      <div className="flex items-center gap-3 border-t border-line px-4 py-2 text-[11px] text-fg-subtle">
+      <div className="flex items-center gap-3 border-t border-line px-4 py-2 text-[11px] text-fg-subtle touch:hidden">
         <span className="flex items-center gap-1">
           <Kbd>↑</Kbd>
           <Kbd>↓</Kbd>
