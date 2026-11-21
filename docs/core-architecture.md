@@ -146,7 +146,7 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
 | --- | --- | --- | --- |
 | 图库与文件 | `domain/library/` | `library_roots`、`comic_folders`、`scan_errors`、`pending_trash`、`pending_trash_items` | 新增、删除整行；`root_id`、`rel_path`、`file_name`、尺寸、`bytes`、`format`、`sha256`、`added_at`、`modified_at`、`missing`、`trashed_at` |
 | 分析 | `domain/analysis/` | （P4a 删掉了没人读写的 `image_fingerprints`，迁移 037） | `dhash`、`dominant_color`、`thumb_at`、`decode_error`、`content_kind*`（手动标记除外）、`camera`、`kind_signals`、`theme`、`art_score`、`frame_count`、`animated`（P4b，迁移 038） |
-| 证据 | `domain/evidence/` | `tags`、`image_tags`、`image_evidence`、`character_evidence`、`work_evidence`（P3b；建议是它们派生的视图 `v_character_suggestions`）、`pixiv_artwork_cache`、`pixiv_character_checks`、`pixiv_unavailable_posts`、`danbooru_tags`、`danbooru_artists` | `tagged_at`、`tagger_model`、`retag`、`artist_checked_at`、`source_site` / `source_post_id` / `source_artist` / `source_url` |
+| 证据 | `domain/evidence/` | `tags`、`image_tags`、`image_evidence`、`character_evidence`、`work_evidence`（P3b；建议是它们派生的视图 `v_character_suggestions`）、`pixiv_artwork_cache`、`pixiv_character_checks`、`pixiv_unavailable_posts`、`danbooru_tags`、`danbooru_artists`；`image_pose_tags_low`、`image_pose_tags_checked`（姿势标签的低分和收集进度，按姿势找图用，迁移 049） | `tagged_at`、`tagger_model`、`retag`、`artist_checked_at`、`source_site` / `source_post_id` / `source_artist` / `source_url` |
 | 编目 | `domain/catalog/` | `characters`、`works`、`character_works`、`aliases`、`danbooru_tag_redirects`、`custom_character_matches`、`character_verified_forms`、`character_verified_names`、`artist_links`、`tag_i18n`、`tag_name_keys`、`tag_renames` | |
 | 归类 | `domain/curation/`（P3a 建立） | `image_characters`、`image_copyrights`（手动指定的作品）、`image_artists`、`character_vetoes` | `rating`、`rating_manual`、`favorite`、`shelved_at`、`original_at` 和原创的来历列、`content_kind_manual`、`artist_manual`、`source_manual` |
 | 可见性 | `domain/visibility/` | `exclusions` | `excluded_by`、`exclude_exempt` |
@@ -157,6 +157,7 @@ Emaki 的技术分层（网页 / HTTP / 数据源 / 后台任务 / SQLite）是�
 | 变更传播（P2） | `propagation/` | `pending_work`（排队状态和用户的暂停，迁移 033）、`derived_versions`（派生数据的版本，P4a，迁移 037） | |
 | 设备与访问（手机端 N，docs/mobile.md 第 2 节） | `access/` | `lan_access`（局域网入口的配置）、`devices`（批准过的设备、凭证的哈希），迁移 041 | |
 | 手机上传（B1、B2，docs/mobile.md 5.4、5.5） | `domain/upload/` | `upload_batches`（一批上传）、`uploads`（每个文件的进度和结果），迁移 042；`device_albums`（手机报的相册、盘点、同步开关、放到哪）、`device_sync`（同步设置和 App 的状态），迁移 043；`devices` 的落点两列照旧由 `access/` 写 | 入库走图库与文件的导入（`domain/library/import.ts`） |
+| 姿势（实验） | `domain/pose/` | `pose_classes`、`image_poses`（按姿势找图，迁移 045）；`posewear_poses`（PoseWear 姿势库，迁移 046）、`image_posewear_members`（每张图的主要匹配和候选，迁移 047）；`posewear_match_state`（每张图按哪一版随包姿势库、哪份骨架和标签匹配过，迁移 050；`image_poses` 同时多了像样的人数和两人骨架）。PoseWear 的目录、配方、骨架随包（`assets/pose/posewear/`），匹配在 `domain/pose/posewearMatch.ts`（纯函数），提取姿势时顺便做，「重新匹配姿势」任务（`JOB_KINDS['pose-match']`）补换过输入的图 | |
 
 - 永久例外只有 `demo/`：演示数据直接灌进空的一次性库，不经过命令。
 - P2 已搬进主人目录的：合集（原 `services/collections/` → `domain/collections/`）、可见性（原 `datasource/sqlite/exclusions.ts` → `domain/visibility/`）；

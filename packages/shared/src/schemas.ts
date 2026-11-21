@@ -28,6 +28,7 @@ import {
   type LibraryRootMode,
   type Rating,
 } from './domain.ts';
+import { POSEWEAR_POSE_ID } from './pose.ts';
 
 /** shared 不带 DOM / node 的类型：这里只用到 URL 的这几个字段（运行时是全局的 URL） */
 declare const URL: new (url: string) => { protocol: string; username: string; password: string };
@@ -49,6 +50,8 @@ export const qList = <T extends z.ZodType<unknown, string>>(item: T) =>
   ]);
 
 export const Id = z.string().min(1);
+/** 姿势类别的 id：full_01 这样 */
+const POSE_CLASS_ID = /^[a-z]+_\d{2}$/;
 export const IdInput = z.object({ id: Id });
 export const RatingSchema = z.enum(['general', 'sensitive', 'questionable', 'explicit']);
 const animatedIsNotKind = (issue: { input?: unknown }) =>
@@ -363,6 +366,7 @@ export const UpdateSettingsInput = z.object({
     })
     .partial()
     .optional(),
+  pose: z.object({ enabled: z.boolean(), showClasses: z.boolean() }).partial().optional(),
   danbooruApiKey: z.string().optional(),
 });
 export const SourceModeInput = z.object({ mode: z.enum(['strict', 'broad']) });
@@ -525,6 +529,9 @@ export const ListImagesInput = z.object({
   imageIds: qList(z.string()).optional(),
   similarTo: z.string().optional(),
   artist: z.string().min(1).max(200).optional(),
+  poseClass: z.string().regex(POSE_CLASS_ID).optional(),
+  posewearPose: z.string().regex(POSEWEAR_POSE_ID).optional(),
+  posewearReliable: qBool.optional(),
   order: z.enum(['asc', 'desc']).optional(),
   cursor: z.string().optional(),
   limit: qNumber.min(1).max(200).optional(),
@@ -587,3 +594,46 @@ export const AuditInput = z.object({
   /** 翻页：只看 id 比它小的 */
   before: qNumber.optional(),
 });
+
+// ------------------------------------------------------------------ 按姿势找图（实验）
+
+/** 下载姿势模型：要用户明确同意（会从 Hugging Face 下载约 240 MB） */
+export const PoseDownloadInput = z.object({ consent: z.literal(true) });
+/**
+ * 从本机文件夹复制姿势模型：文件夹里要有 dw-ll_ucoco_384.onnx；找人模型（model.onnx + threshold.json）放在同一个文件夹，
+ * 或它的 anime_person_v1.1_m / person_detect_v1.1_m 子文件夹里
+ */
+export const PoseCopyInput = z.object({ path: z.string().min(1).max(1000) });
+/** 导入原型算好的姿势标签低分（pose_tags_lowthr.npz）：只导本图库里有的图，已经按现在的识别模型收过的不覆盖 */
+export const PoseTagsImportInput = z.object({ path: z.string().min(1).max(1000).describe('原型的 pose_tags_lowthr.npz') });
+/** 导入原型的姿势数据（一次性；同样的文件再导一次结果不变） */
+export const PoseImportInput = z.object({
+  keypointsPath: z.string().min(1).max(1000).describe('原型的 keypoints_lib.npz'),
+  assignmentsPath: z.string().min(1).max(1000).describe('原型的 assignments.json'),
+});
+/** 导入 PoseWear 的线稿（本机的 PoseWear 文件夹；复制进数据目录，不进仓库）。姿势目录随包，不用导 */
+export const PoseWearImportInput = z.object({
+  path: z.string().min(1).max(1000).describe('PoseWear 文件夹（p/t、p/i 里的线稿，或者平铺的 full_single_P001_front.webp 这样的文件）'),
+  viewsPath: z.string().min(1).max(1000).optional().describe('不再需要（代表视角随包）；给了也不用'),
+});
+/** 重新匹配 PoseWear 姿势：默认只补骨架、标签换过的图；all 全部重算 */
+export const PoseRematchInput = z.object({ all: qBool.optional() });
+/** 一个 PoseWear 姿势的骨架（画小人用）；view 不给就用代表视角 */
+export const PoseWearSkeletonInput = z.object({
+  id: z.string().regex(POSEWEAR_POSE_ID),
+  view: z.enum(['front', 'high', 'low', 'side', 'diag']).optional(),
+});
+/** 导入姿势匹配结果：单人、双人各自整批替换，至少给一个（命令里检查） */
+export const PoseWearAssignInput = z.object({
+  assignmentsPath: z.string().min(1).max(1000).optional().describe('单人：posewear_final 的 assignments_multi_weighted.json（assignments_multi.json、旧的 assignments.json 也认）'),
+  pairsPath: z.string().min(1).max(1000).optional().describe('双人：pose-pair tags_v1 的 assignments.json'),
+});
+export const PoseWearCatalogInput = z.object({ all: qBool.optional() });
+export const PoseWearFileInput = z.object({
+  size: z.enum(['t', 'i']),
+  file: z.string().regex(/^(full_single|full_sexy|upper80v2|pair)_P\d{3}_(front|high|low|side|diag)\.webp$/),
+});
+export const PoseWearOfInput = z.object({ id: Id });
+export const PoseWearLowInput = z.object({ pose: z.string().regex(POSEWEAR_POSE_ID) });
+export const PoseClassInput = z.object({ id: z.string().regex(POSE_CLASS_ID) });
+export const PoseSimilarInput = z.object({ id: Id, cursor: z.string().optional(), limit: qNumber.min(1).max(200).optional() });

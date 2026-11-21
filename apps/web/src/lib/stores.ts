@@ -73,6 +73,9 @@ interface PrefsState {
   setCharactersView: (v: CharactersView) => void;
   setGridRowHeight: (v: number) => void;
   setSidebarCollapsed: (v: boolean) => void;
+  /** 按 PoseWear 姿势找图时只看可靠的（去掉低置信的匹配）；默认关 */
+  poseReliableOnly: boolean;
+  setPoseReliableOnly: (v: boolean) => void;
 }
 
 export const usePrefs = create<PrefsState>()(
@@ -113,6 +116,8 @@ export const usePrefs = create<PrefsState>()(
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       coverCrop: 'head',
       setCoverCrop: (coverCrop) => set({ coverCrop }),
+      poseReliableOnly: false,
+      setPoseReliableOnly: (poseReliableOnly) => set({ poseReliableOnly }),
     }),
     { name: 'emaki.prefs' },
   ),

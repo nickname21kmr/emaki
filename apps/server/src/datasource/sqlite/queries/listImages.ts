@@ -160,6 +160,17 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
     p.artists = JSON.stringify(tagsOfArtist(db, q.artist));
     both('i.id IN (SELECT ia.image_id FROM image_artists ia WHERE ia.artist IN (SELECT value FROM json_each(@artists)))');
   }
+  if (q.poseClass) {
+    // 姿势类别（实验，domain/pose/）：归到这一类的图
+    both('i.id IN (SELECT image_id FROM image_poses WHERE class_id = @poseClass)');
+    p.poseClass = q.poseClass;
+  }
+  if (q.posewearPose) {
+    // PoseWear 姿势（实验，domain/pose/posewear.ts）：匹配到这个姿势的图（不只是主要姿势）；双人的差分不单独出现；
+    // 只看可靠的：去掉低置信（lowtag+skel）
+    both(`i.id IN (SELECT image_id FROM image_posewear_members WHERE pose_id = @pwPose AND variant_of IS NULL${q.posewearReliable ? ' AND low = 0' : ''})`);
+    p.pwPose = q.posewearPose;
+  }
   if (q.theme) {
     // 任一组标签达到阈值（THEME_FILTERS）。先把标签名换成 id，SQL 里不再联 tags 表；
     // 按 image_id 走 image_tags 主键，每张只看自己的几十个标签
@@ -253,15 +264,26 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
   const total = counts ? counts(JSON.stringify(filters), count) : count();
   const limit = Math.min(Math.max(q.limit ?? 60, 1), 200);
   // page 只在看某一本时按页序，否则当入库时间
-  const sort = q.sort === 'page' && collection === null ? 'addedAt' : (q.sort ?? 'addedAt');
+  // 按姿势类别筛选、没指定排序时按离代表骨架的距离（近的在前，游标用偏移：距离不在图片行里）
+  // 按 PoseWear 姿势筛选、没指定排序时按匹配名次（原型按 0.6·骨架相似 + 0.4·标签分排好的，低置信的不另外往后挪）
+  const byPose = !q.sort && (q.posewearPose ? 'poseRank' : q.poseClass ? 'poseDistance' : null);
+  const sort: ImageSort | 'poseDistance' | 'poseRank' = byPose || (q.sort === 'page' && collection === null ? 'addedAt' : (q.sort ?? 'addedAt'));
 
-  if (!q.collectionId && decideCollapse(q.collapseCollections, q.cursor, total)) return collapsedImages(db, q, countWhere.join(' AND '), p, total);
+  if (!q.collectionId && !q.poseClass && !q.posewearPose && decideCollapse(q.collapseCollections, q.cursor, total)) return collapsedImages(db, q, w, countWhere.join(' AND '), p, total);
 
-  if (sort === 'random') {
+  if (sort === 'random' || sort === 'poseDistance' || sort === 'poseRank') {
     const offset = decodeCursor(q.cursor, isOffset) ?? 0;
+    const order =
+      sort === 'poseDistance'
+        ? `(SELECT ip.distance FROM image_poses ip WHERE ip.image_id = i.id) ${q.order === 'desc' ? 'DESC' : 'ASC'}`
+        : sort === 'poseRank'
+          ? `(SELECT pw.rank FROM image_posewear_members pw WHERE pw.image_id = i.id AND pw.pose_id = @pwPose) ${q.order === 'desc' ? 'DESC' : 'ASC'}`
+          : q.seed !== undefined
+          ? SEEDED_RANDOM_EXPR
+          : RANDOM_EXPR;
     const rows = db
-      .prepare(`SELECT ${IMAGE_COLS} ${from} WHERE ${w} ORDER BY ${q.seed !== undefined ? SEEDED_RANDOM_EXPR : RANDOM_EXPR}, i.id LIMIT @lim OFFSET @off`)
-      .all({ ...p, ...(q.seed !== undefined ? { seed: q.seed } : {}), lim: limit + 1, off: offset }) as ImageRow[];
+      .prepare(`SELECT ${IMAGE_COLS} ${from} WHERE ${w} ORDER BY ${order}, i.id LIMIT @lim OFFSET @off`)
+      .all({ ...p, ...(sort === 'random' && q.seed !== undefined ? { seed: q.seed } : {}), lim: limit + 1, off: offset }) as ImageRow[];
     const hasMore = rows.length > limit;
     if (hasMore) rows.pop();
     return { items: hydrateImages(db, rows), nextCursor: hasMore ? encodeCursor(offset + limit) : null, total };

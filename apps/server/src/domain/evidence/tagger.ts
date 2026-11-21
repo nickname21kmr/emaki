@@ -1,6 +1,6 @@
 /**
  * 识别模型的证据提供者（docs/core-architecture.md 第 2.1、4.2 节，P3b）：把引擎输出写成证据。规则（以 TASKS.md T10「规则」表为准）：
- *   general ≥ 阈值 → image_tags；character（达到建议阈值或自动阈值中较低的那个，引擎已经筛过）→ 全部记成角色证据（tagger），
+ *   general ≥ 阈值 → image_tags；姿势名单里的一般标签在 [0.17, 阈值) 的 → image_pose_tags_low（只给按姿势找图用，poseTags.ts）；character（达到建议阈值或自动阈值中较低的那个，引擎已经筛过）→ 全部记成角色证据（tagger），
  *   包括分数达到自动阈值、会变成关联的那些——D2 要靠它判断某条自动关联现在还有没有证据支持；
  *   候选角色的主作品记成作品证据（按标签，不再算进图的作品，附录 #8）；
  *   rating 取 argmax（手动改过的不动，归类模块的 setAutoRating）；DECODE / UNSUPPORTED 也标记已处理（证据不动）；
@@ -21,6 +21,7 @@ import { pickRating } from '../../services/tagger/postprocess.ts';
 import type { HostItemResult } from '../../services/tagger/protocol.ts';
 import { setAutoRating } from '../curation/marks.ts';
 import { collectingTx } from '../tx.ts';
+import { writePoseTagsLow, type PoseLowRow } from './poseTags.ts';
 import { replaceEvidence, type CharacterCandidate, type ImageEvidence, type WorkCandidate } from './store.ts';
 
 export interface WriterOptions {
@@ -37,6 +38,11 @@ export interface WriterOptions {
    * 免得画师补跑再单独跑它（会弄崩子进程的图要重开、降级好几次才放弃）
    */
   artists?: boolean;
+  /**
+   * 这次识别顺便要了姿势标签的低分（HostThresholds.low）：结果里带 low 的图写进 image_pose_tags_low（poseTags.ts），
+   * 解不开的图也记收集过（「补充姿势标签」不再跑它）。不给就不动这两张表
+   */
+  poseLow?: boolean;
 }
 
 export interface WriteStats {
@@ -94,13 +100,17 @@ export class TagResultWriter {
       const ids: number[] = [];
       const evidence: ImageEvidence[] = [];
       const tags = new Map<number, [string, number][]>();
+      const poseLow: PoseLowRow[] = [];
       for (const r of results) {
         const id = this.writeOne(r, now, evidence);
         if (id === null) continue;
         ids.push(id);
         // 识别失败也算「识别过」：按空标签判主题和质量分（保持 tagged_at 与 theme 同时为空 / 非空）
         tags.set(id, r.ok ? r.general : []);
+        if (this.o.poseLow && (!r.ok || r.low)) poseLow.push({ imageId: id, model: this.o.repo, low: r.ok ? r.low! : [] });
       }
+      // 姿势标签的低分：只留名单里、低于一般标签阈值的（达到的已经在 image_tags 里）
+      if (poseLow.length) writePoseTagsLow(this.db, poseLow, this.o.generalThreshold, now);
       // 识别成功的图整体替换模型证据（失败的证据不动）；自动决定由 afterBatchInTx 交给的反应做
       const tx = collectingTx(this.db);
       replaceEvidence(tx, null, 'tagger', evidence);

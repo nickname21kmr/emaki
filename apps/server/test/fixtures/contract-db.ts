@@ -235,6 +235,7 @@ export function buildContractDb(now: number): DemoDb {
     dedupe: { hammingThreshold: 8, lastRunAt: null },
     ui: { theme: 'system' },
     browse: { customThemes: [] },
+    pose: { enabled: false, showClasses: false },
   };
 
   return { works, characters, images, duplicates, exclusions, settings, collections: new Map() };

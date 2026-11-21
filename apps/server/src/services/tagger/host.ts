@@ -180,6 +180,17 @@ async function init(msg: InitMsg): Promise<void> {
   });
 }
 
+/** 姿势标签名单 → 一般标签的下标（名单不变时只算一次；模型里没有的名字跳过） */
+let lowIdx: { labels: Labels; key: string; idx: number[] } | null = null;
+function lowIndices(labels: Labels, tags: readonly string[]): number[] {
+  const key = tags.join('\n');
+  if (lowIdx?.labels === labels && lowIdx.key === key) return lowIdx.idx;
+  const general = new Map(labels.generalIdx.map((i) => [labels.names[i]!, i]));
+  const idx = tags.flatMap((t) => (general.has(t) ? [general.get(t)!] : []));
+  lowIdx = { labels, key, idx };
+  return idx;
+}
+
 /** 线程池用不了时在主线程预处理（原来的做法），错误口径和工作线程一致 */
 async function preprocessInline(spec: TaggerModelSpec, id: number, path: string): Promise<PreprocessReply> {
   return { id, ...(await preprocessFile(spec, path)) };
@@ -208,6 +219,8 @@ async function tag(m: TagMsg): Promise<void> {
   const preprocessMs = performance.now() - t0;
 
   const okIdx = inputs.flatMap((x, k) => (x ? [k] : []));
+  const lowReq = m.thresholds.low;
+  const low = lowReq ? { idx: lowIndices(s.labels, lowReq.tags), min: lowReq.min, max: lowReq.max } : undefined;
   let inferMs = 0;
   const per = perImage(s.spec);
   for (let start = 0; start < okIdx.length; start += s.batchSize) {
@@ -236,6 +249,7 @@ async function tag(m: TagMsg): Promise<void> {
         generalMcut: m.thresholds.generalMcut,
         characterMcut: m.thresholds.characterMcut,
         artistThreshold: m.thresholds.artist,
+        low,
       });
       results[k] = { id: m.items[k]!.id, ok: true, ...d };
     });

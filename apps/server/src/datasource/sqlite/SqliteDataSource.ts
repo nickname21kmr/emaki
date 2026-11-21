@@ -41,6 +41,9 @@ import { ARTIST_MODEL, artistPendingCount, createArtistJobRunner } from '../../s
 import { isModelReady } from '../../services/tagger/download.ts';
 import { findModel } from '../../services/tagger/models.ts';
 import { createTagStage } from '../../services/tagger/tagJob.ts';
+import { createPoseStage, ensurePoseClasses } from '../../services/pose/job.ts';
+import { createPoseTagsStage } from '../../services/pose/tagsJob.ts';
+import { createPoseMatchStage, ensurePoseWearCatalog } from '../../services/pose/posewearMatch.ts';
 import { CharacterCatalog, createCatalog } from '../../domain/catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../../services/catalog/copyrights.ts';
 import { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
@@ -270,6 +273,18 @@ export class SqliteDataSource {
         }),
       },
     });
+    // 按姿势找图（实验，默认关）：类别随仓库分发，按版本同步进库；打开了才跑任务
+    // 补充姿势标签：用户点了才跑（识别新图时已经顺便收了）
+    ds.pipeline.register({
+      pose: createPoseStage({ ctx: ds.ctx, modelsDir: config.modelsDir, detector: ds.ports.poseDetector }),
+      poseTags: createPoseTagsStage({ ctx: ds.ctx, modelsDir: config.modelsDir }),
+      // PoseWear 姿势匹配：提取时顺便做；这个任务补骨架、标签换过的图和姿势库升级后的重算（启动后任务链走到时自动排上）
+      poseMatch: createPoseMatchStage({ ctx: ds.ctx }),
+    });
+    if (readSettings(db).pose.enabled) {
+      ensurePoseClasses(ds.ctx);
+      ensurePoseWearCatalog(ds.ctx);
+    }
     // 查重（T16）
     ds.pipeline.register({ dedupe: ds.dedupe });
     // 从没查过重，或查重之后又有新缩略图（重启丢了进程里的标记）→ 下次有机会就查（T26）

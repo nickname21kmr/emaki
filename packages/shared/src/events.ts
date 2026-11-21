@@ -41,6 +41,7 @@ export const DOMAIN_CHANGES = [
   'collections.changed',
   'duplicates.changed',
   'settings.changed',
+  'pose.changed',
   'library.opened',
 ] as const;
 export type DomainChange = (typeof DOMAIN_CHANGES)[number];

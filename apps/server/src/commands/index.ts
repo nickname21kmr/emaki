@@ -6,6 +6,7 @@ import { accessCommands, accessQueries } from './access.ts';
 import { catalogCommands } from './catalog.ts';
 import { curationCommands } from './curation.ts';
 import { libraryCommands, libraryQueries } from './library.ts';
+import { poseCommands, poseQueries } from './pose.ts';
 import { queries } from './queries.ts';
 import { Registry, type Def } from './registry.ts';
 import { systemCommands, systemQueries } from './system.ts';
@@ -19,6 +20,8 @@ export const DEFINITIONS: readonly Def[] = [
   ...queries,
   ...libraryQueries,
   ...systemQueries,
+  ...poseCommands,
+  ...poseQueries,
   ...accessCommands,
   ...accessQueries,
   ...uploadCommands,

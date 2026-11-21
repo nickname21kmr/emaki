@@ -34,6 +34,27 @@ export interface ArtistStage {
 export interface DedupeStage {
   run(ctx: JobContext): Promise<string>;
 }
+/** 按姿势找图（实验，默认关）：打开了、模型在才自动续跑 */
+export interface PoseStage {
+  enabled(): boolean;
+  isReady(): boolean;
+  pendingCount(): number;
+  run: JobRunner;
+}
+/** 补充姿势标签（按姿势找图，实验）：用户点了才跑（requested），补完或取消时 done() 清掉；没补完就重启的接着补 */
+export interface PoseTagsStage {
+  enabled(): boolean;
+  requested(): boolean;
+  pendingCount(): number;
+  done(): void;
+  run: JobRunner;
+}
+/** 重新匹配 PoseWear 姿势（按姿势找图，实验）：打开了、用户没暂停、有骨架或标签换过的图就自动排上 */
+export interface PoseMatchStage {
+  enabled(): boolean;
+  pendingCount(): number;
+  run: JobRunner;
+}
 /** 按 Pixiv 标签补充角色（会联网）：enabled() 只管识别后的自动排队，手动点按钮照常跑 */
 export interface PixivStage {
   enabled(): boolean;
@@ -53,6 +74,9 @@ export interface PipelineDeps {
   dedupe?: DedupeStage;
   artists?: ArtistStage;
   pixiv?: PixivStage;
+  pose?: PoseStage;
+  poseTags?: PoseTagsStage;
+  poseMatch?: PoseMatchStage;
   /**
    * 「要查重」的标记（P2：持久化在 pending_work 里，可见性和文件内容变化的反应会标记，重启不丢）。
    * 不给时只在内存里（单元测试）。查重开始时 peek() 记下标记，跑完 done(那个值) 只清掉那之前的标记
@@ -75,10 +99,12 @@ export type PausableKind = PausableJobKind;
 /** 延后的文件（2 秒内刚写入）过多久再扫 */
 const DEFERRED_RETRY_MS = 3000;
 
-export type PipelineStages = Partial<Pick<PipelineDeps, 'tag' | 'danbooru' | 'dedupe' | 'artists' | 'pixiv' | 'afterTag' | 'afterScan'>>;
+export type PipelineStages = Partial<
+  Pick<PipelineDeps, 'tag' | 'danbooru' | 'dedupe' | 'artists' | 'pixiv' | 'pose' | 'poseTags' | 'poseMatch' | 'afterTag' | 'afterScan'>
+>;
 
 /** 每种任务的执行体（阶段）：一个阶段只能有一个注册者 */
-const STAGES = ['tag', 'danbooru', 'dedupe', 'artists', 'pixiv'] as const;
+const STAGES = ['tag', 'danbooru', 'dedupe', 'artists', 'pixiv', 'pose', 'poseTags', 'poseMatch'] as const;
 
 export class Pipeline {
   private memoryDedupe = false;
@@ -185,6 +211,12 @@ export class Pipeline {
             // 开着画师的：接着补（新图、WD 识别的旧图、重启前没补完的）；用户取消过就等他手动再点
             const a = this.d.artists;
             if (this.canAutoArtists()) this.d.jobs().enqueue('artists');
+            // 开着姿势检索的：新图接着提取姿势（显卡道里排在画师后面）
+            if (this.canAutoPose()) this.d.jobs().enqueue('pose');
+            // 用户开始过「补充姿势标签」、还没补完（比如中途重启）：接着补
+            if (this.canAutoPoseTags()) this.d.jobs().enqueue('pose-tags');
+            // 标签换过的图重新匹配 PoseWear 姿势（提取过姿势的）
+            this.requestPoseMatch();
             // 放在最后：enqueue 会马上启动空闲的 io 道，先排的话 Pixiv 会抢在同步、查重前面
             this.maybePixiv();
           }
@@ -227,6 +259,37 @@ export class Pipeline {
         case 'danbooru-sync': {
           if (!this.d.danbooru) throw new NotImplementedError('T11', 'Danbooru 同步');
           return this.d.danbooru.run(ctx);
+        }
+        case 'pose': {
+          if (!this.d.pose) throw new NotImplementedError('pose', '提取姿势');
+          if (!this.d.pose.enabled()) return '提取姿势：设置里没有打开';
+          const msg = await this.d.pose.run(ctx);
+          if (ctx.signal.aborted) this.setPaused('pose', true);
+          // 提取时已经顺便匹配了；这期间标签换过的图再补一轮
+          if (!ctx.signal.aborted && !ctx.yielded) this.requestPoseMatch();
+          return msg;
+        }
+        case 'pose-tags': {
+          const p = this.d.poseTags;
+          if (!p) throw new NotImplementedError('pose-tags', '补充姿势标签');
+          if (!p.enabled()) return '补充姿势标签：姿势检索没有打开';
+          try {
+            const msg = await p.run(ctx);
+            // 补了低分标签的图重新匹配 PoseWear 姿势
+            if (!ctx.signal.aborted && !ctx.yielded) this.requestPoseMatch();
+            return msg;
+          } finally {
+            // 补完、用户取消、出错都清掉请求（进度按张记着，再点接着补）；让出的接着排，请求留着
+            if (!ctx.yielded) p.done();
+          }
+        }
+        case 'pose-match': {
+          const p = this.d.poseMatch;
+          if (!p) throw new NotImplementedError('pose-match', '重新匹配姿势');
+          if (!p.enabled()) return '重新匹配姿势：设置里没有打开';
+          const msg = await p.run(ctx);
+          if (ctx.signal.aborted) this.setPaused('pose-match', true);
+          return msg;
         }
       }
     };
@@ -293,6 +356,47 @@ export class Pipeline {
     // 识别确实不用跑（比如重启后）才接着补画师；识别被用户暂停时也不接，免得新图先被 PixAI 跑一遍画师、恢复识别后再跑一遍
     else if (!tagNeeded && this.canAutoArtists()) this.d.jobs().enqueue('artists');
     if (!tagNeeded && !this.tagPaused) this.maybePixiv();
+    if (!tagNeeded && this.canAutoPose()) this.d.jobs().enqueue('pose');
+    if (!tagNeeded && this.canAutoPoseTags()) this.d.jobs().enqueue('pose-tags');
+    // 启动时（姿势库升级了、上次没匹配完）：识别不用跑就接着匹配
+    if (!tagNeeded) this.requestPoseMatch();
+  }
+
+  /** 重新匹配姿势：打开了、用户没暂停、有要匹配的图（骨架、标签换过，或者姿势库升级了） */
+  private canAutoPoseMatch(): boolean {
+    const p = this.d.poseMatch;
+    return !!p && p.enabled() && !this.paused('pose-match') && p.pendingCount() > 0;
+  }
+
+  /** 有图要重新匹配 PoseWear 姿势：能自动跑时排一轮；正在跑也再排一轮（游标可能已经走过这些图）；返回排上了没有 */
+  requestPoseMatch(): boolean {
+    if (!this.canAutoPoseMatch()) return false;
+    this.d.jobs().enqueue('pose-match', { requeueIfRunning: true });
+    return true;
+  }
+
+  /** 补充姿势标签：姿势检索打开了、用户要求了、还有能补的图（识别要跑的时候等识别跑完，识别会顺便收新图的） */
+  private canAutoPoseTags(): boolean {
+    const p = this.d.poseTags;
+    return !!p && p.enabled() && p.requested() && p.pendingCount() > 0;
+  }
+
+  /** 用户点了「补充姿势标签」（请求已经记下）：排一轮；正在跑也再排一轮 */
+  requestPoseTags(): boolean {
+    if (!this.canAutoPoseTags()) return false;
+    this.d.jobs().enqueue('pose-tags', { requeueIfRunning: true });
+    return true;
+  }
+
+  /** 姿势检索打开了、模型在、用户没暂停、有没提取的图 */
+  private canAutoPose(): boolean {
+    const p = this.d.pose;
+    return !!p && p.enabled() && p.isReady() && !this.paused('pose') && p.pendingCount() > 0;
+  }
+
+  /** 刚打开姿势检索（或者导入、换了图）：能自动跑时排一轮；正在跑也再排一轮 */
+  requestPose(): void {
+    if (this.canAutoPose()) this.d.jobs().enqueue('pose', { requeueIfRunning: true });
   }
 
   private maybePixiv(requeueIfRunning = true): void {

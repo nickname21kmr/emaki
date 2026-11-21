@@ -45,6 +45,7 @@ import { applySourceChanges, diffSources, markSourcesCurrent } from '../services
 import { findModel } from '../services/tagger/models.ts';
 import { resetIoBackoff } from '../services/tagger/readBackoff.ts';
 import { pickFolder } from '../system/pickFolder.ts';
+import { afterPoseToggle, checkPoseToggle } from './pose.ts';
 import { defineCommand, defineQuery, type Engine } from './registry.ts';
 
 export async function previewSourceMode(e: Engine, mode: 'strict' | 'broad'): Promise<SourceModePreview> {
@@ -136,6 +137,8 @@ export async function updateSettings(e: Engine, body: UpdateSettingsBody): Promi
   const beforeArtists = readSettings(e.ctx.db).tagger.artists;
   const beforePixiv = readSettings(e.ctx.db).tagger.pixiv;
   const beforeMode = readSettings(e.ctx.db).tagger.pixivFilenameMode;
+  const beforePose = readSettings(e.ctx.db).pose.enabled;
+  checkPoseToggle(e, body.pose?.enabled);
   const { pixivFilenameMode, ...taggerRest } = body.tagger ?? {};
   // 换识别方式走 setSourceMode（报告影响、可撤销），其余照常保存
   // 设置监听者（识别、Danbooru 等重载配置）和缓存由反应通知（settings.changed）
@@ -156,6 +159,8 @@ export async function updateSettings(e: Engine, body: UpdateSettingsBody): Promi
     for (const j of e.ctx.jobs.list())
       if (j.kind === 'artists' && (j.status === 'queued' || j.status === 'running')) e.ctx.jobs.cancel(j.id);
   }
+  // 姿势检索（实验）：打开时同步类别、排一轮提取；关掉时停掉任务
+  afterPoseToggle(e, beforePose, body.pose?.enabled);
   // 刚打开自动查 Pixiv：把关着时登记下来的图补上
   if (body.tagger?.pixiv === true && !beforePixiv) e.pipeline.requestPixiv();
   // 关掉：停掉自动排上的（排队中和正在跑的）；用户在「未识别」页手动点的照常跑完

@@ -2,7 +2,7 @@ import { useAllowed, type Need } from '@/lib/capabilities';
 
 /**
  * 设置页的分组：顺序即目录顺序，编号按这台设备看得到的那些排（useSettingsSections）。
- * 每节声明需要的能力（lib/capabilities.ts），没有的整节不显示：手机访问要 devices、AI 助手要 assistant（这两项手机上永远没有），
+ * 每节声明需要的能力（lib/capabilities.ts），没有的整节不显示：手机访问要 devices、AI 助手要 assistant、姿势检索（实验，读本机文件夹）要 desktop（这三项手机上永远没有），
  * 后台任务要 jobs，图库文件夹、识别、Danbooru、查重读改的都是图库设置（settings）；外观里的主题存在图库设置里（整页本来就要 settings），
  * 其余是本机偏好，关于只读，都不要额外的能力。
  */
@@ -15,6 +15,7 @@ export const SECTIONS = [
   { id: 'jobs', title: '后台任务', need: 'jobs' },
   { id: 'phone', title: '手机访问', need: 'devices' },
   { id: 'assistant', title: 'AI 助手 · 实验', need: 'assistant' },
+  { id: 'pose', title: '姿势检索 · 实验', need: 'desktop' },
   { id: 'about', title: '关于', need: null },
 ] as const satisfies readonly { id: string; title: string; need: Need }[];
 

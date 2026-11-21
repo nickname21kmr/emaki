@@ -14,6 +14,7 @@ import {
   Image as ImageIcon,
   Check,
   Pencil,
+  PersonStanding,
   Play,
   Plus,
   Shuffle,
@@ -98,6 +99,7 @@ export function GalleryToolbar({
   onClearFilters,
   customThemes,
   animatedChip = true,
+  leading,
   sheetTop,
 }: {
   filters: GalleryFilters;
@@ -110,6 +112,8 @@ export function GalleryToolbar({
   customThemes: CustomTheme[];
   /** 显示「动图」chip（别册的动图页本身就是这个筛选，不显示） */
   animatedChip?: boolean;
+  /** 放在筛选最前面的东西（图库：姿势检索打开时的「按姿势」） */
+  leading?: ReactNode;
   /** 手机上筛选面板最上面的一段（图库：收藏、排序、收拢组图） */
   sheetTop?: ReactNode;
 }) {
@@ -223,6 +227,7 @@ export function GalleryToolbar({
           >
             <div className="flex flex-col gap-5 pt-1">
               {sheetTop}
+              {leading && <SheetGroup label="姿势">{leading}</SheetGroup>}
               {/* 搜索框「按标签」和 ⌘K 加进来的必含标签：窄屏上工具条那一行不显示，在这里看、在这里去掉 */}
               {filters.tags.length > 0 && <SheetGroup label="必含">{tagChips}</SheetGroup>}
               <SheetGroup label="分级">{ratingChips}</SheetGroup>
@@ -242,6 +247,12 @@ export function GalleryToolbar({
         <div className="-ml-3 flex min-w-0 flex-1 items-center narrow:hidden">
           <div className="min-w-0 overflow-x-auto scrollbar-none fade-x">
             <div className="flex w-max items-center gap-1.5 py-1 pr-8 pl-4">
+              {leading && (
+                <>
+                  {leading}
+                  <Divider />
+                </>
+              )}
               {/* 搜索框「按标签」和 ⌘K 加进来的必含标签 */}
               {filters.tags.length > 0 && (
                 <>
@@ -308,6 +319,9 @@ export function GalleryViewControls({
   /** bar：目次那一行的右端；sheet：手机上筛选面板的最上面（A1），排成两组 chip，没有缩放（行高按窗口定） */
   layout?: 'bar' | 'sheet';
 }) {
+  // 选了姿势类别时多一种排法：离这一类代表姿势近的在前；「找同姿势的图」按和那张图相近排
+  const sortLabel = filters.poseLike ? '姿势相近' : filters.poseOrder ? (filters.pwPose ? '姿势最像' : '姿势典型') : SORT_LABEL[filters.sort];
+  const noDirection = filters.sort === 'random' || filters.poseOrder || !!filters.poseLike;
   if (layout === 'sheet')
     return (
       <>
@@ -368,16 +382,32 @@ export function GalleryViewControls({
             variant="ghost"
             size="sm"
             icon={<ArrowDownUp className="size-3.5" />}
-            aria-label={`排序：${SORT_LABEL[filters.sort]}`}
-            title={`排序：${SORT_LABEL[filters.sort]}`}
+            aria-label={`排序：${sortLabel}`}
+            title={`排序：${sortLabel}`}
             className="text-[12.5px] @max-[1420px]/kindbar:gap-0 @max-[1420px]/kindbar:px-2"
           >
-            <span className="@max-[1420px]/kindbar:hidden">{SORT_LABEL[filters.sort]}</span>
+            <span className="@max-[1420px]/kindbar:hidden">{sortLabel}</span>
           </Button>
         }
       >
         <MenuLabel>排序方式</MenuLabel>
-        <MenuRadioGroup value={filters.sort} onValueChange={(sort) => update({ sort })}>
+        <MenuRadioGroup
+          value={filters.poseLike ? 'like' : filters.poseOrder ? 'pose' : filters.sort}
+          onValueChange={(v) => {
+            if (v === 'pose') update({ poseOrder: true });
+            else if (v !== 'like') update({ sort: v as GallerySort });
+          }}
+        >
+          {filters.poseLike && (
+            <MenuRadioItem value="like" icon={<PersonStanding />}>
+              和那张姿势相近
+            </MenuRadioItem>
+          )}
+          {(filters.poseClass || filters.pwPose) && (
+            <MenuRadioItem value="pose" icon={<PersonStanding />}>
+              {filters.pwPose ? '和姿势最像的在前' : '姿势典型的在前'}
+            </MenuRadioItem>
+          )}
           {SORTS.map((s) => (
             <MenuRadioItem key={s} value={s} icon={SORT_ICON[s]}>
               {SORT_LABEL[s]}
@@ -388,8 +418,8 @@ export function GalleryViewControls({
 
       <IconButton
         size="sm"
-        label={orderLabel(filters.sort, filters.order)}
-        disabled={filters.sort === 'random'}
+        label={noDirection && filters.sort !== 'random' ? '按姿势排没有方向' : orderLabel(filters.sort, filters.order)}
+        disabled={noDirection}
         onClick={() => update({ order: filters.order === 'desc' ? 'asc' : 'desc' })}
       >
         {filters.order === 'desc' ? <ArrowDownWideNarrow /> : <ArrowUpNarrowWide />}

@@ -17,6 +17,7 @@ import { TaggerSection } from './components/TaggerSection';
 import { useSectionNav } from './hooks';
 import { isSectionId, useSettingsSections, type SectionId } from './sections';
 import { AssistantSettingsSection } from '@/features/assistant/AssistantSettingsSection';
+import { PoseSettingsSectionLazy } from '@/features/pose/lazy';
 import { PhoneAccessSection } from '@/features/access/PhoneAccessSection';
 
 /**
@@ -107,6 +108,8 @@ function renderSection(id: SectionId, settings: Settings, stats: GetStatsRespons
       return <PhoneAccessSection />;
     case 'assistant':
       return <AssistantSettingsSection />;
+    case 'pose':
+      return <PoseSettingsSectionLazy />;
     case 'about':
       return <AboutSection stats={stats} />;
   }

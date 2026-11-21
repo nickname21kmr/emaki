@@ -9,6 +9,7 @@ export default defineProject({
     pool: 'forks',
     testTimeout: 20_000,
     // 不碰开发机上真实的模型：不然扫描完会真去拉起识别子进程，结果取决于这台机器有没有下载模型
-    env: { EMAKI_MODELS_DIR: 'apps/server/test/.no-models' },
+    // 也不看开发机 pose-covers/ 里放的 PoseWear 线稿
+    env: { EMAKI_MODELS_DIR: 'apps/server/test/.no-models', EMAKI_POSE_COVERS_DIR: 'apps/server/test/.no-pose-covers' },
   },
 });

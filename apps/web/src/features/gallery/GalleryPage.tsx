@@ -20,6 +20,8 @@ import { GalleryToolbar, GalleryViewControls } from './components/GalleryToolbar
 import { GridFooter } from './components/GridStates';
 import { SelectionBar } from './components/SelectionBar';
 import { useGalleryParams } from './useGalleryParams';
+import { usePoseEnabled, usePoseSimilarInfinite, usePoseWearLow } from '@/features/pose/client';
+import { PoseEntryLazy, PoseLowMark, PoseWearEntryLazy } from '@/features/pose/lazy';
 
 const SCOPE = 'gallery';
 
@@ -44,14 +46,20 @@ export function GalleryPage() {
   const { data: settings } = useSettings();
   const canVisit = useCanVisit();
   const rowHeight = usePrefs((s) => s.gridRowHeight);
-  const list = useImagesInfinite(query);
+  // 「找同姿势的图」：列表换成姿势相近的那一串（同一类里按和那张图的骨架距离排）
+  const poseOn = usePoseEnabled();
+  const liked = usePoseSimilarInfinite(filters.poseLike);
+  // 按 PoseWear 姿势找图：低置信的格子做个小记号
+  const lowIds = usePoseWearLow(filters.pwPose);
+  const plain = useImagesInfinite(query, !filters.poseLike);
+  const list = filters.poseLike ? liked : plain;
   const images = useMemo(() => list.data?.pages.flatMap((p) => p.items) ?? [], [list.data]);
   const total = list.data?.pages[0]?.total ?? 0;
   const scrollRef = useScrollContainer();
   const navigate = useNavigate();
 
   // 换筛选：回到顶部，并清空多选（选中的图可能已经不在当前结果里了）
-  const queryKey = JSON.stringify(query);
+  const queryKey = JSON.stringify([query, filters.poseLike]);
   const mounted = useRef(false);
   useEffect(() => {
     if (!mounted.current) {
@@ -115,8 +123,12 @@ export function GalleryPage() {
         glyph="无"
         title={filters.q ? `没有找到「${filters.q}」` : `没有符合条件的${kindNoun(filters.kind)}`}
         description={
-          filters.q
+          filters.poseLike
+            ? '那张图还没有能比的姿势（没提取过，或者没找到人物）。'
+            : filters.q
             ? '可以搜文件名，或 Danbooru 风格的标签，比如 long_hair、smile。'
+            : filters.poseClass || filters.pwPose
+            ? '这个姿势在当前筛选下没有图片，放宽一些条件或换一个试试。'
             : '当前的分级、方向、动图或收藏筛选下没有图片，放宽一些条件试试。'
         }
         action={
@@ -144,7 +156,16 @@ export function GalleryPage() {
             loadingMore={isFetchingNextPage}
             onLoadMore={loadMore}
             rowHeight={rowHeight}
-            renderBadges={showKind ? (img) => <KindBadge kind={img.kind} /> : undefined}
+            renderBadges={
+              showKind || lowIds.size
+                ? (img) => (
+                    <>
+                      {showKind && <KindBadge kind={img.kind} />}
+                      {lowIds.has(img.id) && <PoseLowMark />}
+                    </>
+                  )
+                : undefined
+            }
           />
         </div>
         <GridFooter loadingMore={isFetchingNextPage} done={!hasNextPage} total={total} />
@@ -207,6 +228,20 @@ export function GalleryPage() {
             hasFilters={hasFilters}
             onClearFilters={clearFilters}
             customThemes={customThemes}
+            leading={
+              poseOn ? (
+                <>
+                  <PoseWearEntryLazy pose={filters.pwPose} onPick={(id) => update({ pwPose: id })} onClear={() => update({ pwPose: undefined })} />
+                  {/* 51 类：设置里另开才有 */}
+                  <PoseEntryLazy
+                    poseClass={filters.poseClass}
+                    liked={!!filters.poseLike}
+                    onPick={(id) => update({ poseClass: id })}
+                    onClear={() => update({ poseClass: undefined })}
+                  />
+                </>
+              ) : undefined
+            }
             sheetTop={<GalleryViewControls filters={filters} update={update} collapsed={list.data?.pages[0]?.collapsed} layout="sheet" />}
           />
         </div>

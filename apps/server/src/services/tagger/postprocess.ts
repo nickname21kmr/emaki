@@ -15,6 +15,8 @@ export interface DecodeOptions {
   maxCharacter?: number;
   /** 给了就解码画师（模型有画师输出时）；不给就不解码，结果里没有 artist */
   artistThreshold?: number;
+  /** 给了就另外给出这些下标（一般标签）里分数在 [min, max) 的；max 不给就是一般标签实际用的阈值 */
+  low?: { idx: readonly number[]; min: number; max?: number };
 }
 
 export interface Decoded {
@@ -23,6 +25,18 @@ export interface Decoded {
   character: [string, number][];
   /** 只有模型能认画师、又要求解码时才有 */
   artist?: [string, number][];
+  /** 要求了 low 才有 */
+  low?: [string, number][];
+}
+
+/** 姿势标签的低分：idx 里分数在 [min, max) 的，按分数从高到低 */
+function pickLow(p: Float32Array, off: number, idx: readonly number[], names: string[], min: number, max: number): [string, number][] {
+  const out: [string, number][] = [];
+  for (const i of idx) {
+    const v = p[off + i]!;
+    if (v >= min && v < max) out.push([names[i]!, r4(v)]);
+  }
+  return out.sort((a, b) => b[1] - a[1]);
 }
 
 /** MCut（Largeron 2012），与 app.py 一致：降序排序，取相邻差最大处的中点 */
@@ -67,6 +81,7 @@ export function decodeRow(p: Float32Array, off: number, L: Labels, o: DecodeOpti
     general: pick(p, off, L.generalIdx, L.names, g, o.maxGeneral ?? 80),
     character: pick(p, off, L.characterIdx, L.names, c, o.maxCharacter ?? 10),
     ...(o.artistThreshold !== undefined && L.artistIdx.length ? { artist: pick(p, off, L.artistIdx, L.names, o.artistThreshold, 2) } : {}),
+    ...(o.low ? { low: pickLow(p, off, o.low.idx, L.names, o.low.min, o.low.max ?? g) } : {}),
   };
 }
 

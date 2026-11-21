@@ -21,7 +21,8 @@ export type ModuleId =
   | 'commands'
   | 'propagation'
   | 'access'
-  | 'upload';
+  | 'upload'
+  | 'pose';
 
 /** 模块的中文名和目录（相对 apps/server/src，以 / 结尾） */
 export const MODULES: Record<ModuleId, { name: string; dir: string }> = {
@@ -42,6 +43,8 @@ export const MODULES: Record<ModuleId, { name: string; dir: string }> = {
   access: { name: '设备与访问', dir: 'access/' },
   // 手机上传（docs/mobile.md 5.4）：上传的批次和每个文件的进度；入库走图库与文件的导入
   upload: { name: '手机上传', dir: 'domain/upload/' },
+  // 按姿势找图（实验，迁移 045）：姿势类别、每张图的主要人物姿势
+  pose: { name: '姿势', dir: 'domain/pose/' },
 };
 
 /** 表（images 是 images#<列组>）→ 主人 */
@@ -67,6 +70,9 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   pixiv_unavailable_posts: 'evidence',
   danbooru_tags: 'evidence',
   danbooru_artists: 'evidence',
+  // 姿势标签的低分和收集进度（按姿势找图用，迁移 049）
+  image_pose_tags_low: 'evidence',
+  image_pose_tags_checked: 'evidence',
   'images#evidence': 'evidence',
   // 编目：角色、作品、画师合并、别名、重定向、Danbooru 绑定和核验、名字索引和词库
   characters: 'catalog',
@@ -116,6 +122,14 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   uploads: 'upload',
   device_albums: 'upload',
   device_sync: 'upload',
+  // 姿势（实验，迁移 045）
+  pose_classes: 'pose',
+  image_poses: 'pose',
+  // PoseWear 姿势库（实验，迁移 046；047 把主要匹配和候选合成 image_posewear_members）
+  posewear_poses: 'pose',
+  image_posewear_members: 'pose',
+  // 每张图按哪一版姿势库、哪份骨架和标签匹配过（迁移 050，Emaki 自己匹配）
+  posewear_match_state: 'pose',
 };
 
 /**

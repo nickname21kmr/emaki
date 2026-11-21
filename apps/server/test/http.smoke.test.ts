@@ -18,6 +18,8 @@ import { DEFINITIONS } from '../src/commands/index.ts';
 import type { IdMap } from '../src/demo/seed.ts';
 import { NOW } from './contract/harness.ts';
 import { buildContractDb } from './fixtures/contract-db.ts';
+import { patchSettingsInternal } from '../src/datasource/sqlite/settings.ts';
+import { ensurePoseClasses } from '../src/services/pose/job.ts';
 
 // 真实实现会弹出 Windows 的选择文件夹对话框，测试里换成固定返回值
 vi.mock('../src/system/pickFolder.ts', () => ({ pickFolder: async () => 'D:/Picked' }));
@@ -810,6 +812,155 @@ describe('设置、文件夹、任务、SSE、撤销（注册表：settings.*、
 
   it('未知接口 → 404', async () => {
     expect((await call('GET', '/api/no-such-route')).status).toBe(404);
+  });
+});
+
+describe('按姿势找图（实验，注册表：pose.*）', () => {
+  // 演示部件没有姿势模型：关着时只有状态能看，准备模型的命令只做校验，不联网
+  route('GET /api/pose/status', async () => {
+    const { status, json } = await call('GET', '/api/pose/status');
+    expect(status).toBe(200);
+    expect(json).toMatchObject({
+      enabled: false,
+      models: { ready: false, repo: 'deepghs/anime_person_detection、yzd-v/DWPose', download: { state: 'idle' } },
+      job: null,
+      rerun: false,
+      tags: { requested: false, job: null },
+    });
+    expect(json.counts).toMatchObject({ eligible: expect.any(Number), processed: 0, outdated: 0 });
+    expect(json.models.files.map((f: { name: string }) => f.name)).toEqual(['person_detect_v1.1_m/model.onnx', 'person_detect_v1.1_m/threshold.json', 'dw-ll_ucoco_384.onnx']);
+  });
+  // 换了找人模型后重提旧的、补充姿势标签、导入原型的低分（细节在 services/pose/rerun.test.ts、domain/evidence/poseTags.test.ts）
+  route('POST /api/pose/reextract', async () => {
+    expect((await call('POST', '/api/pose/reextract')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const r = await call('POST', '/api/pose/reextract');
+    expect([r.status, r.json.error]).toEqual([400, expect.stringContaining('姿势模型')]);
+  });
+  route('POST /api/pose/tags/backfill', async () => {
+    expect((await call('POST', '/api/pose/tags/backfill')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const r = await call('POST', '/api/pose/tags/backfill');
+    expect([r.status, r.json.count]).toEqual([200, 0]);
+  });
+  route('POST /api/pose/tags/import', async () => {
+    expect((await call('POST', '/api/pose/tags/import', { path: 'Z:/no/such.npz' })).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const r = await call('POST', '/api/pose/tags/import', { path: 'Z:/no/such.npz' });
+    expect([r.status, r.json.error]).toEqual([400, expect.stringContaining('找不到文件')]);
+  });
+  route('POST /api/pose/models/download', async () => {
+    // 没有同意不下载
+    const r = await call('POST', '/api/pose/models/download', { consent: false });
+    expect([r.status, r.json.code]).toEqual([400, 'bad_request']);
+  });
+  route('DELETE /api/pose/models/download', async () => {
+    const r = await call('DELETE', '/api/pose/models/download');
+    expect([r.status, r.json.message]).toEqual([200, '没有在下载']);
+  });
+  route('POST /api/pose/models/copy', async () => {
+    const r = await call('POST', '/api/pose/models/copy', { path: 'Z:/no/such/dir' });
+    expect(r.status).toBe(400);
+    expect(r.json.error).toContain('找不到文件夹');
+  });
+  route('POST /api/pose/import', async () => {
+    const r = await call('POST', '/api/pose/import', { keypointsPath: 'a.npz', assignmentsPath: 'b.json' });
+    expect([r.status, r.json]).toEqual([403, apiError('forbidden')]);
+  });
+  route('POST /api/pose/extract', async () => {
+    expect((await call('POST', '/api/pose/extract')).status).toBe(403);
+    // 打开要先有模型
+    const on = await call('PATCH', '/api/settings', { pose: { enabled: true } });
+    expect([on.status, on.json.error]).toEqual([400, expect.stringContaining('姿势模型')]);
+  });
+  route('GET /api/pose/classes', async () => {
+    expect((await call('GET', '/api/pose/classes')).status).toBe(403);
+    expect((await call('GET', '/api/images?poseClass=full_01')).status).toBe(403);
+    // 直接打开（跳过模型检查）：类别随仓库分发
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    ensurePoseClasses(ds.ctx);
+    const { status, json } = await call('GET', '/api/pose/classes');
+    expect(status).toBe(200);
+    expect(json.groups.map((g: { id: string }) => g.id)).toEqual(['full', 'mid', 'waist', 'bust']);
+    expect(json.groups[0].classes[0]).toMatchObject({ id: 'full_01', count: 0, figureUrl: '/api/pose/classes/full_01/figure.png?v=2' });
+    const list = await call('GET', '/api/images?poseClass=full_01');
+    expect([list.status, list.json.total]).toEqual([200, 0]);
+    expect((await call('GET', '/api/images?poseClass=bogus')).status).toBe(400);
+  });
+  route('GET /api/pose/classes/:id/figure.png', async () => {
+    expect((await call('GET', '/api/pose/classes/full_01/figure.png')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    ensurePoseClasses(ds.ctx);
+    const { status, res } = await call('GET', '/api/pose/classes/full_01/figure.png?v=2');
+    expect([status, res.headers['content-type']]).toEqual([200, 'image/png']);
+    expect(res.rawPayload.subarray(1, 4).toString()).toBe('PNG');
+    expect((await call('GET', '/api/pose/classes/full_99/figure.png')).status).toBe(404);
+  });
+  route('GET /api/pose/similar/:id', async () => {
+    expect((await call('GET', '/api/pose/similar/i1')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const { status, json } = await call('GET', '/api/pose/similar/i1');
+    // 这张图还没有姿势数据
+    expect([status, json.items, json.source.classId]).toEqual([200, [], null]);
+  });
+  // PoseWear 姿势库：导入、目录、线稿、每张图的匹配（细节在 domain/pose/posewear.test.ts）
+  route('POST /api/pose/posewear/import', async () => {
+    expect((await call('POST', '/api/pose/posewear/import', { path: 'Z:/no/such/dir' })).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const r = await call('POST', '/api/pose/posewear/import', { path: 'Z:/no/such/dir' });
+    expect([r.status, r.json.error]).toEqual([400, expect.stringContaining('找不到文件夹')]);
+  });
+  route('POST /api/pose/posewear/matches', async () => {
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const r = await call('POST', '/api/pose/posewear/matches', { assignmentsPath: 'Z:/no/such.json' });
+    expect([r.status, r.json.error]).toEqual([400, expect.stringContaining('找不到文件')]);
+  });
+  route('GET /api/pose/posewear', async () => {
+    expect((await call('GET', '/api/pose/posewear')).status).toBe(403);
+    expect((await call('GET', '/api/images?posewearPose=full_single_P001')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const { status, json } = await call('GET', '/api/pose/posewear?all=1');
+    expect([status, json]).toEqual([200, { sets: [], poses: 0 }]);
+    const list = await call('GET', '/api/images?posewearPose=full_single_P001');
+    expect([list.status, list.json.total]).toEqual([200, 0]);
+    expect((await call('GET', '/api/images?posewearPose=pair60_P001')).status).toBe(400);
+  });
+  route('GET /api/pose/posewear/:size/:file', async () => {
+    expect((await call('GET', '/api/pose/posewear/t/full_single_P001_front.webp')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    // 没导入过
+    expect((await call('GET', '/api/pose/posewear/t/full_single_P001_front.webp')).status).toBe(404);
+    expect((await call('GET', '/api/pose/posewear/x/full_single_P001_front.webp')).status).toBe(400);
+  });
+  route('GET /api/pose/posewear-match/:id', async () => {
+    expect((await call('GET', '/api/pose/posewear-match/i1')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const { status, json } = await call('GET', '/api/pose/posewear-match/i1');
+    expect([status, json.primary, json.related]).toEqual([200, null, []]);
+  });
+  route('GET /api/pose/posewear-low/:pose', async () => {
+    expect((await call('GET', '/api/pose/posewear-low/full_single_P001')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    expect(await call('GET', '/api/pose/posewear-low/pair_P054')).toMatchObject({ status: 200, json: { ids: [] } });
+    expect((await call('GET', '/api/pose/posewear-low/pair60_P054')).status).toBe(400);
+  });
+  // Emaki 自己匹配 PoseWear 姿势（细节在 services/pose/posewearMatch.test.ts）
+  route('GET /api/pose/posewear-skeleton/:id', async () => {
+    expect((await call('GET', '/api/pose/posewear-skeleton/full_single_P001')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const { status, json } = await call('GET', '/api/pose/posewear-skeleton/pair_P054?view=front');
+    expect([status, json.poseId, json.persons.length, json.persons[0].points.length]).toEqual([200, 'pair_P054', 2, 23]);
+    expect((await call('GET', '/api/pose/posewear-skeleton/full_single_P999')).status).toBe(404);
+    expect((await call('GET', '/api/pose/posewear-skeleton/full_single_P001?view=top')).status).toBe(400);
+  });
+  route('POST /api/pose/rematch', async () => {
+    expect((await call('POST', '/api/pose/rematch')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const r = await call('POST', '/api/pose/rematch', { all: true });
+    expect([r.status, r.json.kind]).toEqual([200, 'pose-match']);
+    expect(r.res.headers['x-emaki-undo']).toBe('barrier');
+    // 目录随包，「重新匹配」时同步进库
+    expect((await call('GET', '/api/pose/posewear?all=1')).json.poses).toBeGreaterThan(200);
   });
 });
 

@@ -513,6 +513,7 @@ export function buildDemoDb(now = Date.now()): DemoDb {
     dedupe: { hammingThreshold: 8, lastRunAt: new Date(now - 2 * 3600_000).toISOString() },
     ui: { theme: 'system' },
     browse: { customThemes: [] },
+    pose: { enabled: false, showClasses: false },
   };
 
   // 随机生成的文件名可能撞车；真实库里 (文件夹, 路径) 唯一，这里也保证唯一（放在最后做，不影响随机序列）
