@@ -6,8 +6,15 @@ import type { Db } from '../../db/connection.ts';
 import type { PoseAsset } from './asset.ts';
 import { packMedoid, packPerson, type Group, type Person } from './features.ts';
 
-/** 提取和归类的版本：检测、筛选或类别的规则改了就加 1，旧行会被「提取姿势」重跑 */
-export const POSE_VERSION = 1;
+/**
+ * 提取和归类的版本：检测、筛选或类别的规则改了就加 1。
+ * 旧版本的行照常能用（找图、相近的图都看它），只是标成「旧的」：大图库重跑要很久，不自动重跑，
+ * 用户在设置里点「用新的找人模型重新提取」（pose.reextract）才重跑。
+ * 1 = YOLOX-L 找人（原型 keypoints_lib.npz 也是它）；2 = deepghs 动漫人物检测（person_detect_v1.1_m，2026-11-21）
+ */
+export const POSE_VERSION = 2;
+/** YOLOX 那一版（导入原型数据时用） */
+export const POSE_VERSION_YOLOX = 1;
 
 /** 把随仓库分发的类别同步进库（版本或类别变了才写）；返回有没有写 */
 export function syncPoseClasses(db: Db, asset: PoseAsset, figure: (file: string) => Buffer): boolean {

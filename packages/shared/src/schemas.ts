@@ -597,10 +597,15 @@ export const AuditInput = z.object({
 
 // ------------------------------------------------------------------ 按姿势找图（实验）
 
-/** 下载姿势模型：要用户明确同意（会从 Hugging Face 下载约 350 MB） */
+/** 下载姿势模型：要用户明确同意（会从 Hugging Face 下载约 240 MB） */
 export const PoseDownloadInput = z.object({ consent: z.literal(true) });
-/** 从本机文件夹复制姿势模型（文件夹里要有 yolox_l.onnx 和 dw-ll_ucoco_384.onnx） */
+/**
+ * 从本机文件夹复制姿势模型：文件夹里要有 dw-ll_ucoco_384.onnx；找人模型（model.onnx + threshold.json）放在同一个文件夹，
+ * 或它的 anime_person_v1.1_m / person_detect_v1.1_m 子文件夹里
+ */
 export const PoseCopyInput = z.object({ path: z.string().min(1).max(1000) });
+/** 导入原型算好的姿势标签低分（pose_tags_lowthr.npz）：只导本图库里有的图，已经按现在的识别模型收过的不覆盖 */
+export const PoseTagsImportInput = z.object({ path: z.string().min(1).max(1000).describe('原型的 pose_tags_lowthr.npz') });
 /** 导入原型的姿势数据（一次性；同样的文件再导一次结果不变） */
 export const PoseImportInput = z.object({
   keypointsPath: z.string().min(1).max(1000).describe('原型的 keypoints_lib.npz'),

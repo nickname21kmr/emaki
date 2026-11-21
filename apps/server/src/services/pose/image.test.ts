@@ -1,31 +1,62 @@
 /**
- * 姿势检测的前后处理（不跑模型）：letterbox 的补边和颜色顺序、YOLOX 网格解码和 NMS、裁剪框、SimCC 解码回原图坐标。
- * 和原型 Python 版的端到端对比（真模型、200 张原图）见交付说明：点位误差中位 2.6 像素（长边 1024）。
+ * 姿势检测的前后处理（不跑模型）：找人模型的 letterbox、输出解码和 NMS（夹具是原型 Python 版对一张真图的模型输出和解码结果）、
+ * 裁剪框、SimCC 解码回原图坐标。DWPose 部分和原型 Python 版的端到端对比（真模型、200 张原图）：点位误差中位 2.6 像素（长边 1024）。
  */
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { cropFrame, cropInput, decodeSimcc, decodeYolox, DET, letterbox, PH, personsOrFallback, PW } from './image.ts';
+import { readNpz } from '../../infra/npz.ts';
+import { cropFrame, cropInput, decodeDetections, decodeSimcc, DET, letterbox, PH, personsOrFallback, PW } from './image.ts';
 
 describe('姿势检测的前后处理', () => {
-  it('letterbox：左上对齐、其余补 114、RGB 转成 BGR', () => {
+  it('letterbox：按长边缩到 640、居中，其余补 114，RGB、除 255', () => {
     const img = { w: 2, h: 1, data: Uint8Array.from([255, 0, 0, 255, 0, 0]) }; // 两个红点
-    const { input, ratio } = letterbox(img);
-    expect(ratio).toBe(320);
+    const { input, ratio, ox, oy } = letterbox(img);
+    expect([ratio, ox, oy]).toEqual([320, 0, 160]);
     const plane = DET * DET;
-    expect([input[0], input[plane], input[2 * plane]]).toEqual([0, 0, 255]); // B G R
-    expect(input[DET * (DET - 1)]).toBe(114); // 最后一行是补的
+    const at = (c: number, y: number, x: number) => input[c * plane + y * DET + x];
+    expect([at(0, 160, 0), at(1, 160, 0), at(2, 160, 0)]).toEqual([1, 0, 0]); // R G B
+    expect(at(0, 0, 0)).toBeCloseTo(114 / 255); // 上面是补的
+    expect(at(0, 480, 0)).toBeCloseTo(114 / 255); // 下面也是
+    // 竖图：左右补边，奇数的余量放右边（和原型的 // 2 一样）
+    const tall = letterbox({ w: 3, h: 4, data: new Uint8Array(36).fill(9) });
+    expect([tall.ratio, tall.ox, tall.oy]).toEqual([160, 80, 0]);
   });
 
-  it('YOLOX：网格解码回原图坐标，重叠的框只留分数高的', () => {
-    const out = new Float32Array(8400 * 85);
-    const put = (i: number, dx: number, dy: number, w: number, h: number, obj: number, cls: number) => out.set([dx, dy, Math.log(w), Math.log(h), obj, cls], i * 85);
-    // 步长 8 的第 (y=10, x=20) 格：中心 (160, 80)，宽高 8×(16, 32)
-    put(10 * 80 + 20, 0, 0, 16, 32, 0.9, 0.9);
-    put(10 * 80 + 21, 0, 0, 16, 32, 0.8, 0.8); // 几乎重合，被 NMS 去掉
-    put(0, 0, 0, 1, 1, 0.5, 0.5); // 0.25 < 0.3
-    const { boxes, scores } = decodeYolox(out, 0.5);
-    expect(scores).toHaveLength(1);
-    expect(scores[0]).toBeCloseTo(0.81);
-    expect(boxes[0]!.map((v) => Math.round(v))).toEqual([(160 - 64) * 2, (80 - 128) * 2, (160 + 64) * 2, (80 + 128) * 2]);
+  it('找人：原型对两个女孩重叠的那张图的模型输出，解码出同样的两个框（NMS 去掉重复的）', () => {
+    const z = readNpz(readFileSync(path.resolve(import.meta.dirname, '../../../test/fixtures/pose/anime_det_two.npz')));
+    const out = z.get('out')!;
+    const [ratio, ox, oy] = Array.from(z.get('lb')!.data as Float64Array);
+    const [w, h] = Array.from(z.get('wh')!.data as Int32Array);
+    const want = z.get('boxes')!.data as Float32Array;
+    const wantScores = Array.from(z.get('scores')!.data as Float32Array);
+    // 分数超过 0.1 的候选不止两个：重复的靠 NMS 去掉
+    const n = out.shape[2]!;
+    const cands = Array.from({ length: n }, (_, i) => (out.data as Float32Array)[4 * n + i]!).filter((v) => v > 0.1);
+    expect(cands.length).toBeGreaterThan(2);
+    const { boxes, scores } = decodeDetections(out.data as Float32Array, out.shape, { ratio: ratio!, ox: ox!, oy: oy! }, w!, h!, 0.348);
+    expect(scores).toHaveLength(2);
+    scores.forEach((v, k) => expect(v).toBeCloseTo(wantScores[k]!, 5));
+    boxes.flat().forEach((v, k) => expect(v).toBeCloseTo(want[k]!, 2));
+  });
+
+  it('找人：[N, 5] 的输出也认；低于门槛的不要，框夹在图里', () => {
+    // 两个候选：一个超出图的右下角，一个分数 0.3 < 0.348
+    const rows = [
+      [600, 600, 100, 100, 0.9],
+      [100, 100, 50, 50, 0.3],
+      ...Array.from({ length: 6 }, () => [0, 0, 0, 0, 0]), // 候选比通道多（真模型是 8400 个），方向才认得出
+    ];
+    const flatNC = Float32Array.from(rows.flat());
+    const lb = { ratio: 0.5, ox: 0, oy: 0 }; // 原图 1280×1280
+    const a = decodeDetections(flatNC, [1, 8, 5], lb, 1280, 1280, 0.348);
+    expect(a.scores).toEqual([expect.closeTo(0.9, 5)]);
+    expect(a.boxes[0]).toEqual([1100, 1100, 1279, 1279]);
+    // 通道在前（[1, 5, N]）是同一个结果
+    const flatCN = Float32Array.from([0, 1, 2, 3, 4].flatMap((c) => rows.map((r) => r[c]!)));
+    expect(decodeDetections(flatCN, [1, 5, 8], lb, 1280, 1280, 0.348)).toEqual(a);
+    // 一个也没有
+    expect(decodeDetections(new Float32Array(40), [1, 5, 8], lb, 10, 10, 0.348)).toEqual({ boxes: [], scores: [] });
   });
 
   it('没检测到人：整张图当一个框', () => {

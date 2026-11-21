@@ -5,7 +5,9 @@ export type PoseDevice = 'cpu' | 'dml';
 
 export interface PoseInitMsg {
   type: 'init';
-  yoloxPath: string;
+  /** 找人模型（deepghs 动漫人物检测）和它的分数门槛 */
+  detectorPath: string;
+  detThreshold: number;
   dwposePath: string;
   device: PoseDevice;
   dmlDeviceId: number;
@@ -45,7 +47,9 @@ export interface PoseDetector {
 }
 
 export interface PoseDetectorOptions {
-  yoloxPath: string;
+  detectorPath: string;
+  /** 不给用 threshold.json 的默认值（0.348） */
+  detThreshold?: number;
   dwposePath: string;
   device: PoseDevice;
 }

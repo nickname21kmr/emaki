@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../config.ts';
+import { DET_THRESHOLD } from './models.ts';
 import type { PoseChildMsg, PoseDetector, PoseDetectorOptions, PoseInitMsg, PoseItemResult, PoseReadyMsg } from './protocol.ts';
 
 const INIT_TIMEOUT = 300_000;
@@ -80,7 +81,14 @@ export class PoseClient implements PoseDetector {
       };
       child.on('message', onMsg);
       child.on('exit', onExit);
-      const init: PoseInitMsg = { type: 'init', yoloxPath: o.yoloxPath, dwposePath: o.dwposePath, device: o.device, dmlDeviceId: dmlDevice() };
+      const init: PoseInitMsg = {
+        type: 'init',
+        detectorPath: o.detectorPath,
+        detThreshold: o.detThreshold ?? DET_THRESHOLD,
+        dwposePath: o.dwposePath,
+        device: o.device,
+        dmlDeviceId: dmlDevice(),
+      };
       child.send(init);
     });
   }

@@ -117,6 +117,18 @@ export const JOB_KINDS = {
     verb: '提取中',
     glyph: '姿',
   },
+  // 给识别过的旧图补收姿势标签的低分（按姿势找图用）：用户点了才跑（pose.backfillTags），取消就停，下次接着补
+  'pose-tags': {
+    label: '补充姿势标签',
+    lane: 'gpu',
+    priority: 8,
+    cancellable: true,
+    startable: false,
+    pausable: false,
+    network: false,
+    verb: '补充中',
+    glyph: '标',
+  },
 } as const satisfies Record<string, JobKindSpec>;
 
 /** artists：给还没识别过画师的图补跑 PixAI，只记画师（2026-10-04） */

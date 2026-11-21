@@ -8,6 +8,7 @@ import type {
   PoseClassesResponse,
   PoseSimilarResponse,
   PoseStatus,
+  PoseTagsImportResult,
   PoseWearAssignResult,
   PoseWearCatalogResponse,
   PoseWearImportResult,
@@ -31,6 +32,11 @@ export const poseApi = {
   cancelDownload: () => request<PoseActionResult>('DELETE', '/pose/models/download'),
   copy: (path: string) => request<PoseActionResult>('POST', '/pose/models/copy', { path }),
   extract: () => request<Job>('POST', '/pose/extract', {}),
+  /** 用新的找人模型重新提取旧版本的 */
+  reextract: () => request<PoseActionResult & { count: number }>('POST', '/pose/reextract', {}),
+  /** 补充姿势标签（识别过的旧图重跑识别模型，只收低分） */
+  backfillTags: () => request<PoseActionResult & { count: number; estimateSeconds: number }>('POST', '/pose/tags/backfill', {}),
+  importTagsLow: (path: string) => request<PoseTagsImportResult>('POST', '/pose/tags/import', { path }),
   importPrototype: (body: { keypointsPath: string; assignmentsPath: string }) =>
     request<PoseActionResult & { imported: number; classified: number; missing: number; skipped: number }>('POST', '/pose/import', body),
   classes: () => request<PoseClassesResponse>('GET', '/pose/classes'),

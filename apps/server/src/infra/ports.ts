@@ -64,7 +64,7 @@ export interface EnginePorts {
   jobRunner: ((kind: JobKind) => JobRunner) | null;
 
   /**
-   * 姿势检测（「提取姿势」任务用的 YOLOX + DWPose）。null = 真的推理子进程（services/pose/client.ts）；测试换成假的检测器
+   * 姿势检测（「提取姿势」任务用的动漫人物检测 + DWPose）。null = 真的推理子进程（services/pose/client.ts）；测试换成假的检测器
    */
   poseDetector: PoseDetectorFactory | null;
 

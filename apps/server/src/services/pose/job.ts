@@ -1,7 +1,8 @@
 /**
- * 后台任务「提取姿势」（JOB_KINDS.pose，显卡道）：给计入统计、还没按当前版本提取过的插画跑 DWPose，
+ * 后台任务「提取姿势」（JOB_KINDS.pose，显卡道）：给计入统计、还没提取过的插画找人、跑 DWPose，
  * 挑主要人物、分取景、归到最近的姿势类别（domain/pose/features.ts），写进 image_poses。
- * 新的在前；可以随时取消，下次接着跑；有更急的任务时让出。设置里关着时不跑。
+ * 旧版本（旧的找人模型）提取的不自动重跑：用户点了「用新的找人模型重新提取」（pending_work 的 pose-rerun）才一起跑，
+ * 旧的都重提完了清掉这个标记。新的在前；可以随时取消，下次接着跑；有更急的任务时让出。设置里关着时不跑。
  */
 import { formatEta } from '@emaki/shared';
 import type { JobContext } from '../../core/jobs.ts';
@@ -9,11 +10,12 @@ import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import { readSettings } from '../../datasource/sqlite/settings.ts';
 import { loadPoseAsset, readPoseAssetFile } from '../../domain/pose/asset.ts';
 import { assignImage } from '../../domain/pose/features.ts';
-import { classRefsFromDb, POSE_ELIGIBLE, POSE_PENDING, posePendingCount } from '../../domain/pose/read.ts';
+import { classRefsFromDb, POSE_ELIGIBLE, poseOutdatedCount, posePending, posePendingCount } from '../../domain/pose/read.ts';
 import { refreshClassSizes, syncPoseClasses, writePoses, type PoseRow } from '../../domain/pose/store.ts';
+import { dropWork, hasWork, markWork } from '../../propagation/work.ts';
 import { toAbs } from '../fs/paths.ts';
 import { spawnPoseDetector } from './client.ts';
-import { poseModelPaths, poseModelsReady } from './models.ts';
+import { poseModelPaths, poseModelsReady, readDetThreshold } from './models.ts';
 import type { PoseDetectorFactory, PoseItemResult } from './protocol.ts';
 
 /** 一次发给子进程的张数 */
@@ -35,28 +37,52 @@ export function ensurePoseClasses(ctx: SqliteContext): void {
   ctx.apply(() => syncPoseClasses(ctx.db, asset, (f) => readPoseAssetFile(f)));
 }
 
+/** 用户要求了用新的找人模型重新提取旧版本的姿势、还没重提完 */
+export const poseRerunRequested = (ctx: SqliteContext) => hasWork(ctx.db, 'pose-rerun');
+
+/** 记下「重新提取旧版本的」（持久化，重启后接着重提）；没有旧版本的就不记。返回要重提的张数 */
+export function requestPoseRerun(ctx: SqliteContext): number {
+  const n = poseOutdatedCount(ctx.db);
+  if (n) markWork(ctx.db, 'pose-rerun', new Date(ctx.clock()).toISOString());
+  return n;
+}
+
 export function createPoseStage(deps: PoseStageDeps) {
   const { ctx } = deps;
   const db = ctx.db;
   return {
     enabled: () => readSettings(db).pose.enabled,
     isReady: () => poseReady(deps.detector, deps.modelsDir),
-    pendingCount: () => posePendingCount(db),
+    pendingCount: () => posePendingCount(db, poseRerunRequested(ctx)),
     async run(job: JobContext): Promise<string> {
       if (!readSettings(db).pose.enabled) return '提取姿势：设置里没有打开';
       if (!poseReady(deps.detector, deps.modelsDir)) throw new Error('姿势模型还没准备好（设置 → 姿势检索里下载或复制）');
       ensurePoseClasses(ctx);
-      const total = posePendingCount(db);
+      const rerun = poseRerunRequested(ctx);
+      // 旧版本的都重提完了（或者本来就没有）：清掉重提的标记
+      const rerunDone = () => {
+        if (rerun && !poseOutdatedCount(db)) dropWork(db, 'pose-rerun');
+      };
+      const total = posePendingCount(db, rerun);
       job.setTotal(total);
-      if (!total) return '提取姿势：没有需要提取的图';
+      if (!total) {
+        rerunDone();
+        return '提取姿势：没有需要提取的图';
+      }
       const refs = classRefsFromDb(db);
       const device = readSettings(db).tagger.device;
       job.setMessage(device === 'dml' ? '提取姿势：加载模型到显卡…' : '提取姿势：加载模型…');
-      const detector = await (deps.detector ?? spawnPoseDetector)({ ...poseModelPaths(deps.modelsDir), device });
+      const paths = poseModelPaths(deps.modelsDir);
+      const detector = await (deps.detector ?? spawnPoseDetector)({
+        detectorPath: paths.detectorPath,
+        detThreshold: readDetThreshold(deps.modelsDir),
+        dwposePath: paths.dwposePath,
+        device,
+      });
       const sel = db.prepare(
         `SELECT i.id, r.path AS root, i.rel_path AS rel FROM images i JOIN library_roots r ON r.id = i.root_id
          LEFT JOIN image_poses p ON p.image_id = i.id
-         WHERE ${POSE_ELIGIBLE} AND ${POSE_PENDING} AND i.id < @before ORDER BY i.id DESC LIMIT @limit`,
+         WHERE ${POSE_ELIGIBLE} AND ${posePending(rerun)} AND i.id < @before ORDER BY i.id DESC LIMIT @limit`,
       );
       let before = Number.MAX_SAFE_INTEGER;
       let done = 0;
@@ -116,6 +142,7 @@ export function createPoseStage(deps: PoseStageDeps) {
         ctx.apply(() => refreshClassSizes(db));
         await detector.dispose();
       }
+      rerunDone();
       return `提取姿势：${summary()}（${detector.device === 'dml' ? '显卡' : 'CPU'}）`;
     },
   };

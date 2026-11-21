@@ -820,8 +820,34 @@ describe('按姿势找图（实验，注册表：pose.*）', () => {
   route('GET /api/pose/status', async () => {
     const { status, json } = await call('GET', '/api/pose/status');
     expect(status).toBe(200);
-    expect(json).toMatchObject({ enabled: false, models: { ready: false, repo: 'yzd-v/DWPose', download: { state: 'idle' } }, job: null });
-    expect(json.counts).toMatchObject({ eligible: expect.any(Number), processed: 0 });
+    expect(json).toMatchObject({
+      enabled: false,
+      models: { ready: false, repo: 'deepghs/anime_person_detection、yzd-v/DWPose', download: { state: 'idle' } },
+      job: null,
+      rerun: false,
+      tags: { requested: false, job: null },
+    });
+    expect(json.counts).toMatchObject({ eligible: expect.any(Number), processed: 0, outdated: 0 });
+    expect(json.models.files.map((f: { name: string }) => f.name)).toEqual(['person_detect_v1.1_m/model.onnx', 'person_detect_v1.1_m/threshold.json', 'dw-ll_ucoco_384.onnx']);
+  });
+  // 换了找人模型后重提旧的、补充姿势标签、导入原型的低分（细节在 services/pose/rerun.test.ts、domain/evidence/poseTags.test.ts）
+  route('POST /api/pose/reextract', async () => {
+    expect((await call('POST', '/api/pose/reextract')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const r = await call('POST', '/api/pose/reextract');
+    expect([r.status, r.json.error]).toEqual([400, expect.stringContaining('姿势模型')]);
+  });
+  route('POST /api/pose/tags/backfill', async () => {
+    expect((await call('POST', '/api/pose/tags/backfill')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const r = await call('POST', '/api/pose/tags/backfill');
+    expect([r.status, r.json.count]).toEqual([200, 0]);
+  });
+  route('POST /api/pose/tags/import', async () => {
+    expect((await call('POST', '/api/pose/tags/import', { path: 'Z:/no/such.npz' })).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    const r = await call('POST', '/api/pose/tags/import', { path: 'Z:/no/such.npz' });
+    expect([r.status, r.json.error]).toEqual([400, expect.stringContaining('找不到文件')]);
   });
   route('POST /api/pose/models/download', async () => {
     // 没有同意不下载

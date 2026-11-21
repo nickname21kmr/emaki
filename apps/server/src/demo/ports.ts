@@ -76,6 +76,7 @@ const FAKE_TOTALS: Record<JobKind, number> = {
   artists: 120,
   dedupe: 900,
   pose: 300,
+  'pose-tags': 300,
 };
 
 /** 后台任务部件：每种任务都只走一遍进度条（约 5 秒），不扫描、不跑模型、不联网、不改数据 */

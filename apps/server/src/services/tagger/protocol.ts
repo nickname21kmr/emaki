@@ -11,6 +11,8 @@ export interface HostThresholds {
   characterMcut?: boolean;
   /** 画师门槛；不给就不解码画师 */
   artist?: number;
+  /** 这些一般标签分数在 [min, max) 的另外给出（姿势标签的低分）；max 不给就是一般标签实际用的阈值 */
+  low?: { tags: readonly string[]; min: number; max?: number };
 }
 
 export interface InitMsg {
@@ -44,6 +46,8 @@ export type HostItemResult =
       character: [string, number][];
       /** 模型能认画师、请求里给了门槛时才有；[] = 跑过但没认出 */
       artist?: [string, number][];
+      /** 请求里给了 low 才有：名单里分数在 [min, max) 的一般标签；[] = 跑过但一个也没有 */
+      low?: [string, number][];
     }
   /** ENOENT：文件不在了；IO：暂时读不了（被占用、掉线、解码超时），这次不记、下次再试；UNSUPPORTED / DECODE：图本身的问题 */
   | { id: number; ok: false; code: 'ENOENT' | 'IO' | 'UNSUPPORTED' | 'DECODE'; message: string };

@@ -1,4 +1,4 @@
-import type { PoseStatus } from '@emaki/shared';
+import { formatEta, type PoseStatus } from '@emaki/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { CircleAlert, Download, FolderInput, FolderOpen, X } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
@@ -65,6 +65,7 @@ export function PoseSettingsSection() {
         )}
         {s && <ModelRow status={s} run={run} />}
         {s && enabled && ready && <ExtractRow status={s} run={run} />}
+        {s && enabled && <PoseTagsRow status={s} run={run} />}
         {s && enabled && <PoseWearRows status={s} run={run} />}
         {enabled && (
           <Field label="显示 51 类" hint="早先按骨架聚出来的 51 类：图库里多一个「按人偶挑」，看图器里多一行「姿势类」。数据一直保留。">
@@ -79,7 +80,7 @@ export function PoseSettingsSection() {
 
 type Run = (fn: () => Promise<{ message: string }>) => Promise<boolean>;
 
-const MODEL_NOTE = 'YOLOX-L 找人，DWPose 读全身骨架；来自 Hugging Face（yzd-v/DWPose，Apache-2.0）。';
+const MODEL_NOTE = '动漫人物检测找人（deepghs/anime_person_detection，MIT），DWPose 读全身骨架（yzd-v/DWPose，Apache-2.0）；都来自 Hugging Face。';
 
 function ModelRow({ status, run }: { status: PoseStatus; run: Run }) {
   const m = status.models;
@@ -159,7 +160,7 @@ function ModelRow({ status, run }: { status: PoseStatus; run: Run }) {
           open={copying}
           onOpenChange={setCopying}
           title="从本机复制姿势模型"
-          description="文件夹里要有 yolox_l.onnx 和 dw-ll_ucoco_384.onnx，复制后校验 sha256。"
+          description="文件夹里要有 dw-ll_ucoco_384.onnx；找人模型（model.onnx、threshold.json）放在同一个文件夹或 anime_person_v1.1_m 子文件夹里。复制后校验 sha256。"
           fields={[{ key: 'path', label: '文件夹', value: m.localSource }]}
           submit="复制"
           onSubmit={(v) => run(() => poseApi.copy(v.path!))}
@@ -186,7 +187,7 @@ function ConsentDialog({
     <Dialog open={open} onOpenChange={onOpenChange} title="下载姿势模型" width={500}>
       <ul className="space-y-2.5 text-[13px] leading-relaxed">
         <li>
-          从 Hugging Face（yzd-v/DWPose）下载约 {formatBytes(total)}：
+          从 Hugging Face（deepghs/anime_person_detection、yzd-v/DWPose）下载约 {formatBytes(total)}：
           <span className="text-fg-muted">
             {files.map((f) => `${f.name} ${formatBytes(f.size)}`).join(' + ')}
           </span>
@@ -217,17 +218,70 @@ function ExtractRow({ status, run }: { status: PoseStatus; run: Run }) {
       hint={
         <span className="tabular">
           已提取 {formatCount(c.processed)} / {formatCount(c.eligible)} 张 · 找到人物 {formatCount(c.withPerson)} · 归了类的 {formatCount(c.classified)}
+          {c.outdated > 0 && `。其中 ${formatCount(c.outdated)} 张是旧的找人模型（YOLOX）提取的，照常能用；新的模型找人更全，重叠的两个人也分得开`}
         </span>
       }
     >
       {job ? (
         <JobProgressInline job={job} />
+      ) : c.outdated > 0 && c.pending === 0 ? (
+        <Button size="sm" variant="secondary" onClick={() => void run(poseApi.reextract)}>
+          用新的找人模型重新提取 {formatCount(c.outdated)} 张
+        </Button>
       ) : c.pending > 0 ? (
         <Button size="sm" variant="secondary" onClick={() => void run(() => poseApi.extract().then(() => ({ message: '已开始提取姿势' })))}>
           提取剩下的 {formatCount(c.pending)} 张
         </Button>
       ) : (
         <span className="text-[12.5px] text-fg-subtle">都提取过了</span>
+      )}
+    </Field>
+  );
+}
+
+/** 姿势标签的低分：新识别的图顺便收；识别过的旧图点「补充」重跑识别模型（只收低分），或者导入原型算好的 */
+function PoseTagsRow({ status, run }: { status: PoseStatus; run: Run }) {
+  const live = useActiveJob('pose-tags');
+  const t = status.tags;
+  const job = live ?? t.job;
+  const [importing, setImporting] = useState(false);
+  const can = t.pending - t.missingModel;
+  return (
+    <Field
+      label="补充姿势标签"
+      hint={
+        <span className="tabular">
+          识别时顺便记下姿势标签的低分，按姿势找图更准。已收 {formatCount(t.eligible - t.pending)} / {formatCount(t.eligible)} 张
+          {t.missingModel > 0 && ` · ${formatCount(t.missingModel)} 张用的识别模型不在本机`}
+        </span>
+      }
+    >
+      {job ? (
+        <JobProgressInline job={job} />
+      ) : can > 0 ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="secondary" onClick={() => void run(poseApi.backfillTags)}>
+            补充 {formatCount(can)} 张（约 {formatEta(t.estimateSeconds) ?? '—'}）
+          </Button>
+          {t.prototype && (
+            <Button size="sm" variant="outline" icon={<FolderInput />} onClick={() => setImporting(true)}>
+              导入原型的…
+            </Button>
+          )}
+        </div>
+      ) : (
+        <span className="text-[12.5px] text-fg-subtle">都收过了</span>
+      )}
+      {t.prototype && (
+        <PathDialog
+          open={importing}
+          onOpenChange={setImporting}
+          title="导入原型算好的姿势标签低分"
+          description="只导本图库里有的图，已经收过的不覆盖。导入后就不用再补这些图。"
+          fields={[{ key: 'path', label: 'pose_tags_lowthr.npz', value: t.prototype }]}
+          submit="导入"
+          onSubmit={(v) => run(() => poseApi.importTagsLow(v.path!))}
+        />
       )}
     </Field>
   );

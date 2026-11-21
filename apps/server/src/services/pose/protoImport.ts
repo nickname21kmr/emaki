@@ -2,13 +2,14 @@
  * 导入原型（F:/Claude/.work/pose-proto）跑好的姿势数据：keypoints_lib.npz（每张图检测到的全部人物）+ assignments.json（原型的归类）。
  * 一次性的，同样的文件再导一次结果不变。只导本图库里还有的图（id 对不上的跳过）；原型没处理过的（not_processed、读不了的）
  * 不写，留给「提取姿势」任务。主要人物按 TypeScript 版重新挑（和原型一致率见 domain/pose/features.test.ts），类别、距离、镜像照原型的。
+ * 原型的 keypoints_lib.npz 是 YOLOX 找人跑的，记成旧版本（POSE_VERSION_YOLOX）；已经按新版本提取过的图不覆盖。
  */
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import { loadPoseAsset } from '../../domain/pose/asset.ts';
 import { selectPerson, type DetectedPerson, type Group, type Pt } from '../../domain/pose/features.ts';
-import { refreshClassSizes, setMedoidImages, writePoses, type PoseRow } from '../../domain/pose/store.ts';
+import { POSE_VERSION, POSE_VERSION_YOLOX, refreshClassSizes, setMedoidImages, writePoses, type PoseRow } from '../../domain/pose/store.ts';
 import { readNpz, type NpyArray } from '../../infra/npz.ts';
 import { ensurePoseClasses } from './job.ts';
 
@@ -29,7 +30,7 @@ export interface ProtoImportResult {
   classified: number;
   /** 本图库里没有的图 */
   missing: number;
-  /** 原型没处理过（留给任务） */
+  /** 原型没处理过（留给任务），或者已经用新的找人模型提取过 */
   skipped: number;
 }
 
@@ -75,10 +76,16 @@ export async function importPrototype(ctx: SqliteContext, keypointsPath: string,
   const known = new Set(db.prepare('SELECT id FROM pose_classes').pluck().all() as string[]);
   const ids = Object.keys(asg).map(Number).filter(Number.isInteger);
   const exists = new Set(db.prepare('SELECT id FROM images WHERE id IN (SELECT value FROM json_each(?))').pluck().all(JSON.stringify(ids)) as number[]);
+  // 已经用新的找人模型提取过的图：原型的旧结果不盖上去
+  const fresh = new Set(db.prepare('SELECT image_id FROM image_poses WHERE version >= ?').pluck().all(POSE_VERSION) as number[]);
   const rows: PoseRow[] = [];
   let skipped = 0;
   for (const id of ids) {
     if (!exists.has(id)) continue;
+    if (fresh.has(id)) {
+      skipped++;
+      continue;
+    }
     const a = asg[String(id)]!;
     const n = row.get(a.rep ?? id);
     if (n === undefined || num(A.img_err!, n)) {
@@ -105,7 +112,7 @@ export async function importPrototype(ctx: SqliteContext, keypointsPath: string,
   for (let i = 0; i < rows.length; i += 2000) {
     const chunk = rows.slice(i, i + 2000);
     ctx.apply(() => {
-      writePoses(db, chunk, now);
+      writePoses(db, chunk, now, POSE_VERSION_YOLOX);
       ctx.changed({ type: 'pose.changed', ids: chunk.map((r) => r.imageId) });
     });
   }

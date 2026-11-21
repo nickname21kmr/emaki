@@ -14,6 +14,7 @@ export const JOB_ICON: Record<JobKind, LucideIcon> = {
   artists: Palette,
   'pixiv-tags': CloudDownload,
   pose: PersonStanding,
+  'pose-tags': PersonStanding,
 };
 
 /** 「运行任务」菜单里的顺序：按日常使用频率（只列能手动启动的） */

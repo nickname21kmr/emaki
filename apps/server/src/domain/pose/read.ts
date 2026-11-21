@@ -16,8 +16,12 @@ export const figureUrl = (id: string, version: number) => `/api/pose/classes/${i
 
 /** 要提取姿势的图：计入统计的插画 */
 export const POSE_ELIGIBLE = `${COUNTED('i', 'r')} AND ${ILLUSTRATION}`;
-/** 还没按当前版本提取过的（配合 LEFT JOIN image_poses p） */
-export const POSE_PENDING = `(p.image_id IS NULL OR p.version < ${POSE_VERSION})`;
+/** 还没提取过的（配合 LEFT JOIN image_poses p） */
+export const POSE_MISSING = 'p.image_id IS NULL';
+/** 按旧版本（旧的找人模型）提取的：结果照常用，用户要求了才重跑 */
+export const POSE_OUTDATED = `p.version < ${POSE_VERSION}`;
+/** 「提取姿势」要跑的：没提取过的；用户要求重新提取（rerun）时加上旧版本的 */
+export const posePending = (rerun: boolean) => (rerun ? `(${POSE_MISSING} OR ${POSE_OUTDATED})` : POSE_MISSING);
 
 export function poseClasses(db: Db): PoseClassesResponse {
   const rows = db
@@ -48,20 +52,39 @@ export function poseCounts(db: Db): PoseStatus['counts'] {
   const r = db
     .prepare(
       `SELECT COUNT(*) AS eligible,
-         SUM(CASE WHEN p.image_id IS NOT NULL AND p.version >= ${POSE_VERSION} THEN 1 ELSE 0 END) AS processed,
-         SUM(CASE WHEN p.keypoints IS NOT NULL AND p.version >= ${POSE_VERSION} THEN 1 ELSE 0 END) AS withPerson,
-         SUM(CASE WHEN p.class_id IS NOT NULL AND p.version >= ${POSE_VERSION} THEN 1 ELSE 0 END) AS classified
+         SUM(CASE WHEN p.image_id IS NOT NULL THEN 1 ELSE 0 END) AS processed,
+         SUM(CASE WHEN ${POSE_OUTDATED} THEN 1 ELSE 0 END) AS outdated,
+         SUM(CASE WHEN p.keypoints IS NOT NULL THEN 1 ELSE 0 END) AS withPerson,
+         SUM(CASE WHEN p.class_id IS NOT NULL THEN 1 ELSE 0 END) AS classified
        FROM images i JOIN library_roots r ON r.id = i.root_id LEFT JOIN image_poses p ON p.image_id = i.id
        WHERE ${POSE_ELIGIBLE}`,
     )
-    .get() as { eligible: number; processed: number | null; withPerson: number | null; classified: number | null };
+    .get() as { eligible: number; processed: number | null; outdated: number | null; withPerson: number | null; classified: number | null };
   const processed = r.processed ?? 0;
-  return { eligible: r.eligible, processed, pending: r.eligible - processed, withPerson: r.withPerson ?? 0, classified: r.classified ?? 0 };
+  return {
+    eligible: r.eligible,
+    processed,
+    pending: r.eligible - processed,
+    outdated: r.outdated ?? 0,
+    withPerson: r.withPerson ?? 0,
+    classified: r.classified ?? 0,
+  };
 }
 
-export function posePendingCount(db: Db): number {
+/** 「提取姿势」要跑的张数：没提取过的；rerun 时加上旧版本的 */
+export function posePendingCount(db: Db, rerun = false): number {
   return db
-    .prepare(`SELECT COUNT(*) FROM images i JOIN library_roots r ON r.id = i.root_id LEFT JOIN image_poses p ON p.image_id = i.id WHERE ${POSE_ELIGIBLE} AND ${POSE_PENDING}`)
+    .prepare(
+      `SELECT COUNT(*) FROM images i JOIN library_roots r ON r.id = i.root_id LEFT JOIN image_poses p ON p.image_id = i.id WHERE ${POSE_ELIGIBLE} AND ${posePending(rerun)}`,
+    )
+    .pluck()
+    .get() as number;
+}
+
+/** 按旧版本提取的张数（计入统计的插画） */
+export function poseOutdatedCount(db: Db): number {
+  return db
+    .prepare(`SELECT COUNT(*) FROM images i JOIN library_roots r ON r.id = i.root_id JOIN image_poses p ON p.image_id = i.id WHERE ${POSE_ELIGIBLE} AND ${POSE_OUTDATED}`)
     .pluck()
     .get() as number;
 }

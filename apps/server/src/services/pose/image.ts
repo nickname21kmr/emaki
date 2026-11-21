@@ -1,7 +1,8 @@
 /**
- * 姿势检测的前后处理（原型 dwpose.py 的移植，对齐 controlnet_aux 的 DWPose 参考实现）：
+ * 姿势检测的前后处理（原型 dwpose.py、anime_det.py 的移植，DWPose 部分对齐 controlnet_aux 的参考实现）：
  * - 读图：长边缩到 1024 以内，RGB；
- * - YOLOX-L：640 letterbox（左上对齐、补 114），BGR 0–255，网格解码 + NMS 0.45，只要 person，分数 > 0.3；
+ * - 找人（deepghs 动漫人物检测 v1.1_m，YOLOv8m）：640 letterbox（居中、补 114），RGB 0–1；输出 [5, N]，分数 > 0.1 的做 NMS 0.7，
+ *   再留超过门槛（threshold.json，0.348）的；一个也没有时整张图当一个框；
  * - DWPose-L：人框放大 1.25 倍、补成 288:384，仿射裁出 288×384，RGB 减均值除方差，SimCC 解码（分辨率 ×2）。
  * 纯函数（除了 loadRgb 读文件），单元测试在 image.test.ts。
  */
@@ -17,6 +18,7 @@ export const MAXSIDE = 1024;
  * 归类一致 85%（剩下的多在两类交界处），lanczos3 是 4.8 像素、83%
  */
 const KERNEL = 'linear';
+/** 找人模型的输入边长 */
 export const DET = 640;
 export const PW = 288;
 export const PH = 384;
@@ -81,13 +83,33 @@ function linearTaps(src: number, dst: number) {
   return { i0, f };
 }
 
-/** YOLOX 输入：1×3×640×640，BGR、0–255，图缩放后放在左上角，其余是 114 */
-export function letterbox(img: Rgb): { input: Float32Array; ratio: number } {
-  const r = Math.min(DET / img.h, DET / img.w);
-  const nw = Math.trunc(img.w * r);
-  const nh = Math.trunc(img.h * r);
+/** Python 的 round()：正好一半时取偶数（原型按它算缩放后的尺寸） */
+const roundHalfEven = (x: number) => {
+  const f = Math.floor(x);
+  const d = x - f;
+  return d > 0.5 ? f + 1 : d < 0.5 ? f : f % 2 === 0 ? f : f + 1;
+};
+
+export interface Letterbox {
+  input: Float32Array;
+  /** 原图 → 输入的缩放比例，图在输入里的左上角 */
+  ratio: number;
+  ox: number;
+  oy: number;
+}
+
+/**
+ * 找人模型的输入：1×3×640×640，RGB、0–1。图按长边缩放到 640（小图也放大），居中放，四周补 114（ultralytics 的 letterbox）。
+ * 原型 anime_det.py 的 letterbox 模式（原型里比 imgutils 那种「补成 32 的倍数、不补边」效果好）；缩放是 cv2 INTER_LINEAR，取整到 0–255 再除 255
+ */
+export function letterbox(img: Rgb): Letterbox {
+  const r = DET / Math.max(img.w, img.h);
+  const nw = Math.min(DET, Math.max(1, roundHalfEven(img.w * r)));
+  const nh = Math.min(DET, Math.max(1, roundHalfEven(img.h * r)));
+  const ox = Math.floor((DET - nw) / 2);
+  const oy = Math.floor((DET - nh) / 2);
   const plane = DET * DET;
-  const input = new Float32Array(3 * plane).fill(114);
+  const input = new Float32Array(3 * plane).fill(114 / 255);
   const xs = linearTaps(img.w, nw);
   const ys = linearTaps(img.h, nh);
   for (let y = 0; y < nh; y++) {
@@ -104,31 +126,11 @@ export function letterbox(img: Rgb): { input: Float32Array; ratio: number } {
         const d = img.data[(y1 * img.w + x0) * 3 + c]!;
         const e = img.data[(y1 * img.w + x1) * 3 + c]!;
         const v = (a * (1 - fx) + b * fx) * (1 - fy) + (d * (1 - fx) + e * fx) * fy;
-        // RGB → BGR
-        input[(2 - c) * plane + y * DET + x] = Math.round(v);
+        input[c * plane + (oy + y) * DET + ox + x] = Math.round(v) / 255;
       }
     }
   }
-  return { input, ratio: r };
-}
-
-let grid: { gx: Int32Array; gy: Int32Array; st: Int32Array } | null = null;
-function yoloxGrid() {
-  if (grid) return grid;
-  const gx: number[] = [];
-  const gy: number[] = [];
-  const st: number[] = [];
-  for (const s of [8, 16, 32]) {
-    const n = DET / s;
-    for (let y = 0; y < n; y++)
-      for (let x = 0; x < n; x++) {
-        gx.push(x);
-        gy.push(y);
-        st.push(s);
-      }
-  }
-  grid = { gx: Int32Array.from(gx), gy: Int32Array.from(gy), st: Int32Array.from(st) };
-  return grid;
+  return { input, ratio: r, ox, oy };
 }
 
 type Box = [number, number, number, number];
@@ -154,26 +156,53 @@ function nms(boxes: Box[], scores: number[], thr: number): number[] {
   return keep;
 }
 
-/** YOLOX 输出（8400×85）→ 人框（原图坐标）和分数，按分数从高到低 */
-export function decodeYolox(out: Float32Array, ratio: number, scoreThr = 0.3): { boxes: Box[]; scores: number[] } {
-  const { gx, gy, st } = yoloxGrid();
+/** 找人：NMS 的 IoU、先留下做 NMS 的最低分（原型 anime_det.py 的 IOU、min(门槛, 0.1)） */
+const DET_IOU = 0.7;
+const DET_PRE = 0.1;
+
+/**
+ * 找人模型的输出（[1, 5, N] 或 [1, N, 5]：cx、cy、w、h，再是每一类的分数，这个模型只有一类）→ 人框（原图坐标）和分数，按分数从高到低。
+ * 和原型一样：分数 > 0.1 的先做 NMS（IoU 0.7），再留超过门槛的；框换回原图坐标、夹在图里
+ */
+export function decodeDetections(
+  out: Float32Array,
+  dims: readonly number[],
+  lb: Pick<Letterbox, 'ratio' | 'ox' | 'oy'>,
+  w: number,
+  h: number,
+  scoreThr: number,
+): { boxes: Box[]; scores: number[] } {
+  const [a, b] = dims.length === 3 ? [dims[1]!, dims[2]!] : [dims[0]!, dims[1]!];
+  // 通道在前（[5, N]）还是在后（[N, 5]）：和原型一样按哪一维小判断
+  const chFirst = a <= b;
+  const C = chFirst ? a : b;
+  const N = chFirst ? b : a;
+  const at = (c: number, i: number) => (chFirst ? out[c * N + i]! : out[i * C + c]!);
+  const pre = Math.min(scoreThr, DET_PRE);
   const boxes: Box[] = [];
   const scores: number[] = [];
-  const n = gx.length;
-  for (let i = 0; i < n; i++) {
-    const o = i * 85;
-    const score = out[o + 4]! * out[o + 5]!; // 只要 person（类 0）
-    if (score <= 0.1) continue;
-    const cx = (out[o]! + gx[i]!) * st[i]!;
-    const cy = (out[o + 1]! + gy[i]!) * st[i]!;
-    const w = Math.exp(out[o + 2]!) * st[i]!;
-    const h = Math.exp(out[o + 3]!) * st[i]!;
-    boxes.push([(cx - w / 2) / ratio, (cy - h / 2) / ratio, (cx + w / 2) / ratio, (cy + h / 2) / ratio]);
-    scores.push(score);
+  for (let i = 0; i < N; i++) {
+    let s = -Infinity;
+    for (let c = 4; c < C; c++) s = Math.max(s, at(c, i));
+    if (!(s > pre)) continue;
+    const cx = at(0, i);
+    const cy = at(1, i);
+    const bw = at(2, i);
+    const bh = at(3, i);
+    boxes.push([cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2]);
+    scores.push(s);
   }
   if (!boxes.length) return { boxes: [], scores: [] };
-  const keep = nms(boxes, scores, 0.45).filter((k) => scores[k]! > scoreThr);
-  return { boxes: keep.map((k) => boxes[k]!), scores: keep.map((k) => scores[k]!) };
+  const keep = nms(boxes, scores, DET_IOU).filter((k) => scores[k]! > scoreThr);
+  const clip = (v: number, hi: number) => Math.min(Math.max(v, 0), hi);
+  return {
+    boxes: keep.map((k) => {
+      const [x1, y1, x2, y2] = boxes[k]!;
+      const s = 1 / lb.ratio;
+      return [clip((x1 - lb.ox) * s, w - 1), clip((y1 - lb.oy) * s, h - 1), clip((x2 - lb.ox) * s, w - 1), clip((y2 - lb.oy) * s, h - 1)] as Box;
+    }),
+    scores: keep.map((k) => scores[k]!),
+  };
 }
 
 /** 人框 → 中心和裁剪尺寸（放大 1.25 倍，补成 288:384） */

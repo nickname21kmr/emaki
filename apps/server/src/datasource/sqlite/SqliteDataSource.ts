@@ -42,6 +42,7 @@ import { isModelReady } from '../../services/tagger/download.ts';
 import { findModel } from '../../services/tagger/models.ts';
 import { createTagStage } from '../../services/tagger/tagJob.ts';
 import { createPoseStage, ensurePoseClasses } from '../../services/pose/job.ts';
+import { createPoseTagsStage } from '../../services/pose/tagsJob.ts';
 import { CharacterCatalog, createCatalog } from '../../domain/catalog/characterCatalog.ts';
 import { CopyrightResolver } from '../../services/catalog/copyrights.ts';
 import { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
@@ -272,7 +273,11 @@ export class SqliteDataSource {
       },
     });
     // 按姿势找图（实验，默认关）：类别随仓库分发，按版本同步进库；打开了才跑任务
-    ds.pipeline.register({ pose: createPoseStage({ ctx: ds.ctx, modelsDir: config.modelsDir, detector: ds.ports.poseDetector }) });
+    // 补充姿势标签：用户点了才跑（识别新图时已经顺便收了）
+    ds.pipeline.register({
+      pose: createPoseStage({ ctx: ds.ctx, modelsDir: config.modelsDir, detector: ds.ports.poseDetector }),
+      poseTags: createPoseTagsStage({ ctx: ds.ctx, modelsDir: config.modelsDir }),
+    });
     if (readSettings(db).pose.enabled) ensurePoseClasses(ds.ctx);
     // 查重（T16）
     ds.pipeline.register({ dedupe: ds.dedupe });

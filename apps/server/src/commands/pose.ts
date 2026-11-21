@@ -3,9 +3,12 @@
  *
  * 开关是设置 pose.enabled（settings.update）；关着时：下面除了状态、准备模型之外的查询和命令都返回 403，不跑任务，不下载。
  * 模型要用户自己准备：同意后下载（pose.downloadModels），或者从本机文件夹复制（pose.copyModels）。
+ * 换了找人模型后旧的结果照常用，要重跑点「用新的找人模型重新提取」（pose.reextract）；
+ * 姿势标签的低分识别时顺便收，识别过的旧图点「补充姿势标签」（pose.backfillTags）补，或者导入原型算好的（pose.importTagsLow）。
  * 都是设置类（scope settings），不给 AI 助手；查询是 read。
  */
-import type { PoseActionResult, PoseStatus, PoseWearAssignResult, PoseWearImportResult, PoseWearLowResponse } from '@emaki/shared';
+import type { PoseActionResult, PoseStatus, PoseTagsImportResult, PoseTagsStatus, PoseWearAssignResult, PoseWearImportResult, PoseWearLowResponse } from '@emaki/shared';
+import { formatEta } from '@emaki/shared';
 import {
   EmptyInput,
   PoseClassInput,
@@ -13,6 +16,7 @@ import {
   PoseDownloadInput,
   PoseImportInput,
   PoseSimilarInput,
+  PoseTagsImportInput,
   PoseWearAssignInput,
   PoseWearCatalogInput,
   PoseWearFileInput,
@@ -25,11 +29,14 @@ import path from 'node:path';
 import { config } from '../config.ts';
 import { readSettings } from '../datasource/sqlite/settings.ts';
 import { posewearCatalog, posewearCounts, posewearLowIds, posewearOf } from '../domain/pose/posewear.ts';
+import { poseTagsCounts } from '../domain/evidence/poseTags.ts';
 import { poseClasses, poseCounts, poseFigure, similarPoses } from '../domain/pose/read.ts';
 import { BadRequestError, HttpError, NotFoundError } from '../http/errors.ts';
 import type { FileResponse } from '../infra/ports.ts';
-import { ensurePoseClasses, poseReady } from '../services/pose/job.ts';
-import { cancelPoseDownload, copyPoseModels, localPoseSource, poseDownloadState, poseModelDir, poseModelFiles, poseModelsReady, POSE_REPO, startPoseDownload } from '../services/pose/models.ts';
+import { ensurePoseClasses, poseReady, poseRerunRequested, requestPoseRerun } from '../services/pose/job.ts';
+import { cancelPoseDownload, copyPoseModels, localPoseSource, poseDownloadState, poseModelDir, poseModelFiles, poseModelsReady, repoLabel, startPoseDownload } from '../services/pose/models.ts';
+import { importPoseTagsLow, localPoseTagsNpz } from '../services/pose/poseTagsImport.ts';
+import { planPoseTags, POSE_TAGS_SEC_PER_IMAGE, poseTagsRequested, requestPoseTags } from '../services/pose/tagsJob.ts';
 import { importPoseWear, importPoseWearAssignments, localPoseWear, posewearDir } from '../services/pose/posewear.ts';
 import { importPrototype, localPrototype } from '../services/pose/protoImport.ts';
 import { defineCommand, defineQuery, type Engine } from './registry.ts';
@@ -42,19 +49,42 @@ export function requirePose(e: Engine): void {
   if (!poseEnabled(e)) throw new HttpError(403, 'forbidden', '姿势检索没有打开（设置 → 实验功能）');
 }
 
+const activeJob = (e: Engine, kind: 'pose' | 'pose-tags') => e.ctx.jobs.list().find((j) => j.kind === kind && (j.status === 'running' || j.status === 'queued')) ?? null;
+
+/** 姿势标签低分的状态：要补多少张、补完大约多久（每张约 0.5 秒），模型不在本机的单列 */
+export function poseTagsStatus(e: Engine): PoseTagsStatus {
+  const t = readSettings(e.ctx.db).tagger;
+  const c = poseTagsCounts(e.ctx.db, t.model);
+  const plan = planPoseTags({ ctx: e.ctx, modelsDir: config.modelsDir }, t);
+  const ready = plan.passes.reduce((s, p) => s + p.n, 0);
+  return {
+    eligible: c.eligible,
+    pending: c.pending,
+    missingModel: plan.missing.reduce((s, m) => s + m.n, 0),
+    estimateSeconds: Math.round(ready * POSE_TAGS_SEC_PER_IMAGE),
+    lowTags: c.lowTags,
+    images: c.images,
+    requested: poseTagsRequested(e.ctx),
+    job: activeJob(e, 'pose-tags'),
+    prototype: localPoseTagsNpz(),
+  };
+}
+
 export function poseStatus(e: Engine): PoseStatus {
-  const job = e.ctx.jobs.list().find((j) => j.kind === 'pose' && (j.status === 'running' || j.status === 'queued')) ?? null;
+  const job = activeJob(e, 'pose');
   return {
     enabled: poseEnabled(e),
     models: {
       ready: modelsReady(e),
       dir: poseModelDir(config.modelsDir),
       files: poseModelFiles(config.modelsDir),
-      localSource: localPoseSource(),
-      repo: POSE_REPO.repo,
+      localSource: localPoseSource(config.modelsDir),
+      repo: repoLabel(),
       download: poseDownloadState(),
     },
     counts: poseCounts(e.ctx.db),
+    rerun: poseRerunRequested(e.ctx),
+    tags: poseTagsStatus(e),
     prototype: localPrototype(),
     job,
     posewear: { ...posewearCounts(e.ctx.db), defaults: localPoseWear() },
@@ -72,14 +102,14 @@ export function afterPoseToggle(e: Engine, before: boolean, enabled: boolean | u
     e.pipeline.requestPose();
   }
   if (enabled === false && before) {
-    for (const j of e.ctx.jobs.list()) if (j.kind === 'pose' && (j.status === 'queued' || j.status === 'running')) e.ctx.jobs.cancel(j.id);
+    for (const j of e.ctx.jobs.list()) if ((j.kind === 'pose' || j.kind === 'pose-tags') && (j.status === 'queued' || j.status === 'running')) e.ctx.jobs.cancel(j.id);
   }
 }
 
 export const poseCommands = [
   defineCommand({
     name: 'pose.downloadModels',
-    summary: '下载姿势模型（Hugging Face yzd-v/DWPose，约 350 MB，后台进行、断点续传，进度看 pose.status）；consent 必须是 true',
+    summary: '下载姿势模型（Hugging Face deepghs/anime_person_detection 的找人模型和 yzd-v/DWPose，约 240 MB，后台进行、断点续传，进度看 pose.status）；consent 必须是 true',
     input: PoseDownloadInput,
     scope: 'settings',
     undoable: false,
@@ -102,7 +132,7 @@ export const poseCommands = [
   }),
   defineCommand({
     name: 'pose.copyModels',
-    summary: '从本机文件夹复制姿势模型（yolox_l.onnx、dw-ll_ucoco_384.onnx），校验 sha256',
+    summary: '从本机文件夹复制姿势模型（dw-ll_ucoco_384.onnx；找人模型 model.onnx + threshold.json 在同一个文件夹或 anime_person_v1.1_m 子文件夹里），校验 sha256',
     input: PoseCopyInput,
     scope: 'settings',
     undoable: false,
@@ -195,6 +225,64 @@ export const poseCommands = [
       if (!modelsReady(e)) throw new BadRequestError('姿势模型还没准备好');
       e.pipeline.noteManualStart('pose');
       return e.ctx.jobs.enqueue('pose');
+    },
+  }),
+  defineCommand({
+    name: 'pose.reextract',
+    summary: '用新的找人模型重新提取：旧版本（YOLOX 找人）提取的姿势跟着「提取姿势」任务重跑；记下要求，重启后接着重提，可以取消',
+    input: EmptyInput,
+    scope: 'settings',
+    undoable: false,
+    idempotent: true,
+    http: [{ method: 'POST', path: '/api/pose/reextract' }],
+    run(e): PoseActionResult & { count: number } {
+      requirePose(e);
+      if (!modelsReady(e)) throw new BadRequestError('姿势模型还没准备好');
+      const count = requestPoseRerun(e.ctx);
+      if (!count) return { count, message: '没有用旧的找人模型提取的图' };
+      e.pipeline.noteManualStart('pose');
+      e.pipeline.requestPose();
+      return { count, message: `开始用新的找人模型重新提取 ${count} 张` };
+    },
+  }),
+  defineCommand({
+    name: 'pose.backfillTags',
+    summary: '开始「补充姿势标签」后台任务：给识别过的旧插画重跑识别模型，只收姿势标签的低分（不动标签和角色）；每张约 0.5 秒，可以取消，下次接着补',
+    input: EmptyInput,
+    scope: 'settings',
+    undoable: false,
+    idempotent: true,
+    http: [{ method: 'POST', path: '/api/pose/tags/backfill' }],
+    run(e): PoseActionResult & { count: number; estimateSeconds: number } {
+      requirePose(e);
+      const s = poseTagsStatus(e);
+      const count = s.pending - s.missingModel;
+      const skip = s.missingModel ? `；${s.missingModel} 张用的识别模型不在本机，补不了` : '';
+      if (count <= 0) return { count: 0, estimateSeconds: 0, message: `没有要补的图${skip}` };
+      requestPoseTags(e.ctx);
+      e.pipeline.noteManualStart('pose-tags');
+      e.pipeline.requestPoseTags();
+      return { count, estimateSeconds: s.estimateSeconds, message: `开始补充姿势标签：${count} 张，大约 ${formatEta(s.estimateSeconds) ?? '—'}${skip}` };
+    },
+  }),
+  defineCommand({
+    name: 'pose.importTagsLow',
+    summary: '导入原型算好的姿势标签低分（pose_tags_lowthr.npz）：只导本图库里有的图，已经按现在的识别模型收过的不覆盖，再导一次结果不变',
+    input: PoseTagsImportInput,
+    scope: 'settings',
+    undoable: false,
+    idempotent: true,
+    http: [{ method: 'POST', path: '/api/pose/tags/import' }],
+    async run(e, input): Promise<PoseTagsImportResult> {
+      requirePose(e);
+      if (!existsSync(input.path)) throw new BadRequestError(`找不到文件：${input.path}`);
+      try {
+        const r = await importPoseTagsLow(e.ctx, input.path);
+        const skip = [r.missing && `图库里没有的 ${r.missing} 张`, r.skipped && `已经收过的 ${r.skipped} 张`].filter(Boolean);
+        return { ...r, message: `导入了 ${r.imported} 张的姿势标签低分（${r.withTags} 张有，共 ${r.tags} 条）${skip.length ? `；${skip.join('、')}跳过` : ''}` };
+      } catch (err) {
+        throw new BadRequestError((err as Error).message);
+      }
     },
   }),
 ];

@@ -70,6 +70,9 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   pixiv_unavailable_posts: 'evidence',
   danbooru_tags: 'evidence',
   danbooru_artists: 'evidence',
+  // 姿势标签的低分和收集进度（按姿势找图用，迁移 049）
+  image_pose_tags_low: 'evidence',
+  image_pose_tags_checked: 'evidence',
   'images#evidence': 'evidence',
   // 编目：角色、作品、画师合并、别名、重定向、Danbooru 绑定和核验、名字索引和词库
   characters: 'catalog',

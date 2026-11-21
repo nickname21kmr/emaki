@@ -21,6 +21,7 @@ import type { HostItemResult, HostThresholds } from './protocol.ts';
 import { NOT_SKIPPED, noteReadFailures, skipIds } from './readBackoff.ts';
 import { ResilientTagger } from './resilient.ts';
 import { TagResultWriter } from '../../domain/evidence/tagger.ts';
+import { POSE_LOW_MIN, POSE_TAGS } from '../../domain/evidence/poseTags.ts';
 import type { Change } from '../../propagation/changes.ts';
 import { COUNTED, NO_CHARACTER, TAGGABLE } from '../../readmodel/terms.ts';
 import { formatEta } from '@emaki/shared';
@@ -195,6 +196,7 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
       afterBatchInTx: deps.afterBatchInTx,
       now: deps.now,
       artists: !!t.artists && spec.labelsFormat === 'pixai-json',
+      poseLow: true,
     });
 
     // 阶段 0：没有作品的角色补挂作品。调低阈值后已有的达标建议不在这里自动归（撤销不了），由设置页的按钮做
@@ -253,6 +255,8 @@ export function createTagJobRunner(deps: TagJobDeps): TagRunner {
         // 角色候选：达到建议阈值或模型这个来源的自动阈值（较低的那个）的都要，全部记成证据
         character: Math.min(t.characterThreshold, t.autoAcceptBySource?.tagger ?? t.autoAcceptThreshold),
         ...(t.artists ? { artist: ARTIST_THRESHOLD } : {}),
+        // 姿势标签的低分（按姿势找图用）：名单里分数在 [0.17, 一般标签阈值) 的另外给出，不进 image_tags
+        low: { tags: POSE_TAGS, min: POSE_LOW_MIN },
       };
       const B = tagger.current.batchSize;
       let beforeId = Number.MAX_SAFE_INTEGER;

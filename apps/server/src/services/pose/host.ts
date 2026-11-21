@@ -1,11 +1,11 @@
 /**
- * 姿势检测子进程入口（child_process.fork）：YOLOX-L 找人，DWPose-L 出关键点。
+ * 姿势检测子进程入口（child_process.fork）：deepghs 动漫人物检测（YOLOv8m）找人，DWPose-L 出关键点。
  * 和识别子进程一样放在子进程里：session.run 会占住 JS 线程，DirectML 偶尔原生崩溃，崩了主进程只要重开。
  */
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import type * as Ort from 'onnxruntime-node';
-import { cropFrame, cropInput, decodeSimcc, decodeYolox, letterbox, loadRgb, PH, personsOrFallback, PW, DET } from './image.ts';
+import { cropFrame, cropInput, decodeDetections, decodeSimcc, letterbox, loadRgb, PH, personsOrFallback, PW, DET } from './image.ts';
 import type { PoseChildMsg, PoseDevice, PoseInitMsg, PoseItemResult, PoseParentMsg } from './protocol.ts';
 
 const ort = createRequire(import.meta.url)('onnxruntime-node') as typeof Ort;
@@ -15,6 +15,8 @@ const send = (m: PoseChildMsg) => process.send?.(m);
 
 let det: Ort.InferenceSession | null = null;
 let pose: Ort.InferenceSession | null = null;
+/** 找人的分数门槛（init 时给） */
+let detThreshold = 0.348;
 
 function options(device: PoseDevice, deviceId: number): Ort.InferenceSession.SessionOptions {
   if (device === 'dml')
@@ -35,11 +37,12 @@ async function warm() {
 
 async function init(m: PoseInitMsg) {
   const t0 = performance.now();
+  detThreshold = m.detThreshold;
   let device: PoseDevice = 'cpu';
   let fallbackReason: string | null = null;
   if (m.device === 'dml') {
     try {
-      det = await ort.InferenceSession.create(m.yoloxPath, options('dml', m.dmlDeviceId));
+      det = await ort.InferenceSession.create(m.detectorPath, options('dml', m.dmlDeviceId));
       pose = await ort.InferenceSession.create(m.dwposePath, options('dml', m.dmlDeviceId));
       await warm();
       device = 'dml';
@@ -51,7 +54,7 @@ async function init(m: PoseInitMsg) {
     }
   }
   if (!det || !pose) {
-    det = await ort.InferenceSession.create(m.yoloxPath, options('cpu', 0));
+    det = await ort.InferenceSession.create(m.detectorPath, options('cpu', 0));
     pose = await ort.InferenceSession.create(m.dwposePath, options('cpu', 0));
     await warm();
   }
@@ -73,9 +76,10 @@ async function detectOne(id: number, path: string): Promise<PoseItemResult> {
     if (/timeout/i.test(msg)) return { id, ok: false, code: 'IO', message: `解码超时，下次再试（${msg}）` };
     return { id, ok: false, code: /unsupported image format/i.test(msg) ? 'UNSUPPORTED' : 'DECODE', message: msg };
   }
-  const { input, ratio } = letterbox(img);
-  const out = await det!.run({ [det!.inputNames[0]!]: new ort.Tensor('float32', input, [1, 3, DET, DET]) });
-  const found = decodeYolox(out[det!.outputNames[0]!]!.data as Float32Array, ratio);
+  const lb = letterbox(img);
+  const out = await det!.run({ [det!.inputNames[0]!]: new ort.Tensor('float32', lb.input, [1, 3, DET, DET]) });
+  const o = out[det!.outputNames[0]!]!;
+  const found = decodeDetections(o.data as Float32Array, o.dims, lb, img.w, img.h, detThreshold);
   const people = personsOrFallback(img, found);
   const n = people.length;
   const batch = new Float32Array(n * 3 * PW * PH);

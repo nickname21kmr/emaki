@@ -55,28 +55,36 @@ export interface PoseStatus {
   /** 设置里打开了（Settings.pose.enabled） */
   enabled: boolean;
   models: {
-    /** 两个模型都在、大小对得上 */
+    /** 模型文件都在、大小对得上（找人：deepghs 动漫人物检测；骨架：DWPose） */
     ready: boolean;
+    /** DWPose 所在的文件夹 */
     dir: string;
+    /** 每个文件（name 是仓库里的路径，例如 person_detect_v1.1_m/model.onnx） */
     files: PoseModelFile[];
     /** 本机能直接复制模型的文件夹（找到了才有），给「从本地复制」做默认值 */
     localSource: string | null;
-    /** 下载源（Hugging Face 仓库） */
+    /** 下载源（Hugging Face 仓库，几个用「、」连起来） */
     repo: string;
     download: PoseDownloadState;
   };
   counts: {
     /** 要提取的图（计入统计的插画） */
     eligible: number;
-    /** 已经按当前版本跑过 */
+    /** 提取过的（任何版本） */
     processed: number;
-    /** 还没跑（或版本旧了） */
+    /** 还没提取过（「提取姿势」会自动跑这些） */
     pending: number;
+    /** 提取过、但用的是旧的找人模型（YOLOX）：结果照常用；要重跑点「用新的找人模型重新提取」（pose.reextract） */
+    outdated: number;
     /** 找到了能用的人物 */
     withPerson: number;
     /** 归进了某一类 */
     classified: number;
   };
+  /** 用户要求了用新的找人模型重新提取、还没重提完（旧版本的那些会跟着「提取姿势」一起跑） */
+  rerun: boolean;
+  /** 姿势标签的低分（image_pose_tags_low）：识别时顺便收；识别过的旧图要「补充姿势标签」（pose.backfillTags） */
+  tags: PoseTagsStatus;
   /** 本机有原型跑好的数据时给两个默认路径（「导入已有的姿势数据」用），没有是 null */
   prototype: { keypointsPath: string; assignmentsPath: string } | null;
   /** 正在跑或排队的「提取姿势」任务 */
@@ -95,6 +103,40 @@ export interface PoseStatus {
     pair: { types: number; images: number; shown: number };
     defaults: { folder: string | null; assignmentsPath: string | null; viewsPath: string | null; pairsPath: string | null };
   };
+}
+
+/** 姿势标签的低分：姿势名单里分数在 [0.17, 一般标签阈值) 的一般标签（达到阈值的照旧是普通标签） */
+export interface PoseTagsStatus {
+  /** 识别过的、计入统计的插画 */
+  eligible: number;
+  /** 其中还没收过低分姿势标签的（含模型不在本机的） */
+  pending: number;
+  /** 其中模型不在本机、这台电脑补不了的 */
+  missingModel: number;
+  /** 补完大约要多少秒（按每张约 0.5 秒估；没有要补的是 0） */
+  estimateSeconds: number;
+  /** 低分姿势标签的条数、有低分姿势标签的图 */
+  lowTags: number;
+  images: number;
+  /** 用户开始了补充、还没补完（重启后接着补） */
+  requested: boolean;
+  /** 正在跑或排队的「补充姿势标签」任务 */
+  job: Job | null;
+  /** 本机有原型算好的低分文件（pose_tags_lowthr.npz）时给路径（pose.importTagsLow 的默认值），没有是 null */
+  prototype: string | null;
+}
+
+/** POST /api/pose/tags/import 的结果 */
+export interface PoseTagsImportResult {
+  message: string;
+  /** 写了的图、其中有低分姿势标签的图、写了几条 */
+  imported: number;
+  withTags: number;
+  tags: number;
+  /** 本图库里没有的图 */
+  missing: number;
+  /** 已经按现在的识别模型收过的（不覆盖） */
+  skipped: number;
 }
 
 // ------------------------------------------------------------------ PoseWear 姿势库
