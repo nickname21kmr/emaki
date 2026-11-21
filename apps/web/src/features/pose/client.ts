@@ -11,10 +11,12 @@ import type {
   PoseWearAssignResult,
   PoseWearCatalogResponse,
   PoseWearImportResult,
+  PoseWearLowResponse,
   PoseWearOfResponse,
   PoseWearPose,
 } from '@emaki/shared';
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useMemo } from 'react';
 import { request } from '@/lib/api';
 import { useSettings } from '@/lib/queries';
 
@@ -36,10 +38,19 @@ export const poseApi = {
     request<PoseSimilarResponse>('GET', `/pose/similar/${encodeURIComponent(id)}?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`),
   // PoseWear 姿势库
   importPoseWear: (body: { path: string; viewsPath?: string }) => request<PoseWearImportResult>('POST', '/pose/posewear/import', body),
-  importPoseWearMatches: (assignmentsPath: string) => request<PoseWearAssignResult>('POST', '/pose/posewear/matches', { assignmentsPath }),
+  importPoseWearMatches: (body: { assignmentsPath?: string; pairsPath?: string }) => request<PoseWearAssignResult>('POST', '/pose/posewear/matches', body),
   posewear: (all: boolean) => request<PoseWearCatalogResponse>('GET', `/pose/posewear${all ? '?all=1' : ''}`),
   posewearOf: (id: ID) => request<PoseWearOfResponse>('GET', `/pose/posewear-match/${encodeURIComponent(id)}`),
+  posewearLow: (pose: string) => request<PoseWearLowResponse>('GET', `/pose/posewear-low/${encodeURIComponent(pose)}`),
 };
+
+/** 这个 PoseWear 姿势下低置信的图（网格上做记号）；没选姿势时不拉 */
+export function usePoseWearLow(pose: string | undefined) {
+  const on = usePoseEnabled();
+  const q = useQuery({ queryKey: ['pose', 'posewear-low', pose], queryFn: () => poseApi.posewearLow(pose!), enabled: on && !!pose, staleTime: 60_000 });
+  const ids = q.data?.ids;
+  return useMemo(() => new Set(ids ?? []), [ids]);
+}
 
 /** 设置里打开了没有（没加载出来按关着算） */
 export function usePoseEnabled(): boolean {

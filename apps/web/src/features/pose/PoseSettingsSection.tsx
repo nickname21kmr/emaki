@@ -238,16 +238,19 @@ function PoseWearRows({ status, run }: { status: PoseStatus; run: Run }) {
   const [lib, setLib] = useState(false);
   const [match, setMatch] = useState(false);
   const pw = status.posewear;
-  // 原型 posewear_v1 的 poses.json 在匹配结果旁边：给代表视角
-  const views = pw.defaults.assignmentsPath?.replace(/assignments[.]json$/, 'poses.json') ?? '';
   return (
     <>
       <Field
         label="PoseWear 姿势库"
         hint={
-          pw.poses > 0
-            ? <span className="tabular">已导入 {formatCount(pw.poses)} 个单人姿势（全身、全身·性感、上半身）；再导一次会替换。</span>
-            : '从本机的 PoseWear 文件夹导入姿势和线稿（复制到数据目录）。'
+          pw.poses > 0 ? (
+            <span className="tabular">
+              已导入 {formatCount(pw.poses)} 个单人姿势（全身、全身·性感、上半身）
+              {pw.pair.types > 0 ? `、${formatCount(pw.pair.types)} 类双人` : '，还没有双人（再导一次就有）'}；再导一次会替换。
+            </span>
+          ) : (
+            '从本机的 PoseWear 文件夹导入姿势和线稿（复制到数据目录）。'
+          )
         }
       >
         <Button size="sm" variant={pw.poses > 0 ? 'outline' : 'secondary'} onClick={() => setLib(true)}>
@@ -257,10 +260,10 @@ function PoseWearRows({ status, run }: { status: PoseStatus; run: Run }) {
           open={lib}
           onOpenChange={setLib}
           title="导入 PoseWear 姿势库"
-          description="PoseWear 文件夹里要有 assets/poses.*.json 和 p/t、p/i 线稿。双人姿势暂时不导。"
+          description="PoseWear 文件夹里要有 assets/poses.*.json 和 p/t、p/i 线稿。单人三套全导；双人只导几类结果可靠的互动，每类一张代表线稿。"
           fields={[
             { key: 'path', label: 'PoseWear 文件夹', value: pw.defaults.folder ?? '', pick: true },
-            { key: 'viewsPath', label: '代表视角（posewear_v1 的 poses.json，可以不填，不填用正面）', value: views, optional: true },
+            { key: 'viewsPath', label: '代表视角（原型的 poses.json，可以不填，不填用正面）', value: pw.defaults.viewsPath ?? '', optional: true },
           ]}
           submit="导入"
           onSubmit={(v) => run(() => poseApi.importPoseWear({ path: v.path!, ...(v.viewsPath ? { viewsPath: v.viewsPath } : {}) }))}
@@ -269,9 +272,14 @@ function PoseWearRows({ status, run }: { status: PoseStatus; run: Run }) {
       <Field
         label="姿势匹配结果"
         hint={
-          pw.assigned > 0
-            ? <span className="tabular">{formatCount(pw.assigned)} 张图匹配到了姿势；新图要重新跑匹配再导入。</span>
-            : '每张图匹配到哪个 PoseWear 姿势（assignments.json），只导本图库里有的图。'
+          pw.assigned > 0 || pw.pair.images > 0 ? (
+            <span className="tabular">
+              单人 {formatCount(pw.assigned)} 张、{formatCount(pw.pairs)} 个图-姿势（低置信 {formatCount(pw.low)}）；双人 {formatCount(pw.pair.images)} 张
+              {pw.pair.images > pw.pair.shown && `（去掉差分后 ${formatCount(pw.pair.shown)} 张）`}。新图要重新跑匹配再导入。
+            </span>
+          ) : (
+            '每张图匹配到哪些 PoseWear 姿势（单人、双人各一份），只导本图库里有的图。'
+          )
         }
       >
         <Button size="sm" variant="outline" disabled={pw.poses === 0} onClick={() => setMatch(true)}>
@@ -281,10 +289,20 @@ function PoseWearRows({ status, run }: { status: PoseStatus; run: Run }) {
           open={match}
           onOpenChange={setMatch}
           title="导入姿势匹配结果"
-          description="posewear_v1 的 assignments.json：图片 → 主要姿势、名次和前三个候选。整批替换之前导入的。"
-          fields={[{ key: 'assignmentsPath', label: '匹配结果', value: pw.defaults.assignmentsPath ?? '' }]}
+          description="单人：assignments_multi_weighted.json（一张图的全部姿势，名次按加权分；assignments_multi.json、旧的 assignments.json 也认）。双人：pose-pair 的 assignments.json。填了哪份换哪份，另一份不动。"
+          fields={[
+            { key: 'assignmentsPath', label: '单人匹配结果', value: pw.defaults.assignmentsPath ?? '', optional: true },
+            { key: 'pairsPath', label: '双人匹配结果', value: pw.defaults.pairsPath ?? '', optional: true },
+          ]}
           submit="导入"
-          onSubmit={(v) => run(() => poseApi.importPoseWearMatches(v.assignmentsPath!))}
+          onSubmit={(v) =>
+            run(() =>
+              poseApi.importPoseWearMatches({
+                ...(v.assignmentsPath ? { assignmentsPath: v.assignmentsPath } : {}),
+                ...(v.pairsPath ? { pairsPath: v.pairsPath } : {}),
+              }),
+            )
+          }
         />
       </Field>
     </>

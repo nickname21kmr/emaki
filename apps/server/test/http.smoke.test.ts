@@ -904,6 +904,12 @@ describe('按姿势找图（实验，注册表：pose.*）', () => {
     const { status, json } = await call('GET', '/api/pose/posewear-match/i1');
     expect([status, json.primary, json.related]).toEqual([200, null, []]);
   });
+  route('GET /api/pose/posewear-low/:pose', async () => {
+    expect((await call('GET', '/api/pose/posewear-low/full_single_P001')).status).toBe(403);
+    patchSettingsInternal(ds.ctx.db, 'pose', { enabled: true });
+    expect(await call('GET', '/api/pose/posewear-low/pair_P054')).toMatchObject({ status: 200, json: { ids: [] } });
+    expect((await call('GET', '/api/pose/posewear-low/pair60_P054')).status).toBe(400);
+  });
 });
 
 describe('本机安全（T23）', () => {

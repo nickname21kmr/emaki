@@ -314,8 +314,10 @@ export interface ListImagesQuery extends PageQuery {
   artist?: string;
   /** 姿势类别（full_01 这样；姿势检索打开时才能用）：归到这一类的图。不传 sort 时按离代表骨架的距离排（近的在前） */
   poseClass?: string;
-  /** PoseWear 姿势（full_single_P001 这样；姿势检索打开时才能用）：主要匹配到这个姿势的图。不传 sort 时按匹配名次排 */
+  /** PoseWear 姿势（full_single_P001、pair_P054 这样；姿势检索打开时才能用）：匹配到这个姿势的图（不只是主要姿势；双人同一组差分只给一张）。不传 sort 时按匹配名次排（骨架和标签的加权分） */
   posewearPose?: string;
+  /** 和 posewearPose 一起用：去掉低置信的（lowtag+skel） */
+  posewearReliable?: boolean;
   sort?: ImageSort;
   order?: 'asc' | 'desc';
 }

@@ -5,7 +5,7 @@
  * 模型要用户自己准备：同意后下载（pose.downloadModels），或者从本机文件夹复制（pose.copyModels）。
  * 都是设置类（scope settings），不给 AI 助手；查询是 read。
  */
-import type { PoseActionResult, PoseStatus, PoseWearAssignResult, PoseWearImportResult } from '@emaki/shared';
+import type { PoseActionResult, PoseStatus, PoseWearAssignResult, PoseWearImportResult, PoseWearLowResponse } from '@emaki/shared';
 import {
   EmptyInput,
   PoseClassInput,
@@ -17,13 +17,14 @@ import {
   PoseWearCatalogInput,
   PoseWearFileInput,
   PoseWearImportInput,
+  PoseWearLowInput,
   PoseWearOfInput,
 } from '@emaki/shared/schemas';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { config } from '../config.ts';
 import { readSettings } from '../datasource/sqlite/settings.ts';
-import { posewearCatalog, posewearCounts, posewearOf } from '../domain/pose/posewear.ts';
+import { posewearCatalog, posewearCounts, posewearLowIds, posewearOf } from '../domain/pose/posewear.ts';
 import { poseClasses, poseCounts, poseFigure, similarPoses } from '../domain/pose/read.ts';
 import { BadRequestError, HttpError, NotFoundError } from '../http/errors.ts';
 import type { FileResponse } from '../infra/ports.ts';
@@ -137,7 +138,7 @@ export const poseCommands = [
   }),
   defineCommand({
     name: 'pose.importPoseWear',
-    summary: '导入 PoseWear 姿势库：读本机 PoseWear 文件夹的姿势列表，单人的三套姿势和线稿复制进数据目录（再导一次会替换）',
+    summary: '导入 PoseWear 姿势库：读本机 PoseWear 文件夹的姿势列表，单人的三套姿势、双人几类互动的代表线稿复制进数据目录（再导一次会替换）',
     input: PoseWearImportInput,
     scope: 'settings',
     undoable: false,
@@ -150,7 +151,7 @@ export const poseCommands = [
       if (input.viewsPath && !existsSync(input.viewsPath)) throw new BadRequestError(`找不到文件：${input.viewsPath}`);
       try {
         const r = await importPoseWear(e.ctx, dir, input.viewsPath);
-        return { ...r, message: `导入了 ${r.poses} 个姿势（线稿 ${r.files} 张）` };
+        return { ...r, message: `导入了 ${r.poses} 个单人姿势、${r.pairTypes} 类双人（线稿 ${r.files} 张）` };
       } catch (err) {
         throw new BadRequestError((err as Error).message);
       }
@@ -158,7 +159,7 @@ export const poseCommands = [
   }),
   defineCommand({
     name: 'pose.importPoseWearMatches',
-    summary: '导入姿势匹配结果（posewear_v1 的 assignments.json）：每张图的主要 PoseWear 姿势和前三个候选，只导本图库里有的图，整批替换',
+    summary: '导入姿势匹配结果：单人（assignments_multi.json：每张图全部匹配上的姿势；旧的 assignments.json 也认）和 / 或双人（pose-pair 的 assignments.json），只导本图库里有的图，各自整批替换',
     input: PoseWearAssignInput,
     scope: 'settings',
     undoable: false,
@@ -166,11 +167,16 @@ export const poseCommands = [
     http: [{ method: 'POST', path: '/api/pose/posewear/matches' }],
     async run(e, input): Promise<PoseWearAssignResult> {
       requirePose(e);
-      if (!existsSync(input.assignmentsPath)) throw new BadRequestError(`找不到文件：${input.assignmentsPath}`);
+      if (!input.assignmentsPath && !input.pairsPath) throw new BadRequestError('单人或双人的匹配结果至少给一个');
+      for (const p of [input.assignmentsPath, input.pairsPath]) if (p && !existsSync(p)) throw new BadRequestError(`找不到文件：${p}`);
       try {
-        const r = await importPoseWearAssignments(e.ctx, input.assignmentsPath);
+        const r = await importPoseWearAssignments(e.ctx, { assignmentsPath: input.assignmentsPath, pairsPath: input.pairsPath });
+        const done = [
+          input.assignmentsPath && `单人 ${r.imported} 张（${r.memberships} 个图-姿势，低置信 ${r.low} 个）`,
+          input.pairsPath && `双人 ${r.pairImages} 张（差分 ${r.pairVariants} 条不单独显示）`,
+        ].filter(Boolean);
         const skip = [r.missing && `图库里没有的 ${r.missing} 张`, r.unknownPose && `姿势库里没有的姿势 ${r.unknownPose} 张`].filter(Boolean);
-        return { ...r, message: `导入了 ${r.imported} 张的姿势匹配${skip.length ? `；${skip.join('、')}跳过` : ''}` };
+        return { ...r, message: `导入了${done.join('；')}${skip.length ? `；${skip.join('、')}跳过` : ''}` };
       } catch (err) {
         throw new BadRequestError((err as Error).message);
       }
@@ -252,13 +258,24 @@ export const poseQueries = [
   }),
   defineQuery({
     name: 'pose.posewearOf',
-    summary: '这张图匹配到的 PoseWear 姿势：主要的一个和过了阈值的其他候选（最多 2 个）',
+    summary: '这张图匹配到的 PoseWear 姿势：主要的一个和其他全部匹配上的姿势（单人在前、双人在后，低置信的标出来）',
     input: PoseWearOfInput,
     scope: 'read',
     http: [{ method: 'GET', path: '/api/pose/posewear-match/:id' }],
     run(e, q) {
       requirePose(e);
       return posewearOf(e.ctx.db, q.id);
+    },
+  }),
+  defineQuery({
+    name: 'pose.posewearLow',
+    summary: '这个 PoseWear 姿势下低置信（lowtag+skel）的图 id（网格上做记号用）',
+    input: PoseWearLowInput,
+    scope: 'read',
+    http: [{ method: 'GET', path: '/api/pose/posewear-low/:pose' }],
+    run(e, q): PoseWearLowResponse {
+      requirePose(e);
+      return { ids: posewearLowIds(e.ctx.db, q.pose) };
     },
   }),
   defineQuery({

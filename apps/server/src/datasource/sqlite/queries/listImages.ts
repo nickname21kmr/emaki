@@ -166,8 +166,9 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
     p.poseClass = q.poseClass;
   }
   if (q.posewearPose) {
-    // PoseWear 姿势（实验，domain/pose/posewear.ts）：主要匹配到这个姿势的图
-    both('i.id IN (SELECT image_id FROM image_posewear WHERE pose_id = @pwPose)');
+    // PoseWear 姿势（实验，domain/pose/posewear.ts）：匹配到这个姿势的图（不只是主要姿势）；双人的差分不单独出现；
+    // 只看可靠的：去掉低置信（lowtag+skel）
+    both(`i.id IN (SELECT image_id FROM image_posewear_members WHERE pose_id = @pwPose AND variant_of IS NULL${q.posewearReliable ? ' AND low = 0' : ''})`);
     p.pwPose = q.posewearPose;
   }
   if (q.theme) {
@@ -264,7 +265,7 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
   const limit = Math.min(Math.max(q.limit ?? 60, 1), 200);
   // page 只在看某一本时按页序，否则当入库时间
   // 按姿势类别筛选、没指定排序时按离代表骨架的距离（近的在前，游标用偏移：距离不在图片行里）
-  // 按 PoseWear 姿势筛选、没指定排序时按匹配名次
+  // 按 PoseWear 姿势筛选、没指定排序时按匹配名次（原型按 0.6·骨架相似 + 0.4·标签分排好的，低置信的不另外往后挪）
   const byPose = !q.sort && (q.posewearPose ? 'poseRank' : q.poseClass ? 'poseDistance' : null);
   const sort: ImageSort | 'poseDistance' | 'poseRank' = byPose || (q.sort === 'page' && collection === null ? 'addedAt' : (q.sort ?? 'addedAt'));
 
@@ -276,7 +277,7 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
       sort === 'poseDistance'
         ? `(SELECT ip.distance FROM image_poses ip WHERE ip.image_id = i.id) ${q.order === 'desc' ? 'DESC' : 'ASC'}`
         : sort === 'poseRank'
-          ? `(SELECT pw.rank FROM image_posewear pw WHERE pw.image_id = i.id) ${q.order === 'desc' ? 'DESC' : 'ASC'}`
+          ? `(SELECT pw.rank FROM image_posewear_members pw WHERE pw.image_id = i.id AND pw.pose_id = @pwPose) ${q.order === 'desc' ? 'DESC' : 'ASC'}`
           : q.seed !== undefined
           ? SEEDED_RANDOM_EXPR
           : RANDOM_EXPR;

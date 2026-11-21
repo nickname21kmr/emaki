@@ -192,6 +192,8 @@ export function useGalleryParams({ ownsKind = true }: { ownsKind?: boolean } = {
   // 姿势检索关着时 URL 里的姿势参数当没写（接口会 403）
   const poseOn = usePoseEnabled();
   const classesOn = usePoseClassesShown();
+  // 只看可靠的（本机偏好，按姿势找图时才发）
+  const poseReliable = usePrefs((s) => s.poseReliableOnly);
   const filters = useMemo(() => gatePose(parseGalleryParams(params, kindPref), poseOn, classesOn), [params, kindPref, poseOn, classesOn]);
 
   const update = useCallback(
@@ -229,11 +231,12 @@ export function useGalleryParams({ ownsKind = true }: { ownsKind?: boolean } = {
       artist: filters.artist,
       poseClass: filters.poseClass,
       posewearPose: filters.pwPose,
+      posewearReliable: filters.pwPose && poseReliable ? true : undefined,
       // 按姿势典型度排时不发排序（服务端默认按距离 / 名次）
       sort: filters.poseOrder ? undefined : filters.sort,
       order: filters.poseOrder || filters.sort === 'random' ? undefined : filters.order,
     }),
-    [filters, customTags],
+    [filters, customTags, poseReliable],
   );
 
   const hasFilters = !!(

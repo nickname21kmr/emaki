@@ -18,8 +18,8 @@ import { GalleryToolbar, GalleryViewControls } from './components/GalleryToolbar
 import { GridFooter } from './components/GridStates';
 import { SelectionBar } from './components/SelectionBar';
 import { useGalleryParams } from './useGalleryParams';
-import { usePoseEnabled, usePoseSimilarInfinite } from '@/features/pose/client';
-import { PoseEntryLazy, PoseWearEntryLazy } from '@/features/pose/lazy';
+import { usePoseEnabled, usePoseSimilarInfinite, usePoseWearLow } from '@/features/pose/client';
+import { PoseEntryLazy, PoseLowMark, PoseWearEntryLazy } from '@/features/pose/lazy';
 
 const SCOPE = 'gallery';
 
@@ -46,6 +46,8 @@ export function GalleryPage() {
   // 「找同姿势的图」：列表换成姿势相近的那一串（同一类里按和那张图的骨架距离排）
   const poseOn = usePoseEnabled();
   const liked = usePoseSimilarInfinite(filters.poseLike);
+  // 按 PoseWear 姿势找图：低置信的格子做个小记号
+  const lowIds = usePoseWearLow(filters.pwPose);
   const plain = useImagesInfinite(query, !filters.poseLike);
   const list = filters.poseLike ? liked : plain;
   const images = useMemo(() => list.data?.pages.flatMap((p) => p.items) ?? [], [list.data]);
@@ -147,7 +149,16 @@ export function GalleryPage() {
             loadingMore={isFetchingNextPage}
             onLoadMore={loadMore}
             rowHeight={rowHeight}
-            renderBadges={showKind ? (img) => <KindBadge kind={img.kind} /> : undefined}
+            renderBadges={
+              showKind || lowIds.size
+                ? (img) => (
+                    <>
+                      {showKind && <KindBadge kind={img.kind} />}
+                      {lowIds.has(img.id) && <PoseLowMark />}
+                    </>
+                  )
+                : undefined
+            }
           />
         </div>
         <GridFooter loadingMore={isFetchingNextPage} done={!hasNextPage} total={total} />

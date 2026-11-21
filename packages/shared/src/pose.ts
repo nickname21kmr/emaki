@@ -83,20 +83,53 @@ export interface PoseStatus {
   job: Job | null;
   /** PoseWear 姿势库：导入了多少姿势、多少张图有匹配；本机找得到时给两个导入的默认路径 */
   posewear: {
+    /** 单人姿势数 */
     poses: number;
+    /** 有单人匹配的图 */
     assigned: number;
-    defaults: { folder: string | null; assignmentsPath: string | null };
+    /** 单人的图-姿势对（一张图可以在几个姿势下） */
+    pairs: number;
+    /** 其中低置信的对 */
+    low: number;
+    /** 双人：类型数、有匹配的图、去掉差分后显示的图 */
+    pair: { types: number; images: number; shown: number };
+    defaults: { folder: string | null; assignmentsPath: string | null; viewsPath: string | null; pairsPath: string | null };
   };
 }
 
 // ------------------------------------------------------------------ PoseWear 姿势库
 
-/** PoseWear 的三套单人姿势（双人的 pair60 暂时不导） */
-export type PoseWearSet = 'full_single' | 'full_sexy' | 'upper80v2';
-export const POSEWEAR_SETS = ['full_single', 'full_sexy', 'upper80v2'] as const;
-export const POSEWEAR_SET_LABEL: Record<PoseWearSet, string> = { full_single: '全身', full_sexy: '全身·性感', upper80v2: '上半身' };
-/** 姿势 id：full_single_P001 这样 */
-export const POSEWEAR_POSE_ID = /^(full_single|full_sexy|upper80v2)_P\d{3}$/;
+/**
+ * PoseWear 的三套单人姿势，加上「双人」：双人不按 pair60 的细名分，按互动类型合并（PAIR_TYPES），
+ * id 是 pair_ + 代表线稿的编号（pair_P054）。
+ */
+export type PoseWearSet = 'full_single' | 'full_sexy' | 'upper80v2' | 'pair';
+export const POSEWEAR_SINGLE_SETS = ['full_single', 'full_sexy', 'upper80v2'] as const;
+export const POSEWEAR_SETS = [...POSEWEAR_SINGLE_SETS, 'pair'] as const;
+export const POSEWEAR_SET_LABEL: Record<PoseWearSet, string> = { full_single: '全身', full_sexy: '全身·性感', upper80v2: '上半身', pair: '双人' };
+/** 姿势 id：full_single_P001、pair_P054 这样 */
+export const POSEWEAR_POSE_ID = /^(full_single|full_sexy|upper80v2|pair)_P\d{3}$/;
+
+/** 双人里成人的那一类（分类名）：只在不模糊敏感图时显示 */
+export const PAIR_ADULT_CATEGORY = '成人';
+
+/**
+ * 双人的互动类型：只收结果可靠的几类（tags_v1 看过），一类用一张 pair60 线稿当代表（rep），
+ * members 是并进来的 pair60 姿势。P063 主要靠 reverse_upright_straddle 命中，归成人；P017 是正面缠腰，和坐在腿上分开。
+ */
+export const PAIR_TYPES: readonly { rep: string; name: string; members: readonly string[]; adult: boolean }[] = [
+  { rep: 'P054', name: '公主抱', members: ['P054'], adult: false },
+  { rep: 'P053', name: '从背后抱·站', members: ['P053'], adult: false },
+  { rep: 'P044', name: '从背后抱·坐', members: ['P044'], adult: false },
+  { rep: 'P009', name: '坐在腿上', members: ['P009', 'P010'], adult: false },
+  { rep: 'P017', name: '缠腰相拥', members: ['P017'], adult: false },
+  { rep: 'P051', name: '耳语', members: ['P051'], adult: false },
+  { rep: 'P057', name: '相拥而眠', members: ['P057'], adult: false },
+  { rep: 'P023', name: '面对面跨坐', members: ['P023'], adult: true },
+  { rep: 'P018', name: '背对跨坐', members: ['P018'], adult: true },
+  { rep: 'P063', name: '背靠开腿坐', members: ['P063'], adult: true },
+  { rep: 'P041', name: '趴着抬臀', members: ['P041'], adult: true },
+];
 
 export interface PoseWearPose {
   id: string;
@@ -105,8 +138,12 @@ export interface PoseWearPose {
   number: string;
   name: string;
   category: string;
-  /** 主要匹配到这个姿势、计入统计的图 */
+  /** 匹配到这个姿势、计入统计的图（双人里同一组差分只算一张） */
   count: number;
+  /** 其中低置信的（lowtag+skel：标签弱、靠骨架）张数 */
+  low: number;
+  /** 成人（双人的成人一类）：模糊敏感图时不显示 */
+  adult: boolean;
   /** 线稿小图（300×400 webp） */
   thumbUrl: string;
   /** 线稿大图（900×1200 webp，代表视角） */
@@ -138,27 +175,44 @@ export interface PoseWearMatch {
   distance: number | null;
   tagScore: number | null;
   method: string | null;
+  /** 低置信（lowtag+skel） */
+  low: boolean;
+  /** 在这个姿势里的名次 */
+  rank: number;
   /** 匹配上的那个视角的小图（没有记视角时用代表视角） */
   viewThumbUrl: string;
 }
 
-/** GET /api/pose/posewear/of/:id：这张图的主要姿势和过了阈值的其他候选（最多 2 个） */
+/** GET /api/pose/posewear-match/:id：这张图的主要姿势和其他也匹配上的姿势（单人在前，双人在后） */
 export interface PoseWearOfResponse {
   imageId: string;
-  primary: (PoseWearMatch & { rank: number }) | null;
+  primary: PoseWearMatch | null;
   related: PoseWearMatch[];
 }
 
 /** 导入 PoseWear 姿势库的结果 */
 export interface PoseWearImportResult extends PoseActionResult {
+  /** 单人姿势数 */
   poses: number;
+  /** 双人类型数（PoseWear 里找得到代表线稿的） */
+  pairTypes: number;
   files: number;
+}
+
+/** GET /api/pose/posewear-low/:pose：这个姿势下低置信的图（网格上给它们做个小记号） */
+export interface PoseWearLowResponse {
+  ids: string[];
 }
 
 /** 导入姿势匹配结果的结果 */
 export interface PoseWearAssignResult extends PoseActionResult {
+  /** 单人：有匹配的图、图-姿势对、其中低置信的 */
   imported: number;
-  candidates: number;
+  memberships: number;
+  low: number;
+  /** 双人：有匹配的图、其中算作差分（不单独显示）的 */
+  pairImages: number;
+  pairVariants: number;
   /** 本图库里没有的图 */
   missing: number;
   /** 姿势库里没有的姿势（先导入姿势库） */

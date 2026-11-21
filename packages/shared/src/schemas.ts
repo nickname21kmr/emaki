@@ -411,6 +411,7 @@ export const ListImagesInput = z.object({
   artist: z.string().min(1).max(200).optional(),
   poseClass: z.string().regex(POSE_CLASS_ID).optional(),
   posewearPose: z.string().regex(POSEWEAR_POSE_ID).optional(),
+  posewearReliable: qBool.optional(),
   order: z.enum(['asc', 'desc']).optional(),
   cursor: z.string().optional(),
   limit: qNumber.min(1).max(200).optional(),
@@ -490,13 +491,17 @@ export const PoseWearImportInput = z.object({
   path: z.string().min(1).max(1000).describe('PoseWear 文件夹（里面有 assets/poses.*.json 和 p/t、p/i）'),
   viewsPath: z.string().min(1).max(1000).optional().describe('posewear_v1 的 poses.json：每个姿势的代表视角；不给就用正面'),
 });
-/** 导入姿势匹配结果（posewear_v1 的 assignments.json）；整批替换 */
-export const PoseWearAssignInput = z.object({ assignmentsPath: z.string().min(1).max(1000) });
+/** 导入姿势匹配结果：单人、双人各自整批替换，至少给一个（命令里检查） */
+export const PoseWearAssignInput = z.object({
+  assignmentsPath: z.string().min(1).max(1000).optional().describe('单人：posewear_final 的 assignments_multi_weighted.json（assignments_multi.json、旧的 assignments.json 也认）'),
+  pairsPath: z.string().min(1).max(1000).optional().describe('双人：pose-pair tags_v1 的 assignments.json'),
+});
 export const PoseWearCatalogInput = z.object({ all: qBool.optional() });
 export const PoseWearFileInput = z.object({
   size: z.enum(['t', 'i']),
-  file: z.string().regex(/^(full_single|full_sexy|upper80v2)_P\d{3}_(front|high|low|side|diag)\.webp$/),
+  file: z.string().regex(/^(full_single|full_sexy|upper80v2|pair)_P\d{3}_(front|high|low|side|diag)\.webp$/),
 });
 export const PoseWearOfInput = z.object({ id: Id });
+export const PoseWearLowInput = z.object({ pose: z.string().regex(POSEWEAR_POSE_ID) });
 export const PoseClassInput = z.object({ id: z.string().regex(POSE_CLASS_ID) });
 export const PoseSimilarInput = z.object({ id: Id, cursor: z.string().optional(), limit: qNumber.min(1).max(200).optional() });

@@ -60,6 +60,21 @@ export function PoseInfoRowLazy({ imageId, onNavigate }: { imageId: string; onNa
   );
 }
 
+/**
+ * 按姿势找图时，低置信那张格子左下角的小签「低」：标签弱、主要靠骨架匹配上的。
+ * 和动图标记同一种半透明底，但更淡、更小，只是提个醒。
+ */
+export function PoseLowMark() {
+  return (
+    <span
+      title="低置信：标签对不太上，主要靠骨架匹配到这个姿势"
+      className="flex h-4 items-center rounded-full bg-black/30 px-[5px] text-[10px] leading-none font-medium text-white/80"
+    >
+      低
+    </span>
+  );
+}
+
 /** 设置 → 姿势检索 · 实验；加载时先占一张空卡片，目录跳转找得到这一节 */
 export function PoseSettingsSectionLazy() {
   return wrap(

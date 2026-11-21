@@ -1,10 +1,11 @@
-import { POSEWEAR_SET_LABEL, type PoseWearPose, type PoseWearSet } from '@emaki/shared';
+import { POSEWEAR_SET_LABEL, type PoseWearMatch, type PoseWearOfResponse, type PoseWearPose, type PoseWearSet, type PoseWearSetGroup } from '@emaki/shared';
 import { PersonStanding, X } from 'lucide-react';
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { Chip, Dialog, SearchInput, Segmented, Skeleton, Switch } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
+import { useBlurPrefs, usePrefs } from '@/lib/stores';
 import { findPoseWear, usePoseWear, usePoseWearOf } from './client';
 import { moveFocus } from './ui';
 
@@ -41,6 +42,8 @@ export function PoseWearEntry({ pose, onPick, onClear }: PoseWearEntryProps) {
   // 选着的姿势可能已经没有图了：用全部的目录找名字
   const catalog = usePoseWear(!!pose, true);
   const p = findPoseWear(catalog.data, pose);
+  const reliable = usePrefs((s) => s.poseReliableOnly);
+  const setReliable = usePrefs((s) => s.setPoseReliableOnly);
   return (
     <>
       {pose ? (
@@ -58,6 +61,21 @@ export function PoseWearEntry({ pose, onPick, onClear }: PoseWearEntryProps) {
             )}
             <span className="max-w-[12em] truncate">{p?.name ?? '姿势'}</span>
           </button>
+          {/* 这个姿势有低置信的图时才给开关：只看可靠的（本机记住） */}
+          {p && p.low > 0 && (
+            <button
+              type="button"
+              aria-pressed={reliable}
+              onClick={() => setReliable(!reliable)}
+              title={reliable ? `只看可靠的（去掉了 ${p.low} 张低置信的）；点一下全看` : `只看可靠的：去掉 ${p.low} 张低置信的`}
+              className={cn(
+                'mr-0.5 h-5 rounded-full px-1.5 text-[11px] font-normal transition-colors',
+                reliable ? 'bg-fg-inverse/20 text-fg-inverse' : 'text-fg-inverse/55 hover:bg-fg-inverse/10 hover:text-fg-inverse/85',
+              )}
+            >
+              只看可靠的
+            </button>
+          )}
           <button
             type="button"
             aria-label={`去掉姿势筛选${p ? `「${p.name}」` : ''}`}
@@ -92,6 +110,25 @@ export function PoseWearEntry({ pose, onPick, onClear }: PoseWearEntryProps) {
 
 type SetTab = PoseWearSet | 'all';
 
+/** 显示的张数：只看可靠的时候去掉低置信的 */
+export const shownCount = (p: Pick<PoseWearPose, 'count' | 'low'>, reliable: boolean) => (reliable ? p.count - p.low : p.count);
+
+/** 去掉成人的姿势（双人的成人一类）；adultOk = 顶栏的模糊关着。空了的分类、套也去掉 */
+export function withoutAdult(sets: readonly PoseWearSetGroup[], adultOk: boolean): PoseWearSetGroup[] {
+  if (adultOk) return [...sets];
+  return sets
+    .map((s) => {
+      const categories = s.categories
+        .map((c) => {
+          const poses = c.poses.filter((p) => !p.adult);
+          return { ...c, poses, count: poses.reduce((n, p) => n + p.count, 0) };
+        })
+        .filter((c) => c.poses.length > 0);
+      return { ...s, categories, count: categories.reduce((n, c) => n + c.count, 0) };
+    })
+    .filter((s) => s.categories.length > 0);
+}
+
 export function PoseWearBrowser({
   open,
   onOpenChange,
@@ -109,7 +146,11 @@ export function PoseWearBrowser({
   const term = useDeferredValue(search.trim().toLowerCase());
   const catalog = usePoseWear(open, showAll);
   const grid = useRef<HTMLDivElement>(null);
-  const sets = catalog.data?.sets ?? [];
+  const reliable = usePrefs((s) => s.poseReliableOnly);
+  const setReliable = usePrefs((s) => s.setPoseReliableOnly);
+  // 双人的「成人」一类：模糊敏感图（顶栏眼睛）开着时不显示
+  const adultOk = !useBlurPrefs().blurSensitive;
+  const sets = useMemo(() => withoutAdult(catalog.data?.sets ?? [], adultOk), [catalog.data, adultOk]);
 
   // 打开时：焦点落到当前选中的那格
   const loaded = !!catalog.data;
@@ -121,12 +162,23 @@ export function PoseWearBrowser({
 
   // 按套、名字（也认编号 P012）筛
   const shown = useMemo(() => {
-    const hit = (p: PoseWearPose) => !term || p.name.toLowerCase().includes(term) || p.number.toLowerCase() === term || p.category.includes(term);
+    const hit = (p: PoseWearPose) =>
+      (!term || p.name.toLowerCase().includes(term) || p.number.toLowerCase() === term || p.category.includes(term)) &&
+      // 只看可靠的：全是低置信的姿势这时没有图
+      (showAll || shownCount(p, reliable) > 0);
     return sets
       .filter((s) => tab === 'all' || s.id === tab)
-      .map((s) => ({ ...s, categories: s.categories.map((c) => ({ ...c, poses: c.poses.filter(hit) })).filter((c) => c.poses.length > 0) }))
+      .map((s) => ({
+        ...s,
+        categories: s.categories
+          .map((c) => {
+            const poses = c.poses.filter(hit);
+            return { ...c, poses, count: poses.reduce((n, p) => n + shownCount(p, reliable), 0) };
+          })
+          .filter((c) => c.poses.length > 0),
+      }))
       .filter((s) => s.categories.length > 0);
-  }, [sets, tab, term]);
+  }, [sets, tab, term, reliable, showAll]);
 
   const options = [
     { value: 'all' as SetTab, label: '全部' },
@@ -150,9 +202,15 @@ export function PoseWearBrowser({
           aria-label="搜姿势名"
           className="w-[200px]"
         />
-        <span className="ml-auto flex items-center gap-2 text-[12px] text-fg-muted">
-          没有图的也显示
-          <Switch label="没有图的姿势也显示" checked={showAll} onCheckedChange={setShowAll} />
+        <span className="ml-auto flex items-center gap-4 text-[12px] text-fg-muted">
+          <span className="flex items-center gap-2" title="去掉低置信的匹配：标签对不太上、主要靠骨架的那些">
+            只看可靠的
+            <Switch label="只看可靠的" checked={reliable} onCheckedChange={setReliable} />
+          </span>
+          <span className="flex items-center gap-2">
+            没有图的也显示
+            <Switch label="没有图的姿势也显示" checked={showAll} onCheckedChange={setShowAll} />
+          </span>
         </span>
       </div>
       <div ref={grid} onKeyDown={(e) => moveFocus(e, grid.current)} className="-mx-1 space-y-6">
@@ -176,7 +234,7 @@ export function PoseWearBrowser({
               {s.categories.map((c) => (
                 <div key={c.name} role="group" aria-labelledby={`pw-${s.id}-${c.name}`}>
                   <h3 id={`pw-${s.id}-${c.name}`} className="mb-2.5 flex items-baseline gap-3 text-[13px] font-semibold tracking-tight">
-                    {tab === 'all' && <span className="font-normal text-fg-muted">{s.name} ·</span>}
+                    {(tab === 'all' || s.id === 'pair') && c.name !== s.name && <span className="font-normal text-fg-muted">{s.name} ·</span>}
                     <span className="-ml-2 first:ml-0">{c.name}</span>
                     <span className="text-[11.5px] font-normal text-fg-subtle tabular">{formatCount(c.count)} 张</span>
                     <span aria-hidden className="h-px flex-1 translate-y-[-3px] bg-line" />
@@ -184,24 +242,28 @@ export function PoseWearBrowser({
                   <div role="list" className="grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-3">
                     {c.poses.map((p) => {
                       const selected = p.id === current;
+                      const n = shownCount(p, reliable);
                       return (
                         <div role="listitem" key={p.id}>
                           <button
                             type="button"
                             data-pose-cell
                             aria-pressed={selected}
-                            aria-label={`${s.name}·${c.name}·${p.name}，${p.count} 张`}
-                            title={`${p.number} ${p.name}`}
+                            aria-label={`${s.name}·${c.name}·${p.name}，${n} 张`}
+                            title={s.id === 'pair' ? p.name : `${p.number} ${p.name}`}
                             onClick={() => onPick(p.id)}
                             className={cn(
                               'flex w-full flex-col items-stretch rounded-[8px] p-1.5 text-left transition-colors hover:bg-hover',
                               selected && 'bg-hover',
-                              p.count === 0 && 'opacity-55',
+                              n === 0 && 'opacity-55',
                             )}
                           >
                             <PoseWearArt src={p.thumbUrl} className={cn('w-full rounded-[6px] ring-1 ring-line', selected && 'ring-2 ring-ink')} />
                             <span className="mt-1.5 line-clamp-2 text-[12px] leading-snug font-medium">{p.name}</span>
-                            <span className="text-[11px] text-fg-subtle tabular">{formatCount(p.count)} 张</span>
+                            <span className="text-[11px] text-fg-subtle tabular">
+                              {formatCount(n)} 张
+                              {!reliable && p.low > 0 && <span title="其中低置信的张数"> · 低 {formatCount(p.low)}</span>}
+                            </span>
                           </button>
                         </div>
                       );
@@ -214,7 +276,8 @@ export function PoseWearBrowser({
         )}
       </div>
       <p className="mt-5 border-t border-line pt-3 text-[11.5px] leading-relaxed text-fg-subtle">
-        线稿来自 PoseWear（MIT）。新加的图要重新跑匹配、再导入匹配结果才会出现在这里。
+        线稿来自 PoseWear（MIT）。一张图像几个姿势就在几个姿势下都有；按骨架和标签的加权分排；「低」是标签对不太上、主要靠骨架匹配的，可以只看可靠的。
+        双人按互动类型分，同一组差分只出现一张{adultOk ? '' : '；成人的几类要先关掉顶栏的模糊才显示'}。新加的图要重新跑匹配、再导入匹配结果才会出现在这里。
       </p>
     </Dialog>
   );
@@ -222,13 +285,52 @@ export function PoseWearBrowser({
 
 // ------------------------------------------------------------------ 看图器信息
 
-/** 信息面板「信息」里的一行：主要姿势（线稿 + 名字，点了按这个姿势筛）和最多两个也像的姿势。没有匹配就不占地方 */
+/** 看图器里列的匹配：主要的在前；成人的双人类型只在 adultOk（顶栏的模糊关着）时列 */
+export function visibleMatches(of: PoseWearOfResponse | undefined, adultOk: boolean): PoseWearMatch[] {
+  return [of?.primary, ...(of?.related ?? [])].filter((m): m is PoseWearMatch => !!m && (adultOk || !m.pose.adult));
+}
+
+/** 看图器里的「低」：和网格上的一样淡 */
+function LowTag() {
+  return (
+    <span title="低置信：标签对不太上，主要靠骨架匹配" className="ml-1 rounded-[3px] bg-sunken px-1 text-[10px] text-fg-subtle">
+      低
+    </span>
+  );
+}
+
+/**
+ * 信息面板「信息」里的一行：主要姿势（线稿 + 名字，点了按这个姿势筛），下面是其他也匹配上的姿势（单人、双人分开，低置信的标「低」）。
+ * 成人的双人类型在模糊敏感图时不列。没有匹配就不占地方
+ */
 export function PoseWearInfoRow({ imageId, onNavigate }: { imageId: string; onNavigate: () => void }) {
   const of = usePoseWearOf(imageId, true);
-  const primary = of.data?.primary;
-  const related = of.data?.related ?? [];
+  const all = visibleMatches(of.data, !useBlurPrefs().blurSensitive);
+  const primary = all[0];
   if (!primary) return null;
+  const rest = all.slice(1);
+  const singles = rest.filter((r) => r.pose.set !== 'pair');
+  const pairs = rest.filter((r) => r.pose.set === 'pair');
   const link = (id: string) => `/gallery?pwPose=${encodeURIComponent(id)}`;
+  const line = (label: string, list: PoseWearMatch[]) =>
+    list.length > 0 && (
+      <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px]">
+        <span className="text-fg-subtle">{label}</span>
+        {list.map((r) => (
+          <span key={r.pose.id} className="inline-flex items-center">
+            <Link
+              to={link(r.pose.id)}
+              onClick={onNavigate}
+              title={`${POSEWEAR_SET_LABEL[r.pose.set]} · ${r.pose.category}：看这个姿势的 ${r.pose.count} 张`}
+              className="text-fg-muted underline-offset-2 transition-colors hover:text-shu hover:underline"
+            >
+              {r.pose.name}
+            </Link>
+            {r.low && <LowTag />}
+          </span>
+        ))}
+      </span>
+    );
   return (
     <>
       <dt className="text-fg-subtle">姿势</dt>
@@ -241,27 +343,17 @@ export function PoseWearInfoRow({ imageId, onNavigate }: { imageId: string; onNa
         >
           <PoseWearArt src={primary.viewThumbUrl} className="w-9 rounded-[3px] ring-1 ring-line transition-shadow group-hover/pw:ring-ink" />
           <span className="min-w-0">
-            <span className="block text-[12.5px] leading-snug text-fg transition-colors group-hover/pw:text-shu">{primary.pose.name}</span>
+            <span className="block text-[12.5px] leading-snug text-fg transition-colors group-hover/pw:text-shu">
+              {primary.pose.name}
+              {primary.low && <LowTag />}
+            </span>
             <span className="block text-[11px] text-fg-subtle">
               {POSEWEAR_SET_LABEL[primary.pose.set]} · {primary.pose.category}
             </span>
           </span>
         </Link>
-        {related.length > 0 && (
-          <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px]">
-            <span className="text-fg-subtle">也像</span>
-            {related.map((r) => (
-              <Link
-                key={r.pose.id}
-                to={link(r.pose.id)}
-                onClick={onNavigate}
-                className="text-fg-muted underline-offset-2 transition-colors hover:text-shu hover:underline"
-              >
-                {r.pose.name}
-              </Link>
-            ))}
-          </span>
-        )}
+        {line('也像', singles)}
+        {line('双人', pairs)}
       </dd>
     </>
   );
