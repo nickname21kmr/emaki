@@ -2,12 +2,12 @@ import { X } from 'lucide-react';
 import { Dialog as D } from 'radix-ui';
 import { useRef, type ReactNode } from 'react';
 import { cn } from '@/lib/cn';
-import { dragDecision } from '@/lib/gestures';
+import { useSheetDrag } from '@/lib/useSheetDrag';
 
 /**
  * 底部面板（A1）：从底边升起的一张纸，圆角朝上，底下让出手势导航条（safe-area）。
  * 手机上的「更多」导航、图库的筛选用它；普通的 Dialog 在宽度 compact 时也排成这个样子（见 Dialog.tsx）。
- * 顶上的把手往下拖、点遮罩、Esc 都能收起。
+ * 顶上的把手那一块往下拖（lib/useSheetDrag，和看图器的信息面板同一份）、点遮罩、Esc 都能收起。
  *
  *   <Sheet open={open} onOpenChange={setOpen} title="筛选">…</Sheet>
  */
@@ -30,7 +30,7 @@ export function Sheet({
   className?: string;
 }) {
   const content = useRef<HTMLDivElement>(null);
-  const drag = useDragToClose(content, () => onOpenChange(false));
+  const drag = useSheetDrag({ target: content, onClose: () => onOpenChange(false) });
   return (
     <D.Root open={open} onOpenChange={onOpenChange}>
       <D.Portal>
@@ -77,40 +77,4 @@ export function Sheet({
       </D.Portal>
     </D.Root>
   );
-}
-
-/** 把手那一块往下拖：跟手下移，过了阈值（距离或速度，lib/gestures.ts 的 dragDecision）就收起，没过弹回 */
-function useDragToClose(target: React.RefObject<HTMLElement | null>, close: () => void) {
-  const start = useRef<{ y: number; t: number; id: number } | null>(null);
-  const set = (dy: number, smooth: boolean) => {
-    const el = target.current;
-    if (!el) return;
-    el.style.transition = smooth ? 'transform 220ms var(--ease-out-soft)' : 'none';
-    el.style.transform = dy ? `translateY(${dy}px)` : '';
-  };
-  return {
-    onPointerDown: (e: React.PointerEvent) => {
-      if ((e.target as Element).closest('button')) return;
-      e.currentTarget.setPointerCapture(e.pointerId);
-      start.current = { y: e.clientY, t: e.timeStamp, id: e.pointerId };
-    },
-    onPointerMove: (e: React.PointerEvent) => {
-      const s = start.current;
-      if (!s || s.id !== e.pointerId) return;
-      set(Math.max(0, e.clientY - s.y), false);
-    },
-    onPointerUp: (e: React.PointerEvent) => {
-      const s = start.current;
-      start.current = null;
-      if (!s) return;
-      const dy = Math.max(0, e.clientY - s.y);
-      const height = target.current?.offsetHeight ?? 400;
-      if (dragDecision(dy, dy / Math.max(1, e.timeStamp - s.t), height) > 0) close();
-      else set(0, true);
-    },
-    onPointerCancel: () => {
-      start.current = null;
-      set(0, true);
-    },
-  };
 }

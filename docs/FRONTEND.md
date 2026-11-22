@@ -161,7 +161,7 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
   组件里不读 `innerWidth`、不写宽高或指针的 `matchMedia`（`viewport.test.ts` 扫源码检查，助手附页的 `dock.ts` 例外）。
 - **外框**：compact 时纸铺满屏幕、侧栏换成底部标签栏（`TabBar`，项来自 `tabBarItems`，和侧栏同一套计数、能力过滤）；页头标题变小、副标题换到下面整行，
   全局操作只剩放大镜和「…」。`index.html` 有 `viewport-fit=cover`：贴底的东西（标签栏、底部面板、多选栏、看图器的信息面板）加 `pb-[env(safe-area-inset-bottom)]`，手机横屏的侧栏让出左边刘海。
-- **弹层**：`Dialog` 在 compact 下自动排成底部面板；只在手机上出现的面板用 `Sheet`（`components/ui/Sheet.tsx`，把手往下拖收起）。菜单、弹出框最宽是窗口减边距。
+- **弹层**：`Dialog` 在 compact 下自动排成底部面板；只在手机上出现的面板用 `Sheet`（`components/ui/Sheet.tsx`，把手往下拖收起，`lib/useSheetDrag`）。菜单、弹出框最宽是窗口减边距。
 - **触控目标**：触屏上可点的至少 44×44。`IconButton`、看图器按钮已经带 `touch-hit`（透明的 `::after` 把点击区域扩到 44，视觉尺寸不变）；自己写的小按钮也加它。
   只在悬停时出现的按钮，触屏上要常显（`touch:opacity-100`）或者有别的入口（长按、底部面板、看图器里）。键盘提示在触屏上不显示：`Kbd` 自己带 `touch:hidden`（帮助对话框这种说明快捷键本身的地方传 `doc`），菜单项的快捷键也是；
   整行都是按键说明的（「↑↓ 选择 · ↵ 确认 · Esc 关闭」「Ctrl / ⌘ 点击多选」）那一行自己 `touch:hidden`，需要的话换一句触屏的说法（`touch:inline`）。
@@ -182,9 +182,11 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - 播放器自己只管自己特有的：阅读器的单双页、右开、胶片条、结尾卡；看图器的拿起 / 放回、下滑关闭的样子、放映的交叉淡化（这时不摆前后张）、鼠标滚轮缩放和拖动平移。
 - 「未识别」的大图是处理队列，不是播放器：换图带盖章的动画（`PreviewStage`），只用底层的 `useSwipePager` 认左右滑。
 
-**规矩**：翻页、缩放、点按、长按这类交互只能有一个实现。新的地方要「左右翻一张」「捏合放大」就用 `lib/pager`，要不一样的手感就改 `lib/pager`（所有播放器一起变），
+- 底部面板的「往下拖收起 / 往上拉展开」也只有一份：`lib/useSheetDrag.ts`（`ui/Sheet` 和看图器窄屏的 `lightbox/InfoSheet` 都用它；过了 slop 才接管，拖动区里的按钮照常能点）。
+
+**规矩**：翻页、缩放、点按、长按、拖面板这类交互只能有一个实现。新的地方要「左右翻一张」「捏合放大」就用 `lib/pager`，要不一样的手感就改 `lib/pager`（所有播放器一起变），
 不在页面里另写一套。这也是以后 mod 的前提（core-architecture.md 第 10.2 节）：同一个行为只在一处，改它只要改一处。
-验收：没有端到端测试（纯函数的部分有单元测试：`lib/gestures.test.ts`、`lib/pager/usePageTrack.test.ts`）；改 `lib/pager` 后在电脑（点击、按键、滚轮、触控板）和触屏（拖动、捏合、双击、下滑关闭）上把阅读器和看图器都走一遍。
+验收：没有端到端测试（纯函数的部分有单元测试：`lib/gestures.test.ts`、`lib/pager/usePageTrack.test.ts`、`lib/useSheetDrag.test.ts`；`lib/pager/pager.test.ts`、`useSheetDrag.test.ts` 还会扫一遍源码，翻页、缩放、拖面板的判定在别处被用到就失败）；改 `lib/pager` 后在电脑（点击、按键、滚轮、触控板）和触屏（拖动、捏合、双击、下滑关闭）上把阅读器和看图器都走一遍。
 - **多选**：电脑上照旧悬停勾选圈、Ctrl / Shift 点击；触屏上长按一张进入多选，页头有「选择」（`SelectButton`，`useSelection.start(scope)` 进入还没选图的多选模式，`isSelecting` 判断）。
 
 ### 数字从哪来（P5）
@@ -387,5 +389,4 @@ offline 时顶部正中一枚墨色胶囊「连不上电脑，可能电脑关机
 - 「设为封面」之后可以拖动选择焦点（`coverFocus`）。
 - 「最近访问 / 最近使用」的角色存的是 localStorage 快照，角色被合并或删除后不会自动清掉。
 - 网格缩略图很多时会占满浏览器对同一域名的 6 个 HTTP/1.1 连接，看图器的原图要排队（原图已经是 `fetchpriority="high"`；还不够的话真实后端可以考虑 HTTP/2）。
-- 底部面板的「往下拖收起」有两份：`components/ui/Sheet.tsx` 和看图器的 `lightbox/InfoSheet.tsx`（判定共用 `dragDecision`，跟手和收起的写法各一份），按「播放器」那条规矩该收成一份。
 
