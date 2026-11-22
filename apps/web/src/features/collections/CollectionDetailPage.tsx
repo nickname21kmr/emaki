@@ -25,7 +25,6 @@ import {
   Layers,
   Palette,
   PencilLine,
-  Play,
   RotateCcw,
   ShieldHalf,
   Trash2,
@@ -40,7 +39,6 @@ import { BookPlate } from '@/components/media/BookPlate';
 import { AddToGroupDialog } from '@/components/media/CollectionControls';
 import { CoverFan } from '@/components/media/CoverFan';
 import { ImageGrid, ImageGridSkeleton } from '@/components/media/ImageGrid';
-import { collectImages, slideFilter, useSlideshow } from '@/components/media/lightbox/slideshow';
 import {
   Badge,
   Button,
@@ -98,6 +96,24 @@ export function CollectionDetailPage() {
   return <Detail key={id} data={q.data} />;
 }
 
+/** 本子、组图的页头共用这一份：读过就有「继续读 · 第 N 页」，然后是「从头读」 */
+function ReadActions({ id, unit }: { id: ID; unit: '页' | '张' }) {
+  const navigate = useNavigate();
+  const progress = readProgress.get(id);
+  return (
+    <>
+      {progress && progress > 1 && (
+        <Button variant="ghost" size="sm" onClick={() => navigate(`/collections/${id}/read?p=${progress}`)}>
+          继续读 · 第 {progress} {unit}
+        </Button>
+      )}
+      <Button variant="primary" size="sm" icon={<BookOpenText className="size-3.5" />} onClick={() => navigate(`/collections/${id}/read?p=1`)}>
+        从头读
+      </Button>
+    </>
+  );
+}
+
 function Detail({ data }: { data: GetCollectionResponse }) {
   const c = data.collection;
   const m = COLLECTION_META[c.kind];
@@ -107,7 +123,6 @@ function Detail({ data }: { data: GetCollectionResponse }) {
   const addCandidate = useMutate((danbooruTag: string) => api.bulkCollections({ ids: [c.id], action: { type: 'addCharacterTag', danbooruTag } }));
   const dismiss = useMutate(() => api.deleteCollection(c.id), { onSuccess: () => navigate('/collections') });
   const menu = useAllowedActions(COLLECTION_MENU_NEEDS);
-  const progress = readProgress.get(c.id);
   const [adding, setAdding] = useState(false);
   // 按文件夹成册的跟着文件夹走：不能加别处的图（手选的组图改成本子 / 画集后可以）
   const folder = c.membership === 'folder';
@@ -129,14 +144,7 @@ function Detail({ data }: { data: GetCollectionResponse }) {
         subtitle={[`${formatCount(c.pageCount)} 页`, byline(c)].filter(Boolean).join(' · ')}
         actions={
           <>
-            {progress && progress > 1 && (
-              <Button variant="ghost" size="sm" onClick={() => navigate(`/collections/${c.id}/read?p=${progress}`)}>
-                继续读 · 第 {progress} 页
-              </Button>
-            )}
-            <Button variant="primary" size="sm" icon={<BookOpenText className="size-3.5" />} onClick={() => navigate(`/collections/${c.id}/read?p=1`)}>
-              从头读
-            </Button>
+            <ReadActions id={c.id} unit="页" />
             {(menu.edit || menu.reveal) && <Menu
               width={220}
               trigger={
@@ -296,7 +304,7 @@ function KindSub({ kind, onChange }: { kind: CollectionKind; onChange: (kind: Co
 
 /**
  * 组图（kind=group）：收在一起的散图。结构和本子的扉页一致：页头、扇形封面 + 细线表、出场角色、图片网格。
- * 点图和本子一样进阅读器（默认单页、左开，按组图这个类型记住），从点的那张开始；「放映」整组播放。
+ * 按本子处理：点图进阅读器（默认单页、左开，按组图这个类型记住），从点的那张开始；页头也是「继续读 / 从头读」（ReadActions）。
  */
 function GroupDetail({ data }: { data: GetCollectionResponse }) {
   const c = data.collection;
@@ -307,7 +315,6 @@ function GroupDetail({ data }: { data: GetCollectionResponse }) {
   const organize = useMutate(() => api.updateCollection(c.id, { organizeFiles: true }), { onSuccess: () => setDialog(null) });
   const dismiss = useMutate(() => api.deleteCollection(c.id), { onSuccess: () => navigate('/collections?kind=group') });
   const menu = useAllowedActions(COLLECTION_MENU_NEEDS);
-  const { start, pending } = useSlideshow();
   const names = data.cast.slice(0, 2).map((x) => x.character.name);
   const castLine = names.length ? names.join('、') + (data.cast.length > 2 ? ` 等 ${data.cast.length} 位` : '') : null;
 
@@ -327,15 +334,7 @@ function GroupDetail({ data }: { data: GetCollectionResponse }) {
             <Button variant="ghost" size="sm" icon={<ImagePlus className="size-3.5" />} onClick={() => setDialog('add')}>
               添加图片…
             </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              icon={<Play className="size-3.5" />}
-              loading={pending}
-              onClick={() => start(() => collectImages([{ ...slideFilter(), collectionId: c.id, sort: 'page', order: 'asc' }], 500))}
-            >
-              放映
-            </Button>
+            <ReadActions id={c.id} unit="张" />
             {(menu.edit || menu.organize || menu.reveal) && <Menu
               width={220}
               trigger={
