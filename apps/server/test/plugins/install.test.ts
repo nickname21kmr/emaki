@@ -16,8 +16,20 @@ import { makeZip } from '../helpers/zip.ts';
 
 process.env.EMAKI_LOG_LEVEL = 'silent';
 
-const SAMPLE_DIR = path.resolve(import.meta.dirname, '../../../../examples/plugins/random-browse');
-const sample = () => JSON.parse(readFileSync(path.join(SAMPLE_DIR, 'emaki-plugin.json'), 'utf8')) as Record<string, any>;
+const EXAMPLES_DIR = path.resolve(import.meta.dirname, '../../../../examples/plugins');
+const example = (name: string) =>
+  JSON.parse(readFileSync(path.join(EXAMPLES_DIR, name, 'emaki-plugin.json'), 'utf8')) as Record<string, any>;
+/** 测试用的插件：侧栏一项加一个覆盖（样例插件各只演示一个贡献点，见 examples/plugins；这里两个都要） */
+const sample = (): Record<string, any> => ({
+  id: 'example.random-browse',
+  name: '随便看看',
+  version: '0.1.0',
+  engines: { emaki: '>=0.1.17' },
+  contributes: {
+    'nav.item@1': [{ id: 'random', label: '随便看看', to: '/gallery?sort=random', icon: 'compass', section: 'main' }],
+    'override@1': { 'images.defaultSort': 'modifiedAt' },
+  },
+});
 const VERSION = '0.1.17';
 
 let ds: SqliteDataSource;
@@ -77,10 +89,18 @@ describe('zip 包', () => {
 });
 
 describe('清单检查', () => {
-  it('样例插件（examples/plugins/random-browse）没有问题', () => {
-    const r = checkManifest(sample(), VERSION);
-    expect(r.problems).toEqual([]);
-    expect(r.manifest!.contributes['nav.item@1']![0]).toMatchObject({ id: 'random', to: '/gallery?sort=random', icon: 'compass', section: 'main' });
+  it('样例插件（examples/plugins）都没有问题', () => {
+    const names = readdirSync(EXAMPLES_DIR, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+    expect(names).toEqual(expect.arrayContaining(['random-browse', 'sort-by-modified']));
+    for (const name of names) expect([name, checkManifest(example(name), VERSION).problems]).toEqual([name, []]);
+    expect(checkManifest(example('random-browse'), VERSION).manifest!.contributes['nav.item@1']![0]).toMatchObject({
+      id: 'random',
+      to: '/gallery?sort=random',
+      icon: 'compass',
+      section: 'main',
+    });
   });
 
   it('逐项写成能看懂的话', () => {
@@ -131,6 +151,14 @@ describe('从 zip 装：授权单、装上、撤销、卸载', () => {
     await undo(r.undoToken);
     expect(await plugin('example.random-browse')).toBeUndefined();
     expect(ds.plugins.overrideValue('images.defaultSort')).toBe('addedAt');
+  });
+
+  it('两个样例一起装：一个加侧栏项、一个改默认排序，不争同一个值', async () => {
+    for (const name of ['random-browse', 'sort-by-modified']) await install(inspectZip(example(name), `${name}.zip`));
+    expect(await plugin('example.random-browse')).toMatchObject({ enabled: true, kinds: ['page'], conflicts: [] });
+    expect(await plugin('example.sort-by-modified')).toMatchObject({ enabled: true, kinds: ['override'], conflicts: [] });
+    expect((await state()).nav.main.map((n) => n.id)).toContain('example.random-browse/random');
+    expect(ds.plugins.overrideValue('images.defaultSort')).toBe('modifiedAt');
   });
 
   it('停用、启用、卸载（存储、授权一起删），撤销卸载一切回来', async () => {
@@ -241,7 +269,7 @@ describe('从文件夹装（开发用）、从 git 装', () => {
       calls.push(args);
       const dest = args.at(-1)!;
       mkdirSync(path.join(dest, '.git'), { recursive: true });
-      cpSync(SAMPLE_DIR, dest, { recursive: true });
+      cpSync(path.join(EXAMPLES_DIR, 'random-browse'), dest, { recursive: true });
     });
     const s = await packages.stageGit('https://example.com/p.git', 'v0.1.0');
     expect(calls[0]).toEqual(

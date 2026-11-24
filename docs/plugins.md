@@ -391,7 +391,7 @@ Pixiv 浏览要注意：请求要节流，只拿你的账号本来就能看到�
   - 统一的检查 `authorize(谁, 要做什么)` 还没做：E2 里装的插件不跑代码，没有调用方；授权已经存好、显示出来，E4 接视图的桥时和第一个调用方一起做。
   - 出错计数和自动停用做好了、有测试，但现在没有会出错的插件代码，E4（视图）、E5（服务端）接上；自动停用的通知也到那时候做，现在在插件页上标出。
   - 授权在详情里只能看，不能单独改：要改就重新装或更新。设备的批准还是原来的勾选框（`ScopePicker`），和授权单共用权限的说法（`scopeText`），没换成授权单。
-- **样例**：`examples/plugins/random-browse/`（侧栏加「随便看看」、默认按修改时间排，不要任何权限），说明在 `examples/plugins/README.md`。
+- **样例**：`examples/plugins/sort-by-modified/`（图片默认按修改时间排，`override@1`）和 `examples/plugins/random-browse/`（侧栏加「随便看看」，`nav.item@1`），都不要任何权限、可以一起装；说明在 `examples/plugins/README.md`。测试检查每个样例都装得上。
 - **验收**：服务端 `test/plugins/install.test.ts` 15 个（zip、清单、装上和撤销、卸载和撤销、授权单、更新、文件夹、git、不兼容、自动停用、存储、清理）、路由冒烟 4 个；
   网页 `grantText.test.ts` 3 个、`lib/plugins.test.ts` 加 2 个；浏览器里装样例插件走完授权、停用、卸载、撤销。
 
