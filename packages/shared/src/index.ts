@@ -9,3 +9,4 @@ export * from './events.ts';
 export * from './commands.ts';
 export * from './pose.ts';
 export * from './access.ts';
+export * from './plugins.ts';

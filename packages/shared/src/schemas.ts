@@ -637,3 +637,30 @@ export const PoseWearOfInput = z.object({ id: Id });
 export const PoseWearLowInput = z.object({ pose: z.string().regex(POSEWEAR_POSE_ID) });
 export const PoseClassInput = z.object({ id: z.string().regex(POSE_CLASS_ID) });
 export const PoseSimilarInput = z.object({ id: Id, cursor: z.string().optional(), limit: qNumber.min(1).max(200).optional() });
+
+// ---------------------------------------------------------------- 插件（docs/plugins.md 第 9 节）
+const PluginId = z.string().min(1).max(80);
+const PluginName = z.string().trim().min(1).max(40);
+/** 覆盖的值：键是设置注册表里的（OVERRIDES），值在它的选项里；服务端再按 validOverride 逐项检查 */
+const OverrideValues = z.record(z.string().max(80), z.string().max(80));
+export const PluginsStateInput = z.object({ safe: qBool.optional().describe('安全模式：只看内置插件按原样的结果') });
+export const SetPluginEnabledInput = z.object({ id: PluginId, enabled: z.boolean() });
+export const RenamePluginInput = z.object({ id: PluginId, name: PluginName.nullable().describe('null = 恢复原名') });
+export const PluginIdInput = z.object({ id: PluginId });
+export const CreateOverridePluginInput = z.object({
+  name: PluginName,
+  values: OverrideValues.describe('要覆盖的值，例如 {"images.defaultSort":"modifiedAt"}；能用的键和值见 GET /api/plugins 的 overrides'),
+  enabled: z.boolean().optional().describe('默认 true：建好就启用'),
+});
+export const SetOverrideValuesInput = z.object({ id: PluginId, values: OverrideValues });
+export const SetNavInput = z.object({
+  sections: z
+    .object({ main: z.array(z.string().max(80)).max(100), triage: z.array(z.string().max(80)).max(100), footer: z.array(z.string().max(80)).max(100) })
+    .optional()
+    .describe('侧栏三段各自的顺序（导航项 id）；没列到的项排在各自那一段的最后'),
+  visible: z.record(z.string().max(80), z.boolean()).optional().describe('在不在侧栏显示，只改给出的项'),
+});
+export const ChooseOverrideInput = z.object({
+  key: z.string().max(80),
+  plugin: PluginId.nullable().describe('冲突时用哪个插件的值；null = 按后启用的那个'),
+});

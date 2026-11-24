@@ -367,7 +367,10 @@ export const queries = [
     run(e, q) {
       // 按姿势类别筛选（实验）：姿势检索关着时 403
       if (q.poseClass || q.posewearPose) requirePose(e);
-      return listImages(e.ctx.db, q, (key, compute) => e.results.get('count:' + key, compute) as number);
+      // 没给排序：按生效的默认排序（覆盖插件可以改，docs/plugins.md 9.5）；网页、手机、AI 助手拿到的是同一个。
+      // 按姿势筛选时没给排序是按典型度 / 匹配名次排（listImages 里），不填
+      const query = q.sort || q.poseClass || q.posewearPose ? q : { ...q, sort: e.plugins.overrideValue('images.defaultSort') };
+      return listImages(e.ctx.db, query, (key, compute) => e.results.get('count:' + key, compute) as number);
     },
   }),
   defineQuery({

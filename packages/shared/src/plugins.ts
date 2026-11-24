@@ -1,0 +1,265 @@
+/**
+ * 插件（docs/plugins.md）。在用的人看来，页面、覆盖设置、以后的功能都是「插件」，在「插件」页里启用、停用、改名、删除；
+ * 实现上只有**插件管理**是统一的（身份、启用、显示名、授权……），下面是各管各的**贡献点**（page、nav.item、override、block……），
+ * 每种有自己的格式、合并和冲突规则（第 9 节）。
+ *
+ * 这个文件放两边都要用的：贡献点的格式、内置插件的清单（原来的每一页是一个内置插件）、能被覆盖的值（设置注册表）、
+ * GET /api/plugins 的返回。谁启用了、生效的贡献清单由服务端算（domain/plugins/），网页只用它的结果。
+ */
+import type { ImageSort } from './api.ts';
+
+/** 插件从哪来：内置（原来的页面）、我的（自己或 AI 做的）、装的（E2 起） */
+export type PluginSource = 'builtin' | 'mine' | 'installed';
+
+/** 侧栏分三段：主要的页面、整理（未识别、重复、已排除）、底部（设置） */
+export const NAV_SECTIONS = ['main', 'triage', 'footer'] as const;
+export type NavSection = (typeof NAV_SECTIONS)[number];
+
+/** 导航项的图标（网页映射到 lucide 图标；插件只能从这些里选） */
+export const NAV_ICONS = [
+  'house',
+  'images',
+  'users',
+  'sparkles',
+  'library',
+  'book-copy',
+  'circle-help',
+  'copy',
+  'ban',
+  'settings',
+  'puzzle',
+] as const;
+export type NavIcon = (typeof NAV_ICONS)[number];
+
+// ---------------------------------------------------------------- 贡献点（E1：page、nav.item、block、override）
+
+/** page@1：一页。内置插件写网页的页面 id（apps/web/src/pages.ts），插件的页面以后是视图（E4） */
+export interface PageContribution {
+  id: string;
+}
+
+/** nav.item@1：侧栏（手机上是底部标签栏）里的一项 */
+export interface NavItemContribution {
+  /** 稳定 id（顺序、在不在侧栏按它存） */
+  id: string;
+  label: string;
+  /** 地址；`:originalWorkId` 这种由网页按图库的情况填（没有原创作品时不显示） */
+  to: string;
+  icon: NavIcon;
+  section: NavSection;
+  /** 默认不在侧栏里（「插件」页） */
+  hiddenByDefault?: boolean;
+  /** 只是一个捷径，不放到手机底部标签栏的常驻位（「原创」） */
+  shortcut?: boolean;
+}
+
+/** block@1：放在别的页面里的区块（apps/web/src/blocks/registry.ts 的 id）。插件停用时这些区块一起不显示 */
+export interface BlockContribution {
+  id: string;
+}
+
+export interface Contributes {
+  'page@1'?: PageContribution[];
+  'nav.item@1'?: NavItemContribution[];
+  'block@1'?: BlockContribution[];
+  /** override@1：设置注册表里登记过的值（OVERRIDES） */
+  'override@1'?: Partial<Record<OverrideKey, unknown>>;
+}
+
+export interface PluginManifest {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  contributes: Contributes;
+}
+
+// ---------------------------------------------------------------- 能被覆盖的值（设置注册表，第 9.5 节）
+
+/** 图片列表能用的排序（不含合集按页、按姿势这种只在特定场合有的） */
+export const LIST_SORTS = ['addedAt', 'modifiedAt', 'fileName', 'bytes', 'random'] as const satisfies readonly ImageSort[];
+export type ListSort = (typeof LIST_SORTS)[number];
+
+export const SORT_LABELS: Record<ListSort, string> = {
+  addedAt: '最近添加',
+  modifiedAt: '修改时间',
+  fileName: '文件名',
+  bytes: '体积',
+  random: '随机',
+};
+
+interface OverrideDef<T extends string> {
+  label: string;
+  hint: string;
+  /** 内置默认值：没有插件覆盖时就是它 */
+  default: T;
+  /** 能取的值（校验和「新建覆盖」的表单都用它；现在能覆盖的都是几选一） */
+  options: readonly { value: T; label: string }[];
+}
+
+const def = <T extends string>(d: OverrideDef<T>) => d;
+
+/**
+ * 能被覆盖插件改的值。每个值只在这里定义一次默认值；用到它的地方（服务端的图片列表、网页的排序控件）都从生效值里取，
+ * 不各自写死（apps/web/src/lib/plugins.test.ts 扫源码）。
+ */
+export const OVERRIDES = {
+  'images.defaultSort': def<ListSort>({
+    label: '图片的默认排序',
+    hint: '图库、别册、角色和作品页的图片，没选排序时按这个排；页面上的排序控件照旧能换',
+    default: 'addedAt',
+    options: LIST_SORTS.map((value) => ({ value, label: SORT_LABELS[value] })),
+  }),
+} as const;
+export type OverrideKey = keyof typeof OVERRIDES;
+export type OverrideValue<K extends OverrideKey> = (typeof OVERRIDES)[K]['default'];
+export const OVERRIDE_KEYS = Object.keys(OVERRIDES) as OverrideKey[];
+
+/** 这个值能不能用来覆盖 key（不认识的键、不在选项里的值都不行） */
+export function validOverride(key: string, value: unknown): key is OverrideKey {
+  const d = (OVERRIDES as Record<string, OverrideDef<string>>)[key];
+  return !!d && d.options.some((o) => o.value === value);
+}
+
+/** 图片的默认排序：内置的（没有覆盖时）。只有这里和 OVERRIDES 引用它 */
+export const BUILTIN_DEFAULT_SORT: ListSort = OVERRIDES['images.defaultSort'].default;
+
+// ---------------------------------------------------------------- 内置插件：原来的每一页
+
+export interface BuiltinPlugin extends PluginManifest {
+  /** 必需的（设置、「插件」页）：不能停用 */
+  required?: boolean;
+}
+
+const nav = (
+  id: string,
+  label: string,
+  to: string,
+  icon: NavIcon,
+  section: NavSection,
+  extra: Partial<NavItemContribution> = {},
+): NavItemContribution => ({ id, label, to, icon, section, ...extra });
+
+const builtin = (
+  id: string,
+  name: string,
+  description: string,
+  contributes: Contributes,
+  required = false,
+): BuiltinPlugin => ({ id: `core.${id}`, name, version: '1', description, contributes, ...(required && { required }) });
+
+/**
+ * 内置插件，按这个顺序排侧栏的默认顺序（同一段里）。每个登记它拥有的页面、导航项和放在别的页面里的区块：
+ * 停用了，这些一起不见，不会留下死链接（docs/plugins.md 9.4）。看图器、阅读器这些功能以后（E3）再拆成贡献点。
+ */
+export const BUILTIN_PLUGINS: readonly BuiltinPlugin[] = [
+  builtin('home', '首页', '统计、今日一枚、待处理、最近在收和最新入库', {
+    'page@1': [{ id: 'home' }],
+    'nav.item@1': [nav('home', '首页', '/', 'house', 'main')],
+  }),
+  builtin('gallery', '图库', '全部插画，筛选、搜索、自定义画面', {
+    'page@1': [{ id: 'gallery' }],
+    'nav.item@1': [nav('gallery', '图库', '/gallery', 'images', 'main')],
+  }),
+  builtin('characters', '角色', '角色总览和每个角色的扉页', {
+    'page@1': [{ id: 'characters' }, { id: 'character' }],
+    'nav.item@1': [nav('characters', '角色', '/characters', 'users', 'main')],
+  }),
+  builtin('works', '作品', '每部作品的页面，以及侧栏的「原创」', {
+    'page@1': [{ id: 'work' }],
+    'nav.item@1': [nav('original', '原创', '/works/:originalWorkId', 'sparkles', 'main', { shortcut: true })],
+  }),
+  builtin('collections', '合集', '本子、画集、组图，以及阅读器', {
+    'page@1': [{ id: 'collections' }, { id: 'collection' }, { id: 'reader' }],
+    'nav.item@1': [nav('collections', '合集', '/collections', 'library', 'main')],
+  }),
+  builtin('annex', '别册', '截图、漫画、照片、文字、表情和动图，以及首页的别册目次', {
+    'page@1': [{ id: 'annex' }],
+    'nav.item@1': [nav('annex', '别册', '/annex', 'book-copy', 'main')],
+    'block@1': [{ id: 'home.annex' }],
+  }),
+  builtin('unrecognized', '未识别', '没认出角色的图，按数字键归类', {
+    'page@1': [{ id: 'unrecognized' }],
+    'nav.item@1': [nav('unrecognized', '未识别', '/unrecognized', 'circle-help', 'triage')],
+  }),
+  builtin('duplicates', '重复', '重复的图，逐组选保留哪些', {
+    'page@1': [{ id: 'duplicates' }],
+    'nav.item@1': [nav('duplicates', '重复', '/duplicates', 'copy', 'triage')],
+  }),
+  builtin('excluded', '已排除', '排除规则和被排除的图', {
+    'page@1': [{ id: 'excluded' }],
+    'nav.item@1': [nav('excluded', '已排除', '/excluded', 'ban', 'triage')],
+  }),
+  builtin(
+    'plugins',
+    '插件',
+    '管理插件：启用、停用、改名、删除，调整侧栏的页面顺序',
+    {
+      'page@1': [{ id: 'plugins' }, { id: 'plugin' }],
+      'nav.item@1': [nav('plugins', '插件', '/plugins', 'puzzle', 'footer', { hiddenByDefault: true })],
+    },
+    true,
+  ),
+  builtin(
+    'settings',
+    '设置',
+    '图库文件夹、识别、外观、后台任务、手机访问',
+    {
+      'page@1': [{ id: 'settings' }],
+      'nav.item@1': [nav('settings', '设置', '/settings', 'settings', 'footer')],
+    },
+    true,
+  ),
+];
+
+// ---------------------------------------------------------------- GET /api/plugins
+
+/** 插件页上显示的类型（从贡献推出来，不另存） */
+export type PluginKind = 'page' | 'override';
+
+export interface PluginInfo {
+  id: string;
+  /** 清单里的名字 */
+  name: string;
+  /** 你改的名字（null = 用原名） */
+  displayName: string | null;
+  source: PluginSource;
+  version: string;
+  description?: string;
+  enabled: boolean;
+  required: boolean;
+  kinds: PluginKind[];
+  contributes: Contributes;
+  /** 覆盖的值和别的启用的插件冲突（被别的插件压过时也列出来） */
+  conflicts: OverrideKey[];
+}
+
+/** 侧栏里的一项（已经按你的顺序排好；停用的插件的项不在这里） */
+export interface NavEntry extends NavItemContribution {
+  plugin: string;
+  /** 在不在侧栏显示 */
+  visible: boolean;
+}
+
+export interface OverrideState {
+  value: unknown;
+  /** 哪个插件给的值；null = 内置默认 */
+  plugin: string | null;
+  /** 覆盖这个值的所有启用着的插件（多于一个就是冲突） */
+  candidates: string[];
+}
+
+export interface PluginsState {
+  /** 安全模式：只用内置插件、全部按原样，我的和装的不加载，覆盖不生效 */
+  safeMode: boolean;
+  plugins: PluginInfo[];
+  /** 侧栏：三段，各自按顺序 */
+  nav: Record<NavSection, NavEntry[]>;
+  /** 停用的插件拥有的页面（网页的页面 id）和区块 */
+  disabledPages: string[];
+  disabledBlocks: string[];
+  overrides: Record<OverrideKey, OverrideState>;
+}
+
+/** 插件显示的名字：改过就用改的 */
+export const pluginLabel = (p: Pick<PluginInfo, 'name' | 'displayName'>): string => p.displayName ?? p.name;

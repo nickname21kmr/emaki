@@ -52,6 +52,7 @@ import { importDictIfNeeded } from '../../services/i18n/dict.ts';
 import { SqliteLocalizer, type Localizer } from '../../services/i18n/localizer.ts';
 import { relocalizeAll } from '../../domain/catalog/relocalize.ts';
 import { LibraryWatcher, type WatchedRoot } from '../../services/watch/LibraryWatcher.ts';
+import { Plugins } from '../../domain/plugins/plugins.ts';
 import { config } from '../../config.ts';
 import { pendingPixivCount, queueUnseenPixivAnimations, syncPixivCharacters } from '../../services/pixiv/sync.ts';
 import { refreshPixivAliases } from '../../services/pixiv/aliases.ts';
@@ -104,6 +105,8 @@ export interface SqliteOpenOptions extends Partial<EnginePorts> {
    * 角色收拢、自动关联）之前执行，所以灌进来的数据和真实图库一样经过这些启动步骤
    */
   seed?: (db: Db) => void;
+  /** 安全模式（docs/plugins.md 第 8 节）；不给按 config（--safe、EMAKI_SAFE=1） */
+  safeMode?: boolean;
 }
 
 /**
@@ -403,6 +406,8 @@ export class SqliteDataSource {
   readonly changes: ChangeLog;
   /** 设备与访问（docs/mobile.md 第 2 节）：局域网入口的配置、配对、设备凭证 */
   readonly access: Access;
+  /** 插件管理（docs/plugins.md 第 9 节）：启用、改名、覆盖的值、侧栏 */
+  readonly plugins: Plugins;
 
   protected constructor(db: Db, bus: EventBus, dataDir: string, opts: SqliteOpenOptions) {
     this.ports = resolvePorts(opts);
@@ -453,6 +458,7 @@ export class SqliteDataSource {
     this.exclusions = new ExclusionQueries(this.ctx);
     this.changes = new ChangeLog(this.ctx);
     this.access = new Access({ db, bus, dataDir, clock: this.ctx.clock });
+    this.plugins = new Plugins(this.ctx, opts.safeMode ?? config.safeMode);
     this.duplicates = new DuplicateQueries(this.ctx, this.pendingTrash);
     this.searchQueries = new SearchQueries(db, this.derived);
     this.dedupe = new DedupeService({

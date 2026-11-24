@@ -1046,6 +1046,55 @@ describe('手机访问（注册表：access.*、devices.*，只在本机入口�
   });
 });
 
+describe('插件（注册表：plugins.*，docs/plugins.md 第 9 节）', () => {
+  route('GET /api/plugins', async () => {
+    const { status, json } = await call('GET', '/api/plugins');
+    expect(status).toBe(200);
+    expect(json.safeMode).toBe(false);
+    expect(json.plugins.find((p: { id: string }) => p.id === 'core.annex')).toMatchObject({ enabled: true, source: 'builtin' });
+    expect((await call('GET', '/api/plugins?safe=1')).json.safeMode).toBe(true);
+  });
+  route('POST /api/plugins/:id/enabled', async () => {
+    expect(await call('POST', '/api/plugins/core.annex/enabled', { enabled: false })).toMatchObject({ status: 200, json: { ok: true, message: '已停用「别册」' } });
+    expect((await call('GET', '/api/plugins')).json.disabledPages).toEqual(['annex']);
+    expect((await call('POST', '/api/plugins/core.settings/enabled', { enabled: false })).status).toBe(400);
+    expect((await call('POST', '/api/plugins/nope/enabled', { enabled: true })).status).toBe(404);
+  });
+  route('POST /api/plugins/:id/name', async () => {
+    expect(await call('POST', '/api/plugins/core.annex/name', { name: '杂项' })).toMatchObject({ status: 200, json: { message: '已改名为「杂项」' } });
+    expect((await call('POST', '/api/plugins/core.annex/name', { name: '' })).status).toBe(400);
+  });
+  route('POST /api/plugins/overrides', async () => {
+    const made = await call('POST', '/api/plugins/overrides', { name: '按修改时间', values: { 'images.defaultSort': 'modifiedAt' } });
+    expect(made).toMatchObject({ status: 200, json: { ok: true, id: 'mine.override-1', message: '已新建并启用「按修改时间」' } });
+    expect((await call('POST', '/api/plugins/overrides', { name: 'x', values: { 'images.defaultSort': 'page' } })).status).toBe(400);
+  });
+  route('POST /api/plugins/:id/overrides', async () => {
+    const { json } = await call('POST', '/api/plugins/overrides', { name: 'A', values: { 'images.defaultSort': 'modifiedAt' } });
+    expect((await call('POST', `/api/plugins/${json.id}/overrides`, { values: { 'images.defaultSort': 'bytes' } })).status).toBe(200);
+    expect((await call('GET', '/api/plugins')).json.overrides['images.defaultSort'].value).toBe('bytes');
+  });
+  route('POST /api/plugins/overrides/choice', async () => {
+    const a = (await call('POST', '/api/plugins/overrides', { name: 'A', values: { 'images.defaultSort': 'modifiedAt' } })).json.id;
+    await call('POST', '/api/plugins/overrides', { name: 'B', values: { 'images.defaultSort': 'bytes' } });
+    expect((await call('POST', '/api/plugins/overrides/choice', { key: 'images.defaultSort', plugin: a })).status).toBe(200);
+    expect((await call('GET', '/api/plugins')).json.overrides['images.defaultSort'].value).toBe('modifiedAt');
+    expect((await call('POST', '/api/plugins/overrides/choice', { key: 'nope', plugin: null })).status).toBe(400);
+  });
+  route('DELETE /api/plugins/:id', async () => {
+    const { json } = await call('POST', '/api/plugins/overrides', { name: 'A', values: { 'images.defaultSort': 'modifiedAt' } });
+    expect(await call('DELETE', `/api/plugins/${json.id}`)).toMatchObject({ status: 200, json: { message: '已删除「A」' } });
+    expect((await call('DELETE', '/api/plugins/core.gallery')).status).toBe(400);
+  });
+  route('POST /api/plugins/nav', async () => {
+    const r = await call('POST', '/api/plugins/nav', { visible: { plugins: true } });
+    expect(r).toMatchObject({ status: 200, json: { ok: true } });
+    expect((await call('GET', '/api/plugins')).json.nav.footer.find((n: { id: string }) => n.id === 'plugins').visible).toBe(true);
+    expect((await call('POST', '/api/plugins/nav', {})).status).toBe(400);
+    expect((await call('POST', '/api/plugins/nav', { visible: { settings: false } })).status).toBe(400);
+  });
+});
+
 describe('手机上传（注册表：upload.*、devices.setUpload；http/uploads.ts）：本机入口上没有设备，传不了；整套流程见 test/upload/', () => {
   const sha = 'a'.repeat(64);
   route('POST /api/uploads/check', async () => {

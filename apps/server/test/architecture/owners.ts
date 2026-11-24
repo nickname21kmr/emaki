@@ -22,7 +22,8 @@ export type ModuleId =
   | 'propagation'
   | 'access'
   | 'upload'
-  | 'pose';
+  | 'pose'
+  | 'plugins';
 
 /** 模块的中文名和目录（相对 apps/server/src，以 / 结尾） */
 export const MODULES: Record<ModuleId, { name: string; dir: string }> = {
@@ -45,6 +46,8 @@ export const MODULES: Record<ModuleId, { name: string; dir: string }> = {
   upload: { name: '手机上传', dir: 'domain/upload/' },
   // 按姿势找图（实验，迁移 045）：姿势类别、每张图的主要人物姿势
   pose: { name: '姿势', dir: 'domain/pose/' },
+  // 插件（docs/plugins.md，迁移 052）：启用状态、改的名字、我的插件的清单、各贡献点的状态
+  plugins: { name: '插件', dir: 'domain/plugins/' },
 };
 
 /** 表（images 是 images#<列组>）→ 主人 */
@@ -130,6 +133,10 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   image_posewear_members: 'pose',
   // 每张图按哪一版姿势库、哪份骨架和标签匹配过（迁移 050，Emaki 自己匹配）
   posewear_match_state: 'pose',
+  // 插件（迁移 052）
+  plugin_state: 'plugins',
+  user_plugins: 'plugins',
+  plugin_point_state: 'plugins',
 };
 
 /**

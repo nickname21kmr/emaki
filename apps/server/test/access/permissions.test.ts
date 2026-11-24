@@ -43,12 +43,14 @@ describe('范围的定义', () => {
     expect(DEVICE_GRANTABLE_SCOPES).not.toContain('devices');
     expect(DEVICE_GRANTABLE_SCOPES).not.toContain('desktop');
     for (const s of DEVICE_DEFAULT_SCOPES) expect(DEVICE_GRANTABLE_SCOPES).toContain(s);
-    expect([...DEVICE_DEFAULT_SCOPES]).toEqual(['read', 'curate', 'catalog', 'collections', 'history', 'ui', 'upload']);
+    // plugins（2026-11-24）：在平板上也能启用、停用插件、调侧栏顺序（docs/plugins.md）
+    expect([...DEVICE_DEFAULT_SCOPES]).toEqual(['read', 'curate', 'catalog', 'collections', 'history', 'ui', 'upload', 'plugins']);
     const optional = ['organize-files', 'settings', 'rules', 'duplicates', 'jobs', 'import'];
     expect([...DEVICE_GRANTABLE_SCOPES].sort()).toEqual([...DEVICE_DEFAULT_SCOPES, ...optional].sort());
     // 除了 devices、desktop，每个范围都能授予
     expect(Object.keys(SCOPES).filter((s) => !DEVICE_GRANTABLE_SCOPES.includes(s as Scope))).toEqual(['devices', 'desktop']);
-    expect([...ASSISTANT_SCOPES]).toEqual(['read', 'curate', 'catalog', 'collections', 'import', 'jobs']);
+    // plugins（2026-11-24）：用户要「说一句话让助手做一个覆盖插件」，插件的改动都能撤销
+    expect([...ASSISTANT_SCOPES]).toEqual(['read', 'curate', 'catalog', 'collections', 'import', 'jobs', 'plugins']);
   });
 
   it('在电脑屏幕上弹东西的命令在 desktop 里，ui 只剩「标记看过」；设备管理全在 devices 里', () => {

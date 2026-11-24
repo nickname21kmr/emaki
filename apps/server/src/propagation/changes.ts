@@ -89,6 +89,8 @@ export type Change =
   | ImageChange<'settings.changed', { sections: string[] }>
   /** 这些图的姿势数据变了（提取、导入；姿势模块写） */
   | ImageChange<'pose.changed'>
+  /** 插件的启用、改名、删除、覆盖的值、侧栏的顺序变了（插件模块写，docs/plugins.md）；ids 为空 */
+  | ImageChange<'plugins.changed'>
   /** 启动：规则版本可能变了，派生数据整体对一遍（全量重算合集、排除结果） */
   | ImageChange<'library.opened'>;
 
@@ -136,6 +138,7 @@ export const ALL_CHANGES: readonly ChangeType[] = [
   'collections.changed',
   'duplicates.changed',
   'settings.changed',
+  'plugins.changed',
   'library.opened',
 ];
 
@@ -177,6 +180,7 @@ export const PUBLIC_CHANGE: Record<ChangeType, DomainChange | null> = {
   'settings.changed': 'settings.changed',
   'library.opened': 'library.opened',
   'pose.changed': 'pose.changed',
+  'plugins.changed': 'plugins.changed',
 };
 
 /** 一组变化对外的类型（去重，按出现顺序） */

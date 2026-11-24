@@ -1433,6 +1433,330 @@
     }
   },
   {
+    "name": "plugins_choose_override",
+    "command": "plugins.chooseOverride",
+    "scope": "plugins",
+    "undoable": true,
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "本次操作的唯一标识，重试使用同一个值"
+        },
+        "key": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "plugin": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "冲突时用哪个插件的值；null = 按后启用的那个"
+        }
+      },
+      "required": [
+        "operationId",
+        "key",
+        "plugin"
+      ],
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "plugins_create_override",
+    "command": "plugins.createOverride",
+    "scope": "plugins",
+    "undoable": true,
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "本次操作的唯一标识，重试使用同一个值"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "values": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "description": "要覆盖的值，例如 {\"images.defaultSort\":\"modifiedAt\"}；能用的键和值见 GET /api/plugins 的 overrides"
+        },
+        "enabled": {
+          "description": "默认 true：建好就启用",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "operationId",
+        "name",
+        "values"
+      ],
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "plugins_remove",
+    "command": "plugins.remove",
+    "scope": "plugins",
+    "undoable": true,
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "本次操作的唯一标识，重试使用同一个值"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        }
+      },
+      "required": [
+        "operationId",
+        "id"
+      ],
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "plugins_rename",
+    "command": "plugins.rename",
+    "scope": "plugins",
+    "undoable": true,
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "本次操作的唯一标识，重试使用同一个值"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "null = 恢复原名"
+        }
+      },
+      "required": [
+        "operationId",
+        "id",
+        "name"
+      ],
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "plugins_set_enabled",
+    "command": "plugins.setEnabled",
+    "scope": "plugins",
+    "undoable": true,
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "本次操作的唯一标识，重试使用同一个值"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "operationId",
+        "id",
+        "enabled"
+      ],
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "plugins_set_nav",
+    "command": "plugins.setNav",
+    "scope": "plugins",
+    "undoable": true,
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "本次操作的唯一标识，重试使用同一个值"
+        },
+        "sections": {
+          "description": "侧栏三段各自的顺序（导航项 id）；没列到的项排在各自那一段的最后",
+          "type": "object",
+          "properties": {
+            "main": {
+              "maxItems": 100,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 80
+              }
+            },
+            "triage": {
+              "maxItems": 100,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 80
+              }
+            },
+            "footer": {
+              "maxItems": 100,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 80
+              }
+            }
+          },
+          "required": [
+            "main",
+            "triage",
+            "footer"
+          ]
+        },
+        "visible": {
+          "description": "在不在侧栏显示，只改给出的项",
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        }
+      },
+      "required": [
+        "operationId"
+      ],
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "plugins_set_override_values",
+    "command": "plugins.setOverrideValues",
+    "scope": "plugins",
+    "undoable": true,
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "本次操作的唯一标识，重试使用同一个值"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "values": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 80
+          }
+        }
+      },
+      "required": [
+        "operationId",
+        "id",
+        "values"
+      ],
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
     "name": "present_result",
     "inputSchema": {
       "type": "object",
