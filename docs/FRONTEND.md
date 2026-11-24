@@ -185,7 +185,7 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - 底部面板的「往下拖收起 / 往上拉展开」也只有一份：`lib/useSheetDrag.ts`（`ui/Sheet` 和看图器窄屏的 `lightbox/InfoSheet` 都用它；过了 slop 才接管，拖动区里的按钮照常能点）。
 
 **规矩**：翻页、缩放、点按、长按、拖面板这类交互只能有一个实现。新的地方要「左右翻一张」「捏合放大」就用 `lib/pager`，要不一样的手感就改 `lib/pager`（所有播放器一起变），
-不在页面里另写一套。这也是以后 mod 的前提（core-architecture.md 第 10.2 节）：同一个行为只在一处，改它只要改一处。
+不在页面里另写一套。这也是以后插件的前提（core-architecture.md 第 10.2 节）：同一个行为只在一处，改它只要改一处。
 验收：没有端到端测试（纯函数的部分有单元测试：`lib/gestures.test.ts`、`lib/pager/usePageTrack.test.ts`、`lib/useSheetDrag.test.ts`；`lib/pager/pager.test.ts`、`useSheetDrag.test.ts` 还会扫一遍源码，翻页、缩放、拖面板的判定在别处被用到就失败）；改 `lib/pager` 后在电脑（点击、按键、滚轮、触控板）和触屏（拖动、捏合、双击、下滑关闭）上把阅读器和看图器都走一遍。
 - **多选**：电脑上照旧悬停勾选圈、Ctrl / Shift 点击；触屏上长按一张进入多选，页头有「选择」（`SelectButton`，`useSelection.start(scope)` 进入还没选图的多选模式，`isSelecting` 判断）。
 
