@@ -146,7 +146,7 @@ describe('显示规则', () => {
   });
 
   it('可以另外勾的不含管理设备、在电脑屏幕上弹窗（永远不给）', () => {
-    expect(EXTRA_SCOPES).toEqual(['organize-files', 'settings', 'rules', 'duplicates', 'jobs', 'import']);
+    expect(EXTRA_SCOPES).toEqual(['organize-files', 'settings', 'rules', 'duplicates', 'jobs', 'import', 'install-plugins']);
     const html = renderToStaticMarkup(<ScopePicker value={DEVICE_DEFAULT_SCOPES} onChange={() => {}} />);
     expect(html.match(/role="checkbox"/g)).toHaveLength(DEVICE_GRANTABLE_SCOPES.length);
     expect(html.match(/aria-checked="true"/g)).toHaveLength(DEVICE_DEFAULT_SCOPES.length);

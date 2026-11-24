@@ -64,7 +64,7 @@
 ### 2.5 权限
 - 设备凭证带一组权限范围，直接用 P6 注册表的 `scope`，由注册表统一拦截，不在各个接口里分别判断。
 - 默认给：read、curate、catalog、collections、history（撤销）、ui（标记已看过），加上新增的 upload（B 阶段用）和 plugins（启用、停用插件，调侧栏顺序，2026-11-24 加，docs/plugins.md）。
-- 默认不给、批准时可以勾：organize-files（移动文件）、settings、rules、duplicates、jobs、import。
+- 默认不给、批准时可以勾：organize-files（移动文件）、settings、rules、duplicates、jobs、import、install-plugins（装插件，docs/plugins.md E2）。
 - 永远不给：
   - 新增的 devices（管理设备）；
   - 新增的 desktop（在电脑上打开文件夹、弹出选文件夹的窗口）。现在这两个命令在 ui 里，要拆出来：在手机上点了会在电脑屏幕上弹窗，没有意义。

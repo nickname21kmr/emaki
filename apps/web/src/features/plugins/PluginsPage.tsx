@@ -8,7 +8,7 @@ import {
   type PluginKind,
   type PluginSource,
 } from '@emaki/shared';
-import { ArrowDown, ArrowUp, Ellipsis, PencilLine, Plus, ShieldAlert, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Download, Ellipsis, PencilLine, Plus, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { PageBody, PageHeader } from '@/components/layout/PageHeader';
@@ -18,7 +18,9 @@ import { useCan } from '@/lib/capabilities';
 import { cn } from '@/lib/cn';
 import { usePlugins } from '@/lib/plugins';
 import { useMutate } from '@/lib/queries';
+import { InstallDialog } from './InstallDialogs';
 import { NewOverrideDialog, RemoveDialog, RenameDialog } from './PluginDialogs';
+import { UpdateCheck, useCheckUpdate } from './UpdateCheck';
 
 export const SOURCE_LABEL: Record<PluginSource, string> = { builtin: '内置', mine: '我的', installed: '装的' };
 export const KIND_LABEL: Record<PluginKind, string> = { page: '页面', override: '覆盖' };
@@ -27,9 +29,9 @@ const SECTION_LABEL: Record<NavSection, string> = { main: '主要', triage: '整
 type View = 'all' | 'pages';
 
 /**
- * 「插件」页（docs/plugins.md 9.7）：一切都是插件——原来的每一页（内置）、自己或 AI 做的覆盖（我的）、以后装的功能，
+ * 「插件」页（docs/plugins.md 9.7）：一切都是插件——原来的每一页（内置）、自己或 AI 做的覆盖（我的）、从文件 / 文件夹 / git 装的（装的），
  * 都在这里启用、停用、改名、删除。「页面」视图按侧栏的顺序列出页面，在这里编排侧栏和手机的底部标签栏。
- * 改动都即时生效、能撤销（进撤销栈）。没有 plugins 权限的设备只能看。
+ * 改动都即时生效、能撤销（进撤销栈）。没有 plugins 权限的设备只能看；装插件要 install-plugins。
  */
 export function PluginsPage() {
   const { state } = usePlugins();
@@ -38,7 +40,9 @@ export function PluginsPage() {
   const setView = (v: View) => setParams((p) => (v === 'all' ? (p.delete('view'), p) : (p.set('view', v), p)), { replace: true });
   const off = state.plugins.filter((p) => !p.enabled).length;
   const [creating, setCreating] = useState(false);
+  const [installing, setInstalling] = useState(false);
   const can = useCan('plugins') && !state.safeMode;
+  const canInstall = useCan('install-plugins') && !state.safeMode;
 
   return (
     <>
@@ -47,11 +51,18 @@ export function PluginsPage() {
         nav="plugins"
         subtitle={`${state.plugins.length} 个插件${off ? ` · ${off} 个停用` : ''}`}
         actions={
-          can && (
-            <Button variant="secondary" size="sm" icon={<Plus />} onClick={() => setCreating(true)}>
-              新建覆盖
-            </Button>
-          )
+          <>
+            {can && (
+              <Button variant="secondary" size="sm" icon={<Plus />} onClick={() => setCreating(true)}>
+                新建覆盖
+              </Button>
+            )}
+            {canInstall && (
+              <Button variant="secondary" size="sm" icon={<Download />} onClick={() => setInstalling(true)}>
+                安装…
+              </Button>
+            )}
+          </>
         }
       />
       <PageBody className="flex max-w-[880px] flex-col gap-6">
@@ -69,6 +80,7 @@ export function PluginsPage() {
         {view === 'all' ? <AllView can={can} /> : <PagesView can={can} />}
       </PageBody>
       <NewOverrideDialog open={creating} onOpenChange={setCreating} />
+      <InstallDialog open={installing} onOpenChange={setInstalling} />
     </>
   );
 }
@@ -93,7 +105,7 @@ function AllView({ can }: { can: boolean }) {
   const { state } = usePlugins();
   const [q, setQ] = useState('');
   const [kind, setKind] = useState<'any' | PluginKind>('any');
-  const [status, setStatus] = useState<'any' | 'on' | 'off' | 'conflict'>('any');
+  const [status, setStatus] = useState<'any' | 'on' | 'off' | 'conflict' | 'trouble'>('any');
   const list = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return state.plugins.filter(
@@ -103,7 +115,8 @@ function AllView({ can }: { can: boolean }) {
         (status === 'any' ||
           (status === 'on' && p.enabled) ||
           (status === 'off' && !p.enabled) ||
-          (status === 'conflict' && p.conflicts.length > 0)),
+          (status === 'conflict' && p.conflicts.length > 0) ||
+          (status === 'trouble' && troubled(p))),
     );
   }, [state.plugins, q, kind, status]);
   const groups = (['builtin', 'mine', 'installed'] as const)
@@ -133,6 +146,7 @@ function AllView({ can }: { can: boolean }) {
             { value: 'on', label: '启用' },
             { value: 'off', label: '停用' },
             { value: 'conflict', label: '冲突' },
+            { value: 'trouble', label: '出错' },
           ]}
         />
       </div>
@@ -153,6 +167,9 @@ function AllView({ can }: { can: boolean }) {
   );
 }
 
+/** 有问题的：不能启用、自动停用了、有出错记录 */
+const troubled = (p: PluginInfo) => p.problems.length > 0 || !!p.disabledReason || !!p.errors?.length;
+
 export function useEnablePlugin() {
   return useMutate((v: { id: string; enabled: boolean }) => api.setPluginEnabled(v.id, v.enabled));
 }
@@ -162,6 +179,7 @@ function PluginRow({ plugin: p, can }: { plugin: PluginInfo; can: boolean }) {
   const enable = useEnablePlugin();
   const [dialog, setDialog] = useState<'rename' | 'remove' | null>(null);
   const label = pluginLabel(p);
+  const update = useCheckUpdate(p);
   return (
     <li className="flex items-center gap-3 px-4 py-3">
       <Link to={`/plugins/${encodeURIComponent(p.id)}`} className="group min-w-0 flex-1">
@@ -173,8 +191,10 @@ function PluginRow({ plugin: p, can }: { plugin: PluginInfo; can: boolean }) {
           ))}
           {p.required && <Badge>必需</Badge>}
           {p.conflicts.length > 0 && <Badge tone="warn">冲突</Badge>}
+          {p.problems.length > 0 ? <Badge tone="warn">不能启用</Badge> : troubled(p) && <Badge tone="warn">出错</Badge>}
+          {p.installed && <span className="font-mono text-[11.5px] text-fg-subtle">{p.version}</span>}
         </div>
-        <p className="mt-0.5 truncate text-[12.5px] text-fg-muted">{p.description ?? overrideSummary(p)}</p>
+        <p className="mt-0.5 truncate text-[12.5px] text-fg-muted">{p.problems[0] ?? p.disabledReason ?? p.description ?? overrideSummary(p)}</p>
       </Link>
       {p.required ? (
         <Tooltip content="必需的插件不能停用">
@@ -185,7 +205,7 @@ function PluginRow({ plugin: p, can }: { plugin: PluginInfo; can: boolean }) {
       ) : (
         <Switch
           checked={p.enabled}
-          disabled={!can || enable.isPending}
+          disabled={!can || enable.isPending || (!p.enabled && p.problems.length > 0)}
           onCheckedChange={(v) => enable.mutate({ id: p.id, enabled: v })}
           label={`${p.enabled ? '停用' : '启用'}「${label}」`}
         />
@@ -199,15 +219,21 @@ function PluginRow({ plugin: p, can }: { plugin: PluginInfo; can: boolean }) {
             改名…
           </MenuItem>
           <MenuItem onSelect={() => navigate(`/plugins/${encodeURIComponent(p.id)}`)}>详情</MenuItem>
+          {update.available && (
+            <MenuItem icon={<RefreshCw />} onSelect={update.start}>
+              {update.label}
+            </MenuItem>
+          )}
           {p.source !== 'builtin' && (
             <MenuItem danger icon={<Trash2 />} onSelect={() => setDialog('remove')}>
-              删除…
+              {p.source === 'installed' ? '卸载…' : '删除…'}
             </MenuItem>
           )}
         </Menu>
       )}
       <RenameDialog plugin={p} open={dialog === 'rename'} onOpenChange={(o) => !o && setDialog(null)} />
       <RemoveDialog plugin={p} open={dialog === 'remove'} onOpenChange={(o) => !o && setDialog(null)} />
+      <UpdateCheck state={update} />
     </li>
   );
 }

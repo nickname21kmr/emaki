@@ -1,5 +1,5 @@
-import { OVERRIDES, pluginLabel, type OverrideKey, type PluginInfo } from '@emaki/shared';
-import { PencilLine, Trash2 } from 'lucide-react';
+import { OVERRIDES, pluginLabel, type LibraryRoot, type OverrideKey, type PluginInfo } from '@emaki/shared';
+import { PencilLine, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { PageBody } from '@/components/layout/PageHeader';
@@ -8,14 +8,18 @@ import { Badge, Button, EmptyState, SectionTitle, Segmented, Switch } from '@/co
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/capabilities';
 import { usePlugins } from '@/lib/plugins';
-import { useMutate } from '@/lib/queries';
+import { useMutate, useSettings } from '@/lib/queries';
 import { PAGES, type PageId } from '@/pages';
+import { displayPath } from '@/features/access/UploadTarget';
+import { grantAsPermissions, permissionLines, riskLine, SOURCE_TEXT } from './grantText';
+import { GrantRow } from './InstallDialogs';
 import { RemoveDialog, RenameDialog } from './PluginDialogs';
 import { KIND_LABEL, useEnablePlugin } from './PluginsPage';
+import { UpdateCheck, useCheckUpdate } from './UpdateCheck';
 
 /**
  * 一个插件的详情（docs/plugins.md 9.7）：它贡献了什么（按贡献点列出）、覆盖的值（我的可以改）、冲突时用哪个、
- * 启用、改名、删除。以后装的插件在这里看授权、版本和出错记录（E2）。
+ * 启用、改名、删除。装的插件另外有：从哪装的、版本和更新、授权（和授权单同一套说法）、不能启用的原因、出错记录。
  */
 const SOURCE_PHRASE = { builtin: '内置的插件', mine: '你自己建的插件', installed: '装上的插件' } as const;
 
@@ -26,6 +30,7 @@ export function PluginDetailPage() {
   const can = useCan('plugins') && !state.safeMode;
   const enable = useEnablePlugin();
   const [dialog, setDialog] = useState<'rename' | 'remove' | null>(null);
+  const update = useCheckUpdate(p ?? FALLBACK);
 
   if (!p)
     return (
@@ -61,9 +66,14 @@ export function PluginDetailPage() {
                 改名
               </Button>
             )}
+            {update.available && (
+              <Button variant="ghost" size="sm" icon={<RefreshCw />} loading={update.pending} onClick={update.start}>
+                {update.label.replace('…', '')}
+              </Button>
+            )}
             {can && p.source !== 'builtin' && (
               <Button variant="ghost" size="sm" icon={<Trash2 />} onClick={() => setDialog('remove')}>
-                删除
+                {p.source === 'installed' ? '卸载' : '删除'}
               </Button>
             )}
           </>
@@ -71,8 +81,30 @@ export function PluginDetailPage() {
       />
       <PageBody className="flex max-w-[760px] flex-col gap-8">
         <p className="text-[13px] leading-relaxed text-fg-muted">
-          {SOURCE_PHRASE[p.source]}{p.displayName ? `，原名「${p.name}」` : ''}。{p.description ?? ''}
+          {SOURCE_PHRASE[p.source]}
+          {p.installed && `，版本 ${p.version}${p.installed.ref ? `（${p.installed.ref}）` : ''}，来自${SOURCE_TEXT[p.installed.kind]} `}
+          {p.installed && <span className="font-mono text-[12px] text-fg">{p.installed.location}</span>}
+          {p.displayName ? `，原名「${p.name}」` : ''}。{p.description ?? ''}
         </p>
+        {(p.problems.length > 0 || p.disabledReason) && (
+          <div className="flex items-start gap-3 rounded-lg bg-warn-soft px-4 py-3 text-[13px] leading-relaxed">
+            <ShieldAlert className="mt-0.5 size-4 shrink-0 text-warn" />
+            <div className="flex-1">
+              {p.problems.length > 0 ? (
+                <>
+                  <p className="font-medium">不能启用：</p>
+                  <ul className="list-disc pl-5">
+                    {p.problems.map((x) => (
+                      <li key={x}>{x}</li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <p>{p.disabledReason}</p>
+              )}
+            </div>
+          </div>
+        )}
         <div className="flex items-center gap-3 rounded-lg bg-raised px-4 py-3 ring-1 ring-line">
           <div className="min-w-0 flex-1 text-[13px]">
             <div className="flex flex-wrap items-center gap-2">
@@ -92,16 +124,85 @@ export function PluginDetailPage() {
           </div>
           <Switch
             checked={p.enabled}
-            disabled={!can || p.required || enable.isPending}
+            disabled={!can || p.required || enable.isPending || (!p.enabled && p.problems.length > 0)}
             onCheckedChange={(v) => enable.mutate({ id: p.id, enabled: v })}
             label={`${p.enabled ? '停用' : '启用'}「${label}」`}
           />
         </div>
         <Contributions plugin={p} can={can} />
+        {p.installed && <GrantSection plugin={p} />}
+        {!!p.errors?.length && <ErrorsSection plugin={p} />}
       </PageBody>
       <RenameDialog plugin={p} open={dialog === 'rename'} onOpenChange={(o) => !o && setDialog(null)} />
       <RemoveDialog plugin={p} open={dialog === 'remove'} onOpenChange={(o) => !o && setDialog(null)} />
+      <UpdateCheck state={update} />
     </>
+  );
+}
+
+/** 没找到插件时给 useCheckUpdate 的占位（hook 不能条件调用） */
+const FALLBACK: PluginInfo = {
+  id: '',
+  name: '',
+  displayName: null,
+  source: 'builtin',
+  version: '',
+  enabled: false,
+  required: false,
+  kinds: [],
+  contributes: {},
+  conflicts: [],
+  problems: [],
+};
+
+/** 授权：装的时候在授权单上确认过的，用同一套说法；文件夹写出实际位置 */
+function GrantSection({ plugin: p }: { plugin: PluginInfo }) {
+  const roots: LibraryRoot[] = useSettings().data?.libraryRoots ?? [];
+  const granted = grantAsPermissions(p.grant!, p.permissions);
+  const lines = permissionLines(granted);
+  const risk = riskLine(granted);
+  return (
+    <section>
+      <SectionTitle numbered={false} hint="装的时候在授权单上确认的">
+        授权
+      </SectionTitle>
+      {lines.length === 0 ? (
+        <p className="text-[13px] text-fg-muted">没有要任何权限：它只有配置，不读也不改你的图库，不联网。</p>
+      ) : (
+        <ul className="flex flex-col gap-2.5 text-[13px] leading-relaxed">
+          {lines.map((l) => {
+            const f = l.folder && p.grant!.folders.find((x) => x.id === l.folder!.id);
+            const root = f && roots.find((r) => r.id === String(f.rootId));
+            return (
+              <GrantRow
+                key={l.key}
+                line={f ? { ...l, folder: undefined, text: `把文件放进 ${root ? displayPath(root.path, f.dir) : f.dir}` } : l}
+              />
+            );
+          })}
+        </ul>
+      )}
+      {risk && <p className="mt-3 rounded-lg bg-danger-soft px-3 py-2 text-[13px] text-danger">{risk}</p>}
+    </section>
+  );
+}
+
+function ErrorsSection({ plugin: p }: { plugin: PluginInfo }) {
+  return (
+    <section>
+      <SectionTitle numbered={false} hint="最近 5 次">
+        出错记录
+      </SectionTitle>
+      <ul className="divide-y divide-line rounded-lg bg-raised text-[12.5px] ring-1 ring-line">
+        {p.errors!.map((e, i) => (
+          <li key={i} className="flex gap-3 px-4 py-2">
+            <span className="shrink-0 font-mono text-fg-subtle">{new Date(e.at).toLocaleString()}</span>
+            <span className="shrink-0 text-fg-muted">{e.source}</span>
+            <span className="min-w-0 flex-1 break-words">{e.message}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

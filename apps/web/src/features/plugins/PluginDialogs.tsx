@@ -37,7 +37,7 @@ export function RenameDialog({ plugin: p, open, onOpenChange }: { plugin: Plugin
   );
 }
 
-/** 删除「我的」插件：能撤销，删掉以后它覆盖的值回到原来的 */
+/** 删除「我的」插件、卸载装的插件：能撤销，删掉以后它覆盖的值回到原来的；装的插件的授权、存储一起删，它导入的图留着 */
 export function RemoveDialog({ plugin: p, open, onOpenChange }: { plugin: PluginInfo; open: boolean; onOpenChange: (o: boolean) => void }) {
   const navigate = useNavigate();
   const remove = useMutate(() => api.removePlugin(p.id), {
@@ -50,8 +50,12 @@ export function RemoveDialog({ plugin: p, open, onOpenChange }: { plugin: Plugin
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      title={`删除「${pluginLabel(p)}」？`}
-      description="删掉以后它改的东西回到原来的样子。可以撤销（Ctrl+Z）。"
+      title={`${p.source === 'installed' ? '卸载' : '删除'}「${pluginLabel(p)}」？`}
+      description={
+        p.source === 'installed'
+          ? '它的授权和存的东西一起删掉，它改的东西回到原来的样子；它导入的图和改过的数据留着。可以撤销（Ctrl+Z）。'
+          : '删掉以后它改的东西回到原来的样子。可以撤销（Ctrl+Z）。'
+      }
       width={420}
     >
       <DialogFooter>
@@ -59,7 +63,7 @@ export function RemoveDialog({ plugin: p, open, onOpenChange }: { plugin: Plugin
           取消
         </Button>
         <Button variant="danger" loading={remove.isPending} onClick={() => remove.mutate(undefined)}>
-          删除
+          {p.source === 'installed' ? '卸载' : '删除'}
         </Button>
       </DialogFooter>
     </Dialog>

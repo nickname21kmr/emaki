@@ -1,9 +1,9 @@
-import { builtinPluginsState, BUILTIN_PLUGINS, resolvePlugins, type NavSection } from '@emaki/shared';
+import { builtinPluginsState, BUILTIN_PLUGINS, NAV_ICONS, resolvePlugins, type NavEntry, type NavSection } from '@emaki/shared';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ALL_BLOCKS } from '@/blocks/registry';
-import { sidebarItems, tabBarItems } from '@/components/layout/Sidebar';
+import { activeNav, sidebarItems, tabBarItems } from '@/components/layout/Sidebar';
 import { canVisit, PAGES, pageOf, type PageId } from '@/pages';
 import { capabilitiesOf } from './capabilities';
 import { readSafeMode } from './plugins';
@@ -71,6 +71,25 @@ describe('侧栏和底部标签栏按插件的顺序', () => {
     expect(more.map((i) => i.label)).toEqual(['合集', '重复', '插件', '设置']);
     // 去不了的先过滤，前四个总是能去的
     expect(tabBarItems(summary, nav, (to) => to !== '/unrecognized').tabs.map((i) => i.label)).toEqual(['杂项', '图库', '首页', '合集']);
+  });
+});
+
+describe('装的插件加的侧栏项（docs/plugins.md E2）', () => {
+  it('能选的图标都有对应的图', () => {
+    const nav = builtinPluginsState().nav;
+    const extra: NavEntry[] = NAV_ICONS.map((icon) => ({ id: `p/${icon}`, label: icon, to: '/gallery', icon, section: 'main', plugin: 'p', visible: true }));
+    const { main } = sidebarItems(undefined, { ...nav, main: [...nav.main, ...extra] });
+    expect(main.filter((i) => !i.icon).map((i) => i.label)).toEqual([]);
+  });
+
+  it('指向同一页、带筛选参数的项：只亮它，不和「图库」一起亮；只有内置项时和原来一样', () => {
+    const items = [{ to: '/' }, { to: '/gallery' }, { to: '/gallery?sort=random' }, { to: '/characters' }];
+    expect(activeNav(items, '/gallery', '')).toBe('/gallery');
+    expect(activeNav(items, '/gallery', '?kind=all&sort=random')).toBe('/gallery?sort=random');
+    expect(activeNav(items, '/gallery', '?sort=bytes')).toBe('/gallery');
+    expect(activeNav(items, '/', '')).toBe('/');
+    expect(activeNav(items, '/characters/3', '')).toBe('/characters');
+    expect(activeNav(items, '/plugins', '')).toBeNull();
   });
 });
 

@@ -323,7 +323,7 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 7. **手机访问**（`features/access/PhoneAccessSection`，[mobile.md](mobile.md) 第 2 节）：开关「让手机连接这台电脑」（默认关）；打开后是状态（监听的端口、局域网地址，`error` 红底醒目写出，Windows 防火墙要允许「专用网络」的提醒）、
    电脑名称、端口、「用二维码添加」（`uqr` 编码后画成 SVG，包一层 `data-theme="light"`，深色主题下也是浅底深码）；下面「等你批准的请求」（大号 3 + 3 校验码、剩余时间、批准 / 拒绝，权限默认折叠）和「已连接的设备」（编辑名称和权限、移除先确认）。
    数据是查询 `access.status`（`useAccessStatus`，局域网入口上 403 时为 null），SSE 的 `access` 事件让它重新取。这些命令不可撤销、不占撤销栈（`useMutate(…, { undo: false })`）。
-8. **插件**（`PluginsSection`，[plugins.md](plugins.md) 9.7）：只放「在侧栏显示『插件』」开关和「管理插件」链接；插件页 `/plugins` 单独一页（`features/plugins/`）。
+8. **插件**（`PluginsSection`，[plugins.md](plugins.md) 9.7）：只放「在侧栏显示『插件』」开关和「管理插件」链接；插件页 `/plugins` 单独一页（`features/plugins/`），装插件和授权单也在那里（12.3）。
 9. **关于**：版本、数据目录、快捷键入口。
 
 设置修改即时保存（`api.updateSettings`，toast「已保存」），滑块松手时才保存。

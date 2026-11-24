@@ -1,8 +1,30 @@
 import { builtinPluginsState, JOB_KINDS, type Job, type LibrarySummary, type NavEntry, type NavIcon, type NavSection } from '@emaki/shared';
-import { Ban, BookCopy, LibraryBig, CircleHelp, Copy, House, Images, ListOrdered, Puzzle, Settings, Sparkles, UsersRound, type LucideIcon } from 'lucide-react';
+import {
+  Ban,
+  BookCopy,
+  Bookmark,
+  ChartColumn,
+  CircleHelp,
+  Clock,
+  Compass,
+  Copy,
+  Download,
+  Folder,
+  Heart,
+  House,
+  Images,
+  LibraryBig,
+  ListOrdered,
+  Puzzle,
+  Settings,
+  Sparkles,
+  Star,
+  UsersRound,
+  type LucideIcon,
+} from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import type { ReactNode } from 'react';
-import { NavLink, useNavigate } from 'react-router';
+import { Link, matchPath, NavLink, useLocation, useNavigate } from 'react-router';
 import { useCapabilities } from '@/lib/capabilities';
 import { cn } from '@/lib/cn';
 import { useLiveJobs, useRunningJobs } from '@/lib/events';
@@ -41,7 +63,33 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   ban: Ban,
   settings: Settings,
   puzzle: Puzzle,
+  clock: Clock,
+  star: Star,
+  bookmark: Bookmark,
+  folder: Folder,
+  chart: ChartColumn,
+  compass: Compass,
+  download: Download,
+  heart: Heart,
 };
+
+/**
+ * 当前是哪一项（返回它的 to）：地址对得上的里面，带的筛选参数都对得上、参数最多的那个。
+ * 插件能加指向同一页、带筛选参数的项（「随便看看」→ /gallery?sort=random），这时只亮它，不和「图库」一起亮；
+ * 只有内置项时和 NavLink 的判断一样（首页只认 /，别的认前缀）。
+ */
+export function activeNav(items: readonly { to: string }[], pathname: string, search: string): string | null {
+  const here = new URLSearchParams(search);
+  let best: { to: string; score: number } | null = null;
+  for (const it of items) {
+    const [path = '', query = ''] = it.to.split('?');
+    if (!matchPath({ path, end: path === '/' }, pathname)) continue;
+    const want = [...new URLSearchParams(query)];
+    if (!want.every(([k, v]) => here.get(k) === v)) continue;
+    if (!best || want.length > best.score) best = { to: it.to, score: want.length };
+  }
+  return best?.to ?? null;
+}
 
 /**
  * 侧栏的导航项（纯函数，测试直接调）：顺序、名字、在不在侧栏来自插件（docs/plugins.md 9.6，lib/plugins.ts 的 useNav），
@@ -139,6 +187,8 @@ export function Sidebar() {
   const main = visible(items.main);
   const triage = visible(items.triage);
   const footer = visible(items.footer);
+  const { pathname, search } = useLocation();
+  const current = activeNav([...main, ...triage, ...footer], pathname, search);
 
   return (
     // 窗口矮（768 的笔记本、计数和任务环都在）时侧栏自己滚，不把整个页面撑高
@@ -157,7 +207,7 @@ export function Sidebar() {
 
         <nav className="mt-6 flex flex-col items-center gap-1 touch-low:mt-0 touch-low:gap-0 short:mt-0">
           {main.map((item) => (
-            <SidebarLink key={item.to} item={item} />
+            <SidebarLink key={item.id ?? item.to} item={item} active={item.to === current} />
           ))}
         </nav>
 
@@ -166,7 +216,7 @@ export function Sidebar() {
             <div className="my-4 h-px w-8 shrink-0 bg-line-strong touch-low:my-2 short:my-2" />
             <nav className="flex flex-col items-center gap-1 touch-low:gap-0">
               {triage.map((item) => (
-                <SidebarLink key={item.to} item={item} />
+                <SidebarLink key={item.id ?? item.to} item={item} active={item.to === current} />
               ))}
             </nav>
           </>
@@ -195,7 +245,7 @@ export function Sidebar() {
         ))}
 
         {footer.map((item) => (
-          <SidebarLink key={item.to} item={item} />
+          <SidebarLink key={item.id ?? item.to} item={item} active={item.to === current} />
         ))}
       </aside>
     </ContextMenu>
@@ -211,8 +261,8 @@ function Logo() {
   );
 }
 
-function SidebarLink({ item }: { item: NavItem }) {
-  const link = <SidebarLinkInner item={item} />;
+function SidebarLink({ item, active }: { item: NavItem; active: boolean }) {
+  const link = <SidebarLinkInner item={item} active={active} />;
   return item.hint ? (
     <Tooltip content={item.hint} side="right">
       {link}
@@ -225,17 +275,16 @@ function SidebarLink({ item }: { item: NavItem }) {
 /** 10 万以内显示精确数字，再大才缩写（TR-4） */
 export const sidebarCount = (n: number) => (n < 100_000 ? formatCount(n) : formatCompact(n));
 
-function SidebarLinkInner({ item, ...rest }: { item: NavItem }) {
+function SidebarLinkInner({ item, active: isActive, ...rest }: { item: NavItem; active: boolean }) {
   const Icon = item.icon;
   return (
-    <NavLink
+    <Link
       {...rest}
       to={item.to}
-      end={item.to === '/'}
+      aria-current={isActive ? 'page' : undefined}
       className="group relative flex w-[64px] flex-col items-center gap-0.5 py-1.5 touch-low:py-1"
     >
-      {({ isActive }) => (
-        <>
+      <>
           {item.count !== undefined && item.count > 0 && (
             <RollingNumber
               value={item.count}
@@ -270,8 +319,7 @@ function SidebarLinkInner({ item, ...rest }: { item: NavItem }) {
             {item.label}
           </span>
         </>
-      )}
-    </NavLink>
+    </Link>
   );
 }
 

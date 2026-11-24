@@ -60,6 +60,7 @@ import type {
   MovePreview,
   MutationResult,
   NavSection,
+  PluginPackage,
   PluginsState,
   NetworkCheckResponse,
   PickFolderResponse,
@@ -164,10 +165,12 @@ function toQueryString(params?: object): string {
   return s ? `?${s}` : '';
 }
 
-export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** raw：请求体是二进制（插件的 zip 包），不转 JSON */
+export async function request<T>(method: string, path: string, body?: unknown, raw?: { data: Blob; type: string }): Promise<T> {
   let res: Response;
   const headers: Record<string, string> = {};
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (raw) headers['Content-Type'] = raw.type;
+  else if (body !== undefined) headers['Content-Type'] = 'application/json';
   // 写请求带 operationId（Idempotency-Key）：同一个键重试，服务端返回第一次的结果，不会做两遍
   if (method !== 'GET') headers['Idempotency-Key'] = uuid();
   // 连不上、或者很久没回应：让连接状态探一下是不是电脑不在了（lib/connection.ts）
@@ -176,7 +179,7 @@ export async function request<T>(method: string, path: string, body?: unknown): 
     res = await fetch(`/api${path}`, {
       method,
       headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: raw ? raw.data : body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
     suspect();
@@ -329,6 +332,14 @@ export const api = {
     post<MutationResult>(`/plugins/${encodeURIComponent(id)}/overrides`, { values }),
   setNav: (body: { sections?: Record<NavSection, string[]>; visible?: Record<string, boolean> }) => post<MutationResult>('/plugins/nav', body),
   chooseOverride: (key: string, plugin: string | null) => post<MutationResult>('/plugins/overrides/choice', { key, plugin }),
+  // 装插件（E2）：先准备（读清单、算要新给的权限），授权单上确认了再装
+  inspectPluginZip: (file: File) =>
+    request<PluginPackage>('PUT', `/plugins/packages?name=${encodeURIComponent(file.name)}`, undefined, { data: file, type: 'application/zip' }),
+  inspectPlugin: (source: { kind: 'folder'; path: string } | { kind: 'git'; url: string; ref?: string }) =>
+    post<PluginPackage>('/plugins/packages/inspect', { source }),
+  checkPluginUpdate: (id: string) => post<PluginPackage>(`/plugins/${encodeURIComponent(id)}/check-update`),
+  installPlugin: (token: string, folders?: Record<string, { rootId: string; dir: string }>) =>
+    post<MutationResult & { id: string }>('/plugins/install', { token, ...(folders && { folders }) }),
 
   // 手机访问（docs/mobile.md 第 2 节）：scope 是 devices，只有本机入口能用（局域网入口上是 403）；都不可撤销、不占撤销栈
   accessStatus: () => get<AccessStatus>('/access'),
