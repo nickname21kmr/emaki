@@ -73,6 +73,9 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   heart: Heart,
 };
 
+/** 导航项的图标（侧栏、底部标签栏、命令面板同一套） */
+export const navIcon = (icon: NavIcon): LucideIcon => ICONS[icon] ?? Puzzle;
+
 /**
  * 当前是哪一项（返回它的 to）：地址对得上的里面，带的筛选参数都对得上、参数最多的那个。
  * 插件能加指向同一页、带筛选参数的项（「随便看看」→ /gallery?sort=random），这时只亮它，不和「图库」一起亮；

@@ -5,6 +5,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Dialog as D } from 'radix-ui';
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useLocation, useNavigate, useNavigationType } from 'react-router';
+import { Slot } from '@/blocks/Slot';
 import { imageUrl } from '@/lib/api';
 import { blurLabel, blurReason } from '@/lib/blur';
 import { formatCount } from '@/lib/format';
@@ -616,33 +617,50 @@ function TopBar({
         {fileName && <span className="truncate text-[13px] text-white/55 compact:hidden">{fileName}</span>}
       </div>
       <div className="pointer-events-auto flex shrink-0 items-center gap-1">
-        {playing !== undefined && (
-          <LbButton label={playing ? '暂停放映' : '继续放映'} shortcut="Space" onClick={onTogglePlay}>
-            {playing ? <Pause /> : <Play />}
-          </LbButton>
-        )}
-        {kind && (
-          <KindMenu
-            label="把这张归入"
-            current={kind}
-            align="end"
-            open={kindOpen}
-            onOpenChange={onKindOpenChange}
-            onSelect={onSetKind}
-            trigger={
-              <LbButton label="归入…" shortcut="C" active={kindOpen}>
-                <Shapes />
+        {/* 按钮按登记的顺序（blocks/slots.ts 的 lightbox.toolbar） */}
+        <Slot
+          id="lightbox.toolbar"
+          render={{
+            'lightbox.slideshow': () =>
+              playing !== undefined && (
+                <LbButton label={playing ? '暂停放映' : '继续放映'} shortcut="Space" onClick={onTogglePlay}>
+                  {playing ? <Pause /> : <Play />}
+                </LbButton>
+              ),
+            'lightbox.kind': () =>
+              kind && (
+                <KindMenu
+                  label="把这张归入"
+                  current={kind}
+                  align="end"
+                  open={kindOpen}
+                  onOpenChange={onKindOpenChange}
+                  onSelect={onSetKind}
+                  trigger={
+                    <LbButton label="归入…" shortcut="C" active={kindOpen}>
+                      <Shapes />
+                    </LbButton>
+                  }
+                />
+              ),
+            'lightbox.assistant': () => <AssistantLightboxButton />,
+            'lightbox.info': () => (
+              <LbButton
+                label={sheet ? (panelOpen ? '收起信息' : '展开信息') : panelOpen ? '收起信息' : '显示信息'}
+                shortcut="I"
+                active={panelOpen}
+                onClick={onTogglePanel}
+              >
+                <PanelRight />
               </LbButton>
-            }
-          />
-        )}
-        <AssistantLightboxButton />
-        <LbButton label={sheet ? (panelOpen ? '收起信息' : '展开信息') : panelOpen ? '收起信息' : '显示信息'} shortcut="I" active={panelOpen} onClick={onTogglePanel}>
-          <PanelRight />
-        </LbButton>
-        <LbButton label="关闭" shortcut="Esc" onClick={onClose}>
-          <X />
-        </LbButton>
+            ),
+            'lightbox.close': () => (
+              <LbButton label="关闭" shortcut="Esc" onClick={onClose}>
+                <X />
+              </LbButton>
+            ),
+          }}
+        />
       </div>
     </div>
   );

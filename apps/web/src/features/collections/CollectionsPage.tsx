@@ -13,6 +13,7 @@ import { CharacterPicker } from '@/features/gallery/CharacterPicker';
 import { useDebounced } from '@/features/gallery/useDebounced';
 import { ArtistShelf } from './components/ArtistShelf';
 import { CollectionShelf } from './components/Shelf';
+import { Slot } from '@/blocks/Slot';
 
 const BOOKS: CollectionKind[] = ['doujin', 'artbook'];
 /** 组图里手动收集的（同一投稿以外的：手选的，和按文件夹成册后改成组图的） */
@@ -214,20 +215,27 @@ function SeriesView({ seriesKey }: { seriesKey: string }) {
         title={seriesKey}
         subtitle={list.data ? `全 ${items.length} ${word} · ${formatCount(pages)} 页` : undefined}
         actions={
-          items.length > 0 && (
-            <>
-              <Button variant="ghost" size="sm" icon={<Check className="size-3.5" />} onClick={() => bulk.mutate({ type: 'review' })}>
-                整套标为已整理
-              </Button>
-              <CharacterPicker title="整套关联角色" meta={`${items.length} ${word}`}
-                onPick={(c) => bulk.mutate({ type: 'addCharacter', characterId: c.id })}
-                onCandidate={(danbooruTag) => bulk.mutate({ type: 'addCharacterTag', danbooruTag })}>
-                <Button variant="ghost" size="sm" icon={<UserRoundPlus className="size-3.5" />}>
-                  整套关联角色…
-                </Button>
-              </CharacterPicker>
-            </>
-          )
+          <Slot
+            id="page.collections"
+            render={{
+              'collections.reviewAll': () =>
+                items.length > 0 && (
+                  <Button variant="ghost" size="sm" icon={<Check className="size-3.5" />} onClick={() => bulk.mutate({ type: 'review' })}>
+                    整套标为已整理
+                  </Button>
+                ),
+              'collections.linkCharacter': () =>
+                items.length > 0 && (
+                  <CharacterPicker title="整套关联角色" meta={`${items.length} ${word}`}
+                    onPick={(c) => bulk.mutate({ type: 'addCharacter', characterId: c.id })}
+                    onCandidate={(danbooruTag) => bulk.mutate({ type: 'addCharacterTag', danbooruTag })}>
+                    <Button variant="ghost" size="sm" icon={<UserRoundPlus className="size-3.5" />}>
+                      整套关联角色…
+                    </Button>
+                  </CharacterPicker>
+                ),
+            }}
+          />
         }
       />
       <PageBody className="flex-1 pt-6">

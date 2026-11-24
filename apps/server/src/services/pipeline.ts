@@ -162,6 +162,7 @@ export class Pipeline {
   constructor(private d: PipelineDeps) {
     if (d.afterTag) this.afterTagHooks.push(d.afterTag);
     if (d.afterScan) this.afterScanHooks.push(d.afterScan);
+    this.registerBuiltinKinds();
   }
 
   /**
@@ -180,119 +181,140 @@ export class Pipeline {
     if (stages.afterScan) this.afterScanHooks.push(stages.afterScan);
   }
 
+  /**
+   * 每种任务的执行体（docs/plugins.md 9.2 的 job.kind，E3）：一种任务登记一个，队列按种类到这里查（JobQueue 的 resolveRunner）。
+   * 内置的在构造时登记（registerBuiltinKinds）；以后插件的任务种类（E5）也登记进同一张表，不在这里加分支
+   */
+  private readonly kinds = new Map<JobKind, JobRunner>();
+
+  /** 登记一种任务的执行体；同一种登记两次直接报错 */
+  registerKind(kind: JobKind, run: JobRunner): void {
+    if (this.kinds.has(kind)) throw new Error(`任务种类 ${kind} 已经登记过了`);
+    this.kinds.set(kind, run);
+  }
+
+  /** 登记过的任务种类 */
+  registeredKinds(): JobKind[] {
+    return [...this.kinds.keys()];
+  }
+
   runner =
     (kind: JobKind): JobRunner =>
     async (ctx) => {
-      switch (kind) {
-        case 'scan': {
-          const s = await this.d.scanner.scan(ctx);
-          // 取消的扫描不触发后续任务（这时也没做丢失判定）
-          if (!ctx.signal.aborted) {
-            this.afterScan(s);
-            for (const hook of this.afterScanHooks) hook(s);
-          }
-          return formatScanSummary(s);
-        }
-        case 'thumbnail': {
-          const msg = await this.d.thumbs.runBackfill(ctx);
-          if (!ctx.signal.aborted && !ctx.yielded) this.afterThumbnail();
-          return msg;
-        }
-        case 'tag': {
-          if (!this.d.tag) throw new NotImplementedError('T10', '角色识别');
-          const manual = this.tagManual;
-          this.tagManual = false;
-          const msg = await this.d.tag.run(ctx, { manual });
-          if (ctx.signal.aborted) this.tagPaused = true;
-          if (!ctx.signal.aborted && !ctx.yielded) {
-            for (const hook of this.afterTagHooks) hook();
-            if (this.d.danbooru?.shouldRunAfterTag()) this.d.jobs().enqueue('danbooru-sync');
-            if (this.dedupeDirty) this.d.jobs().enqueue('dedupe');
-            // 开着画师的：接着补（新图、WD 识别的旧图、重启前没补完的）；用户取消过就等他手动再点
-            const a = this.d.artists;
-            if (this.canAutoArtists()) this.d.jobs().enqueue('artists');
-            // 开着姿势检索的：新图接着提取姿势（显卡道里排在画师后面）
-            if (this.canAutoPose()) this.d.jobs().enqueue('pose');
-            // 用户开始过「补充姿势标签」、还没补完（比如中途重启）：接着补
-            if (this.canAutoPoseTags()) this.d.jobs().enqueue('pose-tags');
-            // 标签换过的图重新匹配 PoseWear 姿势（提取过姿势的）
-            this.requestPoseMatch();
-            // 放在最后：enqueue 会马上启动空闲的 io 道，先排的话 Pixiv 会抢在同步、查重前面
-            this.maybePixiv();
-          }
-          return msg;
-        }
-        case 'pixiv-tags': {
-          if (!this.d.pixiv) throw new NotImplementedError('pixiv', 'Pixiv 角色补充');
-          // 手动点的（含让出后的续跑）关着也跑；自动排上的到开跑时再查一次：排队期间用户可能关掉了开关
-          if (!this.pixivManual && (!this.d.pixiv.enabled() || this.pixivPaused)) return '补充 Pixiv 角色：设置里没有打开';
-          try {
-            const msg = await this.d.pixiv.run(ctx);
-            // 让出时不排 Danbooru 同步，等续跑的那一轮跑完再排
-            if (!ctx.signal.aborted && !ctx.yielded && this.d.danbooru?.shouldRunAfterTag()) this.d.jobs().enqueue('danbooru-sync');
-            return msg;
-          } catch (error) {
-            this.pixivFailed = true;
-            throw error;
-          } finally {
-            if (ctx.signal.aborted) this.pixivPaused = true;
-            // 这一轮结束了（不是让出）：手动标记用完
-            if (!ctx.yielded) this.pixivManual = false;
-          }
-        }
-        case 'artists': {
-          if (!this.d.artists) throw new NotImplementedError('artists', '识别画师');
-          if (!this.d.artists.enabled()) return '识别画师：设置里没有打开';
-          const msg = await this.d.artists.run(ctx);
-          if (ctx.signal.aborted) this.artistsPaused = true;
-          // 认出新画师后，同步 Danbooru 拿日文名、推特（打开了联网同步时）
-          if (!ctx.signal.aborted && !ctx.yielded && this.d.danbooru?.shouldRunAfterTag()) this.d.jobs().enqueue('danbooru-sync');
-          return msg;
-        }
-        case 'dedupe': {
-          if (!this.d.dedupe) throw new NotImplementedError('T16', '查重');
-          const seen = this.d.dedupeWork?.peek() ?? null;
-          const msg = await this.d.dedupe.run(ctx);
-          if (!ctx.signal.aborted) this.dedupeDone(seen);
-          return msg;
-        }
-        case 'danbooru-sync': {
-          if (!this.d.danbooru) throw new NotImplementedError('T11', 'Danbooru 同步');
-          return this.d.danbooru.run(ctx);
-        }
-        case 'pose': {
-          if (!this.d.pose) throw new NotImplementedError('pose', '提取姿势');
-          if (!this.d.pose.enabled()) return '提取姿势：设置里没有打开';
-          const msg = await this.d.pose.run(ctx);
-          if (ctx.signal.aborted) this.setPaused('pose', true);
-          // 提取时已经顺便匹配了；这期间标签换过的图再补一轮
-          if (!ctx.signal.aborted && !ctx.yielded) this.requestPoseMatch();
-          return msg;
-        }
-        case 'pose-tags': {
-          const p = this.d.poseTags;
-          if (!p) throw new NotImplementedError('pose-tags', '补充姿势标签');
-          if (!p.enabled()) return '补充姿势标签：姿势检索没有打开';
-          try {
-            const msg = await p.run(ctx);
-            // 补了低分标签的图重新匹配 PoseWear 姿势
-            if (!ctx.signal.aborted && !ctx.yielded) this.requestPoseMatch();
-            return msg;
-          } finally {
-            // 补完、用户取消、出错都清掉请求（进度按张记着，再点接着补）；让出的接着排，请求留着
-            if (!ctx.yielded) p.done();
-          }
-        }
-        case 'pose-match': {
-          const p = this.d.poseMatch;
-          if (!p) throw new NotImplementedError('pose-match', '重新匹配姿势');
-          if (!p.enabled()) return '重新匹配姿势：设置里没有打开';
-          const msg = await p.run(ctx);
-          if (ctx.signal.aborted) this.setPaused('pose-match', true);
-          return msg;
-        }
-      }
+      const run = this.kinds.get(kind);
+      if (!run) throw new Error(`没有登记的任务种类：${kind}`);
+      return run(ctx);
     };
+
+  private registerBuiltinKinds(): void {
+    this.registerKind('scan', async (ctx) => {
+      const s = await this.d.scanner.scan(ctx);
+      // 取消的扫描不触发后续任务（这时也没做丢失判定）
+      if (!ctx.signal.aborted) {
+        this.afterScan(s);
+        for (const hook of this.afterScanHooks) hook(s);
+      }
+      return formatScanSummary(s);
+    });
+    this.registerKind('thumbnail', async (ctx) => {
+      const msg = await this.d.thumbs.runBackfill(ctx);
+      if (!ctx.signal.aborted && !ctx.yielded) this.afterThumbnail();
+      return msg;
+    });
+    this.registerKind('tag', async (ctx) => {
+      if (!this.d.tag) throw new NotImplementedError('T10', '角色识别');
+      const manual = this.tagManual;
+      this.tagManual = false;
+      const msg = await this.d.tag.run(ctx, { manual });
+      if (ctx.signal.aborted) this.tagPaused = true;
+      if (!ctx.signal.aborted && !ctx.yielded) {
+        for (const hook of this.afterTagHooks) hook();
+        if (this.d.danbooru?.shouldRunAfterTag()) this.d.jobs().enqueue('danbooru-sync');
+        if (this.dedupeDirty) this.d.jobs().enqueue('dedupe');
+        // 开着画师的：接着补（新图、WD 识别的旧图、重启前没补完的）；用户取消过就等他手动再点
+        const a = this.d.artists;
+        if (this.canAutoArtists()) this.d.jobs().enqueue('artists');
+        // 开着姿势检索的：新图接着提取姿势（显卡道里排在画师后面）
+        if (this.canAutoPose()) this.d.jobs().enqueue('pose');
+        // 用户开始过「补充姿势标签」、还没补完（比如中途重启）：接着补
+        if (this.canAutoPoseTags()) this.d.jobs().enqueue('pose-tags');
+        // 标签换过的图重新匹配 PoseWear 姿势（提取过姿势的）
+        this.requestPoseMatch();
+        // 放在最后：enqueue 会马上启动空闲的 io 道，先排的话 Pixiv 会抢在同步、查重前面
+        this.maybePixiv();
+      }
+      return msg;
+    });
+    this.registerKind('pixiv-tags', async (ctx) => {
+      if (!this.d.pixiv) throw new NotImplementedError('pixiv', 'Pixiv 角色补充');
+      // 手动点的（含让出后的续跑）关着也跑；自动排上的到开跑时再查一次：排队期间用户可能关掉了开关
+      if (!this.pixivManual && (!this.d.pixiv.enabled() || this.pixivPaused)) return '补充 Pixiv 角色：设置里没有打开';
+      try {
+        const msg = await this.d.pixiv.run(ctx);
+        // 让出时不排 Danbooru 同步，等续跑的那一轮跑完再排
+        if (!ctx.signal.aborted && !ctx.yielded && this.d.danbooru?.shouldRunAfterTag()) this.d.jobs().enqueue('danbooru-sync');
+        return msg;
+      } catch (error) {
+        this.pixivFailed = true;
+        throw error;
+      } finally {
+        if (ctx.signal.aborted) this.pixivPaused = true;
+        // 这一轮结束了（不是让出）：手动标记用完
+        if (!ctx.yielded) this.pixivManual = false;
+      }
+    });
+    this.registerKind('artists', async (ctx) => {
+      if (!this.d.artists) throw new NotImplementedError('artists', '识别画师');
+      if (!this.d.artists.enabled()) return '识别画师：设置里没有打开';
+      const msg = await this.d.artists.run(ctx);
+      if (ctx.signal.aborted) this.artistsPaused = true;
+      // 认出新画师后，同步 Danbooru 拿日文名、推特（打开了联网同步时）
+      if (!ctx.signal.aborted && !ctx.yielded && this.d.danbooru?.shouldRunAfterTag()) this.d.jobs().enqueue('danbooru-sync');
+      return msg;
+    });
+    this.registerKind('dedupe', async (ctx) => {
+      if (!this.d.dedupe) throw new NotImplementedError('T16', '查重');
+      const seen = this.d.dedupeWork?.peek() ?? null;
+      const msg = await this.d.dedupe.run(ctx);
+      if (!ctx.signal.aborted) this.dedupeDone(seen);
+      return msg;
+    });
+    this.registerKind('danbooru-sync', async (ctx) => {
+      if (!this.d.danbooru) throw new NotImplementedError('T11', 'Danbooru 同步');
+      return this.d.danbooru.run(ctx);
+    });
+    this.registerKind('pose', async (ctx) => {
+      if (!this.d.pose) throw new NotImplementedError('pose', '提取姿势');
+      if (!this.d.pose.enabled()) return '提取姿势：设置里没有打开';
+      const msg = await this.d.pose.run(ctx);
+      if (ctx.signal.aborted) this.setPaused('pose', true);
+      // 提取时已经顺便匹配了；这期间标签换过的图再补一轮
+      if (!ctx.signal.aborted && !ctx.yielded) this.requestPoseMatch();
+      return msg;
+    });
+    this.registerKind('pose-tags', async (ctx) => {
+      const p = this.d.poseTags;
+      if (!p) throw new NotImplementedError('pose-tags', '补充姿势标签');
+      if (!p.enabled()) return '补充姿势标签：姿势检索没有打开';
+      try {
+        const msg = await p.run(ctx);
+        // 补了低分标签的图重新匹配 PoseWear 姿势
+        if (!ctx.signal.aborted && !ctx.yielded) this.requestPoseMatch();
+        return msg;
+      } finally {
+        // 补完、用户取消、出错都清掉请求（进度按张记着，再点接着补）；让出的接着排，请求留着
+        if (!ctx.yielded) p.done();
+      }
+    });
+    this.registerKind('pose-match', async (ctx) => {
+      const p = this.d.poseMatch;
+      if (!p) throw new NotImplementedError('pose-match', '重新匹配姿势');
+      if (!p.enabled()) return '重新匹配姿势：设置里没有打开';
+      const msg = await p.run(ctx);
+      if (ctx.signal.aborted) this.setPaused('pose-match', true);
+      return msg;
+    });
+  }
 
   private afterScan(s: ScanSummary) {
     // 有「刚写入、延后处理」的文件：它们的目录已在 requests 里，过一会儿再扫一次，

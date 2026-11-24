@@ -16,6 +16,7 @@ import { GrantRow } from './InstallDialogs';
 import { RemoveDialog, RenameDialog } from './PluginDialogs';
 import { KIND_LABEL, useEnablePlugin } from './PluginsPage';
 import { UpdateCheck, useCheckUpdate } from './UpdateCheck';
+import { Slot } from '@/blocks/Slot';
 
 /**
  * 一个插件的详情（docs/plugins.md 9.7）：它贡献了什么（按贡献点列出）、覆盖的值（我的可以改）、冲突时用哪个、
@@ -60,23 +61,30 @@ export function PluginDetailPage() {
         crumbs={[{ label: '插件', to: '/plugins' }]}
         current={label}
         actions={
-          <>
-            {can && (
-              <Button variant="ghost" size="sm" icon={<PencilLine />} onClick={() => setDialog('rename')}>
-                改名
-              </Button>
-            )}
-            {update.available && (
-              <Button variant="ghost" size="sm" icon={<RefreshCw />} loading={update.pending} onClick={update.start}>
-                {update.label.replace('…', '')}
-              </Button>
-            )}
-            {can && p.source !== 'builtin' && (
-              <Button variant="ghost" size="sm" icon={<Trash2 />} onClick={() => setDialog('remove')}>
-                {p.source === 'installed' ? '卸载' : '删除'}
-              </Button>
-            )}
-          </>
+          <Slot
+            id="page.plugin"
+            render={{
+              'plugin.rename': () =>
+                can && (
+                  <Button variant="ghost" size="sm" icon={<PencilLine />} onClick={() => setDialog('rename')}>
+                    改名
+                  </Button>
+                ),
+              'plugin.update': () =>
+                update.available && (
+                  <Button variant="ghost" size="sm" icon={<RefreshCw />} loading={update.pending} onClick={update.start}>
+                    {update.label.replace('…', '')}
+                  </Button>
+                ),
+              'plugin.remove': () =>
+                can &&
+                p.source !== 'builtin' && (
+                  <Button variant="ghost" size="sm" icon={<Trash2 />} onClick={() => setDialog('remove')}>
+                    {p.source === 'installed' ? '卸载' : '删除'}
+                  </Button>
+                ),
+            }}
+          />
         }
       />
       <PageBody className="flex max-w-[760px] flex-col gap-8">

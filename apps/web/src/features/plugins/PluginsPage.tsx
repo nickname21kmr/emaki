@@ -21,6 +21,7 @@ import { useMutate } from '@/lib/queries';
 import { InstallDialog } from './InstallDialogs';
 import { NewOverrideDialog, RemoveDialog, RenameDialog } from './PluginDialogs';
 import { UpdateCheck, useCheckUpdate } from './UpdateCheck';
+import { Slot } from '@/blocks/Slot';
 
 export const SOURCE_LABEL: Record<PluginSource, string> = { builtin: '内置', mine: '我的', installed: '装的' };
 export const KIND_LABEL: Record<PluginKind, string> = { page: '页面', override: '覆盖' };
@@ -51,18 +52,23 @@ export function PluginsPage() {
         nav="plugins"
         subtitle={`${state.plugins.length} 个插件${off ? ` · ${off} 个停用` : ''}`}
         actions={
-          <>
-            {can && (
-              <Button variant="secondary" size="sm" icon={<Plus />} onClick={() => setCreating(true)}>
-                新建覆盖
-              </Button>
-            )}
-            {canInstall && (
-              <Button variant="secondary" size="sm" icon={<Download />} onClick={() => setInstalling(true)}>
-                安装…
-              </Button>
-            )}
-          </>
+          <Slot
+            id="page.plugins"
+            render={{
+              'plugins.newOverride': () =>
+                can && (
+                  <Button variant="secondary" size="sm" icon={<Plus />} onClick={() => setCreating(true)}>
+                    新建覆盖
+                  </Button>
+                ),
+              'plugins.install': () =>
+                canInstall && (
+                  <Button variant="secondary" size="sm" icon={<Download />} onClick={() => setInstalling(true)}>
+                    安装…
+                  </Button>
+                ),
+            }}
+          />
         }
       />
       <PageBody className="flex max-w-[880px] flex-col gap-6">

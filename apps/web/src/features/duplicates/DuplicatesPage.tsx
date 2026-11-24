@@ -23,6 +23,7 @@ import { enterAction, reclaimBytes, resolveKeep } from './utils';
 import { pickRevealed } from '@/lib/undoPlace';
 import { useUndoRevealTarget } from '@/lib/useUndoReveal';
 import { useCan } from '@/lib/capabilities';
+import { Slot } from '@/blocks/Slot';
 
 type View = 'pending' | 'resolved';
 
@@ -258,7 +259,7 @@ export function DuplicatesPage() {
 
   return (
     <>
-      <PageHeader title="重复" nav="duplicates" subtitle={subtitle} actions={<RescanButton />} sticky>
+      <PageHeader title="重复" nav="duplicates" subtitle={subtitle} actions={<Slot id="page.duplicates" render={{ 'duplicates.rescan': () => <RescanButton /> }} />} sticky>
         <div className="flex items-center gap-3">
           <Segmented<View>
             value={view}

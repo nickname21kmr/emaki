@@ -18,6 +18,7 @@ import { TriageSkeleton } from './components/TriageSkeleton';
 import { useTagJob } from './useTagJob';
 import { useUnrecognizedParams } from './useUnrecognizedParams';
 import { useAllowedActions, type Need } from '@/lib/capabilities';
+import { Slot } from '@/blocks/Slot';
 
 /**
  * 页头按钮需要的能力（lib/capabilities.ts）：Pixiv 补角色是后台任务（jobs），重认没认出的是整库按规则改（rules）；
@@ -54,10 +55,17 @@ export function UnrecognizedPage() {
     <div className="flex h-full min-h-[620px] flex-col compact:h-auto compact:min-h-0 short:h-auto short:min-h-0">
       <PageHeader title="未识别" nav="unrecognized" subtitle={<Subtitle />} actions={
           <div className="flex items-center gap-2 compact:flex-wrap">
-            {p.area === 'art' && allow.pixiv && <PixivTagsButton />}
-            {p.kind && <PromoteSuggestionsButton kind={p.kind} />}
-            {allow.retag && <RetagButton />}
-            <RunTaggerButton variant="outline" tip="给还没识别过的图认角色：认得出的直接归入，拿不准的进「有建议」。" />
+            <Slot
+              id="page.unrecognized"
+              render={{
+                'unrecognized.pixivTags': () => p.area === 'art' && allow.pixiv && <PixivTagsButton />,
+                'unrecognized.promote': () => p.kind && <PromoteSuggestionsButton kind={p.kind} />,
+                'unrecognized.retag': () => allow.retag && <RetagButton />,
+                'unrecognized.runTagger': () => (
+                  <RunTaggerButton variant="outline" tip="给还没识别过的图认角色：认得出的直接归入，拿不准的进「有建议」。" />
+                ),
+              }}
+            />
           </div>
         } className="shrink-0">
         <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">

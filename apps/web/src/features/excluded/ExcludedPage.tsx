@@ -17,6 +17,7 @@ import { SingleImagesSection } from './components/SingleImagesSection';
 import { useSinglesSelection } from './useSinglesSelection';
 import { sortRules } from './utils';
 import { useAllowedActions, type Need } from '@/lib/capabilities';
+import { Slot } from '@/blocks/Slot';
 
 /**
  * 这一页的改动需要的能力（lib/capabilities.ts）：加规则、恢复一条规则、单张的「恢复这张」都是删 / 建排除记录（rules）；
@@ -74,11 +75,17 @@ export function ExcludedPage() {
         title="已排除" nav="excluded"
         subtitle={subtitle}
         actions={
-          allow.rules && (
-            <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setAddOpen(true)}>
-              添加规则
-            </Button>
-          )
+          <Slot
+            id="page.excluded"
+            render={{
+              'excluded.addRule': () =>
+                allow.rules && (
+                  <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setAddOpen(true)}>
+                    添加规则
+                  </Button>
+                ),
+            }}
+          />
         }
       >
         <p className="inline-flex items-center gap-2 rounded-full bg-sunken px-3.5 py-1.5 text-[12.5px] text-fg-muted">

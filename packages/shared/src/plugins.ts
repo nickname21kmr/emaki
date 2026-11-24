@@ -68,10 +68,22 @@ export interface BlockContribution {
   id: string;
 }
 
+/**
+ * page.action@1、menu.item@1、lightbox.toolbar@1、lightbox.panel@1：几样东西按顺序排在一处的地方的条目
+ * （apps/web/src/blocks/slots.ts 的 id，E3）。内置插件在这里登记它放在别的插件的页面里的条目，停用时一起不画
+ */
+export interface SlotEntryContribution {
+  id: string;
+}
+
 export interface Contributes {
   'page@1'?: PageContribution[];
   'nav.item@1'?: NavItemContribution[];
   'block@1'?: BlockContribution[];
+  'page.action@1'?: SlotEntryContribution[];
+  'menu.item@1'?: SlotEntryContribution[];
+  'lightbox.toolbar@1'?: SlotEntryContribution[];
+  'lightbox.panel@1'?: SlotEntryContribution[];
   /** override@1：设置注册表里登记过的值（OVERRIDES） */
   'override@1'?: Partial<Record<OverrideKey, unknown>>;
 }
@@ -89,6 +101,9 @@ export interface PluginManifest {
   permissions?: PluginPermissions;
   contributes: Contributes;
 }
+
+/** 条目类的贡献点（E3）：它们的条目停用时一起不画 */
+export const SLOT_POINT_KEYS = ['page.action@1', 'menu.item@1', 'lightbox.toolbar@1', 'lightbox.panel@1'] as const;
 
 /** 装的插件现在能贡献的（不跑代码的那几种）。page、block 要等视图（E4），命令、任务要等服务端运行（E5） */
 export const INSTALLABLE_POINTS = ['nav.item@1', 'override@1'] as const;
@@ -249,9 +264,10 @@ export const BUILTIN_PLUGINS: readonly BuiltinPlugin[] = [
     'page@1': [{ id: 'characters' }, { id: 'character' }],
     'nav.item@1': [nav('characters', '角色', '/characters', 'users', 'main')],
   }),
-  builtin('works', '作品', '每部作品的页面，以及侧栏的「原创」', {
+  builtin('works', '作品', '每部作品的页面，以及侧栏的「原创」、角色总览里的「作品页」链接', {
     'page@1': [{ id: 'work' }],
     'nav.item@1': [nav('original', '原创', '/works/:originalWorkId', 'sparkles', 'main', { shortcut: true })],
+    'page.action@1': [{ id: 'characters.workPage' }],
   }),
   builtin('collections', '合集', '本子、画集、组图，以及阅读器', {
     'page@1': [{ id: 'collections' }, { id: 'collection' }, { id: 'reader' }],
@@ -387,9 +403,10 @@ export interface PluginsState {
   plugins: PluginInfo[];
   /** 侧栏：三段，各自按顺序 */
   nav: Record<NavSection, NavEntry[]>;
-  /** 停用的插件拥有的页面（网页的页面 id）和区块 */
+  /** 停用的插件拥有的页面（网页的页面 id）、区块、别处的条目（页头操作、菜单项、看图器的按钮和信息栏） */
   disabledPages: string[];
   disabledBlocks: string[];
+  disabledEntries: string[];
   overrides: Record<OverrideKey, OverrideState>;
 }
 
@@ -468,6 +485,7 @@ export function resolvePlugins(input: {
     ),
     disabledPages: off.flatMap((p) => (p.manifest.contributes['page@1'] ?? []).map((x) => x.id)),
     disabledBlocks: off.flatMap((p) => (p.manifest.contributes['block@1'] ?? []).map((x) => x.id)),
+    disabledEntries: off.flatMap((p) => SLOT_POINT_KEYS.flatMap((k) => (p.manifest.contributes[k] ?? []).map((x) => x.id))),
     overrides,
   };
 }

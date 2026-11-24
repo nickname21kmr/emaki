@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ALL_BLOCKS } from '@/blocks/registry';
 import { activeNav, sidebarItems, tabBarItems } from '@/components/layout/Sidebar';
+import { paletteGoItems } from '@/components/overlays/palette/commands';
 import { canVisit, PAGES, pageOf, type PageId } from '@/pages';
 import { capabilitiesOf } from './capabilities';
 import { readSafeMode } from './plugins';
@@ -90,6 +91,36 @@ describe('装的插件加的侧栏项（docs/plugins.md E2）', () => {
     expect(activeNav(items, '/', '')).toBe('/');
     expect(activeNav(items, '/characters/3', '')).toBe('/characters');
     expect(activeNav(items, '/plugins', '')).toBeNull();
+  });
+});
+
+describe('命令面板的「前往」也来自导航项', () => {
+  it('原来的顺序和数字键不变；不在侧栏的「插件」页也能去；停用的不列、改的名字跟着变；插件加的排在后面', () => {
+    const all = () => true;
+    const base = paletteGoItems(builtinPluginsState().nav, all);
+    expect(base.map((n) => [n.label, n.key ?? ''])).toEqual([
+      ['首页', '1'],
+      ['图库', '2'],
+      ['角色', '3'],
+      ['未识别', '4'],
+      ['重复', '5'],
+      ['别册', '6'],
+      ['合集', ''],
+      ['已排除', ''],
+      ['设置', ''],
+      ['插件', ''],
+    ]);
+    const s = resolvePlugins({
+      plugins: BUILTIN_PLUGINS.map((m) => ({ manifest: m, source: 'builtin', required: !!m.required, enabled: m.id !== 'core.annex', displayName: m.id === 'core.gallery' ? '画廊' : null, enabledAt: null })),
+      nav: { sections: {}, visible: {} },
+      overrideChoices: {},
+      safeMode: false,
+    });
+    const extra: NavEntry = { id: 'p/random', label: '随便看看', to: '/gallery?sort=random', icon: 'compass', section: 'main', plugin: 'p', visible: true };
+    const nav = { ...s.nav, main: [...s.nav.main, extra] };
+    const off = new Set(s.disabledPages);
+    const items = paletteGoItems(nav, (to) => canVisit(capabilitiesOf(undefined), to, off));
+    expect(items.map((n) => n.label)).toEqual(['首页', '画廊', '角色', '未识别', '重复', '合集', '已排除', '设置', '随便看看', '插件']);
   });
 });
 

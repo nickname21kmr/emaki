@@ -62,6 +62,12 @@ export function useDisabledBlocks(): ReadonlySet<string> {
   return useMemo(() => new Set(state.disabledBlocks), [state.disabledBlocks]);
 }
 
+/** 停用的插件放在别处的条目（页头操作、菜单项、看图器的按钮和信息栏，blocks/slots.ts） */
+export function useDisabledEntries(): ReadonlySet<string> {
+  const { state } = usePlugins();
+  return useMemo(() => new Set(state.disabledEntries ?? []), [state.disabledEntries]);
+}
+
 /** 一个能覆盖的值现在生效的是什么（覆盖插件给的，或者内置默认） */
 export function useOverride<K extends OverrideKey>(key: K): OverrideValue<K> {
   return usePlugins().state.overrides[key].value as OverrideValue<K>;

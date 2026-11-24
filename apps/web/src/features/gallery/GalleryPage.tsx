@@ -22,6 +22,7 @@ import { SelectionBar } from './components/SelectionBar';
 import { useGalleryParams } from './useGalleryParams';
 import { usePoseEnabled, usePoseSimilarInfinite, usePoseWearLow } from '@/features/pose/client';
 import { PoseEntryLazy, PoseLowMark, PoseWearEntryLazy } from '@/features/pose/lazy';
+import { Slot } from '@/blocks/Slot';
 
 const SCOPE = 'gallery';
 
@@ -200,11 +201,14 @@ export function GalleryPage() {
         }
         title={filters.artist ? (artistName ?? filters.artist.replace(/_/g, ' ')) : '图库'}
         actions={
-          <>
-            {artist && <ArtistMenu artist={artist} onMoved={(tag) => update({ artist: tag })} />}
-            <SendToComputerButton />
-            {images.length > 0 && <SelectButton scope={SCOPE} />}
-          </>
+          <Slot
+            id="page.gallery"
+            render={{
+              'gallery.artist': () => artist && <ArtistMenu artist={artist} onMoved={(tag) => update({ artist: tag })} />,
+              'gallery.sendToComputer': () => <SendToComputerButton />,
+              'gallery.select': () => images.length > 0 && <SelectButton scope={SCOPE} />,
+            }}
+          />
         }
         subtitle={
           <Subtitle

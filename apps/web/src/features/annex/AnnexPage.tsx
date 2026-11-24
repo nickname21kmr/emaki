@@ -18,6 +18,7 @@ import { GridFooter } from '@/features/gallery/components/GridStates';
 import { SelectionBar } from '@/features/gallery/components/SelectionBar';
 import { useGalleryParams } from '@/features/gallery/useGalleryParams';
 import { KindIndex } from './KindIndex';
+import { Slot } from '@/blocks/Slot';
 
 const SCOPE = 'annex';
 
@@ -136,27 +137,33 @@ function AnnexView({ scope, count }: { scope: AnnexScope | null; count: number |
         sticky
         title="别册" nav="annex"
         actions={
-          comicView && (
-            <Segmented<'books' | 'pages'>
-              size="sm"
-              value={comicView}
-              onChange={(v) =>
-                setParams(
-                  (p) => {
-                    const next = new URLSearchParams(p);
-                    if (v === 'books') next.delete('view');
-                    else next.set('view', v);
-                    return next;
-                  },
-                  { replace: true },
-                )
-              }
-              options={[
-                { value: 'books', label: '成册' },
-                { value: 'pages', label: '散页' },
-              ]}
-            />
-          )
+          <Slot
+            id="page.annex"
+            render={{
+              'annex.comicView': () =>
+                comicView && (
+                  <Segmented<'books' | 'pages'>
+                    size="sm"
+                    value={comicView}
+                    onChange={(v) =>
+                      setParams(
+                        (p) => {
+                          const next = new URLSearchParams(p);
+                          if (v === 'books') next.delete('view');
+                          else next.set('view', v);
+                          return next;
+                        },
+                        { replace: true },
+                      )
+                    }
+                    options={[
+                      { value: 'books', label: '成册' },
+                      { value: 'pages', label: '散页' },
+                    ]}
+                  />
+                ),
+            }}
+          />
         }
         subtitle={
           scope && count !== undefined ? (

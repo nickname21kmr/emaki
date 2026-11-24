@@ -18,7 +18,8 @@ import { PagerTrack } from '@/lib/pager/PagerTrack';
 import { usePager } from '@/lib/pager/usePager';
 import { useTouchZoom } from '@/lib/pager/useTouchZoom';
 import { useZoomPan, type ZoomBounds } from '@/lib/pager/zoom';
-import { buildSpreads, spreadIndexOf } from './spreads';
+import { readerMode } from './modes';
+import { spreadIndexOf } from './spreads';
 
 /** 最多放大到适应窗口的几倍（漫画页的原图一般是屏幕的一两倍，4 倍够看清网点） */
 export const READER_MAX_SCALE = 4;
@@ -82,11 +83,12 @@ function Reader({ data }: { data: GetCollectionResponse }) {
   const setRtl = usePrefs((s) => s.setReaderRtl);
   const toggleBlur = usePrefs((s) => s.toggleBlurSensitive);
 
-  // 竖屏、窄窗口一律单页；横屏而且宽度 expanded 才能双页（lib/viewport.ts 的 readerSpreadFits，A1）
+  // 阅读方式按登记的（reader/modes.ts）：竖屏、窄窗口一律单页；横屏而且宽度 expanded 才能双页（lib/viewport.ts 的 readerSpreadFits，A1）
   const viewport = useViewport();
   const wideEnough = readerSpreadFits(viewport);
-  const spreadOn = spreadPref && wideEnough;
-  const spreads = useMemo(() => buildSpreads(pages, spreadOn), [pages, spreadOn]);
+  const mode = readerMode(spreadPref ? 'spread' : 'single', viewport);
+  const spreadOn = mode.id === 'spread';
+  const spreads = useMemo(() => mode.layout(pages), [pages, mode]);
   // 显示的是哪一页先记在这里、立刻换（轨道马上开始滑）；地址栏的 ?p= 等翻完 350ms 再写：
   // 写地址会让整个路由树重新渲染（无窗口的 Chrome 里约 100ms），放在动画前面就是「点了没反应、再一下子滑过去」
   const urlP = Number(params.get('p')) || 0;

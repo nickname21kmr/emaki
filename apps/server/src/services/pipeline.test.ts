@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { JobKind } from '@emaki/shared';
+import { JOB_KINDS, type JobKind } from '@emaki/shared';
 import type { JobContext, JobQueue } from '../core/jobs.ts';
 import { Pipeline, type PipelineDeps } from './pipeline.ts';
 import type { ScanSummary } from './scan/Scanner.ts';
@@ -282,5 +282,14 @@ describe('Pipeline', () => {
     paused.pipeline.notePaused('artists');
     paused.pipeline.requestArtists();
     expect(paused.enqueued).toEqual([]);
+  });
+});
+
+describe('任务种类的登记（docs/plugins.md 9.2 的 job.kind，E3）', () => {
+  it('每种内置任务都登记了执行体；同一种登记两次报错；没登记的种类跑起来报错', async () => {
+    const { pipeline } = setup();
+    expect(pipeline.registeredKinds().sort()).toEqual((Object.keys(JOB_KINDS) as JobKind[]).sort());
+    expect(() => pipeline.registerKind('scan', async () => 'x')).toThrow(/已经登记过了/);
+    await expect(pipeline.runner('nope' as JobKind)(ctx())).rejects.toThrow(/没有登记的任务种类/);
   });
 });
