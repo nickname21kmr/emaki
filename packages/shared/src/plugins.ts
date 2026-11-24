@@ -7,6 +7,7 @@
  * GET /api/plugins 的返回。谁启用了、生效的贡献清单由服务端算（domain/plugins/），网页只用它的结果。
  */
 import type { ImageSort } from './api.ts';
+import type { Scope } from './commands.ts';
 
 /** 插件从哪来：内置（原来的页面）、我的（自己或 AI 做的）、装的（E2 起） */
 export type PluginSource = 'builtin' | 'mine' | 'installed';
@@ -28,6 +29,15 @@ export const NAV_ICONS = [
   'ban',
   'settings',
   'puzzle',
+  // 给插件用的
+  'clock',
+  'star',
+  'bookmark',
+  'folder',
+  'chart',
+  'compass',
+  'download',
+  'heart',
 ] as const;
 export type NavIcon = (typeof NAV_ICONS)[number];
 
@@ -71,7 +81,81 @@ export interface PluginManifest {
   name: string;
   version: string;
   description?: string;
+  author?: string;
+  homepage?: string;
+  /** 兼容哪些版本的 Emaki（semver 范围，packages/shared/src/semver.ts）；不写就是都行 */
+  engines?: { emaki?: string };
+  /** 装的插件要的权限（授权单上列出来，docs/plugins.md 4.2） */
+  permissions?: PluginPermissions;
   contributes: Contributes;
+}
+
+/** 装的插件现在能贡献的（不跑代码的那几种）。page、block 要等视图（E4），命令、任务要等服务端运行（E5） */
+export const INSTALLABLE_POINTS = ['nav.item@1', 'override@1'] as const;
+
+// ---------------------------------------------------------------- 授权（docs/plugins.md 第 4 节）
+
+/** 清单里要一个文件夹：插件放文件的地方，装的时候在授权单上选好 */
+export interface FolderRequest {
+  /** 插件里怎么叫它（清单里唯一） */
+  id: string;
+  /** 用来干什么（授权单上写出来） */
+  purpose: string;
+  /** 建议放在图库文件夹下的哪个相对路径 */
+  suggest?: string;
+}
+
+/** 清单里要的权限 */
+export interface PluginPermissions {
+  scopes?: Scope[];
+  folders?: FolderRequest[];
+  /** 声明会连的域名 */
+  network?: string[];
+  /** 会在后台跑（任务、对变化的反应） */
+  background?: boolean;
+  /** 改内部（第 3 层） */
+  unsafe?: boolean;
+}
+
+/** 授权里选好的文件夹：哪个图库文件夹下的哪个相对路径 */
+export interface FolderGrant {
+  id: string;
+  rootId: number;
+  dir: string;
+}
+
+/**
+ * 授权：设备、AI 助手、插件被授予的是同一种东西（docs/plugins.md 4.1）。
+ * 设备的仍存在 devices 表（scopes、上传到哪），插件的存在 plugin_grants，都转成这个类型。
+ */
+export interface Grant {
+  scopes: Scope[];
+  folders: FolderGrant[];
+  network: string[];
+  background: boolean;
+  unsafe: boolean;
+}
+
+export const EMPTY_GRANT: Grant = { scopes: [], folders: [], network: [], background: false, unsafe: false };
+
+/** 什么都没要 */
+export const emptyPermissions = (p: PluginPermissions | undefined): boolean =>
+  !p || (!p.scopes?.length && !p.folders?.length && !p.network?.length && !p.background && !p.unsafe);
+
+/** 要的权限里，授权里还没有的（更新时只为这些出授权单；grant 为 null 是全部） */
+export function missingPermissions(want: PluginPermissions | undefined, grant: Grant | null): PluginPermissions {
+  const w = want ?? {};
+  const g = grant ?? EMPTY_GRANT;
+  const out: PluginPermissions = {};
+  const scopes = (w.scopes ?? []).filter((s) => !g.scopes.includes(s));
+  if (scopes.length) out.scopes = scopes;
+  const folders = (w.folders ?? []).filter((f) => !g.folders.some((x) => x.id === f.id));
+  if (folders.length) out.folders = folders;
+  const network = (w.network ?? []).filter((h) => !g.network.includes(h));
+  if (network.length) out.network = network;
+  if (w.background && !g.background) out.background = true;
+  if (w.unsafe && !g.unsafe) out.unsafe = true;
+  return out;
 }
 
 // ---------------------------------------------------------------- 能被覆盖的值（设置注册表，第 9.5 节）
@@ -217,6 +301,26 @@ export const BUILTIN_PLUGINS: readonly BuiltinPlugin[] = [
 /** 插件页上显示的类型（从贡献推出来，不另存） */
 export type PluginKind = 'page' | 'override';
 
+/** 装的插件从哪来 */
+export type PackageKind = 'file' | 'folder' | 'git';
+
+export interface InstalledInfo {
+  kind: PackageKind;
+  /** 文件名、文件夹的路径、git 地址 */
+  location: string;
+  /** git 的分支或标签 */
+  ref: string | null;
+  installedAt: string;
+  updatedAt: string;
+}
+
+export interface PluginErrorInfo {
+  at: string;
+  /** 哪里出的错（加载、视图、服务端……） */
+  source: string;
+  message: string;
+}
+
 export interface PluginInfo {
   id: string;
   /** 清单里的名字 */
@@ -232,6 +336,34 @@ export interface PluginInfo {
   contributes: Contributes;
   /** 覆盖的值和别的启用的插件冲突（被别的插件压过时也列出来） */
   conflicts: OverrideKey[];
+  /** 不能启用的原因（版本不兼容、用到了还不支持的贡献点、包不见了……）；有的话 enabled 一定是 false */
+  problems: string[];
+  /** 装的插件：从哪装的 */
+  installed?: InstalledInfo;
+  /** 装的插件：清单里要的权限、给了的授权 */
+  permissions?: PluginPermissions;
+  grant?: Grant;
+  /** 最近的出错记录（新的在前）；自动停用时写明原因 */
+  errors?: PluginErrorInfo[];
+  disabledReason?: string | null;
+}
+
+/**
+ * 准备安装（或更新）的一个包：服务端解开、读了清单，等你在授权单上确认（PUT /api/plugins/packages、plugins.inspect）。
+ * token 交给 plugins.install；过一小时作废。
+ */
+export interface PluginPackage {
+  token: string;
+  source: { kind: PackageKind; location: string; ref: string | null };
+  manifest: PluginManifest;
+  /** 装不上的原因（有的话授权单上只能取消） */
+  problems: string[];
+  /** 已经装了同一个插件：现在的版本和授权（这次就是更新） */
+  current: { version: string; grant: Grant } | null;
+  /** 这次要新给的权限（没装过就是全部）；更新时什么都没多，就不用再出授权单 */
+  added: PluginPermissions;
+  /** 每个要的文件夹默认放在哪（装过的沿用原来选的） */
+  folderDefaults: Record<string, { rootId: number; dir: string } | null>;
 }
 
 /** 侧栏里的一项（已经按你的顺序排好；停用的插件的项不在这里） */
@@ -283,6 +415,10 @@ export interface PluginRecord {
   displayName: string | null;
   /** 最近一次启用的时间（覆盖冲突时按后启用的那个） */
   enabledAt: string | null;
+  /** 不能启用的原因：有的话按停用算 */
+  problems?: string[];
+  /** 原样带到 PluginInfo 上的（装的插件的来源、授权、出错记录） */
+  extra?: Pick<PluginInfo, 'installed' | 'permissions' | 'grant' | 'errors' | 'disabledReason'>;
 }
 
 export function kindsOf(c: Contributes): PluginKind[] {
@@ -303,10 +439,11 @@ export function resolvePlugins(input: {
   overrideChoices: Readonly<Record<string, string>>;
   safeMode: boolean;
 }): PluginsState {
-  const enabledRecs = input.plugins.filter((p) => p.enabled);
+  const recs = input.plugins.map((p) => (p.problems?.length && p.enabled ? { ...p, enabled: false } : p));
+  const enabledRecs = recs.filter((p) => p.enabled);
   const overrides = resolveOverrides(enabledRecs, input.overrideChoices);
   const conflictsOf = (id: string) => OVERRIDE_KEYS.filter((k) => overrides[k].candidates.length > 1 && overrides[k].candidates.includes(id));
-  const plugins: PluginInfo[] = input.plugins.map((p) => ({
+  const plugins: PluginInfo[] = recs.map((p) => ({
     id: p.manifest.id,
     name: p.manifest.name,
     displayName: p.displayName,
@@ -318,8 +455,10 @@ export function resolvePlugins(input: {
     kinds: kindsOf(p.manifest.contributes),
     contributes: p.manifest.contributes,
     conflicts: conflictsOf(p.manifest.id),
+    problems: p.problems ?? [],
+    ...p.extra,
   }));
-  const off = input.plugins.filter((p) => !p.enabled);
+  const off = recs.filter((p) => !p.enabled);
   return {
     safeMode: input.safeMode,
     plugins,

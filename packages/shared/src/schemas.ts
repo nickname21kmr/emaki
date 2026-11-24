@@ -28,6 +28,7 @@ import {
   type LibraryRootMode,
   type Rating,
 } from './domain.ts';
+import { NAV_ICONS, NAV_SECTIONS } from './plugins.ts';
 import { POSEWEAR_POSE_ID } from './pose.ts';
 
 /** shared 不带 DOM / node 的类型：这里只用到 URL 的这几个字段（运行时是全局的 URL） */
@@ -663,4 +664,68 @@ export const SetNavInput = z.object({
 export const ChooseOverrideInput = z.object({
   key: z.string().max(80),
   plugin: PluginId.nullable().describe('冲突时用哪个插件的值；null = 按后启用的那个'),
+});
+
+/** 装的插件的 id：小写字母、数字、-，可以用 . 分段（example.random-browse）；core.、mine.、ai. 开头的留给 Emaki 自己 */
+export const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}(\.[a-z0-9][a-z0-9-]{0,39}){0,3}$/;
+const LOCAL_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const HOST = /^(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)+$|^localhost$/i;
+
+/**
+ * 插件清单 emaki-plugin.json 的结构（docs/plugins.md 第 8 节）。只查结构；版本范围、权限能不能给、贡献点认不认识这些
+ * 由服务端（domain/plugins/manifest.ts）逐项写成能看懂的话。
+ */
+export const PluginManifestSchema = z.object({
+  id: z.string().regex(PLUGIN_ID_RE, 'id 只能用小写字母、数字、- 和 .，比如 example.random-browse'),
+  name: z.string().trim().min(1).max(40),
+  version: z.string().max(40),
+  description: z.string().max(300).optional(),
+  author: z.string().max(80).optional(),
+  homepage: z.string().max(300).optional(),
+  engines: z.object({ emaki: z.string().max(100).optional() }).optional(),
+  permissions: z
+    .object({
+      scopes: z.array(z.string().max(40)).max(30).optional(),
+      folders: z
+        .array(z.object({ id: z.string().regex(LOCAL_ID), purpose: z.string().trim().min(1).max(80), suggest: z.string().max(200).optional() }))
+        .max(5)
+        .optional(),
+      network: z.array(z.string().regex(HOST, '要写域名，比如 www.pixiv.net')).max(30).optional(),
+      background: z.boolean().optional(),
+      unsafe: z.boolean().optional(),
+    })
+    .optional(),
+  contributes: z.record(z.string().max(60), z.unknown()).default({}),
+  /** 服务端代码的入口（E5） */
+  server: z.string().max(200).optional(),
+});
+
+/** nav.item@1（装的插件）：只能指向 Emaki 里的地址（可以带筛选参数），图标从 NAV_ICONS 里选 */
+export const InstalledNavItemSchema = z.object({
+  id: z.string().regex(LOCAL_ID),
+  label: z.string().trim().min(1).max(12),
+  to: z
+    .string()
+    .max(300)
+    .refine((to) => /^\/(?![/\\])/.test(to) && !/[\s:]/.test(to.split(/[?#]/)[0]!), '只能是 Emaki 里的地址，以 / 开头，比如 /gallery?sort=random'),
+  icon: z.enum(NAV_ICONS).default('puzzle'),
+  section: z.enum(NAV_SECTIONS).default('main'),
+  hiddenByDefault: z.boolean().optional(),
+});
+
+const PackageSource = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('folder'), path: z.string().trim().min(1).max(500).describe('这台电脑上的文件夹（开发用：不复制，改了点「重新读取」）') }),
+  z.object({
+    kind: z.literal('git'),
+    url: z.string().trim().min(1).max(500).describe('https://…、ssh://… 或 git@主机:路径'),
+    ref: z.string().trim().max(100).optional().describe('分支或标签；不写是默认分支'),
+  }),
+]);
+export const InspectPluginInput = z.object({ source: PackageSource });
+export const InstallPluginInput = z.object({
+  token: z.string().min(1).max(80),
+  folders: z
+    .record(z.string().max(40), z.object({ rootId: Id, dir: z.string().max(300) }))
+    .optional()
+    .describe('授权单上为每个要的文件夹选好的位置'),
 });

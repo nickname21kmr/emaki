@@ -137,6 +137,11 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   plugin_state: 'plugins',
   user_plugins: 'plugins',
   plugin_point_state: 'plugins',
+  // 装的插件、授权、插件的存储、出错记录（迁移 053）
+  installed_plugins: 'plugins',
+  plugin_grants: 'plugins',
+  plugin_storage: 'plugins',
+  plugin_errors: 'plugins',
 };
 
 /**

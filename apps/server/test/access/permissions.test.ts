@@ -45,7 +45,8 @@ describe('范围的定义', () => {
     for (const s of DEVICE_DEFAULT_SCOPES) expect(DEVICE_GRANTABLE_SCOPES).toContain(s);
     // plugins（2026-11-24）：在平板上也能启用、停用插件、调侧栏顺序（docs/plugins.md）
     expect([...DEVICE_DEFAULT_SCOPES]).toEqual(['read', 'curate', 'catalog', 'collections', 'history', 'ui', 'upload', 'plugins']);
-    const optional = ['organize-files', 'settings', 'rules', 'duplicates', 'jobs', 'import'];
+    // install-plugins（2026-11-24，docs/plugins.md E2）：装插件，默认不给，可以勾
+    const optional = ['organize-files', 'settings', 'rules', 'duplicates', 'jobs', 'import', 'install-plugins'];
     expect([...DEVICE_GRANTABLE_SCOPES].sort()).toEqual([...DEVICE_DEFAULT_SCOPES, ...optional].sort());
     // 除了 devices、desktop，每个范围都能授予
     expect(Object.keys(SCOPES).filter((s) => !DEVICE_GRANTABLE_SCOPES.includes(s as Scope))).toEqual(['devices', 'desktop']);

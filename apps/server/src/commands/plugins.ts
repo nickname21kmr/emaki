@@ -1,9 +1,14 @@
 /**
  * 插件（docs/plugins.md 第 9 节）：插件管理的查询和命令。写入都在插件模块（domain/plugins/），都能撤销。
+ *
+ * 装插件（E2）分两步：plugins.inspect（文件夹、git；zip 走 http/pluginPackages.ts 的 PUT /api/plugins/packages）把包准备好，
+ * 网页出授权单；你确认以后 plugins.install。这两个的范围是 install-plugins：不给 AI 助手（授权单必须由你确认），设备默认也没有。
  */
 import {
   ChooseOverrideInput,
   CreateOverridePluginInput,
+  InspectPluginInput,
+  InstallPluginInput,
   PluginIdInput,
   PluginsStateInput,
   RenamePluginInput,
@@ -48,7 +53,7 @@ export const pluginCommands = [
   }),
   defineCommand({
     name: 'plugins.remove',
-    summary: '删除一个「我的」插件（内置的不能删，可以停用）',
+    summary: '删除「我的」插件、卸载装的插件：它的授权和存储一起删，它导入的图和改过的数据留着（内置的不能删，可以停用）',
     input: PluginIdInput,
     scope: 'plugins',
     undoable: true,
@@ -99,5 +104,37 @@ export const pluginCommands = [
     idempotent: true,
     http: [{ method: 'POST', path: '/api/plugins/overrides/choice' }],
     tx: (e, { key, plugin }) => e.plugins.chooseOverride(key, plugin),
+  }),
+  defineCommand({
+    name: 'plugins.inspect',
+    summary: '准备安装一个插件：从这台电脑上的文件夹，或者 git 地址取来、读清单、检查，返回授权单要列的东西（还没装）',
+    input: InspectPluginInput,
+    scope: 'install-plugins',
+    undoable: false,
+    barrier: false,
+    idempotent: false,
+    http: [{ method: 'POST', path: '/api/plugins/packages/inspect' }],
+    run: (e, { source }) => e.plugins.inspect(source),
+  }),
+  defineCommand({
+    name: 'plugins.checkUpdate',
+    summary: '装的插件再从它的来源取一遍（git 重新下载、文件夹重新读取），返回新版本和这次要新给的权限（还没更新）',
+    input: PluginIdInput,
+    scope: 'install-plugins',
+    undoable: false,
+    barrier: false,
+    idempotent: false,
+    http: [{ method: 'POST', path: '/api/plugins/:id/check-update' }],
+    run: (e, { id }) => e.plugins.checkUpdate(id),
+  }),
+  defineCommand({
+    name: 'plugins.install',
+    summary: '授权单上确认了：装上（或更新）准备好的插件，新装的直接启用',
+    input: InstallPluginInput,
+    scope: 'install-plugins',
+    undoable: true,
+    idempotent: true,
+    http: [{ method: 'POST', path: '/api/plugins/install' }],
+    run: (e, { token, folders }) => e.plugins.install(token, folders),
   }),
 ];

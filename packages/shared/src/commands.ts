@@ -21,6 +21,7 @@ export const SCOPES = {
   devices: '管理手机等设备：局域网入口的开关、批准、拒绝、撤销、改权限',
   desktop: '在这台电脑的屏幕上弹东西：在资源管理器中显示、选文件夹',
   plugins: '插件：启用、停用、改名、删除，新建覆盖，调整侧栏的页面顺序（docs/plugins.md）',
+  'install-plugins': '装插件：从文件、文件夹或 git 地址安装、更新别人写的插件（授权单只能由你在页面上确认）',
 } as const;
 export type Scope = keyof typeof SCOPES;
 
@@ -51,6 +52,26 @@ export const DEVICE_GRANTABLE_SCOPES: readonly Scope[] = [
   'duplicates',
   'jobs',
   'import',
+  'install-plugins',
+];
+
+/**
+ * 插件能要的范围（docs/plugins.md 4.1）：图库的读写、整理、任务都行；管设备、在电脑屏幕上弹窗、管插件、装插件、手机上传不行
+ * ——这些是给人和设备的。清单里要了别的，装不上（domain/plugins/manifest.ts）
+ */
+export const PLUGIN_GRANTABLE_SCOPES: readonly Scope[] = [
+  'read',
+  'curate',
+  'catalog',
+  'collections',
+  'import',
+  'organize-files',
+  'rules',
+  'duplicates',
+  'settings',
+  'jobs',
+  'history',
+  'ui',
 ];
 
 /** GET /api/commands：注册表里的一项 */

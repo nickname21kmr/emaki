@@ -41,7 +41,10 @@ export type UndoTable =
   | 'derived_versions'
   | 'plugin_state'
   | 'user_plugins'
-  | 'plugin_point_state';
+  | 'plugin_point_state'
+  | 'installed_plugins'
+  | 'plugin_grants'
+  | 'plugin_storage';
 
 type Row = Record<string, unknown>;
 type Op =

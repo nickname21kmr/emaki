@@ -53,6 +53,7 @@ import { SqliteLocalizer, type Localizer } from '../../services/i18n/localizer.t
 import { relocalizeAll } from '../../domain/catalog/relocalize.ts';
 import { LibraryWatcher, type WatchedRoot } from '../../services/watch/LibraryWatcher.ts';
 import { Plugins } from '../../domain/plugins/plugins.ts';
+import { PluginPackages } from '../../services/plugins/packages.ts';
 import { config } from '../../config.ts';
 import { pendingPixivCount, queueUnseenPixivAnimations, syncPixivCharacters } from '../../services/pixiv/sync.ts';
 import { refreshPixivAliases } from '../../services/pixiv/aliases.ts';
@@ -155,6 +156,8 @@ export class SqliteDataSource {
     // 审计记录：上次中途退出、没做完的命令标成 interrupted（同一个 operationId 再来要求先核对），只留最近的一批
     ds.registry.audit.open();
     ds.purgeRemovedRoots();
+    // 插件：清掉没装完的包、卸载以后没有插件指向的包（docs/plugins.md E2）
+    ds.plugins.cleanup();
     // 派生数据的版本（propagation/versions.ts，附录 #23）：版本对不上的整体重算一次再记下。
     // 来源解析：来源变了的由反应清掉过期的 Pixiv 建议、重新登记补充；
     // 内容类型 / 主题 / 质量分（T27）：版本过期的行在 HTTP 监听前同步重算；EMAKI_CLASSIFY=0 跳过（全部按插画统计，保持旧值）
@@ -458,7 +461,12 @@ export class SqliteDataSource {
     this.exclusions = new ExclusionQueries(this.ctx);
     this.changes = new ChangeLog(this.ctx);
     this.access = new Access({ db, bus, dataDir, clock: this.ctx.clock });
-    this.plugins = new Plugins(this.ctx, opts.safeMode ?? config.safeMode);
+    this.plugins = new Plugins(
+      this.ctx,
+      opts.safeMode ?? config.safeMode,
+      new PluginPackages(dataDir, this.ports.clock),
+      config.appVersion,
+    );
     this.duplicates = new DuplicateQueries(this.ctx, this.pendingTrash);
     this.searchQueries = new SearchQueries(db, this.derived);
     this.dedupe = new DedupeService({

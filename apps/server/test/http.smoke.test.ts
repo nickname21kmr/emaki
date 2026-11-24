@@ -6,7 +6,7 @@
  * 最后一条用例列出全部路由（命令 / 查询注册表里的地址，加上 src/app.ts、src/http/*.ts 里手写的），确保这里每个都测到了（新增路由忘了补冒烟会失败）。
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { SCOPES } from '@emaki/shared';
@@ -19,6 +19,8 @@ import type { IdMap } from '../src/demo/seed.ts';
 import { NOW } from './contract/harness.ts';
 import { buildContractDb } from './fixtures/contract-db.ts';
 import { patchSettingsInternal } from '../src/datasource/sqlite/settings.ts';
+import { makeTmpDir } from './helpers/tmp.ts';
+import { makeZip } from './helpers/zip.ts';
 import { ensurePoseClasses } from '../src/services/pose/job.ts';
 
 // 真实实现会弹出 Windows 的选择文件夹对话框，测试里换成固定返回值
@@ -1092,6 +1094,46 @@ describe('插件（注册表：plugins.*，docs/plugins.md 第 9 节）', () => 
     expect((await call('GET', '/api/plugins')).json.nav.footer.find((n: { id: string }) => n.id === 'plugins').visible).toBe(true);
     expect((await call('POST', '/api/plugins/nav', {})).status).toBe(400);
     expect((await call('POST', '/api/plugins/nav', { visible: { settings: false } })).status).toBe(400);
+  });
+
+  // 装插件（E2）：先准备（zip / 文件夹 / git），再按授权单装
+  const sampleManifest = {
+    id: 'example.smoke',
+    name: '冒烟',
+    version: '0.1.0',
+    contributes: { 'override@1': { 'images.defaultSort': 'modifiedAt' } },
+  };
+  const putZip = (body: Buffer, name = 'smoke.zip') =>
+    app.inject({ method: 'PUT', url: `/api/plugins/packages?name=${encodeURIComponent(name)}`, payload: body, headers: { 'content-type': 'application/zip' } });
+  route('PUT /api/plugins/packages', async () => {
+    const res = await putZip(makeZip({ 'emaki-plugin.json': JSON.stringify(sampleManifest) }));
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ source: { kind: 'file', location: 'smoke.zip' }, manifest: { id: 'example.smoke' }, problems: [], added: {} });
+    expect((await putZip(Buffer.from('nope'))).statusCode).toBe(400);
+  });
+  route('POST /api/plugins/install', async () => {
+    const { token } = (await putZip(makeZip({ 'emaki-plugin.json': JSON.stringify(sampleManifest) }))).json();
+    expect(await call('POST', '/api/plugins/install', { token })).toMatchObject({ status: 200, json: { ok: true, id: 'example.smoke', message: '已安装并启用「冒烟」' } });
+    expect((await call('GET', '/api/plugins')).json.overrides['images.defaultSort']).toMatchObject({ value: 'modifiedAt', plugin: 'example.smoke' });
+    expect((await call('POST', '/api/plugins/install', { token })).status).toBe(400);
+  });
+  route('POST /api/plugins/packages/inspect', async () => {
+    const dir = makeTmpDir('smoke-plugin');
+    writeFileSync(path.join(dir, 'emaki-plugin.json'), JSON.stringify(sampleManifest));
+    const { status, json } = await call('POST', '/api/plugins/packages/inspect', { source: { kind: 'folder', path: dir } });
+    expect(status).toBe(200);
+    expect(json).toMatchObject({ source: { kind: 'folder', location: dir }, manifest: { id: 'example.smoke' } });
+    expect((await call('POST', '/api/plugins/packages/inspect', { source: { kind: 'git', url: 'ext::sh -c id' } })).status).toBe(400);
+  });
+  route('POST /api/plugins/:id/check-update', async () => {
+    const dir = makeTmpDir('smoke-plugin');
+    writeFileSync(path.join(dir, 'emaki-plugin.json'), JSON.stringify(sampleManifest));
+    const { json } = await call('POST', '/api/plugins/packages/inspect', { source: { kind: 'folder', path: dir } });
+    await call('POST', '/api/plugins/install', { token: json.token });
+    writeFileSync(path.join(dir, 'emaki-plugin.json'), JSON.stringify({ ...sampleManifest, version: '0.2.0' }));
+    const upd = await call('POST', '/api/plugins/example.smoke/check-update');
+    expect(upd).toMatchObject({ status: 200, json: { manifest: { version: '0.2.0' }, current: { version: '0.1.0' } } });
+    expect((await call('POST', '/api/plugins/core.annex/check-update')).status).toBe(400);
   });
 });
 
