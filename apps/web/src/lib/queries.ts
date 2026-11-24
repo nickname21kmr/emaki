@@ -81,6 +81,8 @@ export const qk = {
   albumSync: (deviceId?: string) => ['uploads', 'albums', deviceId ?? 'self'] as const,
   /** 谁在调用（GET /api/me）：网页按它隐藏用不了的入口（lib/capabilities.ts） */
   me: ['me'] as const,
+  /** 插件和生效的结果（GET /api/plugins，lib/plugins.ts）；safe 是安全模式 */
+  plugins: (safe: boolean) => ['plugins', safe] as const,
 };
 
 // ------------------------------------------------------------------ 读取

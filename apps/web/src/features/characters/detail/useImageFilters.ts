@@ -1,15 +1,10 @@
-import { BROWSE_THEMES, type BrowseTheme, type CustomTheme, type ImageSort, type Rating } from '@emaki/shared';
+import { BROWSE_THEMES, LIST_SORTS, SORT_LABELS, type BrowseTheme, type CustomTheme, type ImageSort, type Rating } from '@emaki/shared';
 import { useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
+import { useOverride } from '@/lib/plugins';
 import { useCustomThemes } from '@/lib/queries';
 
-export const SORT_OPTIONS: { value: ImageSort; label: string }[] = [
-  { value: 'addedAt', label: '最近添加' },
-  { value: 'modifiedAt', label: '修改时间' },
-  { value: 'fileName', label: '文件名' },
-  { value: 'bytes', label: '体积' },
-  { value: 'random', label: '随机' },
-];
+export const SORT_OPTIONS: { value: ImageSort; label: string }[] = LIST_SORTS.map((value) => ({ value, label: SORT_LABELS[value] }));
 
 export const RATINGS: Rating[] = ['general', 'sensitive', 'questionable', 'explicit'];
 
@@ -52,7 +47,9 @@ export function useImageFilters(): ImageFilters {
   const [params, setParams] = useSearchParams();
 
   const rawSort = params.get('sort');
-  const sort: ImageSort = rawSort && SORTS.has(rawSort) ? (rawSort as ImageSort) : 'addedAt';
+  // 没写排序时按生效的默认排序（插件能覆盖，docs/plugins.md 9.5）
+  const defaultSort = useOverride('images.defaultSort');
+  const sort: ImageSort = rawSort && SORTS.has(rawSort) ? (rawSort as ImageSort) : defaultSort;
   const order: ImageOrder = params.get('order') === 'asc' ? 'asc' : 'desc';
   const allKinds = params.get('kinds') === 'all';
   const themeParam = params.get('theme') ?? '';
@@ -90,8 +87,8 @@ export function useImageFilters(): ImageFilters {
     theme,
     custom,
     customThemes,
-    isDefault: sort === 'addedAt' && order === 'desc' && rating.length === 0 && !allKinds && !theme && !custom,
-    setSort: (s) => patch({ sort: s === 'addedAt' ? null : s }),
+    isDefault: sort === defaultSort && order === 'desc' && rating.length === 0 && !allKinds && !theme && !custom,
+    setSort: (s) => patch({ sort: s === defaultSort ? null : s }),
     toggleOrder: () => patch({ order: order === 'desc' ? 'asc' : null }),
     toggleRating: (r) => {
       const next = rating.includes(r) ? rating.filter((x) => x !== r) : [...rating, r];

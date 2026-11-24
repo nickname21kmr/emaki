@@ -1,3 +1,4 @@
+import { useCanVisit } from '@/pages';
 import { AddToGroupDialog, CollapseGroupsMenu } from '@/components/media/CollectionControls';
 import type { Character } from '@emaki/shared';
 import {
@@ -36,6 +37,7 @@ export type SheetMode = 'unsure' | 'shelved' | 'annex';
  * 批量处理在 T34c 加。
  */
 export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: UnrecognizedParamsApi; summary?: UnrecognizedSummary }) {
+  const annexOn = useCanVisit()('/annex');
   const navigate = useNavigate();
   const entries: IndexEntry[] | null = useMemo(() => {
     if (!summary) return null;
@@ -165,7 +167,7 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
             summary && (
               <>
                 {formatCount(total)} 张 · {order}
-                {mode === 'annex' && p.kind && (
+                {mode === 'annex' && p.kind && annexOn && (
                   <Link to={`/annex/${p.kind}`} className="ml-2 text-fg-muted hover:text-fg">
                     在别册里看全部 →
                   </Link>
@@ -202,7 +204,7 @@ export function SheetLayout({ mode, p, summary }: { mode: SheetMode; p: Unrecogn
         label={label}
         total={total}
         theme={mode === 'unsure' ? p.theme : undefined}
-        onAnnex={() => p.kind && navigate(`/annex/${p.kind}`)}
+        onAnnex={annexOn ? () => p.kind && navigate(`/annex/${p.kind}`) : undefined}
       />
       )}
       <AddToGroupDialog open={grouping} onOpenChange={setGrouping} ids={sheet.selectedIds} onDone={sheet.clear} />
@@ -231,7 +233,8 @@ function GroupNotePanel({
   label: string;
   total: number;
   theme?: UnrecognizedTheme;
-  onAnnex: () => void;
+  /** 别册停用了（docs/plugins.md 9.4）时不给：不显示去别册的按钮 */
+  onAnnex?: () => void;
 }) {
   const meta = theme ? THEME_META[theme] : null;
   return (
@@ -277,7 +280,7 @@ function GroupNotePanel({
           </li>
         </ul>
       </PanelSection>
-      {mode === 'annex' && (
+      {mode === 'annex' && onAnnex && (
         <Button variant="secondary" className="mt-4" trailing={<ArrowRight className="size-4" />} onClick={onAnnex}>
           去别册看{label}
         </Button>

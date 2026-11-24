@@ -59,6 +59,8 @@ import type {
   MoveImagesBody,
   MovePreview,
   MutationResult,
+  NavSection,
+  PluginsState,
   NetworkCheckResponse,
   PickFolderResponse,
   PromotableSuggestions,
@@ -314,6 +316,19 @@ export const api = {
   revertChange: (id: ID) => post<MutationResult>(`/changes/${encodeURIComponent(id)}/revert`),
   /** 连一下 Danbooru、Hugging Face 和国内镜像，排查同步失败 */
   checkNetwork: () => get<NetworkCheckResponse>('/system/network-check'),
+
+  // 插件（docs/plugins.md 第 9 节）：都能撤销
+  /** 全部插件和生效的结果；safe：按安全模式算（网址带 ?safe） */
+  plugins: (safe = false) => get<PluginsState>('/plugins', safe ? { safe: 1 } : undefined),
+  setPluginEnabled: (id: string, enabled: boolean) => post<MutationResult>(`/plugins/${encodeURIComponent(id)}/enabled`, { enabled }),
+  renamePlugin: (id: string, name: string | null) => post<MutationResult>(`/plugins/${encodeURIComponent(id)}/name`, { name }),
+  removePlugin: (id: string) => del<MutationResult>(`/plugins/${encodeURIComponent(id)}`),
+  createOverride: (body: { name: string; values: Record<string, string>; enabled?: boolean }) =>
+    post<MutationResult & { id: string }>('/plugins/overrides', body),
+  setOverrideValues: (id: string, values: Record<string, string>) =>
+    post<MutationResult>(`/plugins/${encodeURIComponent(id)}/overrides`, { values }),
+  setNav: (body: { sections?: Record<NavSection, string[]>; visible?: Record<string, boolean> }) => post<MutationResult>('/plugins/nav', body),
+  chooseOverride: (key: string, plugin: string | null) => post<MutationResult>('/plugins/overrides/choice', { key, plugin }),
 
   // 手机访问（docs/mobile.md 第 2 节）：scope 是 devices，只有本机入口能用（局域网入口上是 403）；都不可撤销、不占撤销栈
   accessStatus: () => get<AccessStatus>('/access'),

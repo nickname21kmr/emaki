@@ -6,6 +6,8 @@ export { Dialog, DialogFooter } from './Dialog';
 export { Input, SearchInput, type InputProps } from './Input';
 export { Kbd } from './Kbd';
 export {
+  ContextMenu,
+  ContextMenuItem,
   Menu,
   MenuCheckboxItem,
   MenuIconItem,

@@ -12,18 +12,17 @@ import {
   NAV_SECTIONS,
   OVERRIDE_KEYS,
   OVERRIDES,
+  PINNED_NAV,
   pluginLabel,
+  resolvePlugins,
   validOverride,
-  type BuiltinPlugin,
-  type Contributes,
-  type NavEntry,
+  type NavLayout,
   type NavSection,
   type OverrideKey,
-  type OverrideState,
   type OverrideValue,
   type PluginInfo,
-  type PluginKind,
   type PluginManifest,
+  type PluginRecord,
   type PluginsState,
 } from '@emaki/shared';
 import type { Db } from '../../db/connection.ts';
@@ -37,15 +36,6 @@ interface StateRow {
   display_name: string | null;
   enabled_at: string | null;
 }
-
-/** 侧栏的布局（贡献点 nav 的状态）：三段各自的顺序、在不在侧栏 */
-interface NavLayout {
-  sections: Partial<Record<NavSection, string[]>>;
-  visible: Record<string, boolean>;
-}
-
-/** 必需的导航项：不能从侧栏拿掉（设置里有「插件」页的入口，拿掉就没处去了） */
-const PINNED_NAV = new Set(['settings']);
 
 interface Loaded {
   manifest: PluginManifest;
@@ -67,43 +57,20 @@ export class Plugins {
 
   // ---------------------------------------------------------------- 读
 
-  /** 全部插件和生效的结果。safe：这一次按安全模式算（网页地址带 ?safe） */
+  /** 全部插件和生效的结果（计算在 @emaki/shared 的 resolvePlugins，网页没取到时也用它）。safe：这一次按安全模式算（网页地址带 ?safe） */
   state(opts: { safe?: boolean } = {}): PluginsState {
     const safe = this.safeMode || !!opts.safe;
-    const loaded = this.load(safe);
-    const enabled = (p: Loaded) => this.isEnabled(p, safe);
-    const overrides = this.resolveOverrides(loaded.filter(enabled));
-    const conflictsOf = (id: string) =>
-      OVERRIDE_KEYS.filter((k) => overrides[k].candidates.length > 1 && overrides[k].candidates.includes(id));
-    const plugins: PluginInfo[] = loaded.map((p) => ({
-      id: p.manifest.id,
-      name: p.manifest.name,
-      displayName: safe ? null : (p.row?.display_name ?? null),
-      source: p.source,
-      version: p.manifest.version,
-      ...(p.manifest.description && { description: p.manifest.description }),
-      enabled: enabled(p),
-      required: p.required,
-      kinds: kindsOf(p.manifest.contributes),
-      contributes: p.manifest.contributes,
-      conflicts: conflictsOf(p.manifest.id),
-    }));
-    const off = loaded.filter((p) => !enabled(p));
-    return {
+    return resolvePlugins({
+      plugins: this.records(safe),
+      nav: safe ? { sections: {}, visible: {} } : this.navLayout(),
+      overrideChoices: safe ? {} : this.overrideChoices(),
       safeMode: safe,
-      plugins,
-      nav: this.resolveNav(plugins.filter((p) => p.enabled), safe),
-      disabledPages: off.flatMap((p) => (p.manifest.contributes['page@1'] ?? []).map((x) => x.id)),
-      disabledBlocks: off.flatMap((p) => (p.manifest.contributes['block@1'] ?? []).map((x) => x.id)),
-      overrides,
-    };
+    });
   }
 
   /** 某个值现在生效的是什么（服务端自己用，比如图片列表没给排序时按它排；安全模式下是内置默认） */
   overrideValue<K extends OverrideKey>(key: K): OverrideValue<K> {
-    if (this.safeMode) return OVERRIDES[key].default;
-    const loaded = this.load(false).filter((p) => this.isEnabled(p, false));
-    return this.resolveOverrides(loaded)[key].value as OverrideValue<K>;
+    return this.state().overrides[key].value as OverrideValue<K>;
   }
 
   // ---------------------------------------------------------------- 写（都能撤销）
@@ -242,7 +209,7 @@ export class Plugins {
     const rows = new Map(
       (this.db.prepare('SELECT id, enabled, display_name, enabled_at FROM plugin_state').all() as StateRow[]).map((r) => [r.id, r]),
     );
-    const builtins: Loaded[] = BUILTIN_PLUGINS.map((m: BuiltinPlugin) => ({
+    const builtins: Loaded[] = BUILTIN_PLUGINS.map((m) => ({
       manifest: m,
       source: 'builtin',
       required: !!m.required,
@@ -261,10 +228,24 @@ export class Plugins {
     return [...builtins, ...mine];
   }
 
-  private isEnabled(p: Loaded, safe: boolean): boolean {
-    if (p.required) return true;
-    if (safe) return p.source === 'builtin';
-    return p.row ? p.row.enabled === 1 : true;
+  /** 每个插件这一次算出来的状态（安全模式下只有内置的、全部启用、原名） */
+  private records(safe: boolean): PluginRecord[] {
+    return this.load(safe).map((p) => ({
+      manifest: p.manifest,
+      source: p.source,
+      required: p.required,
+      enabled: p.required || (safe ? p.source === 'builtin' : p.row ? p.row.enabled === 1 : true),
+      displayName: safe ? null : (p.row?.display_name ?? null),
+      enabledAt: p.row?.enabled_at ?? null,
+    }));
+  }
+
+  private overrideChoices(): Record<string, string> {
+    const rows = this.db.prepare("SELECT key, value FROM plugin_point_state WHERE point = 'override'").all() as { key: string; value: string }[];
+    return Object.fromEntries(rows.flatMap((r) => {
+      const v = safeParse(r.value);
+      return typeof v === 'string' ? [[r.key, v]] : [];
+    }));
   }
 
   private require(id: string): Loaded {
@@ -292,60 +273,6 @@ export class Plugins {
     }
   }
 
-  /** 侧栏：先按你排的，没排到的（新启用的、新加的）接在它默认那一段的最后 */
-  private resolveNav(enabled: PluginInfo[], safe: boolean): Record<NavSection, NavEntry[]> {
-    const layout = safe ? { sections: {}, visible: {} } : this.navLayout();
-    const items = new Map<string, NavEntry>();
-    for (const p of enabled) {
-      const navs = p.contributes['nav.item@1'] ?? [];
-      for (const n of navs) {
-        const label = p.displayName && navs.length === 1 ? p.displayName : n.label;
-        const visible = PINNED_NAV.has(n.id) ? true : (layout.visible[n.id] ?? !n.hiddenByDefault);
-        items.set(n.id, { ...n, label, plugin: p.id, visible });
-      }
-    }
-    const out = Object.fromEntries(NAV_SECTIONS.map((s) => [s, [] as NavEntry[]])) as Record<NavSection, NavEntry[]>;
-    const placed = new Set<string>();
-    for (const s of NAV_SECTIONS)
-      for (const id of layout.sections[s] ?? []) {
-        const it = items.get(id);
-        if (it && !placed.has(id)) {
-          placed.add(id);
-          out[s].push({ ...it, section: s });
-        }
-      }
-    for (const it of items.values()) if (!placed.has(it.id)) out[it.section].push(it);
-    return out;
-  }
-
-  /** 每个能覆盖的值：启用的插件里谁覆盖了它；冲突时按你选的，没选按后启用的那个 */
-  private resolveOverrides(enabled: Loaded[]): Record<OverrideKey, OverrideState> {
-    const choices = new Map(
-      (this.db.prepare("SELECT key, value FROM plugin_point_state WHERE point = 'override'").all() as { key: string; value: string }[]).map(
-        (r) => [r.key, safeParse(r.value)],
-      ),
-    );
-    const byEnabledAt = [...enabled].sort((a, b) => (a.row?.enabled_at ?? '').localeCompare(b.row?.enabled_at ?? ''));
-    return Object.fromEntries(
-      OVERRIDE_KEYS.map((key) => {
-        const cands = byEnabledAt.filter((p) => validOverride(key, p.manifest.contributes['override@1']?.[key]));
-        const chosen = cands.find((p) => p.manifest.id === choices.get(key)) ?? cands.at(-1);
-        const state: OverrideState = {
-          value: chosen ? chosen.manifest.contributes['override@1']![key] : OVERRIDES[key].default,
-          plugin: chosen?.manifest.id ?? null,
-          candidates: cands.map((p) => p.manifest.id),
-        };
-        return [key, state];
-      }),
-    ) as Record<OverrideKey, OverrideState>;
-  }
-}
-
-function kindsOf(c: Contributes): PluginKind[] {
-  const kinds: PluginKind[] = [];
-  if (c['page@1']?.length || c['nav.item@1']?.length) kinds.push('page');
-  if (c['override@1'] && Object.keys(c['override@1']).length) kinds.push('override');
-  return kinds;
 }
 
 function checkValues(raw: Record<string, string>): Partial<Record<OverrideKey, string>> {

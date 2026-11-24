@@ -71,7 +71,7 @@ export function ExcludedPage() {
   return (
     <>
       <PageHeader
-        title="已排除"
+        title="已排除" nav="excluded"
         subtitle={subtitle}
         actions={
           allow.rules && (

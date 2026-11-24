@@ -148,7 +148,7 @@ export function CharactersPage() {
     <>
       <PageHeader
         sticky
-        title="角色"
+        title="角色" nav="characters"
         subtitle={
           stats ? (
             `${formatCount(stats.characterCount)} 位角色 · ${formatCount(stats.workCount)} 部作品`

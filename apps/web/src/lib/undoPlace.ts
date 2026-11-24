@@ -23,6 +23,7 @@ export function pageName(path: string): string {
   if (p === '/annex' || p.startsWith('/annex/')) return '别册';
   if (p === '/excluded') return '已排除';
   if (p === '/settings') return '设置';
+  if (p === '/plugins' || p.startsWith('/plugins/')) return '插件';
   if (p === '/welcome') return '欢迎页';
   if (p.startsWith('/dev')) return '开发页';
   return '首页';

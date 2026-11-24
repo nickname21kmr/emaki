@@ -134,7 +134,7 @@ function AnnexView({ scope, count }: { scope: AnnexScope | null; count: number |
     <div className="flex min-h-full flex-col">
       <PageHeader
         sticky
-        title="别册"
+        title="别册" nav="annex"
         actions={
           comicView && (
             <Segmented<'books' | 'pages'>

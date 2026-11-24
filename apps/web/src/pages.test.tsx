@@ -6,7 +6,7 @@
  * - 命令面板的命令按 need 过滤；
  * - 说明页：没权限的路由显示「这台设备没有『…』的权限」，有权限的照常，还不知道是谁时先不渲染。
  */
-import { DEVICE_DEFAULT_SCOPES, SCOPES, type LibrarySummary, type Me, type Scope } from '@emaki/shared';
+import { DEVICE_DEFAULT_SCOPES, SCOPES, type LibrarySummary, type Me, type Scope, builtinPluginsState } from '@emaki/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -147,6 +147,8 @@ describe('侧栏', () => {
 function render(node: ReactNode, me: Me | undefined, path = '/') {
   const client = new QueryClient({ defaultOptions: { queries: { enabled: false, retry: false } } });
   if (me) client.setQueryData(qk.me, me);
+  // 插件：什么都没改过（内置插件全部启用）
+  client.setQueryData(qk.plugins(false), builtinPluginsState());
   return renderToStaticMarkup(
     <QueryClientProvider client={client}>
       <TooltipProvider>
@@ -169,7 +171,7 @@ describe('设置的分区', () => {
     function Probe() {
       return <>{useSettingsSections().map((s) => s.id).join(',')}</>;
     }
-    expect(render(<Probe />, device([...DEVICE_DEFAULT_SCOPES, 'settings']))).toBe('library,tagger,danbooru,dedupe,appearance,about');
+    expect(render(<Probe />, device([...DEVICE_DEFAULT_SCOPES, 'settings']))).toBe('library,tagger,danbooru,dedupe,appearance,plugins,about');
     expect(render(<Probe />, local)).toBe(SECTIONS.map((s) => s.id).join(','));
   });
 });

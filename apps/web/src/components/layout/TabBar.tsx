@@ -8,11 +8,12 @@ import { cn } from '@/lib/cn';
 import { useRunningJobs } from '@/lib/events';
 import { useHealth, useSummary } from '@/lib/queries';
 import { useCanVisit } from '@/pages';
+import { usePlugins } from '@/lib/plugins';
 import { JobRing, moreAlert, sidebarCount, tabBarItems, type NavItem } from './Sidebar';
 
 /**
  * 底部标签栏（A1）：宽度 compact（手机竖屏）时代替侧栏，其余宽度不显示（CSS 的 compact: 变体）。
- * 首页、图库、角色、合集常驻，「更多」打开底部面板放其余几页；项、计数、说明、能力过滤和侧栏同一套（tabBarItems）。
+ * 按侧栏的顺序前四页常驻（默认首页、图库、角色、合集），「更多」打开底部面板放其余几页；项、计数、说明、能力过滤和侧栏同一套（tabBarItems）。
  * 底下让出手势导航条（safe-area-inset-bottom）。
  */
 export function TabBar() {
@@ -21,11 +22,12 @@ export function TabBar() {
   const canVisit = useCanVisit();
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
-  const items = tabBarItems(s);
-  // 和侧栏一样等 GET /api/me 回来再画，没权限的不显示
-  const visible = (list: NavItem[]) => (ready ? list.filter((item) => canVisit(item.to)) : []);
-  const tabs = visible(items.tabs);
-  const more = visible(items.more);
+  const plugins = usePlugins();
+  // 和侧栏一样等 GET /api/me 和插件回来再画；没权限、停用的不显示（先过滤再分常驻和「更多」，前四个总是能去的）
+  const items = tabBarItems(s, plugins.state.nav, canVisit);
+  const shown = ready && plugins.ready;
+  const tabs = shown ? items.tabs : [];
+  const more = shown ? items.more : [];
   const inMore = more.some((i) => matchPath({ path: i.to, end: false }, pathname));
 
   return (

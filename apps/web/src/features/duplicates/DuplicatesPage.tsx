@@ -258,7 +258,7 @@ export function DuplicatesPage() {
 
   return (
     <>
-      <PageHeader title="重复" subtitle={subtitle} actions={<RescanButton />} sticky>
+      <PageHeader title="重复" nav="duplicates" subtitle={subtitle} actions={<RescanButton />} sticky>
         <div className="flex items-center gap-3">
           <Segmented<View>
             value={view}

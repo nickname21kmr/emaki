@@ -137,6 +137,8 @@ export const REFRESH: Record<DomainChange, readonly string[]> = {
   // 以前跟着刷新整组 IMAGE_VIEWS：提取姿势时每 3 秒重拉一遍图库已加载的每一页、角色、作品、未识别，后端一直被占着，看图和筛选都慢
   'pose.changed': ['pose', POSE_LISTS],
   'library.opened': [...WITH_FILES, 'exclusions', 'tags', 'custom-character-matches'],
+  // 插件（docs/plugins.md）：侧栏、停用的页面、覆盖的值；默认排序变了，没给排序的图片列表也要重拉
+  'plugins.changed': ['plugins', 'images'],
 };
 
 /** 命令本身没声明变化（画师的合并关系、标记看过、启动任务……）时按命令刷新；不在这里的就什么也不刷 */

@@ -136,6 +136,8 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - 侧栏的项写目标地址，need 取那一页的；设置的新分区在 `features/settings/sections.ts` 写 need；命令面板的命令、看图器和多选栏的操作各自写 need；
 - 页面里改东西的按钮按它调的命令的 scope 判断（`useCan`），能读不能改的页面照常显示、改的入口隐藏；
 - 会发出请求的（助手设置、手机访问状态这类设备上必然 403 的）用 `known(need)`：确定是电脑上才发。
+- **插件停用的页面也走同一个判断**（[plugins.md](plugins.md) 9.4）：每一页属于一个内置插件（`@emaki/shared` 的 `BUILTIN_PLUGINS`），停用了 `canVisit` 就是 false，`PageGate` 显示「这一页已停用」。
+  侧栏和手机底部标签栏的项、顺序、名字来自插件（`lib/plugins.ts` 的 `useNav`）；链接到别的页面时照样用 `useCanVisit()`，停用的就不显示。新页面要登记到某个内置插件的 `page@1`（`lib/plugins.test.ts` 检查）。
 
 页面的筛选状态放在 URL 查询参数（`useSearchParams`），刷新后保留。会影响列表里有哪些图的本机偏好也写进 URL：图库的类型 `?kind=`、收拢组图 `?collapse=`（没写时把偏好补进去，写了以 URL 为准），AI 助手拿到的页面地址和用户看到的一致。
 
@@ -321,7 +323,8 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 7. **手机访问**（`features/access/PhoneAccessSection`，[mobile.md](mobile.md) 第 2 节）：开关「让手机连接这台电脑」（默认关）；打开后是状态（监听的端口、局域网地址，`error` 红底醒目写出，Windows 防火墙要允许「专用网络」的提醒）、
    电脑名称、端口、「用二维码添加」（`uqr` 编码后画成 SVG，包一层 `data-theme="light"`，深色主题下也是浅底深码）；下面「等你批准的请求」（大号 3 + 3 校验码、剩余时间、批准 / 拒绝，权限默认折叠）和「已连接的设备」（编辑名称和权限、移除先确认）。
    数据是查询 `access.status`（`useAccessStatus`，局域网入口上 403 时为 null），SSE 的 `access` 事件让它重新取。这些命令不可撤销、不占撤销栈（`useMutate(…, { undo: false })`）。
-8. **关于**：版本、数据目录、快捷键入口。
+8. **插件**（`PluginsSection`，[plugins.md](plugins.md) 9.7）：只放「在侧栏显示『插件』」开关和「管理插件」链接；插件页 `/plugins` 单独一页（`features/plugins/`）。
+9. **关于**：版本、数据目录、快捷键入口。
 
 设置修改即时保存（`api.updateSettings`，toast「已保存」），滑块松手时才保存。
 

@@ -1,18 +1,21 @@
-import { JOB_KINDS, type Job, type LibrarySummary } from '@emaki/shared';
-import { Ban, BookCopy, LibraryBig, CircleHelp, Copy, House, Images, Settings, Sparkles, UsersRound, type LucideIcon } from 'lucide-react';
+import { builtinPluginsState, JOB_KINDS, type Job, type LibrarySummary, type NavEntry, type NavIcon, type NavSection } from '@emaki/shared';
+import { Ban, BookCopy, LibraryBig, CircleHelp, Copy, House, Images, ListOrdered, Puzzle, Settings, Sparkles, UsersRound, type LucideIcon } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import type { ReactNode } from 'react';
-import { NavLink } from 'react-router';
+import { NavLink, useNavigate } from 'react-router';
 import { useCapabilities } from '@/lib/capabilities';
 import { cn } from '@/lib/cn';
 import { useLiveJobs, useRunningJobs } from '@/lib/events';
 import { formatCompact, formatCount } from '@/lib/format';
 import { useHealth, useSummary } from '@/lib/queries';
-import { Badge, RollingNumber, Tooltip } from '@/components/ui';
+import { Badge, ContextMenu, ContextMenuItem, RollingNumber, Tooltip } from '@/components/ui';
 import { Emblem } from '@/components/ui/Emblem';
+import { usePlugins } from '@/lib/plugins';
 import { useCanVisit } from '@/pages';
 
 export interface NavItem {
+  /** 导航项的 id（插件的 nav.item）；「更多」这种临时的没有 */
+  id?: string;
   to: string;
   label: string;
   icon: LucideIcon;
@@ -22,82 +25,94 @@ export interface NavItem {
   dot?: boolean;
   /** 悬停说明 */
   hint?: string;
+  /** 只是捷径（「原创」）：不放进手机底部标签栏的常驻位 */
+  shortcut?: boolean;
 }
 
+const ICONS: Record<NavIcon, LucideIcon> = {
+  house: House,
+  images: Images,
+  users: UsersRound,
+  sparkles: Sparkles,
+  library: LibraryBig,
+  'book-copy': BookCopy,
+  'circle-help': CircleHelp,
+  copy: Copy,
+  ban: Ban,
+  settings: Settings,
+  puzzle: Puzzle,
+};
+
 /**
- * 侧栏的导航项（纯函数，测试直接调）：每项的 to 对应 src/pages.ts 里的一页，需要的能力由那一页声明，
- * 没权限的不显示（docs/mobile.md 4.4）。计数都读汇总接口：服务端按命名口径算好，这里不加减（附录 #28）
+ * 侧栏的导航项（纯函数，测试直接调）：顺序、名字、在不在侧栏来自插件（docs/plugins.md 9.6，lib/plugins.ts 的 useNav），
+ * 这里只给每一项加上图库的情况（计数、朱点、说明、原创的地址）。每项的 to 对应 src/pages.ts 里的一页，
+ * 需要的能力由那一页声明，没权限、插件停用的由调用方按 canVisit 过滤（docs/mobile.md 4.4）。
+ * 计数都读汇总接口：服务端按命名口径算好，这里不加减（附录 #28）
  */
-export function sidebarItems(s: LibrarySummary | undefined): { main: NavItem[]; triage: NavItem[]; footer: NavItem[] } {
-  const main: NavItem[] = [
-    {
-      to: '/',
-      label: '首页',
-      icon: House,
-      dot: !!s?.added.today,
-      hint: s?.added.today ? `今天新收 ${formatCount(s.added.today)} 张` : undefined,
-    },
-    { to: '/gallery', label: '图库', icon: Images },
-    { to: '/characters', label: '角色', icon: UsersRound },
-    // 原创（用户 2026-09-29）：直达「原创」作品页；还没有原创作品时不显示
-    ...(s?.originalWorkId
-      ? [
-          {
-            to: `/works/${s.originalWorkId}`,
-            label: '原创',
-            icon: Sparkles,
-            hint: s.images.original ? `你归为原创的 ${formatCount(s.images.original)} 张，和原创角色的图` : '原创角色的图',
-          },
-        ]
-      : []),
-    // 合集（T38d）：本子与画集，不显示数量
-    { to: '/collections', label: '合集', icon: LibraryBig },
-    // 别册：截图、漫画等不打扰插画的图（T32b），只显示总数
-    { to: '/annex', label: '别册', icon: BookCopy, count: s?.images.annex ?? 0 },
-  ];
-  const triage: NavItem[] = [
-    {
-      to: '/unrecognized',
-      label: '未识别',
-      icon: CircleHelp,
-      // 待处理数（唯一定义见汇总接口 triage）：等你确认的张数 + 成册待整理的本数；待识别的不算（识别跑完会自动处理）
-      count: s?.triage.total,
-      hint: s
-        ? [
-            `${formatCount(s.triage.images)} 张等你确认`,
-            s.triage.books ? `${formatCount(s.triage.books)} 本待整理` : '',
-            s.triage.waiting ? `另有 ${formatCount(s.triage.waiting)} 张等待识别` : '',
-          ]
-            .filter(Boolean)
-            .join(' · ')
-        : undefined,
-    },
-    {
-      to: '/duplicates',
-      label: '重复',
-      icon: Copy,
-      count: s?.duplicates,
-      hint: s?.duplicates ? `${formatCount(s.duplicates)} 组重复等你处理` : undefined,
-    },
-    { to: '/excluded', label: '已排除', icon: Ban },
-  ];
-  const footer: NavItem[] = [{ to: '/settings', label: '设置', icon: Settings }];
-  return { main, triage, footer };
+export function sidebarItems(
+  s: LibrarySummary | undefined,
+  nav: Record<NavSection, NavEntry[]> = builtinPluginsState().nav,
+): { main: NavItem[]; triage: NavItem[]; footer: NavItem[] } {
+  const item = (n: NavEntry): NavItem | null => {
+    const base: NavItem = { id: n.id, to: n.to, label: n.label, icon: ICONS[n.icon], shortcut: n.shortcut };
+    switch (n.id) {
+      case 'home':
+        return { ...base, dot: !!s?.added.today, hint: s?.added.today ? `今天新收 ${formatCount(s.added.today)} 张` : undefined };
+      // 原创（用户 2026-09-29）：直达「原创」作品页；还没有原创作品时不显示
+      case 'original':
+        return s?.originalWorkId
+          ? {
+              ...base,
+              to: n.to.replace(':originalWorkId', String(s.originalWorkId)),
+              hint: s.images.original ? `你归为原创的 ${formatCount(s.images.original)} 张，和原创角色的图` : '原创角色的图',
+            }
+          : null;
+      // 别册：截图、漫画等不打扰插画的图（T32b），只显示总数
+      case 'annex':
+        return { ...base, count: s?.images.annex ?? 0 };
+      case 'unrecognized':
+        return {
+          ...base,
+          // 待处理数（唯一定义见汇总接口 triage）：等你确认的张数 + 成册待整理的本数；待识别的不算（识别跑完会自动处理）
+          count: s?.triage.total,
+          hint: s
+            ? [
+                `${formatCount(s.triage.images)} 张等你确认`,
+                s.triage.books ? `${formatCount(s.triage.books)} 本待整理` : '',
+                s.triage.waiting ? `另有 ${formatCount(s.triage.waiting)} 张等待识别` : '',
+              ]
+                .filter(Boolean)
+                .join(' · ')
+            : undefined,
+        };
+      case 'duplicates':
+        return { ...base, count: s?.duplicates, hint: s?.duplicates ? `${formatCount(s.duplicates)} 组重复等你处理` : undefined };
+      default:
+        return base;
+    }
+  };
+  const list = (entries: NavEntry[]) => entries.filter((n) => n.visible).flatMap((n) => item(n) ?? []);
+  return { main: list(nav.main), triage: list(nav.triage), footer: list(nav.footer) };
 }
 
-/** 底部标签栏（宽度 compact，A1）常驻的几页，按这个顺序；其余的进「更多」 */
-export const TAB_PATHS = ['/', '/gallery', '/characters', '/collections'] as const;
+/** 底部标签栏常驻几页（其余进「更多」） */
+const TAB_COUNT = 4;
 
 /**
- * 底部标签栏的项（纯函数）：首页、图库、角色、合集常驻，其余（原创、别册、未识别、重复、已排除、设置）进「更多」，
+ * 底部标签栏的项（纯函数）：按侧栏的顺序，前四个（「原创」这种捷径不算）常驻，其余进「更多」，
  * 顺序、计数、说明和侧栏完全一样（都来自 sidebarItems）。能力过滤由调用方做，和侧栏同一个 canVisit。
+ * 默认是首页、图库、角色、合集常驻，其余（原创、别册、未识别、重复、已排除、设置）进「更多」。
  * moreAlert：「更多」里有待处理的（未识别、重复有数，或者带朱点的项）时，「更多」标签上也点一个朱点。
  */
-export function tabBarItems(s: LibrarySummary | undefined): { tabs: NavItem[]; more: NavItem[] } {
-  const { main, triage, footer } = sidebarItems(s);
-  const all = [...main, ...triage, ...footer];
-  const tabs = TAB_PATHS.flatMap((to) => all.filter((i) => i.to === to));
-  const more = all.filter((i) => !(TAB_PATHS as readonly string[]).includes(i.to));
+export function tabBarItems(
+  s: LibrarySummary | undefined,
+  nav?: Record<NavSection, NavEntry[]>,
+  canVisit: (to: string) => boolean = () => true,
+): { tabs: NavItem[]; more: NavItem[] } {
+  const { main, triage, footer } = sidebarItems(s, nav);
+  const all = [...main, ...triage, ...footer].filter((i) => canVisit(i.to));
+  const tabs = all.filter((i) => !i.shortcut).slice(0, TAB_COUNT);
+  const more = all.filter((i) => !tabs.includes(i));
   return { tabs, more };
 }
 
@@ -115,9 +130,12 @@ export function Sidebar() {
   const jobs = useRunningJobs();
   const demo = useHealth().data?.dataSource === 'demo';
   const { ready } = useCapabilities();
+  const plugins = usePlugins();
+  const navigate = useNavigate();
   const canVisit = useCanVisit();
-  const items = sidebarItems(s);
-  const visible = (list: NavItem[]) => (ready ? list.filter((item) => canVisit(item.to)) : []);
+  const items = sidebarItems(s, plugins.state.nav);
+  // 等 GET /api/me 和插件都回来再画：局域网入口上不先闪出没权限的项，改过顺序的不先闪出默认顺序
+  const visible = (list: NavItem[]) => (ready && plugins.ready ? list.filter((item) => canVisit(item.to)) : []);
   const main = visible(items.main);
   const triage = visible(items.triage);
   const footer = visible(items.footer);
@@ -126,52 +144,61 @@ export function Sidebar() {
     // 窗口矮（768 的笔记本、计数和任务环都在）时侧栏自己滚，不把整个页面撑高
     // 触屏而且矮（平板横屏 720 高，touch-low）：不放徽记、间距收紧，十项导航一屏放得下（2026-11-19 平板实测最后一项被截掉）
     // 手机横屏（高度 compact）：同样不放徽记，上下留白收紧；左边让出刘海（safe-area）
-    <aside className="flex w-[76px] shrink-0 flex-col items-center overflow-x-hidden overflow-y-auto py-4 scrollbar-none compact:hidden touch-low:py-2 short:box-content short:py-2 short:pl-[env(safe-area-inset-left)]">
-      <Logo />
+    // 右键（触屏上长按）：调整页面顺序（docs/plugins.md 9.6）
+    <ContextMenu
+      content={
+        <ContextMenuItem icon={<ListOrdered />} onSelect={() => navigate('/plugins?view=pages')}>
+          调整页面顺序…
+        </ContextMenuItem>
+      }
+    >
+      <aside className="flex w-[76px] shrink-0 flex-col items-center overflow-x-hidden overflow-y-auto py-4 scrollbar-none compact:hidden touch-low:py-2 short:box-content short:py-2 short:pl-[env(safe-area-inset-left)]">
+        <Logo />
 
-      <nav className="mt-6 flex flex-col items-center gap-1 touch-low:mt-0 touch-low:gap-0 short:mt-0">
-        {main.map((item) => (
+        <nav className="mt-6 flex flex-col items-center gap-1 touch-low:mt-0 touch-low:gap-0 short:mt-0">
+          {main.map((item) => (
+            <SidebarLink key={item.to} item={item} />
+          ))}
+        </nav>
+
+        {triage.length > 0 && (
+          <>
+            <div className="my-4 h-px w-8 shrink-0 bg-line-strong touch-low:my-2 short:my-2" />
+            <nav className="flex flex-col items-center gap-1 touch-low:gap-0">
+              {triage.map((item) => (
+                <SidebarLink key={item.to} item={item} />
+              ))}
+            </nav>
+          </>
+        )}
+
+        <div className="flex-1" />
+
+        {demo && (
+          <Tooltip content="正在使用演示数据（npm run dev:demo），改动不会保存" side="right">
+            <span className="mb-3">
+              <Badge tone="warn" className="px-1.5 text-[10px]">
+                演示数据
+              </Badge>
+            </span>
+          </Tooltip>
+        )}
+
+        {jobs.slice(0, 2).map((job) => (
+          <JobRing
+            key={job.id}
+            kind={job.kind}
+            progress={job.total ? job.progress / job.total : null}
+            label={job.message}
+            to={canVisit('/settings#jobs') ? '/settings#jobs' : null}
+          />
+        ))}
+
+        {footer.map((item) => (
           <SidebarLink key={item.to} item={item} />
         ))}
-      </nav>
-
-      {triage.length > 0 && (
-        <>
-          <div className="my-4 h-px w-8 shrink-0 bg-line-strong touch-low:my-2 short:my-2" />
-          <nav className="flex flex-col items-center gap-1 touch-low:gap-0">
-            {triage.map((item) => (
-              <SidebarLink key={item.to} item={item} />
-            ))}
-          </nav>
-        </>
-      )}
-
-      <div className="flex-1" />
-
-      {demo && (
-        <Tooltip content="正在使用演示数据（npm run dev:demo），改动不会保存" side="right">
-          <span className="mb-3">
-            <Badge tone="warn" className="px-1.5 text-[10px]">
-              演示数据
-            </Badge>
-          </span>
-        </Tooltip>
-      )}
-
-      {jobs.slice(0, 2).map((job) => (
-        <JobRing
-          key={job.id}
-          kind={job.kind}
-          progress={job.total ? job.progress / job.total : null}
-          label={job.message}
-          to={canVisit('/settings#jobs') ? '/settings#jobs' : null}
-        />
-      ))}
-
-      {footer.map((item) => (
-        <SidebarLink key={item.to} item={item} />
-      ))}
-    </aside>
+      </aside>
+    </ContextMenu>
   );
 }
 

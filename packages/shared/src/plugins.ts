@@ -263,3 +263,125 @@ export interface PluginsState {
 
 /** 插件显示的名字：改过就用改的 */
 export const pluginLabel = (p: Pick<PluginInfo, 'name' | 'displayName'>): string => p.displayName ?? p.name;
+
+// ---------------------------------------------------------------- 从状态算出生效的结果（服务端用它；网页在还没取到时用它算内置的默认）
+
+/** 侧栏的布局（贡献点 nav.item 的状态）：三段各自的顺序、在不在侧栏 */
+export interface NavLayout {
+  sections: Partial<Record<NavSection, string[]>>;
+  visible: Record<string, boolean>;
+}
+
+/** 必需的导航项：不能从侧栏拿掉（设置里有「插件」页的入口，拿掉就没处去了） */
+export const PINNED_NAV: ReadonlySet<string> = new Set(['settings']);
+
+export interface PluginRecord {
+  manifest: PluginManifest;
+  source: PluginSource;
+  required: boolean;
+  enabled: boolean;
+  displayName: string | null;
+  /** 最近一次启用的时间（覆盖冲突时按后启用的那个） */
+  enabledAt: string | null;
+}
+
+export function kindsOf(c: Contributes): PluginKind[] {
+  const kinds: PluginKind[] = [];
+  if (c['page@1']?.length || c['nav.item@1']?.length) kinds.push('page');
+  if (c['override@1'] && Object.keys(c['override@1']).length) kinds.push('override');
+  return kinds;
+}
+
+/**
+ * 插件 + 各贡献点的状态 → 生效的结果（PluginsState）。只有这一份：服务端（domain/plugins/）按数据库里的状态算，
+ * 网页在 GET /api/plugins 回来之前按内置插件的默认算（结果和服务端什么都没改过时一样，所以不闪）。
+ */
+export function resolvePlugins(input: {
+  plugins: readonly PluginRecord[];
+  nav: NavLayout;
+  /** 覆盖冲突时选了哪个插件 */
+  overrideChoices: Readonly<Record<string, string>>;
+  safeMode: boolean;
+}): PluginsState {
+  const enabledRecs = input.plugins.filter((p) => p.enabled);
+  const overrides = resolveOverrides(enabledRecs, input.overrideChoices);
+  const conflictsOf = (id: string) => OVERRIDE_KEYS.filter((k) => overrides[k].candidates.length > 1 && overrides[k].candidates.includes(id));
+  const plugins: PluginInfo[] = input.plugins.map((p) => ({
+    id: p.manifest.id,
+    name: p.manifest.name,
+    displayName: p.displayName,
+    source: p.source,
+    version: p.manifest.version,
+    ...(p.manifest.description && { description: p.manifest.description }),
+    enabled: p.enabled,
+    required: p.required,
+    kinds: kindsOf(p.manifest.contributes),
+    contributes: p.manifest.contributes,
+    conflicts: conflictsOf(p.manifest.id),
+  }));
+  const off = input.plugins.filter((p) => !p.enabled);
+  return {
+    safeMode: input.safeMode,
+    plugins,
+    nav: resolveNav(
+      plugins.filter((p) => p.enabled),
+      input.nav,
+    ),
+    disabledPages: off.flatMap((p) => (p.manifest.contributes['page@1'] ?? []).map((x) => x.id)),
+    disabledBlocks: off.flatMap((p) => (p.manifest.contributes['block@1'] ?? []).map((x) => x.id)),
+    overrides,
+  };
+}
+
+/** 侧栏：先按你排的，没排到的（新启用的、新加的）接在它默认那一段的最后 */
+function resolveNav(enabled: readonly PluginInfo[], layout: NavLayout): Record<NavSection, NavEntry[]> {
+  const items = new Map<string, NavEntry>();
+  for (const p of enabled) {
+    const navs = p.contributes['nav.item@1'] ?? [];
+    for (const n of navs) {
+      // 只有一个导航项的插件（原来的每一页）：改插件的名字就是改这一页的名字
+      const label = p.displayName && navs.length === 1 ? p.displayName : n.label;
+      const visible = PINNED_NAV.has(n.id) ? true : (layout.visible[n.id] ?? !n.hiddenByDefault);
+      items.set(n.id, { ...n, label, plugin: p.id, visible });
+    }
+  }
+  const out = Object.fromEntries(NAV_SECTIONS.map((s) => [s, [] as NavEntry[]])) as Record<NavSection, NavEntry[]>;
+  const placed = new Set<string>();
+  for (const s of NAV_SECTIONS)
+    for (const id of layout.sections[s] ?? []) {
+      const it = items.get(id);
+      if (it && !placed.has(id)) {
+        placed.add(id);
+        out[s].push({ ...it, section: s });
+      }
+    }
+  for (const it of items.values()) if (!placed.has(it.id)) out[it.section].push(it);
+  return out;
+}
+
+/** 每个能覆盖的值：启用的插件里谁覆盖了它；冲突时按你选的，没选按后启用的那个 */
+function resolveOverrides(enabled: readonly PluginRecord[], choices: Readonly<Record<string, string>>): Record<OverrideKey, OverrideState> {
+  const byEnabledAt = [...enabled].sort((a, b) => (a.enabledAt ?? '').localeCompare(b.enabledAt ?? ''));
+  return Object.fromEntries(
+    OVERRIDE_KEYS.map((key) => {
+      const cands = byEnabledAt.filter((p) => validOverride(key, p.manifest.contributes['override@1']?.[key]));
+      const chosen = cands.find((p) => p.manifest.id === choices[key]) ?? cands.at(-1);
+      const state: OverrideState = {
+        value: chosen ? chosen.manifest.contributes['override@1']![key] : OVERRIDES[key].default,
+        plugin: chosen?.manifest.id ?? null,
+        candidates: cands.map((p) => p.manifest.id),
+      };
+      return [key, state];
+    }),
+  ) as Record<OverrideKey, OverrideState>;
+}
+
+/** 什么都没改过（或者安全模式）时的结果：内置插件全部启用、按原样 */
+export function builtinPluginsState(safeMode = false): PluginsState {
+  return resolvePlugins({
+    plugins: BUILTIN_PLUGINS.map((m) => ({ manifest: m, source: 'builtin', required: !!m.required, enabled: true, displayName: null, enabledAt: null })),
+    nav: { sections: {}, visible: {} },
+    overrideChoices: {},
+    safeMode,
+  });
+}

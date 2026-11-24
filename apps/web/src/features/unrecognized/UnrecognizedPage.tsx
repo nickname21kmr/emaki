@@ -1,3 +1,4 @@
+import { useCanVisit } from '@/pages';
 import { Link } from 'react-router';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Skeleton } from '@/components/ui';
@@ -51,7 +52,7 @@ export function UnrecognizedPage() {
     // 手机竖屏、手机横屏（A1）：整页正常往下滚。平板竖屏（medium）和电脑一样是固定高度、各栏自己滚：
     // 队列有几百张，整页滚的话决策面板的操作键会被队列撑到页面最底下（2026-11-19 平板实测）
     <div className="flex h-full min-h-[620px] flex-col compact:h-auto compact:min-h-0 short:h-auto short:min-h-0">
-      <PageHeader title="未识别" subtitle={<Subtitle />} actions={
+      <PageHeader title="未识别" nav="unrecognized" subtitle={<Subtitle />} actions={
           <div className="flex items-center gap-2 compact:flex-wrap">
             {p.area === 'art' && allow.pixiv && <PixivTagsButton />}
             {p.kind && <PromoteSuggestionsButton kind={p.kind} />}
@@ -76,6 +77,7 @@ export function UnrecognizedPage() {
 
 /** 「N 张插画和漫画还没有角色」+ 识别进度（TR-1 第 8 条） */
 function Subtitle() {
+  const annexOn = useCanVisit()('/annex');
   const { data } = useUnrecognizedSummary();
   const { running, progress } = useTagJob();
   // 设置里关了「未识别里也列出漫画页」：这里只有插画
@@ -88,7 +90,7 @@ function Subtitle() {
       {running
         ? ` · 识别中${progress !== null ? ` ${Math.round(progress * 100)}%` : ''}，新建议会自动加入`
         : art.untagged > 0 && ` · ${formatCount(art.untagged)} 张还没跑过识别`}
-      {annex.total > 0 && (
+      {annex.total > 0 && annexOn && (
         <span className="text-fg-subtle">
           {' · 另有 '}
           {formatCount(annex.total)} 张在

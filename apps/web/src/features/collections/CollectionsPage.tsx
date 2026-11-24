@@ -160,7 +160,7 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
     <div className="flex min-h-full flex-col">
       <PageHeader
         sticky
-        title="合集"
+        title="合集" nav="collections"
         subtitle={
           c ? (
             <span>

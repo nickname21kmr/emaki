@@ -169,7 +169,7 @@ export function GalleryPage() {
           />
         </div>
         <GridFooter loadingMore={isFetchingNextPage} done={!hasNextPage} total={total} />
-        {onlyIllust && !hasNextPage && (counts?.annex ?? 0) > 0 && (
+        {onlyIllust && !hasNextPage && (counts?.annex ?? 0) > 0 && canVisit('/annex') && (
           <p className="pb-6 text-center text-[12.5px] text-fg-muted">
             另有 {formatCount((counts?.annex ?? 0))} 张截图、漫画等在{' '}
             <Link to="/annex" className="font-medium text-fg hover:underline">
@@ -260,6 +260,7 @@ const kindNoun = (kind: ContentKind[] | 'all') => (kind === 'all' || kind.length
 
 /** 首次提示：图库现在只显示插画（D2）。关掉后不再出现 */
 function KindTip({ annex }: { annex: number }) {
+  const annexOn = useCanVisit()('/annex');
   const seen = usePrefs((s) => s.galleryKindTipSeen);
   const dismiss = usePrefs((s) => s.dismissGalleryKindTip);
   if (seen || annex === 0) return null;
@@ -268,9 +269,11 @@ function KindTip({ annex }: { annex: number }) {
       <span className="flex-1">
         图库现在只显示插画。截图、漫画、照片等 {formatCount(annex)} 张收在「别册」里：不删除，只是不计入角色、不进未识别。
       </span>
-      <Link to="/annex" className="inline-flex shrink-0 items-center gap-1 font-medium text-fg hover:underline">
-        去别册看看 <ArrowRight className="size-3.5" />
-      </Link>
+      {annexOn && (
+        <Link to="/annex" className="inline-flex shrink-0 items-center gap-1 font-medium text-fg hover:underline">
+          去别册看看 <ArrowRight className="size-3.5" />
+        </Link>
+      )}
       <button type="button" onClick={dismiss} aria-label="知道了" className="shrink-0 rounded-full p-1 hover:bg-hover hover:text-fg">
         <X className="size-3.5" />
       </button>
@@ -290,6 +293,7 @@ function Subtitle({
   /** null = 还在加载 */
   total: number | null;
 }) {
+  const annexOn = useCanVisit()('/annex');
   if (!counts) return <Skeleton className="mt-1.5 h-3 w-36 rounded-full" />;
   // 分母跟着当前看的类型走：只看插画时是插画总数，不是连别册一起的全库
   const n = kindTotal(counts.byKind, counts.total, kind);
@@ -320,7 +324,7 @@ function Subtitle({
   return (
     <span>
       {formatCount(n)} 张{noun}
-      {onlyIllust && annex > 0 && (
+      {onlyIllust && annex > 0 && annexOn && (
         <>
           {' · '}
           <Link to="/annex" className="text-fg-subtle transition-colors hover:text-fg">
