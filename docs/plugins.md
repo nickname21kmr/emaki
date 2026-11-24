@@ -1,6 +1,6 @@
 # 个性化页面与插件（下一阶段设计）
 
-> 状态：草案（2026-11-24）。第 1 节的决定都已经定了。
+> 状态：设计已定（2026-11-24），E0 原型验证通过（12.1），开始 E1。
 > 依据：[core-architecture.md](core-architecture.md) 第 10 节（目标、留好的接口、插件的三层）；回顾和调研见第 13 节。
 > 相关：[mobile.md](mobile.md)（设备凭证和权限范围）、[ai-assistant.md](ai-assistant.md)（MCP、助手的权限）、[FRONTEND.md](FRONTEND.md)（区块、播放器、「交互只有一个实现」）。
 
@@ -113,6 +113,8 @@ Pixiv 浏览  0.1.0                                      来自：本地文件 p
 - **数据走桥接**：视图通过 `tools/call` 调用命令和查询。工具清单就是现在给 MCP 生成的那份，再按生效权限过滤，名字也一样（`curation_link`、`read_library` 等）。桥接的宿主端打算用官方 `@modelcontextprotocol/ext-apps` 的 `AppBridge`，把调用接到命令和查询注册表上；它能不能不接 MCP 客户端直接用，要在 E0 验证。
 - **Emaki 自己加的方法**：统一加 `emaki/` 前缀、带版本号，包括导航和打开看图器、读写当前选择、插件自己的存储（键值）、订阅变化事件（MCP Apps 不管事件）。在 Claude 里跑时这些方法不存在，视图先检测有没有，没有就退化。
 - **图片**：缩略图和原图走宿主发的短期地址（`/api/plugin-media/<令牌>/...`，令牌绑定插件和权限范围），用普通的 `<img>` 加载，不经过桥接拷贝。
+- **插件用的库**：官方的 `App` 类（`@modelcontextprotocol/ext-apps` 的 `app-with-deps`，约 540 KB）由宿主在固定地址提供（`/plugin-sdk/app.js`，带 `Access-Control-Allow-Origin: *`，因为匿名来源加载模块脚本要跨域许可），插件页面不用各自内联一份。宿主这边的 `AppBridge` 连同依赖约 1 MB（未压缩），只在第一次显示插件页面时按需加载，不进主包。
+- **自己跳走**：插件页面可以把自己跳转到外部网址（`location.href = …`），浏览器没有能拦这一下的开关，数据可能借此带出去。宿主监听 iframe 的 `load`：第一次以后再触发就说明跳走了，立刻撤掉这个页面并记一次错误。请求在被发现之前已经发出去了，按决定 7 接受这个残余风险，授权单上不另写。
 - **默认关闭的方法**：MCP Apps 里 `ui/message`、`ui/update-model-context` 能直接往 AI 的上下文里写东西，是一条注入通道。默认不开，要用的插件在清单里声明，授权单上写出来。
 - **向外**：插件的视图同时作为 Emaki MCP 服务器的工具挂出去，带 `_meta.ui.resourceUri`。在 Claude、ChatGPT 里调用这个工具，对话里就会显示同一个页面，权限取交集（4.1）。
 - **性能**：视图只能用分页和统计查询；宿主限制每个插件的调用频率和单次返回的大小；页面上的区块视图滚到可见时才加载。
@@ -127,7 +129,7 @@ Pixiv 浏览  0.1.0                                      来自：本地文件 p
 
 ## 6. 服务端逻辑（2c）
 
-- **怎么跑**：每个插件一个 Node 子进程（`child_process.fork`，用 Emaki 自带的那个 Node），启动时加权限参数：只能读插件自己的包目录，只能写插件自己的数据目录。宿主和插件之间用 IPC 通信，插件拿到一个注入好的 `emaki` 对象：
+- **怎么跑**：每个插件一个 Node 子进程（`child_process.fork`，用 Emaki 自带的那个 Node），启动时加权限参数：只能读插件自己的包目录，只能写插件自己的数据目录。Node 22.13 之前这个开关叫 `--experimental-permission`，启动时先用 `process.allowedNodeEnvironmentFlags` 看认哪个。宿主和插件之间用 IPC 通信，插件拿到一个注入好的 `emaki` 对象：
   - `emaki.call(命令或查询, 输入)`：受授权限制，actor 是这个插件；
   - `emaki.fetch(url, 选项)`：走 Emaki 现有的网络设置（系统代理、Clash 检测），省得插件自己处理代理；插件也可以直接用 Node 的 `fetch`，不拦截；
   - `emaki.storage`（键值）、`emaki.secrets`（登录凭证这类，存在数据目录里，视图读不到）、`emaki.files`（插件自己的临时文件夹）；
@@ -330,6 +332,19 @@ Pixiv 浏览要注意：请求要节流，只拿你的账号本来就能看到�
 | E4 视图 | MCP Apps 宿主；`emaki/` 方法；助手的 `plugins` 工具；AI 统计页；同一页面在 Claude 里也能打开 | 说一句话做出统计页、固定到侧栏；Emaki 升级后照样能用；在 Claude 里能打开 |
 | E5 服务端逻辑 | Node 子进程运行时、凭证、插件命令、后台任务、反应；内置 Pixiv 浏览 | 浏览、批量下载、进度和取消、去重；插件读写自己目录以外的文件被拦下（有测试）；插件崩了 Emaki 照常 |
 | E6 逃生口 | 内部点按名字登记、`patch`、版本绑定、「谁改了哪里」、升级后自动停用 | 样例补丁（在某个命令前后各加一点逻辑）能用；Emaki 版本一变，它就自动停用 |
+
+### 12.1 E0 的结论（2026-11-24）
+
+四项都能用，方案不用换。
+
+| 验证项 | 结果 |
+| --- | --- |
+| ① 隔离的 iframe | `sandbox="allow-scripts"` 加 `srcdoc`，安全策略写在插件页面的 `<meta>` 里。电脑 Chromium、安卓 Chrome 124、安卓 WebView 124（模拟器上一个最小的 WebView App）三处结果一样：插件页面的来源是 `null`，本地存储、Cookie、宿主页面的 DOM 都碰不到（`SecurityError`），直接请求宿主接口和外网都被安全策略拦下 |
+| ② 官方宿主库接我们的注册表 | `@modelcontextprotocol/ext-apps` 2.0.4（MIT）的 `AppBridge` 第一个参数传 `null`，不接 MCP 客户端，用 `oncalltool`、`onreadresource` 接到自己的处理函数上；插件页面用官方 `App` 类 `callServerTool` 调到了宿主，握手几毫秒。它依赖 MCP SDK 2 的 `client`、`core` 和 zod 4：只在网页这边用，和服务端现在的 SDK 1.32 不冲突，zod 版本和仓库一致 |
+| ③ Node 子进程限制文件 | Linux Node 22.14、Windows Node 24.14（免安装版带的就是打包那台机器的 Node）结果一样：自己的包目录能读、npm 依赖能加载、自己的数据目录能写；越界读、越界写、开子进程都是 `ERR_ACCESS_DENIED`；IPC 正常；联网不拦（按决定 7） |
+| ④ 插件页面里的图片 | 宿主给的地址用普通 `<img>` 加载正常（安全策略只放行宿主地址）。匿名来源的请求不带 Cookie，所以插件图片必须走地址里带短期令牌的方式（第 5 节），局域网入口靠 Cookie 登录的 App 里也成立 |
+
+另外查到的：插件页面能自己跳到外部网址把数据带出去，宿主能在事后发现（iframe 第二次 `load`），处理办法写在第 5 节。HTTPS 自签证书下 iframe 里的图片走的是 App 已经认过的那张证书，E4 在平板上实测时再确认一遍。
 
 **这一阶段不做的**：公开的插件市场、签名、多用户、插件静默自动更新、iOS、在安卓 App 的原生代码里跑插件（App 只是网页的外壳）。
 
