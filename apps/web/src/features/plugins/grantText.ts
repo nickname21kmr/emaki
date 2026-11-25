@@ -27,11 +27,18 @@ export interface GrantLine {
 /** 这些范围会动用户已有的东西，标出来 */
 const DANGER_SCOPES: readonly Scope[] = ['organize-files', 'rules', 'settings'];
 
-/** 贡献的东西：侧栏加一项、改一个默认值 */
+/** 贡献的东西：自己画的页面、侧栏加一项、改一个默认值 */
 export function contributionLines(m: PluginManifest): GrantLine[] {
   const lines: GrantLine[] = [];
+  for (const p of m.contributes['page@1'] ?? [])
+    if (p.view)
+      lines.push({
+        key: `page:${p.id}`,
+        text: `加一页「${p.title ?? m.name}」`,
+        detail: '页面自己画，在隔离的框里显示：不能联网，只能经 Emaki 调下面允许的那些',
+      });
   for (const n of m.contributes['nav.item@1'] ?? [])
-    lines.push({ key: `nav:${n.id}`, text: `在侧栏加「${n.label}」`, detail: `打开 ${n.to}` });
+    lines.push({ key: `nav:${n.id}`, text: `在侧栏加「${n.label}」`, detail: n.page !== undefined ? '打开它的那一页' : `打开 ${n.to}` });
   for (const [k, v] of Object.entries(m.contributes['override@1'] ?? {})) {
     const def = OVERRIDES[k as OverrideKey];
     const opt = def?.options.find((o) => o.value === v);
@@ -87,4 +94,8 @@ export const grantAsPermissions = (g: Grant, requested: PluginPermissions | unde
   ...(g.unsafe && { unsafe: true }),
 });
 
-export const SOURCE_TEXT = { file: '本地文件', folder: '文件夹', git: 'git' } as const;
+export const SOURCE_TEXT = { file: '本地文件', folder: '文件夹', git: 'git', ai: 'AI 助手' } as const;
+
+/** 授权单上的「来自：…」（AI 做的页面没有文件、地址） */
+export const sourceText = (s: { kind: keyof typeof SOURCE_TEXT; location: string; ref: string | null }): string =>
+  s.kind === 'ai' ? 'AI 助手' : `${SOURCE_TEXT[s.kind]} ${s.location}${s.ref ? `（${s.ref}）` : ''}`;

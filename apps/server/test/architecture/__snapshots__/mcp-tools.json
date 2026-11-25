@@ -1527,6 +1527,25 @@
     }
   },
   {
+    "name": "plugins_list",
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "只看这一个插件，并返回它页面的 HTML",
+          "type": "string",
+          "maxLength": 80
+        }
+      },
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
     "name": "plugins_remove",
     "command": "plugins.remove",
     "scope": "plugins",
@@ -1600,6 +1619,92 @@
         "operationId",
         "id",
         "name"
+      ],
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "plugins_save_view",
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "本次操作的唯一标识，重试使用同一个值"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,31}$",
+          "description": "页面的英文短名（小写字母、数字、-），插件 id 是 ai.<name>；修改已有的页面用同一个 name"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "显示的名字（侧栏、页头、插件页），比如「收藏统计」"
+        },
+        "description": {
+          "description": "一句话说明这一页看什么",
+          "type": "string",
+          "maxLength": 300
+        },
+        "html": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000000,
+          "description": "整页 HTML（MCP Apps 视图），写法见工具说明"
+        },
+        "scopes": {
+          "default": [
+            "read"
+          ],
+          "description": "页面要调的工具需要的权限范围，默认只读 [\"read\"]；会改数据的页面才加 curate、collections 等，不能超过助手自己的范围",
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 40
+          }
+        },
+        "icon": {
+          "default": "chart",
+          "description": "侧栏图标",
+          "type": "string",
+          "enum": [
+            "house",
+            "images",
+            "users",
+            "sparkles",
+            "library",
+            "book-copy",
+            "circle-help",
+            "copy",
+            "ban",
+            "settings",
+            "puzzle",
+            "clock",
+            "star",
+            "bookmark",
+            "folder",
+            "chart",
+            "compass",
+            "download",
+            "heart"
+          ]
+        }
+      },
+      "required": [
+        "operationId",
+        "name",
+        "title",
+        "html"
       ],
       "$schema": "http://json-schema.org/draft-07/schema#"
     }
@@ -1918,6 +2023,12 @@
             "width",
             "height"
           ]
+        },
+        "size": {
+          "description": "长边缩到多少像素（缩略图用 240～480）",
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 1600
         }
       },
       "required": [

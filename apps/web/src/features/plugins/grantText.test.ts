@@ -20,6 +20,22 @@ describe('授权单上的话（宿主按清单生成）', () => {
     expect(wontLine({})).toBe('它不会：读或改你的图库、移动或删除你的图、改设置、联网');
   });
 
+  it('自己画的页面：写明在隔离的框里、不能联网；导航项指向它自己的页面', () => {
+    const view: PluginManifest = {
+      id: 'ai.fav',
+      name: '收藏一览',
+      version: '1.0.0',
+      contributes: {
+        'page@1': [{ id: 'main', view: 'index.html' }],
+        'nav.item@1': [{ id: 'main', label: '收藏', to: '/p/ai.fav/main', page: 'main', icon: 'heart', section: 'main' }],
+      },
+    };
+    expect(contributionLines(view)).toEqual([
+      expect.objectContaining({ text: '加一页「收藏一览」', detail: expect.stringMatching(/隔离.*不能联网/) }),
+      expect.objectContaining({ text: '在侧栏加「收藏」', detail: '打开它的那一页' }),
+    ]);
+  });
+
   it('要了权限：一项一句；会动文件的标出来；能读图又联网，直接写出后果', () => {
     const perms = {
       scopes: ['read', 'import', 'organize-files'] as const,

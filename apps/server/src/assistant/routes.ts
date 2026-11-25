@@ -70,10 +70,11 @@ export function assistantRoutes(app: FastifyInstance, ds: SqliteDataSource) {
     const token = req.headers.authorization?.replace(/^Bearer /, '') ?? '';
     const auth = service.authorize(token);
     // MCP SDK 和 sharp 用到时才加载，助手没开时启动不付这份开销
-    const [{ StreamableHTTPServerTransport }, { createLibraryMcp }] = await Promise.all([import('@modelcontextprotocol/sdk/server/streamableHttp.js'), import('./tools.ts')]);
+    const [{ StreamableHTTPServerTransport }, { createLibraryMcp }, { loadSdk }] = await Promise.all([import('@modelcontextprotocol/sdk/server/streamableHttp.js'), import('./tools.ts'), import('./views.ts')]);
     // SQL 工具直接读引擎正在用的库文件（演示模式是 data/demo 里那份，不会读到真实图库）；内存库没有文件，不提供
     const file = ds.databaseFile ?? null;
-    const server = createLibraryMcp(ds.registry, file, service, auth.scope, auth.sessionId);
+    // 插件：AI 做页面的工具、插件页面在 Claude 里打开（docs/plugins.md 第 5 节）
+    const server = createLibraryMcp(ds.registry, file, service, auth.scope, auth.sessionId, { plugins: ds.plugins, sdk: () => loadSdk() });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport); reply.hijack();
     reply.raw.once('close', () => { void server.close(); });

@@ -1,4 +1,4 @@
-import { OVERRIDES, pluginLabel, type LibraryRoot, type OverrideKey, type PluginInfo } from '@emaki/shared';
+import { OVERRIDES, pluginLabel, pluginPagePath, type LibraryRoot, type OverrideKey, type PluginInfo } from '@emaki/shared';
 import { PencilLine, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
@@ -7,6 +7,7 @@ import { DetailHeader } from '@/features/characters/detail/DetailHeader';
 import { Badge, Button, EmptyState, SectionTitle, Segmented, Switch } from '@/components/ui';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/capabilities';
+import { cn } from '@/lib/cn';
 import { usePlugins } from '@/lib/plugins';
 import { useMutate, useSettings } from '@/lib/queries';
 import { PAGES, type PageId } from '@/pages';
@@ -89,9 +90,10 @@ export function PluginDetailPage() {
       />
       <PageBody className="flex max-w-[760px] flex-col gap-8">
         <p className="text-[13px] leading-relaxed text-fg-muted">
-          {SOURCE_PHRASE[p.source]}
-          {p.installed && `，版本 ${p.version}${p.installed.ref ? `（${p.installed.ref}）` : ''}，来自${SOURCE_TEXT[p.installed.kind]} `}
-          {p.installed && <span className="font-mono text-[12px] text-fg">{p.installed.location}</span>}
+          {p.installed?.kind === 'ai' ? 'AI 助手做的页面' : SOURCE_PHRASE[p.source]}
+          {p.installed?.kind === 'ai' && `，第 ${p.version.split('.')[0]} 版`}
+          {p.installed && p.installed.kind !== 'ai' && `，版本 ${p.version}${p.installed.ref ? `（${p.installed.ref}）` : ''}，来自${SOURCE_TEXT[p.installed.kind]} `}
+          {p.installed && p.installed.kind !== 'ai' && <span className="font-mono text-[12px] text-fg">{p.installed.location}</span>}
           {p.displayName ? `，原名「${p.name}」` : ''}。{p.description ?? ''}
         </p>
         {(p.problems.length > 0 || p.disabledReason) && (
@@ -227,12 +229,26 @@ function Contributions({ plugin: p, can }: { plugin: PluginInfo; can: boolean })
             页面
           </SectionTitle>
           <ul className="flex flex-wrap gap-2 text-[13px]">
-            {pages.map((x) => (
-              <li key={x.id} className="rounded-md bg-sunken px-2.5 py-1">
-                {PAGES[x.id as PageId]?.title ?? x.id}
-                <span className="ml-1.5 font-mono text-[11.5px] text-fg-subtle">{PAGES[x.id as PageId]?.path}</span>
-              </li>
-            ))}
+            {pages.map((x) =>
+              x.view ? (
+                // 插件自己画的页面（视图）：能打开
+                <li key={x.id}>
+                  <Link
+                    to={pluginPagePath(p.id, x.id)}
+                    aria-disabled={!p.enabled}
+                    className={cn('inline-block rounded-md bg-sunken px-2.5 py-1 hover:bg-hover', !p.enabled && 'pointer-events-none opacity-60')}
+                  >
+                    {x.title ?? pluginLabel(p)}
+                    <span className="ml-1.5 font-mono text-[11.5px] text-fg-subtle">{pluginPagePath(p.id, x.id)}</span>
+                  </Link>
+                </li>
+              ) : (
+                <li key={x.id} className="rounded-md bg-sunken px-2.5 py-1">
+                  {PAGES[x.id as PageId]?.title ?? x.id}
+                  <span className="ml-1.5 font-mono text-[11.5px] text-fg-subtle">{PAGES[x.id as PageId]?.path}</span>
+                </li>
+              ),
+            )}
           </ul>
         </section>
       )}

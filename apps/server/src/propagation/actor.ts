@@ -2,7 +2,8 @@
  * actor：这次写操作是谁做的（docs/core-architecture.md 第 2.2、5.2 节）。
  * - HTTP 请求默认是 user；AI 助手经 app.inject 调接口时带内部请求头，记成 assistant（只认本进程的令牌，外面的请求伪造不了）；
  * - 后台任务的执行体在 job:<任务种类> 下运行（core/jobs.ts）；启动修补是 system:<步骤>；
- * - 局域网入口上批准过的设备（手机）是 device:<设备 id>（access/lan.ts），带着这台设备的权限范围（grant）。
+ * - 局域网入口上批准过的设备（手机）是 device:<设备 id>（access/lan.ts），带着这台设备的权限范围（grant）；
+ * - 插件的视图经桥接调的是 plugin:<插件 id>@<版本>（http/pluginViews.ts），grant 是插件的授权和入口的交集（docs/plugins.md 4.1）。
  * 提交后的反应按 actor 决定强刷新还是弱刷新：用户、助手和设备强刷新，后台任务和启动修补弱刷新。
  *
  * 用 AsyncLocalStorage 传递：命令、领域模块不用一层层传参。没有设置时（测试直接调方法）按 user 算。
@@ -13,7 +14,7 @@ import type { DomainChange, JobKind, LibraryChangedReason, Scope } from '@emaki/
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 
-export type Actor = 'user' | 'assistant' | `job:${JobKind}` | `system:${string}` | `device:${string}`;
+export type Actor = 'user' | 'assistant' | `job:${JobKind}` | `system:${string}` | `device:${string}` | `plugin:${string}`;
 
 /** 一次调用的上下文：谁、在执行哪个命令、推出去了哪些事件 */
 export interface CallContext {
@@ -63,8 +64,11 @@ export function runCall<T>(call: CallContext, fn: () => T): T {
   return storage.run(call, fn);
 }
 
-/** 用户、助手和设备（手机）的操作：界面要马上看到结果，缓存强刷新 */
-export const isInteractive = (actor: Actor): boolean => actor === 'user' || actor === 'assistant' || actor.startsWith('device:');
+/** 用户、助手、设备（手机）和插件视图的操作：界面要马上看到结果，缓存强刷新 */
+export const isInteractive = (actor: Actor): boolean =>
+  actor === 'user' || actor === 'assistant' || actor.startsWith('device:') || actor.startsWith('plugin:');
+
+export const pluginActor = (pluginId: string, version: string): Actor => `plugin:${pluginId}@${version}`;
 
 /** 推给前端的 changed 事件的 reason */
 export function changedReason(actor: Actor): LibraryChangedReason {

@@ -8,6 +8,7 @@ import { cn } from '@/lib/cn';
 import type { ConversationView } from '../useConversation';
 import { useAssistantView } from '../viewState';
 import { showInLightbox, useAssistantImage } from './parts';
+import { PluginSaveCard } from '@/features/plugins/PluginSaveCard';
 
 export interface FigureProps {
   /** present_result 那条消息（text 和卡片标题相同时不重复显示正文） */
@@ -56,6 +57,7 @@ function FigureView({ message, card, figureNo, tableNo, conv, className }: Figur
       {lead && <p className="text-[13.5px] leading-[1.75] break-words whitespace-pre-wrap">{message.text}</p>}
       {card.imageIds.length > 0 && <Plate card={card} n={figureNo} conv={conv} />}
       {card.columns && card.columns.length > 0 && <Table card={card} n={tableNo} />}
+      {card.plugin && <PluginSaveCard card={card.plugin} />}
     </div>
   );
 }

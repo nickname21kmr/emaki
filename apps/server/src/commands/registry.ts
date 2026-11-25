@@ -164,8 +164,9 @@ export class Registry {
   private require<K extends Def['kind']>(name: string, kind: K): Extract<Def, { kind: K }> {
     const def = this.defs.get(name);
     if (!def || def.kind !== kind) throw new HttpError(404, 'not_found', `没有这个${kind === 'command' ? '命令' : '查询'}：${name}`);
-    const grant = currentCall()?.grant;
-    if (grant && !grant.has(def.scope)) throw new HttpError(403, 'forbidden', `这台设备没有「${SCOPES[def.scope]}」的权限`);
+    const call = currentCall();
+    if (call?.grant && !call.grant.has(def.scope))
+      throw new HttpError(403, 'forbidden', `${call.actor.startsWith('plugin:') ? '这个插件' : '这台设备'}没有「${SCOPES[def.scope]}」的权限`);
     return def as Extract<Def, { kind: K }>;
   }
 

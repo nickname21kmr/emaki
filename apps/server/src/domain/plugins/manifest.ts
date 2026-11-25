@@ -16,15 +16,18 @@ import {
   type Contributes,
   type NavItemContribution,
   type OverrideKey,
+  type PageContribution,
   type PluginManifest,
   type PluginPermissions,
   type Scope,
 } from '@emaki/shared';
-import { InstalledNavItemSchema, PluginManifestSchema } from '@emaki/shared/schemas';
-import { readFileSync } from 'node:fs';
+import { InstalledNavItemSchema, InstalledPageSchema, PluginManifestSchema } from '@emaki/shared/schemas';
+import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 export const MANIFEST_FILE = 'emaki-plugin.json';
+/** 一个视图文件最大多少（官方 App 类由宿主在 /plugin-sdk/app.js 提供，视图本身不用带） */
+export const MAX_VIEW_BYTES = 2 * 1024 * 1024;
 
 /** 留给 Emaki 自己的 id 前缀：内置的、我的、AI 做的 */
 const RESERVED_PREFIXES = ['core.', 'mine.', 'ai.'];
@@ -39,7 +42,8 @@ export interface CheckedManifest {
 const scopeName = (s: Scope) => SCOPES[s].split(/[：（]/)[0]!;
 const uniq = <T>(xs: readonly T[]) => [...new Set(xs)];
 
-export function checkManifest(raw: unknown, emakiVersion: string): CheckedManifest {
+/** ai：AI 助手做的页面（id 必须是 ai. 开头，宿主生成的清单）；别的插件不能用 core.、mine.、ai. */
+export function checkManifest(raw: unknown, emakiVersion: string, opts: { ai?: boolean } = {}): CheckedManifest {
   const parsed = PluginManifestSchema.safeParse(raw);
   if (!parsed.success)
     return {
@@ -49,7 +53,9 @@ export function checkManifest(raw: unknown, emakiVersion: string): CheckedManife
   const m = parsed.data;
   const problems: string[] = [];
 
-  if (RESERVED_PREFIXES.some((p) => m.id.startsWith(p))) problems.push(`id「${m.id}」以 ${m.id.split('.')[0]}. 开头，这是留给 Emaki 自己的`);
+  if (opts.ai) {
+    if (!m.id.startsWith('ai.')) problems.push(`AI 做的页面的 id 要以 ai. 开头（现在是「${m.id}」）`);
+  } else if (RESERVED_PREFIXES.some((p) => m.id.startsWith(p))) problems.push(`id「${m.id}」以 ${m.id.split('.')[0]}. 开头，这是留给 Emaki 自己的`);
   if (!validVersion(m.version)) problems.push(`版本号「${m.version}」要写成 1.2.3 这样`);
   const range = m.engines?.emaki;
   if (range !== undefined) {
@@ -107,8 +113,21 @@ export function checkManifest(raw: unknown, emakiVersion: string): CheckedManife
         else values[k] = v;
       }
       contributes['override@1'] = values;
+    } else if (point === 'page@1') {
+      const r = InstalledPageSchema.array().min(1).max(10).safeParse(value);
+      if (!r.success) {
+        const i = r.error.issues[0]!;
+        problems.push(`page@1 的 ${i.path.join('.')}：${i.message}`);
+        continue;
+      }
+      const ids = r.data.map((p) => p.id);
+      if (new Set(ids).size !== ids.length) problems.push('page@1 里有重复的 id');
+      contributes['page@1'] = r.data as PageContribution[];
     }
   }
+  // 导航项指向自己的页面：要有这一页
+  for (const n of contributes['nav.item@1'] ?? [])
+    if (n.page !== undefined && !contributes['page@1']?.some((p) => p.id === n.page)) problems.push(`导航项「${n.label}」指向的页面「${n.page}」在 page@1 里没有`);
   if (!Object.keys(m.contributes).length) problems.push('它什么都没有贡献（contributes 是空的）');
 
   const manifest: PluginManifest = {
@@ -126,16 +145,40 @@ export function checkManifest(raw: unknown, emakiVersion: string): CheckedManife
 }
 
 /** 读一个包里的清单（去掉 BOM）；读不到、不是 JSON 都写成问题 */
-export function readManifest(dir: string, emakiVersion: string): CheckedManifest {
+export function readManifest(dir: string, emakiVersion: string, opts: { ai?: boolean } = {}): CheckedManifest {
   let text: string;
   try {
     text = readFileSync(path.join(dir, MANIFEST_FILE), 'utf8').replace(/^﻿/, '');
   } catch {
     return { manifest: null, problems: [`没有找到 ${MANIFEST_FILE}`] };
   }
+  let checked: CheckedManifest;
   try {
-    return checkManifest(JSON.parse(text), emakiVersion);
+    checked = checkManifest(JSON.parse(text), emakiVersion, opts);
   } catch (e) {
     return { manifest: null, problems: [`${MANIFEST_FILE} 不是合法的 JSON：${(e as Error).message}`] };
+  }
+  if (checked.manifest) checked.problems.push(...checkViewFiles(dir, checked.manifest));
+  return checked;
+}
+
+/** 视图文件在不在包里、大不大（装的时候查，之后每次算状态再查：文件夹装的可能改了） */
+export function checkViewFiles(dir: string, m: PluginManifest): string[] {
+  const problems: string[] = [];
+  for (const p of m.contributes['page@1'] ?? []) {
+    if (!p.view) continue;
+    const size = fileSize(path.join(dir, ...p.view.split('/')));
+    if (size === null) problems.push(`页面「${p.title ?? p.id}」的视图文件 ${p.view} 不在包里`);
+    else if (size > MAX_VIEW_BYTES) problems.push(`页面「${p.title ?? p.id}」的视图文件 ${p.view} 太大（最多 ${MAX_VIEW_BYTES / 1024 / 1024} MB）`);
+  }
+  return problems;
+}
+
+function fileSize(file: string): number | null {
+  try {
+    const st = statSync(file);
+    return st.isFile() ? st.size : null;
+  } catch {
+    return null;
   }
 }

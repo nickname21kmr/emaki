@@ -1135,6 +1135,65 @@ describe('插件（注册表：plugins.*，docs/plugins.md 第 9 节）', () => 
     expect(upd).toMatchObject({ status: 200, json: { manifest: { version: '0.2.0' }, current: { version: '0.1.0' } } });
     expect((await call('POST', '/api/plugins/core.annex/check-update')).status).toBe(400);
   });
+  route('GET /api/plugins/packages/:token', async () => {
+    const { token } = (await putZip(makeZip({ 'emaki-plugin.json': JSON.stringify(sampleManifest) }))).json();
+    expect(await call('GET', `/api/plugins/packages/${token}`)).toMatchObject({ status: 200, json: { token, manifest: { id: 'example.smoke' } } });
+    expect((await call('GET', '/api/plugins/packages/nope')).status).toBe(404);
+  });
+
+  // 视图（E4）：装一个带页面的插件，打开、调工具、记错、取图
+  const viewManifest = {
+    id: 'example.view',
+    name: '视图',
+    version: '0.1.0',
+    permissions: { scopes: ['read'] },
+    contributes: { 'page@1': [{ id: 'main', view: 'index.html' }], 'nav.item@1': [{ id: 'main', label: '视图', page: 'main' }] },
+  };
+  const installView = async () => {
+    const { token } = (await putZip(makeZip({ 'emaki-plugin.json': JSON.stringify(viewManifest), 'index.html': '<p>hi</p>' }))).json();
+    await call('POST', '/api/plugins/install', { token });
+  };
+  route('GET /api/plugins/:id/pages/:page', async () => {
+    await installView();
+    const { status, json } = await call('GET', '/api/plugins/example.view/pages/main');
+    expect(status).toBe(200);
+    expect(json).toMatchObject({ pluginId: 'example.view', pageId: 'main', title: '视图', html: '<p>hi</p>', mediaBase: expect.stringMatching(/^\/api\/plugin-media\//) });
+    expect(json.tools.map((t: { name: string }) => t.name)).toEqual(['read_library', 'read_media']);
+    expect((await call('GET', '/api/plugins/example.view/pages/nope')).status).toBe(404);
+  });
+  route('POST /api/plugins/:id/call', async () => {
+    await installView();
+    const r = await call('POST', '/api/plugins/example.view/call', { name: 'read_library', arguments: { path: '/api/summary' } });
+    expect(r.status).toBe(200);
+    expect(r.json.isError).toBeUndefined();
+    const denied = await call('POST', '/api/plugins/example.view/call', { name: 'curation_set_favorite', arguments: { operationId: 'x', ids: ['1'], value: true } });
+    expect(denied).toMatchObject({ status: 200, json: { isError: true } });
+    expect((await call('POST', '/api/plugins/core.annex/call', { name: 'read_library', arguments: {} })).status).toBe(409);
+  });
+  route('POST /api/plugins/:id/storage', async () => {
+    await installView();
+    expect(await call('POST', '/api/plugins/example.view/storage', { op: 'set', key: 'tab', value: { a: 1 } })).toMatchObject({ status: 200 });
+    expect((await call('POST', '/api/plugins/example.view/storage', { op: 'get', key: 'tab' })).json).toMatchObject({ value: { a: 1 } });
+    expect((await call('POST', '/api/plugins/example.view/storage', { op: 'list' })).json).toMatchObject({ keys: ['tab'] });
+    expect((await call('POST', '/api/plugins/example.view/storage', { op: 'nope' })).status).toBe(400);
+  });
+  route('POST /api/plugins/:id/errors', async () => {
+    await installView();
+    expect(await call('POST', '/api/plugins/example.view/errors', { message: '握手超时' })).toMatchObject({ status: 200, json: { autoDisabled: false } });
+    expect((await call('POST', '/api/plugins/example.view/errors', {})).status).toBe(400);
+  });
+  route('GET /api/plugin-media/:token/:size/:imageId', async () => {
+    await installView();
+    const { json } = await call('GET', '/api/plugins/example.view/pages/main');
+    const images = (await call('GET', '/api/images?limit=1')).json.items as { id: string }[];
+    if (images[0]) expect((await app.inject({ method: 'GET', url: `${json.mediaBase}/thumb/${images[0].id}` })).statusCode).not.toBe(403);
+    expect((await app.inject({ method: 'GET', url: '/api/plugin-media/nope/thumb/1' })).statusCode).toBe(404);
+  });
+  route('POST /api/plugins/ai-views', async () => {
+    const r = await call('POST', '/api/plugins/ai-views', { name: 'smoke', title: '冒烟页', html: '<p>ai</p>' });
+    expect(r).toMatchObject({ status: 200, json: { status: 'needs_confirmation', id: 'ai.smoke', name: '冒烟页', version: '1.0.0' } });
+    expect((await call('POST', '/api/plugins/ai-views', { name: 'smoke', title: '冒烟页', html: '<p>ai</p>', scopes: ['settings'] })).status).toBe(400);
+  });
 });
 
 describe('手机上传（注册表：upload.*、devices.setUpload；http/uploads.ts）：本机入口上没有设备，传不了；整套流程见 test/upload/', () => {

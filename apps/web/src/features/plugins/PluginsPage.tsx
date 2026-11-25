@@ -18,7 +18,7 @@ import { useCan } from '@/lib/capabilities';
 import { cn } from '@/lib/cn';
 import { usePlugins } from '@/lib/plugins';
 import { useMutate } from '@/lib/queries';
-import { InstallDialog } from './InstallDialogs';
+import { ConfirmPackage, InstallDialog } from './InstallDialogs';
 import { NewOverrideDialog, RemoveDialog, RenameDialog } from './PluginDialogs';
 import { UpdateCheck, useCheckUpdate } from './UpdateCheck';
 import { Slot } from '@/blocks/Slot';
@@ -87,6 +87,20 @@ export function PluginsPage() {
       </PageBody>
       <NewOverrideDialog open={creating} onOpenChange={setCreating} />
       <InstallDialog open={installing} onOpenChange={setInstalling} />
+      {params.get('confirm') && (
+        <ConfirmPackage
+          token={params.get('confirm')!}
+          onClose={() =>
+            setParams(
+              (p) => {
+                p.delete('confirm');
+                return p;
+              },
+              { replace: true },
+            )
+          }
+        />
+      )}
     </>
   );
 }

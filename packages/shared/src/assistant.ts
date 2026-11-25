@@ -23,6 +23,17 @@ export interface AssistantCard {
   imageIds: string[];
   columns?: string[];
   rows?: unknown[][];
+  /** 助手做好的页面等你保存（plugins_save_view，docs/plugins.md 5.1）：卡片上就是授权单和「在侧栏显示」 */
+  plugin?: AssistantPluginCard;
+}
+export interface AssistantPluginCard {
+  /** 准备好的包（plugins.install 用）；已经直接存好的（权限没变的修改）没有 */
+  token: string | null;
+  pluginId: string;
+  name: string;
+  version: string;
+  /** 存好以后打开哪一页 */
+  to: string;
 }
 export interface AssistantQuestion {
   id: string;

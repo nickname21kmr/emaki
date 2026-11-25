@@ -43,6 +43,8 @@ export const PAGES = {
   // 插件（docs/plugins.md 9.7）：谁都能看，改要 plugins（页面里各自判断）
   plugins: { path: '/plugins', title: '插件', need: 'read' },
   plugin: { path: '/plugins/:id', title: '插件', need: 'read' },
+  // 插件自己画的页面（视图，docs/plugins.md 第 5 节）：标题来自插件
+  pluginView: { path: '/p/:plugin/:page', title: '插件', need: 'read' },
   // 开发用（生产构建不注册）
   devUi: { path: '/dev/ui', title: '共用件', need: null },
   // 不认识的地址显示首页

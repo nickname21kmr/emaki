@@ -60,8 +60,10 @@ import type {
   MovePreview,
   MutationResult,
   NavSection,
+  PluginCallResult,
   PluginPackage,
   PluginsState,
+  PluginView,
   NetworkCheckResponse,
   PickFolderResponse,
   PromotableSuggestions,
@@ -338,8 +340,19 @@ export const api = {
   inspectPlugin: (source: { kind: 'folder'; path: string } | { kind: 'git'; url: string; ref?: string }) =>
     post<PluginPackage>('/plugins/packages/inspect', { source }),
   checkPluginUpdate: (id: string) => post<PluginPackage>(`/plugins/${encodeURIComponent(id)}/check-update`),
-  installPlugin: (token: string, folders?: Record<string, { rootId: string; dir: string }>) =>
-    post<MutationResult & { id: string }>('/plugins/install', { token, ...(folders && { folders }) }),
+  installPlugin: (token: string, folders?: Record<string, { rootId: string; dir: string }>, showInNav?: boolean) =>
+    post<MutationResult & { id: string }>('/plugins/install', { token, ...(folders && { folders }), ...(showInNav !== undefined && { showInNav }) }),
+  /** 准备好的包（助手的保存卡片、确认链接只有 token） */
+  pluginPackage: (token: string) => get<PluginPackage>(`/plugins/packages/${encodeURIComponent(token)}`),
+
+  // 插件的视图（docs/plugins.md 第 5 节，服务端 http/pluginViews.ts）：不进撤销栈，视图里改了数据的命令照常有撤销 token
+  pluginView: (id: string, page: string) => get<PluginView>(`/plugins/${encodeURIComponent(id)}/pages/${encodeURIComponent(page)}`),
+  pluginCall: (id: string, name: string, args: Record<string, unknown>) =>
+    post<PluginCallResult>(`/plugins/${encodeURIComponent(id)}/call`, { name, arguments: args }),
+  pluginStorage: (id: string, body: { op: 'get' | 'delete'; key: string } | { op: 'set'; key: string; value: unknown } | { op: 'list'; prefix?: string }) =>
+    post<{ value?: unknown; keys?: string[]; ok?: boolean }>(`/plugins/${encodeURIComponent(id)}/storage`, body),
+  pluginError: (id: string, message: string, source = '视图') =>
+    post<{ autoDisabled: boolean }>(`/plugins/${encodeURIComponent(id)}/errors`, { source, message }),
 
   // 手机访问（docs/mobile.md 第 2 节）：scope 是 devices，只有本机入口能用（局域网入口上是 403）；都不可撤销、不占撤销栈
   accessStatus: () => get<AccessStatus>('/access'),

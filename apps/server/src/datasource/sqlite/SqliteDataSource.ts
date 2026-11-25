@@ -53,6 +53,7 @@ import { SqliteLocalizer, type Localizer } from '../../services/i18n/localizer.t
 import { relocalizeAll } from '../../domain/catalog/relocalize.ts';
 import { LibraryWatcher, type WatchedRoot } from '../../services/watch/LibraryWatcher.ts';
 import { Plugins } from '../../domain/plugins/plugins.ts';
+import { PluginMedia } from '../../services/plugins/media.ts';
 import { PluginPackages } from '../../services/plugins/packages.ts';
 import { config } from '../../config.ts';
 import { pendingPixivCount, queueUnseenPixivAnimations, syncPixivCharacters } from '../../services/pixiv/sync.ts';
@@ -411,6 +412,8 @@ export class SqliteDataSource {
   readonly access: Access;
   /** 插件管理（docs/plugins.md 第 9 节）：启用、改名、覆盖的值、侧栏 */
   readonly plugins: Plugins;
+  /** 插件视图里的图片：短期令牌（docs/plugins.md 第 5 节，http/pluginViews.ts） */
+  readonly pluginMedia: PluginMedia;
 
   protected constructor(db: Db, bus: EventBus, dataDir: string, opts: SqliteOpenOptions) {
     this.ports = resolvePorts(opts);
@@ -467,6 +470,7 @@ export class SqliteDataSource {
       new PluginPackages(dataDir, this.ports.clock),
       config.appVersion,
     );
+    this.pluginMedia = new PluginMedia(this.ports.clock);
     this.duplicates = new DuplicateQueries(this.ctx, this.pendingTrash);
     this.searchQueries = new SearchQueries(db, this.derived);
     this.dedupe = new DedupeService({

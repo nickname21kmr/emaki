@@ -1,0 +1,13 @@
+{
+  "id": "example.works-chart",
+  "name": "作品排行",
+  "version": "0.1.0",
+  "description": "样例插件：自己画的一页（视图）。各作品收了多少张、最近七天新增多少，点作品进作品页。只读图库，不改任何东西。",
+  "author": "Emaki",
+  "engines": { "emaki": ">=0.1.17" },
+  "permissions": { "scopes": ["read"] },
+  "contributes": {
+    "page@1": [{ "id": "main", "view": "index.html", "title": "作品排行" }],
+    "nav.item@1": [{ "id": "main", "label": "作品排行", "page": "main", "icon": "chart", "section": "main" }]
+  }
+}

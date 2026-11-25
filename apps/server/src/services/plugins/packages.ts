@@ -124,6 +124,17 @@ export class PluginPackages {
     return this.remember(s);
   }
 
+  /** 宿主自己生成的包（AI 助手做的页面）：几个文件写到 staging。files 的键是相对路径（只用 / 分隔，宿主给的，不含 ..） */
+  stageFiles(kind: PackageKind, location: string, files: Record<string, string>): Staged {
+    const s = this.newStaging(kind, location, null);
+    for (const [rel, text] of Object.entries(files)) {
+      const to = path.join(s.root, ...rel.split('/'));
+      mkdirSync(path.dirname(to), { recursive: true });
+      writeFileSync(to, text);
+    }
+    return this.remember(s);
+  }
+
   /** 准备好的包；过期的、没有的返回 null */
   get(token: string): Staged | null {
     this.expire();

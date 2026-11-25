@@ -9,14 +9,28 @@
  * 助手的会话工具（只读 SQL、页面上下文、提问、展示结果）不是图库操作，在这里手写（SESSION_TOOLS）。
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { ASSISTANT_SCOPES, type AssistantCard, type AssistantContext, type ImportImagesResult } from '@emaki/shared';
+import {
+  ASSISTANT_SCOPES,
+  pluginLabel,
+  pluginPagePath,
+  pluginViewUri,
+  type AssistantCard,
+  type AssistantContext,
+  type PluginsState,
+} from '@emaki/shared';
+import { SaveAiViewInput } from '@emaki/shared/schemas';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { openSharp } from '../services/image/pixels.ts';
-import type { CommandDef, QueryDef, Registry } from '../commands/registry.ts';
-import type { FileResponse } from '../infra/ports.ts';
+import type { Registry } from '../commands/registry.ts';
+import type { Plugins } from '../domain/plugins/plugins.ts';
+import { json, libraryTools } from './libraryTools.ts';
 import { queryLibrary } from './query.ts';
+import { forMcp, MCP_APP_MIME, VIEW_GUIDE } from './views.ts';
+
+export { assistantCommands, libraryTools, readableQueries, READ_TOOLS, SESSION_TOOLS, toolName, type LibraryTool } from './libraryTools.ts';
+
+/** 插件的工具（有插件管理时才挂）：AI 做页面、列出插件 */
+export const PLUGIN_TOOLS = ['plugins_save_view', 'plugins_list'] as const;
 
 export interface ToolHost {
   assertEnabled(): void;
@@ -26,56 +40,14 @@ export interface ToolHost {
   recordMutation(sessionId: string | undefined, result: any): void;
 }
 
-/** 不来自注册表的工具：助手自己的会话工具（不是图库操作），以及按地址读查询、看图这两个读工具 */
-export const SESSION_TOOLS = ['describe_database', 'query_database', 'get_page_context', 'ask_user', 'present_result'] as const;
-export const READ_TOOLS = ['read_library', 'read_media'] as const;
-
-const json = (data: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data) }] });
-
-/** 命令名 → 工具名：curation.setFavorite → curation_set_favorite */
-export const toolName = (command: string) => command.replace(/\./g, '_').replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
-
-/** 助手能用的命令（按 scope），按名字排好 */
-export function assistantCommands(registry: Registry): CommandDef[] {
-  return registry
-    .commands()
-    .filter((d) => ASSISTANT_SCOPES.includes(d.scope))
-    .sort((a, b) => a.name.localeCompare(b.name));
+export interface LibraryMcpExtra {
+  /** 插件管理：有它才挂 AI 做页面的工具（plugins_save_view、plugins_list）和插件页面的视图（在 Claude 里打开） */
+  plugins?: Plugins;
+  /** 视图用的官方 App 类（网页构建出的 /plugin-sdk/app.js）：在 Claude 里打开时内联进页面；没有构建过是 null */
+  sdk?: () => string | null;
 }
 
-/** read_library 能读的查询：scope 是 read、有 GET 地址、不是文件（看图用 read_media） */
-export function readableQueries(registry: Registry): { def: QueryDef; path: string; pattern: RegExp; params: string[] }[] {
-  return registry
-    .queries()
-    .filter((d) => ASSISTANT_SCOPES.includes(d.scope) && d.name !== 'images.thumbnail' && d.name !== 'images.original' && d.name !== 'pose.figure' && d.name !== 'pose.posewearFile')
-    .flatMap((def) =>
-      (def.http ?? [])
-        .filter((h) => h.method === 'GET')
-        .map((h) => {
-          const params: string[] = [];
-          const pattern = new RegExp(`^${h.path.replace(/:(\w+)/g, (_m, p: string) => (params.push(p), '([^/]+)'))}$`);
-          return { def, path: h.path, pattern, params };
-        }),
-    );
-}
-
-/** 命令的参数：对象 schema 直接展开加上 operationId；别的（判别联合）放在 input 里 */
-function toolInput(def: CommandDef): { shape: Record<string, z.ZodType>; wrapped: boolean } {
-  const operationId = z.string().min(1).max(100).describe('本次操作的唯一标识，重试使用同一个值');
-  const input = def.input as unknown as { shape?: Record<string, z.ZodType> };
-  if (input.shape) return { shape: { operationId, ...input.shape }, wrapped: false };
-  return { shape: { operationId, input: def.input as z.ZodType }, wrapped: true };
-}
-
-/** app.inject 按 WHATWG URL 解析：\ 当作 /，.. 和 %2e 会被消掉。所以按解析后的结果判断，且解析不能改写路径 */
-function parseReadPath(path: string): URL {
-  const url = URL.canParse(path, 'http://localhost') ? new URL(path, 'http://localhost') : null;
-  if (!url || url.origin !== 'http://localhost' || url.hash || url.pathname !== path.split(/[?#]/)[0]) throw new Error('不支持的读取路径');
-  return url;
-}
-
-/** file 为 null 表示引擎用的是内存库（测试），没有文件可读，不提供 SQL 工具 */
-export function createLibraryMcp(registry: Registry, file: string | null, host: ToolHost, scope: string, sessionId?: string) {
+export function createLibraryMcp(registry: Registry, file: string | null, host: ToolHost, scope: string, sessionId?: string, extra: LibraryMcpExtra = {}) {
   const server = new McpServer(
     { name: 'emaki', version: '0.1.0' },
     {
@@ -180,96 +152,148 @@ export function createLibraryMcp(registry: Registry, file: string | null, host: 
     },
   );
 
-  // ---------------------------------------------------------------- 读：注册表里的查询
-  const readable = readableQueries(registry);
+  // ---------------------------------------------------------------- 图库的工具：读的查询、写的命令（插件视图用的也是这一份）
+  const tools = libraryTools(registry, {
+    actor,
+    namespace: `assistant:${scope}`,
+    scopes: new Set(ASSISTANT_SCOPES),
+    check: () => host.assertEnabled(),
+    onMutation: (result) => host.recordMutation(sessionId, result),
+  });
+  for (const t of tools)
+    server.registerTool(t.name, { description: t.description, inputSchema: t.inputSchema, annotations: t.annotations }, (args: Record<string, unknown>) =>
+      t.call(args),
+    );
+
+  // ---------------------------------------------------------------- AI 做的页面（docs/plugins.md 5.1）、在对话里打开插件的页面
+  if (extra.plugins) {
+    registerPluginTools(server, registry, host, extra.plugins, { scope, sessionId });
+    registerViewTools(server, host, extra.plugins, extra.sdk ?? (() => null));
+  }
+  return server;
+}
+// ---------------------------------------------------------------- AI 做的页面（docs/plugins.md 5.1）
+
+type SaveViewResult =
+  | { status: 'saved'; id: string; version: string; message: string; undoToken?: string }
+  | { status: 'needs_confirmation'; id: string; token: string; name: string; version: string; message: string };
+
+function registerPluginTools(
+  server: McpServer,
+  registry: Registry,
+  host: ToolHost,
+  plugins: Plugins,
+  o: { scope: string; sessionId: string | undefined },
+): void {
+  const input = SaveAiViewInput.shape;
   server.registerTool(
-    'read_library',
+    'plugins_save_view',
     {
       description:
-        '按应用现有口径读取图库（注册表里的查询，和网页同一个口径）。path 是下面的地址之一，可附查询参数：' +
-        readable.map((r) => `${r.path}（${r.def.summary}）`).join('；') +
-        '。角色归入搜索可用 /api/search?forAssignment=true&q=角色名。界面上显示的数（待处理数、已认出比例、别册张数等）读 /api/summary。' +
-        '图片的状态是三个事实：tagged（这份文件识别过没有）、characterCount（角色数）、queue（art 未识别「插画 · 漫画」、shelved 放下的、annex「照片 · 文字等」、book 在整本处理的合集里、null 不在），另有 excluded。',
-      inputSchema: { path: z.string().max(4000) },
-      annotations: read,
+        '把你做好的一页（MCP Apps 视图的整页 HTML）存成 Emaki 的插件页面：出现在「插件」页里，用户可以启用、停用、改名、删除，可以放进侧栏。' +
+        '第一次保存（或者多要了权限）时，对话里会出一张卡片（授权单 + 「在侧栏显示」），用户点「保存」才存好——这时请结束本轮，等用户确认；' +
+        '修改已有的页面（同一个 name）、权限没变时直接存成新的一版（能撤销）。权限不能超过你自己的范围。operationId 是本次操作的唯一标识。\n\n' +
+        VIEW_GUIDE,
+      inputSchema: { operationId: z.string().min(1).max(100).describe('本次操作的唯一标识，重试使用同一个值'), ...input },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
-    async ({ path }) => {
+    async (args: Record<string, unknown>) => {
       host.assertEnabled();
-      const url = parseReadPath(path);
-      for (const r of readable) {
-        const m = r.pattern.exec(url.pathname);
-        if (!m) continue;
-        const input: Record<string, unknown> = Object.fromEntries(url.searchParams);
-        r.params.forEach((p, i) => (input[p] = decodeURIComponent(m[i + 1]!)));
-        return json(await registry.query(r.def.name, input, { actor }));
+      const { operationId, ...rest } = args;
+      const r = await registry.execute<SaveViewResult>('plugins.saveView', rest, {
+        actor: 'assistant',
+        operationId: String(operationId),
+        namespace: `assistant:${o.scope}`,
+      });
+      const to = pluginPagePath(r.id, 'main');
+      if (r.status === 'saved') {
+        if (r.undoToken) host.recordMutation(o.sessionId, r);
+        return json({ ...r, to });
       }
-      throw new Error('不支持的读取路径');
-    },
-  );
-  server.registerTool(
-    'read_media',
-    {
-      description: '实际查看图库图片（查询 images.original）。按需使用，可指定原图的像素裁剪区域检查局部。输出缩放到最多 1600px。',
-      inputSchema: {
-        imageId: z.string().min(1),
-        crop: z
-          .object({
-            left: z.number().int().nonnegative(),
-            top: z.number().int().nonnegative(),
-            width: z.number().int().positive(),
-            height: z.number().int().positive(),
-          })
-          .optional(),
-      },
-      annotations: read,
-    },
-    async ({ imageId, crop }) => {
-      host.assertEnabled();
-      const file = await registry.query<FileResponse>('images.original', { id: imageId }, { actor });
-      // 和缩略图同一套解码：容忍 pixiv 常见的坏 JPEG，BMP 走自带解码器
-      const bmp = file.contentType === 'image/bmp';
-      const input = file.kind === 'buffer' ? Buffer.from(file.body) : bmp ? await readFile(file.filePath) : file.filePath;
-      let pipeline = openSharp(input, bmp ? 'bmp' : 'jpeg');
-      if (crop) pipeline = pipeline.extract(crop);
-      const bytes = await pipeline
-        .resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 82 })
-        .toBuffer();
-      return { content: [{ type: 'image' as const, mimeType: 'image/jpeg', data: bytes.toString('base64') }] };
+      const card: AssistantCard = {
+        id: randomUUID(),
+        title: `保存页面「${r.name}」`,
+        imageIds: [],
+        plugin: { token: r.token, pluginId: r.id, name: r.name, version: r.version, to },
+      };
+      host.present(card, o.sessionId);
+      return json({
+        status: r.status,
+        id: r.id,
+        message: o.sessionId
+          ? '对话里出了一张保存卡片。用户点「保存」以后页面才存好（一小时内有效）；请结束本轮，等用户确认。'
+          : `页面准备好了，请用户打开 Emaki 的「插件」页（/plugins?confirm=${r.token}）确认保存（一小时内有效）。`,
+        to,
+      });
     },
   );
 
-  // ---------------------------------------------------------------- 写：注册表里助手能用的命令
-  for (const def of assistantCommands(registry)) {
-    const { shape, wrapped } = toolInput(def);
-    const notes = [
-      def.mcp?.description,
-      def.undoable ? '可撤销，返回撤销 token（也会出现在网页的撤销栈里）' : '不可撤销',
-      'operationId 是本次操作的唯一标识，重试复用同一个值',
-    ];
-    server.registerTool(
-      toolName(def.name),
-      {
-        description: `${def.summary}。${notes.filter(Boolean).join('；')}。`,
-        inputSchema: shape,
-        annotations: { readOnlyHint: false, destructiveHint: !!def.mcp?.destructive, idempotentHint: true },
-      },
-      async (args: Record<string, unknown>) => {
+  server.registerTool(
+    'plugins_list',
+    {
+      description:
+        '列出 Emaki 的插件（内置的页面、覆盖、装的插件、你做的页面），看名字、启用了没有、有哪些页面和它们的地址。给 id 时再返回这个插件每个页面的 HTML，修改你做的页面前先读它。',
+      inputSchema: { id: z.string().max(80).optional().describe('只看这一个插件，并返回它页面的 HTML') },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ id }) => {
+      host.assertEnabled();
+      const st = await registry.query<PluginsState>('plugins.state', {}, { actor: 'assistant' });
+      const list = st.plugins
+        .filter((p) => !id || p.id === id)
+        .map((p) => ({
+          id: p.id,
+          name: pluginLabel(p),
+          source: p.installed?.kind === 'ai' ? 'ai' : p.source,
+          enabled: p.enabled,
+          version: p.version,
+          kinds: p.kinds,
+          ...(p.description && { description: p.description }),
+          ...(p.problems.length && { problems: p.problems }),
+          ...(p.grant && { scopes: p.grant.scopes }),
+          pages: (p.contributes['page@1'] ?? []).filter((pg) => pg.view).map((pg) => ({ id: pg.id, title: pg.title, to: pluginPagePath(p.id, pg.id) })),
+        }));
+      if (!id) return json(list);
+      if (!list.length) throw new Error(`没有插件「${id}」`);
+      const pages = plugins.viewSources(id);
+      return json({ ...list[0], pages: list[0]!.pages.map((pg) => ({ ...pg, html: pages.find((x) => x.pageId === pg.id)?.html ?? null })) });
+    },
+  );
+}
+
+// ---------------------------------------------------------------- 插件的页面在 Claude 里打开（MCP Apps，docs/plugins.md 第 5 节「向外」）
+
+/** 工具名只能用字母、数字、_、-，最长 64 */
+export const viewToolName = (pluginId: string, pageId: string) => `open_view_${`${pluginId}_${pageId}`.replace(/[^a-zA-Z0-9]+/g, '_')}`.slice(0, 64);
+
+function registerViewTools(server: McpServer, host: ToolHost, plugins: Plugins, sdk: () => string | null): void {
+  for (const v of plugins.viewPages()) {
+    const uri = pluginViewUri(v.pluginId, v.pageId);
+    server.registerResource(
+      `${v.pluginId}/${v.pageId}`,
+      uri,
+      { title: v.title, description: v.description ?? `Emaki 插件页面「${v.title}」`, mimeType: MCP_APP_MIME },
+      async () => {
         host.assertEnabled();
-        const { operationId, ...rest } = args;
-        const input = wrapped ? rest.input : rest;
-        const result = await registry.execute<Record<string, unknown>>(def.name, input, {
-          actor,
-          operationId: String(operationId),
-          namespace: `assistant:${scope}`,
-        });
-        if (result && typeof result === 'object' && result.undoToken) host.recordMutation(sessionId, result);
-        // 新增入库：全部失败（重名要确认的不算）时标成出错
-        const items = (result as Partial<ImportImagesResult>).items;
-        const failed = def.name === 'library.import' && items?.every((i) => i.status === 'failed' && i.code !== 'needs_confirm');
-        return { ...json(result), ...(failed ? { isError: true } : {}) };
+        const page = plugins.view(v.pluginId, v.pageId);
+        const text = forMcp(page.html, sdk());
+        // 视图不联网、只用自己内联的东西（官方 App 类内联进来了；图片在 Claude 里经 read_media 取成 data:）
+        return { contents: [{ uri, mimeType: MCP_APP_MIME, text, _meta: { ui: { csp: { connectDomains: [], resourceDomains: [] }, prefersBorder: false } } }] };
+      },
+    );
+    server.registerTool(
+      viewToolName(v.pluginId, v.pageId),
+      {
+        title: v.title,
+        description: `在对话里打开 Emaki 的插件页面「${v.title}」${v.description ? `：${v.description}` : ''}。页面自己会读图库，不用再传参数。`,
+        inputSchema: {},
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+        _meta: { ui: { resourceUri: uri }, 'ui/resourceUri': uri },
+      },
+      async () => {
+        host.assertEnabled();
+        return json({ opened: v.title, page: pluginPagePath(v.pluginId, v.pageId) });
       },
     );
   }
-  return server;
 }

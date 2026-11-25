@@ -43,18 +43,33 @@ export type NavIcon = (typeof NAV_ICONS)[number];
 
 // ---------------------------------------------------------------- 贡献点（E1：page、nav.item、block、override）
 
-/** page@1：一页。内置插件写网页的页面 id（apps/web/src/pages.ts），插件的页面以后是视图（E4） */
+/**
+ * page@1：一页。内置插件写网页的页面 id（apps/web/src/pages.ts）；装的插件、AI 做的页面是视图（E4，docs/plugins.md 第 5 节）：
+ * 包里的一个 HTML 文件，在隔离的 iframe 里显示，地址是 pluginPagePath(插件, 页面)
+ */
 export interface PageContribution {
   id: string;
+  /** 视图：包里的 HTML 文件（相对路径，比如 views/stats.html） */
+  view?: string;
+  /** 页头上的标题（不写用插件的名字） */
+  title?: string;
 }
+
+/** 插件的视图页面在网页上的地址 */
+export const pluginPagePath = (pluginId: string, pageId: string): string => `/p/${pluginId}/${pageId}`;
+
+/** 视图页面在 MCP 里的资源地址（MCP Apps 的 ui://，在 Claude 里打开用） */
+export const pluginViewUri = (pluginId: string, pageId: string): string => `ui://${pluginId}/${pageId}`;
 
 /** nav.item@1：侧栏（手机上是底部标签栏）里的一项 */
 export interface NavItemContribution {
   /** 稳定 id（顺序、在不在侧栏按它存） */
   id: string;
   label: string;
-  /** 地址；`:originalWorkId` 这种由网页按图库的情况填（没有原创作品时不显示） */
+  /** 地址；`:originalWorkId` 这种由网页按图库的情况填（没有原创作品时不显示）。装的插件写 page 时由宿主填成那一页的地址 */
   to: string;
+  /** 装的插件：指向自己的哪一页（page@1 的 id），不写 to */
+  page?: string;
   icon: NavIcon;
   section: NavSection;
   /** 默认不在侧栏里（「插件」页） */
@@ -105,8 +120,8 @@ export interface PluginManifest {
 /** 条目类的贡献点（E3）：它们的条目停用时一起不画 */
 export const SLOT_POINT_KEYS = ['page.action@1', 'menu.item@1', 'lightbox.toolbar@1', 'lightbox.panel@1'] as const;
 
-/** 装的插件现在能贡献的（不跑代码的那几种）。page、block 要等视图（E4），命令、任务要等服务端运行（E5） */
-export const INSTALLABLE_POINTS = ['nav.item@1', 'override@1'] as const;
+/** 装的插件现在能贡献的：不跑代码的那几种，加上视图页面（E4）。区块、看图器按钮这些以后开放，命令、任务要等服务端运行（E5） */
+export const INSTALLABLE_POINTS = ['nav.item@1', 'override@1', 'page@1'] as const;
 
 // ---------------------------------------------------------------- 授权（docs/plugins.md 第 4 节）
 
@@ -295,7 +310,7 @@ export const BUILTIN_PLUGINS: readonly BuiltinPlugin[] = [
     '插件',
     '管理插件：启用、停用、改名、删除，调整侧栏的页面顺序',
     {
-      'page@1': [{ id: 'plugins' }, { id: 'plugin' }],
+      'page@1': [{ id: 'plugins' }, { id: 'plugin' }, { id: 'pluginView' }],
       'nav.item@1': [nav('plugins', '插件', '/plugins', 'puzzle', 'footer', { hiddenByDefault: true })],
     },
     true,
@@ -317,8 +332,8 @@ export const BUILTIN_PLUGINS: readonly BuiltinPlugin[] = [
 /** 插件页上显示的类型（从贡献推出来，不另存） */
 export type PluginKind = 'page' | 'override';
 
-/** 装的插件从哪来 */
-export type PackageKind = 'file' | 'folder' | 'git';
+/** 装的插件从哪来；ai 是 AI 助手做的页面（docs/plugins.md 5.1，算「我的」） */
+export type PackageKind = 'file' | 'folder' | 'git' | 'ai';
 
 export interface InstalledInfo {
   kind: PackageKind;
@@ -381,6 +396,49 @@ export interface PluginPackage {
   /** 每个要的文件夹默认放在哪（装过的沿用原来选的） */
   folderDefaults: Record<string, { rootId: number; dir: string } | null>;
 }
+
+/** 打开一个视图页面要的东西（plugins.view，GET /api/plugins/:id/pages/:page） */
+export interface PluginView {
+  pluginId: string;
+  pageId: string;
+  version: string;
+  /** 页头上的标题 */
+  title: string;
+  /** 视图的 HTML（宿主再加上安全策略，放进隔离的 iframe） */
+  html: string;
+  /** 图片的短期地址前缀：`${mediaBase}/thumb/<图片 id>`、`${mediaBase}/original/<图片 id>`；没有「读图库」的授权时是 null */
+  mediaBase: string | null;
+  /** 视图能调的工具（按授权过滤过的，名字和 MCP 里的一样） */
+  tools: { name: string; description: string; inputSchema: Record<string, unknown> }[];
+}
+
+/** 视图调一个工具的结果（MCP 的 CallToolResult：文本是 JSON） */
+export interface PluginCallResult {
+  isError?: boolean;
+  content: { type: string; text?: string; data?: string; mimeType?: string }[];
+  structuredContent?: unknown;
+}
+
+/**
+ * 视图能用的 Emaki 自己的方法（MCP Apps 之外的，docs/plugins.md 第 5 节），走同一条 postMessage 通道。
+ * 版本号在宿主信息里（hostInfo.name 是 Emaki 时看 experimental.emaki.version）；在 Claude 里没有这些方法，视图要退化。
+ */
+export const EMAKI_VIEW_API_VERSION = 1;
+export const EMAKI_VIEW_METHODS = {
+  /** 这个视图是谁、图片地址的前缀（{ pluginId, pageId, mediaBase }） */
+  context: 'emaki/context',
+  /** 跳到 Emaki 里的一个地址（{ to: '/gallery?favorite=1' }） */
+  navigate: 'emaki/navigate',
+  /** 用看图器打开几张图（{ ids, index? }） */
+  openImages: 'emaki/openImages',
+  /** 插件自己的键值存储（{ key }、{ key, value }、{ prefix }） */
+  storageGet: 'emaki/storage/get',
+  storageSet: 'emaki/storage/set',
+  storageDelete: 'emaki/storage/delete',
+  storageList: 'emaki/storage/list',
+} as const;
+/** 宿主推给视图的通知：图库变了（{ reason }），视图可以重新取数 */
+export const EMAKI_CHANGED_NOTIFICATION = 'emaki/changed';
 
 /** 侧栏里的一项（已经按你的顺序排好；停用的插件的项不在这里） */
 export interface NavEntry extends NavItemContribution {

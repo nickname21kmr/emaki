@@ -13,7 +13,9 @@
  * 网页据此出一张授权单；你确认以后 install 才写库。更新也一样，权限没多就不用再出授权单。
  */
 import {
+  AI_VIEW_SCOPES,
   BUILTIN_PLUGINS,
+  SCOPES,
   EMPTY_GRANT,
   missingPermissions,
   NAV_SECTIONS,
@@ -21,6 +23,7 @@ import {
   OVERRIDES,
   PINNED_NAV,
   pluginLabel,
+  pluginPagePath,
   resolvePlugins,
   validOverride,
   type NavLayout,
@@ -37,17 +40,20 @@ import {
   type PluginPackage,
   type PluginRecord,
   type PluginsState,
+  type NavIcon,
+  type NavItemContribution as NavItemContributionInput,
+  type Scope,
 } from '@emaki/shared';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Db } from '../../db/connection.ts';
 import { iso, parseId } from '../../datasource/sqlite/sql.ts';
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
-import { BadRequestError, NotFoundError } from '../../http/errors.ts';
+import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
 import { ROOT_ACTIVE } from '../../readmodel/terms.ts';
 import type { PluginPackages, Staged } from '../../services/plugins/packages.ts';
 import { normalizeSubdir } from '../library/move.ts';
-import { checkManifest, MANIFEST_FILE, readManifest } from './manifest.ts';
+import { checkManifest, checkViewFiles, MANIFEST_FILE, readManifest } from './manifest.ts';
 import { PluginStorage } from './storage.ts';
 
 /** 自动停用：这么久之内出错这么多次 */
@@ -223,7 +229,7 @@ export class Plugins {
    * 授权单上确认了：装上（或更新）并启用。folders 是授权单上给每个要的文件夹选的位置（不给的用默认）。
    * 包先放到固定的位置，再在一个事务里写清单、授权、启用状态；能撤销（撤销后包在下次启动时删掉）
    */
-  install(token: string, folders: Record<string, { rootId: ID; dir: string }> = {}) {
+  install(token: string, folders: Record<string, { rootId: ID; dir: string }> = {}, opts: { showInNav?: boolean } = {}) {
     const staged = this.packages.get(token);
     if (!staged) throw new BadRequestError('这个包已经过期了，重新选一次');
     const { manifest, problems } = this.checkStaged(staged);
@@ -254,6 +260,7 @@ export class Plugins {
       u.set('installed_plugins', 'id = ?', [id]);
       u.set('plugin_grants', 'plugin_id = ?', [id]);
       u.set('plugin_state', 'id = ?', [id]);
+      if (opts.showInNav !== undefined) u.set('plugin_point_state', "point = 'nav'");
       const now = iso(this.ctx.clock());
       this.db
         .prepare(
@@ -277,8 +284,15 @@ export class Plugins {
              ON CONFLICT(id) DO UPDATE SET enabled = 1, enabled_at = excluded.enabled_at, disabled_reason = NULL, updated_at = excluded.updated_at`,
           )
           .run(id, now, now);
+      if (opts.showInNav !== undefined) {
+        const layout = this.navLayout();
+        for (const n of manifest.contributes['nav.item@1'] ?? []) layout.visible[`${id}/${n.id}`] = opts.showInNav;
+        this.writeNavLayout(layout);
+      }
       this.changed();
       const old = existing ? (safeParse(existing.manifest) as PluginManifest | null) : null;
+      if (staged.kind === 'ai')
+        return { message: !existing ? `已保存「${manifest.name}」` : `已保存「${manifest.name}」的第 ${manifest.version.split('.')[0]} 版` };
       return {
         message: !existing
           ? `已安装并启用「${manifest.name}」`
@@ -293,6 +307,123 @@ export class Plugins {
   /** 不装了：删掉准备好的包 */
   discardPackage(token: string): void {
     this.packages.discard(token);
+  }
+
+  /** 准备好的包（授权单再取一次：助手的卡片、外部 MCP 给的确认链接都只有 token） */
+  stagedPackage(token: string): PluginPackage {
+    const s = this.packages.get(token);
+    if (!s) throw new NotFoundError('这个包已经过期了（准备好的包一小时后作废）');
+    return this.toPackage(s);
+  }
+
+  // ---------------------------------------------------------------- 视图（E4，docs/plugins.md 第 5 节）
+
+  /**
+   * 一个视图页面：HTML 和它的授权。插件要启用着（安全模式下只有内置的，没有视图）；
+   * 标题按你改的名字 → 页面的标题 → 插件的名字（9.6：改名同时改导航项和页头）
+   */
+  view(id: string, pageId: string): { pluginId: string; pageId: string; version: string; title: string; html: string; scopes: Scope[] } {
+    const info = this.state().plugins.find((p) => p.id === id);
+    if (!info) throw new NotFoundError(`没有插件「${id}」`);
+    if (!info.enabled) throw new ConflictError(`「${pluginLabel(info)}」停用了`);
+    const page = info.contributes['page@1']?.find((p) => p.id === pageId);
+    const row = this.installedRow(id);
+    if (!page?.view || !row) throw new NotFoundError(`「${pluginLabel(info)}」没有页面「${pageId}」`);
+    let html: string;
+    try {
+      html = readFileSync(path.join(this.packages.resolve(row.package_dir), ...page.view.split('/')), 'utf8');
+    } catch {
+      throw new NotFoundError(`「${pluginLabel(info)}」的视图文件 ${page.view} 读不到`);
+    }
+    return {
+      pluginId: id,
+      pageId,
+      version: info.version,
+      title: info.displayName ?? page.title ?? info.name,
+      html,
+      scopes: [...(this.grantOf(id)?.scopes ?? [])],
+    };
+  }
+
+  /** 一个插件全部视图页面的 HTML（不管启用没有）：AI 助手修改自己做的页面前读它（plugins_list） */
+  viewSources(id: string): { pageId: string; html: string | null }[] {
+    const p = this.require(id);
+    const row = p.installed;
+    return (p.manifest.contributes['page@1'] ?? [])
+      .filter((pg) => pg.view)
+      .map((pg) => {
+        try {
+          return { pageId: pg.id, html: row ? readFileSync(path.join(this.packages.resolve(row.package_dir), ...pg.view!.split('/')), 'utf8') : null };
+        } catch {
+          return { pageId: pg.id, html: null };
+        }
+      });
+  }
+
+  /** 启用着的插件的全部视图页面（MCP 里挂成工具和 ui:// 资源，在 Claude 里打开用） */
+  viewPages(): { pluginId: string; pageId: string; title: string; description: string | undefined }[] {
+    return this.state().plugins.flatMap((p) =>
+      p.enabled
+        ? (p.contributes['page@1'] ?? [])
+            .filter((pg) => pg.view)
+            .map((pg) => ({ pluginId: p.id, pageId: pg.id, title: p.displayName ?? pg.title ?? p.name, description: p.description }))
+        : [],
+    );
+  }
+
+  /** 视图经桥接调用时：插件要启用着；返回版本（记进 actor）和授权的范围。没有这个插件、停用了 → null */
+  callGrant(id: string): { version: string; scopes: Scope[] } | null {
+    const info = this.state().plugins.find((p) => p.id === id);
+    if (!info?.enabled || !info.grant) return null;
+    return { version: info.version, scopes: [...info.grant.scopes] };
+  }
+
+  /**
+   * AI 助手做的页面（docs/plugins.md 5.1）：生成清单和包。权限不超过助手自己的（AI_VIEW_SCOPES）。
+   * 已经有这一页、这次没多要权限：直接存成新的一版（能撤销），返回 saved；
+   * 第一次存、或者多要了权限：返回准备好的包，等你在授权单上确认（plugins.install）。
+   */
+  saveAiView(input: { name: string; title: string; description?: string; html: string; scopes: string[]; icon: NavIcon }):
+    | { status: 'saved'; id: string; version: string; message: string; undoToken?: string | null }
+    | { status: 'needs_confirmation'; id: string; package: PluginPackage } {
+    const scopes = [...new Set(input.scopes)];
+    const over = scopes.filter((x) => !AI_VIEW_SCOPES.includes(x as Scope));
+    if (over.length)
+      throw new BadRequestError(
+        `AI 做的页面不能要「${over.map((x) => (x in SCOPES ? SCOPES[x as Scope].split(/[：（]/)[0] : x)).join('、')}」；最多只能要：${AI_VIEW_SCOPES.join('、')}`,
+      );
+    const id = `ai.${input.name}`;
+    const existing = this.installedRow(id);
+    if (existing && existing.source_kind !== 'ai') throw new BadRequestError(`「${id}」不是 AI 做的页面`);
+    const oldMajor = existing ? Number.parseInt(((safeParse(existing.manifest) as PluginManifest | null)?.version ?? '0').split('.')[0]!, 10) || 0 : 0;
+    const version = `${oldMajor + 1}.0.0`;
+    const title = input.title.trim();
+    const manifest: PluginManifest = {
+      id,
+      name: title,
+      version,
+      ...(input.description && { description: input.description }),
+      author: 'AI 助手',
+      ...(scopes.length && { permissions: { scopes: scopes as Scope[] } }),
+      contributes: {
+        'page@1': [{ id: 'main', view: 'index.html', title }],
+        'nav.item@1': [{ id: 'main', label: [...title].slice(0, 12).join(''), page: 'main', icon: input.icon, section: 'main' } as NavItemContributionInput],
+      },
+    };
+    const staged = this.packages.stageFiles('ai', 'AI 助手', {
+      [MANIFEST_FILE]: JSON.stringify(manifest, null, 2),
+      'index.html': input.html,
+    });
+    const pkg = this.toPackage(staged);
+    if (pkg.problems.length) {
+      this.packages.discard(staged.token);
+      throw new BadRequestError(pkg.problems.join('；'));
+    }
+    if (existing && !Object.keys(pkg.added).length) {
+      const r = this.install(staged.token);
+      return { ...r, status: 'saved', id, version };
+    }
+    return { status: 'needs_confirmation', id, package: pkg };
   }
 
   // ---------------------------------------------------------------- 出错和自动停用（docs/plugins.md 第 8 节）
@@ -387,9 +518,7 @@ export class Plugins {
     }
     return this.ctx.mutate((u) => {
       u.set('plugin_point_state', "point = 'nav'");
-      this.db
-        .prepare("INSERT INTO plugin_point_state (point, key, value) VALUES ('nav', 'layout', ?) ON CONFLICT(point, key) DO UPDATE SET value = excluded.value")
-        .run(JSON.stringify(next));
+      this.writeNavLayout(next);
       this.changed();
       return { message: input.sections ? '已调整侧栏的顺序' : '已更新侧栏' };
     });
@@ -447,16 +576,19 @@ export class Plugins {
     const installed: Loaded[] = [];
     for (const r of this.db.prepare('SELECT * FROM installed_plugins ORDER BY installed_at, id').all() as InstalledRow[]) {
       // 每次按现在的 Emaki 版本再查一遍：升级以后不兼容的写明原因、不生效
-      const checked = checkManifest(safeParse(r.manifest), this.emakiVersion);
+      const ai = r.source_kind === 'ai';
+      const checked = checkManifest(safeParse(r.manifest), this.emakiVersion, { ai });
       const problems = [...checked.problems];
-      if (!existsSync(path.join(this.packages.resolve(r.package_dir), MANIFEST_FILE)))
+      const dir = this.packages.resolve(r.package_dir);
+      if (!existsSync(path.join(dir, MANIFEST_FILE)))
         problems.push(r.source_kind === 'folder' ? `文件夹不见了（${r.package_dir}）` : '插件的文件不见了，重新安装');
+      else if (checked.manifest) problems.push(...checkViewFiles(dir, checked.manifest));
       const m = checked.manifest ?? broken(r.id);
-      // 导航项的 id 带上插件的 id，和内置的、别的插件的不撞
-      const navs = m.contributes['nav.item@1']?.map((n) => ({ ...n, id: `${r.id}/${n.id}` }));
+      // 导航项的 id 带上插件的 id，和内置的、别的插件的不撞；指向自己页面的填上地址
+      const navs = m.contributes['nav.item@1']?.map((n) => ({ ...n, id: `${r.id}/${n.id}`, ...(n.page !== undefined && { to: pluginPagePath(r.id, n.page) }) }));
       installed.push({
         manifest: { ...m, id: r.id, contributes: { ...m.contributes, ...(navs && { 'nav.item@1': navs }) } },
-        source: 'installed',
+        source: ai ? 'mine' : 'installed',
         required: false,
         row: rows.get(r.id),
         problems,
@@ -522,8 +654,8 @@ export class Plugins {
 
   /** 准备好的包里的清单，再加上「和已有的插件撞了 id」这种只有装的时候才知道的问题 */
   private checkStaged(s: Staged): { manifest: PluginManifest | null; problems: string[] } {
-    const { manifest, problems } = readManifest(s.root, this.emakiVersion);
-    if (manifest && this.load(false).some((p) => p.manifest.id === manifest.id && p.source !== 'installed'))
+    const { manifest, problems } = readManifest(s.root, this.emakiVersion, { ai: s.kind === 'ai' });
+    if (manifest && this.load(false).some((p) => p.manifest.id === manifest.id && !p.installed))
       problems.push(`已经有一个 id 是「${manifest.id}」的插件了`);
     return { manifest, problems };
   }
@@ -603,6 +735,12 @@ export class Plugins {
   private newId(): string {
     const taken = new Set((this.db.prepare('SELECT id FROM user_plugins').all() as { id: string }[]).map((r) => r.id));
     for (let n = 1; ; n++) if (!taken.has(`mine.override-${n}`)) return `mine.override-${n}`;
+  }
+
+  private writeNavLayout(layout: NavLayout): void {
+    this.db
+      .prepare("INSERT INTO plugin_point_state (point, key, value) VALUES ('nav', 'layout', ?) ON CONFLICT(point, key) DO UPDATE SET value = excluded.value")
+      .run(JSON.stringify(layout));
   }
 
   private navLayout(): NavLayout {

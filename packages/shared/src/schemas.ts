@@ -701,16 +701,29 @@ export const PluginManifestSchema = z.object({
 });
 
 /** nav.item@1（装的插件）：只能指向 Emaki 里的地址（可以带筛选参数），图标从 NAV_ICONS 里选 */
-export const InstalledNavItemSchema = z.object({
+export const InstalledNavItemSchema = z
+  .object({
+    id: z.string().regex(LOCAL_ID),
+    label: z.string().trim().min(1).max(12),
+    to: z
+      .string()
+      .max(300)
+      .refine((to) => /^\/(?![/\\])/.test(to) && !/[\s:]/.test(to.split(/[?#]/)[0]!), '只能是 Emaki 里的地址，以 / 开头，比如 /gallery?sort=random')
+      .optional(),
+    page: z.string().regex(LOCAL_ID).optional().describe('指向这个插件自己的页面（page@1 的 id），不写 to'),
+    icon: z.enum(NAV_ICONS).default('puzzle'),
+    section: z.enum(NAV_SECTIONS).default('main'),
+    hiddenByDefault: z.boolean().optional(),
+  })
+  .refine((n) => (n.to === undefined) !== (n.page === undefined), { message: 'to 和 page 要写一个，只写一个', path: ['to'] });
+
+/** 视图文件：包里的相对路径，.html 结尾，不能往上跳 */
+const VIEW_FILE = /^(?!.*(^|\/)\.\.?(\/|$))[\w.-]+(\/[\w.-]+)*\.html?$/;
+/** 装的插件、AI 做的页面的 page@1：一个视图 */
+export const InstalledPageSchema = z.object({
   id: z.string().regex(LOCAL_ID),
-  label: z.string().trim().min(1).max(12),
-  to: z
-    .string()
-    .max(300)
-    .refine((to) => /^\/(?![/\\])/.test(to) && !/[\s:]/.test(to.split(/[?#]/)[0]!), '只能是 Emaki 里的地址，以 / 开头，比如 /gallery?sort=random'),
-  icon: z.enum(NAV_ICONS).default('puzzle'),
-  section: z.enum(NAV_SECTIONS).default('main'),
-  hiddenByDefault: z.boolean().optional(),
+  view: z.string().max(200).regex(VIEW_FILE, '视图要写包里的 HTML 文件，比如 views/stats.html'),
+  title: z.string().trim().min(1).max(40).optional(),
 });
 
 const PackageSource = z.discriminatedUnion('kind', [
@@ -728,4 +741,25 @@ export const InstallPluginInput = z.object({
     .record(z.string().max(40), z.object({ rootId: Id, dir: z.string().max(300) }))
     .optional()
     .describe('授权单上为每个要的文件夹选好的位置'),
+  showInNav: z.boolean().optional().describe('它的导航项放不放进侧栏（不给：放进去，和新启用的页面一样）'),
+});
+export const PluginPackageTokenInput = z.object({ token: z.string().min(1).max(80) });
+
+// ---------------------------------------------------------------- 视图（E4，docs/plugins.md 第 5 节）
+export const PluginViewInput = z.object({ id: PluginId, page: z.string().regex(LOCAL_ID) });
+/** AI 助手做的页面（docs/plugins.md 5.1）：一个视图，插件 id 是 ai.<name> */
+export const SaveAiViewInput = z.object({
+  name: z
+    .string()
+    .regex(LOCAL_ID, '只能用小写字母、数字和 -')
+    .describe('页面的英文短名（小写字母、数字、-），插件 id 是 ai.<name>；修改已有的页面用同一个 name'),
+  title: PluginName.describe('显示的名字（侧栏、页头、插件页），比如「收藏统计」'),
+  description: z.string().trim().max(300).optional().describe('一句话说明这一页看什么'),
+  html: z.string().min(1).max(1_000_000).describe('整页 HTML（MCP Apps 视图），写法见工具说明'),
+  scopes: z
+    .array(z.string().max(40))
+    .max(10)
+    .default(['read'])
+    .describe('页面要调的工具需要的权限范围，默认只读 ["read"]；会改数据的页面才加 curate、collections 等，不能超过助手自己的范围'),
+  icon: z.enum(NAV_ICONS).default('chart').describe('侧栏图标'),
 });

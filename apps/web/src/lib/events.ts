@@ -373,6 +373,13 @@ export function openEventStream(
   };
 }
 
+/** 图库变了（changed 事件）时要知道的：插件的视图转给 iframe（emaki/changed，features/plugins/view/） */
+const libraryChangeListeners = new Set<(reason: string) => void>();
+export function onLibraryChanged(fn: (reason: string) => void): () => void {
+  libraryChangeListeners.add(fn);
+  return () => libraryChangeListeners.delete(fn);
+}
+
 /**
  * 一条 SSE 事件（useServerEvents 收到的，测试也直接调）：changed 按变化类型刷新并记下事件 id（写操作等它）；
  * command 是 AI 助手做的、可撤销的修改时放进撤销栈；resync 全部刷新；hello 记下这次连着的后端和位置；
@@ -408,6 +415,7 @@ export function handleServerEvent(client: QueryClient, invalidate: ReturnType<ty
       break;
     case 'changed':
       noteEvent(event.id, invalidate(event.reason, event.changes.length || event.command ? event.changes : null, event.command));
+      for (const fn of libraryChangeListeners) fn(event.reason);
       break;
     case 'command':
       noteEvent(event.id);

@@ -1,6 +1,6 @@
 # 个性化页面与插件（下一阶段设计）
 
-> 状态：设计已定（2026-11-24），E0 原型验证通过（12.1），E1 完成（12.2），E2 完成（12.3），E3 完成（12.4）。
+> 状态：设计已定（2026-11-24），E0 原型验证通过（12.1），E1 完成（12.2），E2 完成（12.3），E3 完成（12.4），E4 完成（12.5）。
 > 依据：[core-architecture.md](core-architecture.md) 第 10 节（目标、留好的接口、插件的三层）；回顾和调研见第 13 节。
 > 相关：[mobile.md](mobile.md)（设备凭证和权限范围）、[ai-assistant.md](ai-assistant.md)（MCP、助手的权限）、[FRONTEND.md](FRONTEND.md)（区块、播放器、「交互只有一个实现」）。
 
@@ -113,7 +113,7 @@ Pixiv 浏览  0.1.0                                      来自：本地文件 p
 - **数据走桥接**：视图通过 `tools/call` 调用命令和查询。工具清单就是现在给 MCP 生成的那份，再按生效权限过滤，名字也一样（`curation_link`、`read_library` 等）。桥接的宿主端打算用官方 `@modelcontextprotocol/ext-apps` 的 `AppBridge`，把调用接到命令和查询注册表上；它能不能不接 MCP 客户端直接用，要在 E0 验证。
 - **Emaki 自己加的方法**：统一加 `emaki/` 前缀、带版本号，包括导航和打开看图器、读写当前选择、插件自己的存储（键值）、订阅变化事件（MCP Apps 不管事件）。在 Claude 里跑时这些方法不存在，视图先检测有没有，没有就退化。
 - **图片**：缩略图和原图走宿主发的短期地址（`/api/plugin-media/<令牌>/...`，令牌绑定插件和权限范围），用普通的 `<img>` 加载，不经过桥接拷贝。
-- **插件用的库**：官方的 `App` 类（`@modelcontextprotocol/ext-apps` 的 `app-with-deps`，约 540 KB）由宿主在固定地址提供（`/plugin-sdk/app.js`，带 `Access-Control-Allow-Origin: *`，因为匿名来源加载模块脚本要跨域许可），插件页面不用各自内联一份。宿主这边的 `AppBridge` 连同依赖约 1 MB（未压缩），只在第一次显示插件页面时按需加载，不进主包。
+- **插件用的库**：官方的 `App` 类（`@modelcontextprotocol/ext-apps` 的 `app-with-deps`，约 540 KB）加上 Emaki 的一层小封装，由宿主在固定地址提供（`/plugin-sdk/app.js`，普通脚本，全局 `Emaki`，E4 定的，见 12.5），插件页面不用各自内联一份。宿主这边的 `AppBridge` 连同依赖约 1 MB（未压缩），只在第一次显示插件页面时按需加载，不进主包。
 - **自己跳走**：插件页面可以把自己跳转到外部网址（`location.href = …`），浏览器没有能拦这一下的开关，数据可能借此带出去。宿主监听 iframe 的 `load`：第一次以后再触发就说明跳走了，立刻撤掉这个页面并记一次错误。请求在被发现之前已经发出去了，按决定 7 接受这个残余风险，授权单上不另写。
 - **默认关闭的方法**：MCP Apps 里 `ui/message`、`ui/update-model-context` 能直接往 AI 的上下文里写东西，是一条注入通道。默认不开，要用的插件在清单里声明，授权单上写出来。
 - **向外**：插件的视图同时作为 Emaki MCP 服务器的工具挂出去，带 `_meta.ui.resourceUri`。在 Claude、ChatGPT 里调用这个工具，对话里就会显示同一个页面，权限取交集（4.1）。
@@ -418,6 +418,44 @@ Pixiv 浏览要注意：请求要节流，只拿你的账号本来就能看到�
   - 看图器的快捷键（`Lightbox.tsx` 里的 F、E、O、C、I）还写在一起，它们调用的操作和按钮是同一份（`useImageActions`）；
   - 画师菜单、插件页一行的「⋯」、侧栏右键菜单这类小菜单；
   - 停用「合集」时，图库里收拢的本子、未识别里的待整理合集仍然链接到合集页，点进去是「这一页已停用」和「启用」按钮。合集和图库、阅读器绑得很深，先这样。
+
+### 12.5 E4 做了什么（2026-11-25）
+
+- **视图页面**（贡献点 `page@1` 对装的插件开放）：清单里 `{ "id": "main", "view": "index.html", "title": "…" }`，视图是包里的一个 HTML 文件；
+  导航项写 `"page": "main"` 指向自己的页面，宿主填成 `/p/<插件>/<页面>`。装的时候、之后每次算状态都查视图文件在不在、大不大（2 MB）。
+- **宿主**（网页 `features/plugins/view/`）：
+  - `frame.ts`：iframe 只开 `allow-scripts`，HTML 放进 `srcdoc`，宿主在 doctype 之后、页面任何东西之前加安全策略（不能联网；脚本只能内联和 `/plugin-sdk/`；图片只能是 `/api/plugin-media/`、`data:`、`blob:`）；
+    Emaki 的颜色、字体、圆角换成 MCP Apps 的标准 CSS 变量交给视图，深色主题跟着换；
+  - `bridge.ts`（按需加载，约 235 KB，不进主包）：官方 `AppBridge` 不接 MCP 客户端，`tools/call` 转给服务端；`emaki/` 方法：`context`（这一页是谁、图片地址前缀）、
+    `navigate`、`openImages`（看图器）、`storage/get|set|delete|list`；图库变了推 `emaki/changed`（半秒合并一次）；宿主能力里写 `experimental.emaki.version`；
+  - `ViewFrame.tsx`：iframe 自己建（先设好 sandbox 和 srcdoc 再放进页面），第二次 `load` 就是跳走了，撤掉并记一次错；15 秒没握手也算坏；错误卡上能重新载入、停用这个插件；
+    视图里的修改能撤销的进这个页面的撤销栈，标「插件名：」；
+  - `PluginViewPage.tsx`（`/p/:plugin/:page`，属于必需的「插件」插件）：页头和别的页面一样，标题跟着改的名字；停用了显示「这一页已停用」。视图不放进查询缓存：图库一变缓存会整个重取，那样每次都会重新载入 iframe。
+- **桥接的服务端**（`http/pluginViews.ts`）：打开一页（发图片令牌、列能调的工具）、调工具、插件的存储、记一次错、取图。工具就是给 AI 助手的那一份
+  （拆到 `assistant/libraryTools.ts`，MCP 和视图共用），按「插件的授权 ∩ 入口」过滤（手机上用插件，生效的是两边的交集），记成 `plugin:<id>@<版本>`、进审计；
+  每个插件限频（一下子 60 次、之后每秒 20 次），一次返回最多 4 MB。
+- **图片**（`services/plugins/media.ts`）：`/api/plugin-media/<令牌>/thumb|original/<图片 id>`，令牌绑定插件和发令牌时的范围，12 小时作废；插件停用就不认；局域网入口上这个地址不要设备凭证（凭令牌）。
+- **插件用的库**（`apps/web/src/plugin-sdk/sdk.ts`，`vite.plugin-sdk.ts` 打成 `/plugin-sdk/app.js`，约 530 KB）：`Emaki.App` 是官方的类；`Emaki.connect()` 连上宿主、套上主题，
+  返回 `read(地址)`、`call(工具, 参数)`（写工具自动补 operationId）、`thumb(id)`、`original(id)`、`open(地址)`、`openImages(ids)`、`storage`、`onChanged`。
+  在别的宿主里退化：跳转什么都不做、存储在内存里、图片经 `read_media` 取成 `data:`。
+- **AI 做的页面**（5.1）：命令 `plugins.saveView`（助手的工具 `plugins_save_view`，手写：要在对话里出卡片）生成清单和包，插件 id 是 `ai.<名字>`，来源 `ai`（算「我的」，迁移 054 让 `installed_plugins` 认这种来源）。
+  第一次存、或者多要了权限：对话里出一张保存卡片（`PluginSaveCard`，内容就是授权单加「在侧栏显示」，只读的页面就是一个「保存」按钮），存好直接打开那一页；
+  修改（同一个名字）权限没变就直接存成新的一版（第 N 版，能撤销）；权限不超过助手自己的（`AI_VIEW_SCOPES`）。`plugins_list` 列出插件，给 id 时读回页面的 HTML，助手改页面前先读。
+  外部的 AI 客户端（Claude 这类）没有会话卡片，工具返回 `/plugins?confirm=<令牌>`，在「插件」页上出同一张授权单。工具说明里带写法（`assistant/views.ts` 的 `VIEW_GUIDE`）。
+- **在 Claude 里打开**：MCP 服务器给每个启用着的视图页面挂一个工具（`open_view_<插件>_<页面>`，带 `_meta.ui.resourceUri`）和一个 `ui://<插件>/<页面>` 资源
+  （`text/html;profile=mcp-app`，`/plugin-sdk/app.js` 内联进去，安全策略不放行任何外部地址）。视图在那边经 MCP 调同一批工具，权限是那个客户端的。
+- **样例**：`examples/plugins/works-chart/`（「作品排行」：统计、各作品张数、点一行进作品页、排序存在插件存储里）。
+- **和计划不一样的地方**：
+  - 清单里视图写包里的相对路径（`"view": "index.html"`），不写 `ui://`；`ui://<插件>/<页面>` 由宿主给 MCP 用；
+  - `/plugin-sdk/app.js` 是普通脚本（全局 `Emaki`），不是模块：经 MCP 给出去时整段内联，别的宿主不用认 Emaki 的地址；普通脚本跨域加载也不用 `Access-Control-Allow-Origin`；
+  - 视图不能用 SQL（`query_database`）：页面只用工具和 `read_library` 的地址，Emaki 改了表结构也照样能用；要更方便的统计，以后加统计查询；
+  - `ui/message`、`ui/update-model-context` 没开（宿主能力里不声明）；视图的工具清单没给（官方 `App` 没有列服务端工具的方法），`emaki/context` 以后可以带；
+  - 插件的存储原来经变更传播写，每写一次网页整个刷新，改成直接写（不是图库数据）。
+- **验收**：服务端 `test/plugins/views.test.ts` 16 个（带页面的插件、装不上的、打开、调工具和撤销、权限取交集、停用、令牌、限频、出错自动停用、AI 存页面和改版、权限上限、
+  MCP 里的工具和资源、助手会话里的卡片和外部客户端的链接），路由冒烟加 7 个；网页 `frame.test.ts`、`grantText.test.ts` 加 1 个。
+  浏览器里：演示数据上装样例、打开、排序（存储）、点行跳作品页、浅色深色、手机；按 token 出授权单、保存 AI 页面、点图打开看图器；
+  模拟 Claude（外部 MCP 客户端读资源，放进只放行内联和 `data:` 的宿主，官方 `AppBridge`）：页面画出来，图片经 `read_media`，没有报错。
+  真的 AI 说一句话做统计页、在真的 Claude 里打开，要在你那边试。
 
 **这一阶段不做的**：公开的插件市场、签名、多用户、插件静默自动更新、iOS、在安卓 App 的原生代码里跑插件（App 只是网页的外壳）。
 

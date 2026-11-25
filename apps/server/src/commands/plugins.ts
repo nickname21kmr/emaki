@@ -10,6 +10,8 @@ import {
   InspectPluginInput,
   InstallPluginInput,
   PluginIdInput,
+  PluginPackageTokenInput,
+  SaveAiViewInput,
   PluginsStateInput,
   RenamePluginInput,
   SetNavInput,
@@ -27,6 +29,14 @@ export const pluginQueries = [
     scope: 'read',
     http: [{ method: 'GET', path: '/api/plugins' }],
     run: (e, q) => e.plugins.state({ safe: q.safe }),
+  }),
+  defineQuery({
+    name: 'plugins.package',
+    summary: '准备好的一个包（还没装）：授权单要列的东西。助手的保存卡片、「插件」页的确认链接按 token 再取一次',
+    input: PluginPackageTokenInput,
+    scope: 'read',
+    http: [{ method: 'GET', path: '/api/plugins/packages/:token' }],
+    run: (e, q) => e.plugins.stagedPackage(q.token),
   }),
 ];
 
@@ -135,6 +145,28 @@ export const pluginCommands = [
     undoable: true,
     idempotent: true,
     http: [{ method: 'POST', path: '/api/plugins/install' }],
-    run: (e, { token, folders }) => e.plugins.install(token, folders),
+    run: (e, { token, folders, showInNav }) => e.plugins.install(token, folders, { showInNav }),
+  }),
+  defineCommand({
+    name: 'plugins.saveView',
+    summary:
+      'AI 助手做的页面（docs/plugins.md 5.1）：存成插件 ai.<name>。第一次存、或者多要了权限时只准备好包，等你在授权单上确认（plugins.install）；修改已有的页面、权限没变时直接存成新的一版',
+    input: SaveAiViewInput,
+    scope: 'plugins',
+    undoable: true,
+    idempotent: true,
+    http: [{ method: 'POST', path: '/api/plugins/ai-views' }],
+    run: (e, input) => {
+      const r = e.plugins.saveAiView(input);
+      if (r.status === 'saved') return r;
+      return {
+        status: r.status,
+        id: r.id,
+        token: r.package.token,
+        name: r.package.manifest.name,
+        version: r.package.manifest.version,
+        message: `「${r.package.manifest.name}」准备好了，等你确认保存`,
+      };
+    },
   }),
 ];

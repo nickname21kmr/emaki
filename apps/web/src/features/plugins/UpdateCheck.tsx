@@ -33,7 +33,8 @@ export function useCheckUpdate(p: PluginInfo) {
     onError: (e) => void toast(e instanceof Error ? e.message : String(e)),
   });
   return {
-    available: canInstall && !!kind,
+    // AI 做的页面没有来源可以再取：改它是让助手存新的一版
+    available: canInstall && !!kind && kind !== 'ai',
     label: kind === 'folder' ? '重新读取' : kind === 'git' ? '检查更新' : '选新的文件更新…',
     start: () => (kind === 'file' ? setPickFile(true) : check.mutate()),
     pending: check.isPending || reread.isPending,
