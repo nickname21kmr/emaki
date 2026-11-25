@@ -1,11 +1,12 @@
 import { pluginLabel, type PluginView } from '@emaki/shared';
-import { Puzzle } from 'lucide-react';
+import { ExternalLink, Puzzle } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { PageBody, PageHeader } from '@/components/layout/PageHeader';
 import { Button, EmptyState, Spinner } from '@/components/ui';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/capabilities';
+import { appBridge } from '@/lib/deviceAuth';
 import { usePlugins } from '@/lib/plugins';
 import { errorMessage, useMutate } from '@/lib/queries';
 import { ViewFrame } from './ViewFrame';
@@ -24,6 +25,17 @@ export function PluginViewPage() {
   const enabled = !!info?.enabled;
   const view = useView(plugin, page, enabled ? `${info?.version}|${info?.displayName ?? ''}` : null);
   const name = info ? pluginLabel(info) : '插件';
+  // 页面对应的网站（site@1），App 能打开时才算
+  const siteId = info?.contributes['page@1']?.find((p) => p.id === page)?.site;
+  const bridge = appBridge();
+  const site = enabled && siteId && bridge?.openSite ? info?.contributes['site@1']?.find((x) => x.id === siteId) : undefined;
+  const [showView, setShowView] = useState(false);
+  const openSite = () => site && bridge?.openSite?.(info!.id, site.id);
+  // 进这一页就打开一次（从网站返回时不再自动打开）
+  useEffect(() => {
+    if (site) bridge?.openSite?.(plugin, site.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plugin, site?.id]);
 
   if (!ready) return <PageHeader title="插件" />;
   if (!info || (enabled && view.error && !view.data))
@@ -63,6 +75,30 @@ export function PluginViewPage() {
                   去插件页
                 </Button>
               )
+            }
+          />
+        </PageBody>
+      </>
+    );
+  // 这一页对应插件的一个外部网站，又在 App 里（能直接打开网站、加上插件的按钮）：打开网站本身
+  if (site && !showView)
+    return (
+      <>
+        <PageHeader title={view.data?.title ?? name} />
+        <PageBody>
+          <EmptyState
+            glyph="站"
+            title={`${site.title} 在 App 里打开了`}
+            description={`在 ${site.title} 的页面上选作品，点底部的「下载到 Emaki」；按返回键回到这里。`}
+            action={
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button variant="secondary" size="sm" icon={<ExternalLink />} onClick={openSite}>
+                  再打开 {site.title}
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setShowView(true)}>
+                  用 Emaki 里的浏览页
+                </Button>
+              </div>
             }
           />
         </PageBody>

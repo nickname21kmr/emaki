@@ -81,7 +81,7 @@ describe('zip 包', () => {
     expect(() => unzip(makeZip({ 'a/../../evil.txt': 'x' }))).toThrow(/不安全/);
     expect(() => unzip(makeZip({ '/etc/passwd': 'x' }))).toThrow(/不安全/);
     expect(() => unzip(makeZip({ 'C:/x.txt': 'x' }))).toThrow(/不安全/);
-    expect(() => unzip(makeZip({ 'link': 'target' }, { symlink: ['link'] }))).toThrow(/符号链接/);
+    expect(() => unzip(makeZip({ link: 'target' }, { symlink: ['link'] }))).toThrow(/符号链接/);
     expect(() => unzip(makeZip({ 'big.bin': Buffer.alloc(2000) }), { maxFiles: 10, maxEntry: 1000, maxTotal: 5000 })).toThrow(/太大/);
     expect(() => unzip(makeZip({ a: 'x', b: 'y' }), { maxFiles: 1, maxEntry: 1000, maxTotal: 5000 })).toThrow(/太多/);
     expect(() => unzip(Buffer.from('not a zip at all, just some text'))).toThrow(/不是 zip/);
@@ -119,21 +119,50 @@ describe('清单检查', () => {
     expect(problems({ server: 'server/index.js' })).toEqual([]);
     expect(problems({ server: '../evil.js' })).toEqual([expect.stringMatching(/^server：/)]);
     expect(problems({ server: 'server/index.ts' })).toEqual([expect.stringMatching(/\.mjs/)]);
-    const cmd = (c: object) => ({ server: 'server/index.js', contributes: { 'command@1': [{ name: 'example.random-browse.go', summary: '走', scope: 'read', ...c }] } });
+    const cmd = (c: object) => ({
+      server: 'server/index.js',
+      contributes: { 'command@1': [{ name: 'example.random-browse.go', summary: '走', scope: 'read', ...c }] },
+    });
     expect(problems(cmd({}))).toEqual([]);
     expect(problems(cmd({ name: 'other.go' }))).toEqual([expect.stringMatching(/要以插件 id 开头/)]);
     expect(problems(cmd({ scope: 'devices' }))).toEqual([expect.stringMatching(/插件用不了/)]);
     expect(problems(cmd({ input: { type: 'string' } }))).toEqual([expect.stringMatching(/对象的 JSON Schema/)]);
     expect(problems({ contributes: cmd({}).contributes })).toEqual([expect.stringMatching(/没有 server/)]);
+    // site@1：脚本只能加在声明过的网站上；页面对应的网站要有
+    const site = (x: object = {}, perms: object = { network: ['www.pixiv.net'] }) => ({
+      permissions: perms,
+      contributes: {
+        'site@1': [
+          { id: 'pixiv', title: 'Pixiv', url: 'https://www.pixiv.net/', matches: ['www.pixiv.net'], script: 'site/pixiv.js', ...x },
+        ],
+      },
+    });
+    expect(problems(site())).toEqual([]);
+    expect(problems(site({}, { network: ['pixiv.net'] }))).toEqual([]);
+    expect(problems(site({}, {}))).toEqual([expect.stringMatching(/www\.pixiv\.net 不在 permissions\.network 里/)]);
+    expect(problems(site({ url: 'https://evil.example/' }))).toEqual([expect.stringMatching(/起始页不在它的 matches 里/)]);
+    expect(problems(site({ url: 'http://www.pixiv.net/' }))).toEqual([expect.stringMatching(/https/)]);
+    expect(problems(site({ script: '../x.js' }))).toEqual([expect.stringMatching(/^site@1 的 0\.script/)]);
+    expect(problems({ contributes: { 'page@1': [{ id: 'main', view: 'index.html', site: 'nope' }] } })).toEqual([
+      expect.stringMatching(/对应的网站「nope」在 site@1 里没有/),
+    ]);
     expect(problems({ server: 'server/index.js', contributes: { 'job.kind@1': [{ kind: 'dl', label: '下载' }] } })).toEqual([
       expect.stringMatching(/"background": true/),
     ]);
     expect(problems({ permissions: { unsafe: true } })).toEqual([expect.stringMatching(/内部/)]);
-    expect(problems({ contributes: { 'override@1': { 'images.defaultSort': 'sideways' } } })).toEqual([expect.stringMatching(/不能是「sideways」/)]);
+    expect(problems({ contributes: { 'override@1': { 'images.defaultSort': 'sideways' } } })).toEqual([
+      expect.stringMatching(/不能是「sideways」/),
+    ]);
     expect(problems({ contributes: { 'override@1': { 'no.such': 'x' } } })).toEqual([expect.stringMatching(/不认识/)]);
     for (const to of ['https://evil.example', '//evil.example', 'gallery', '/works/:id', 'javascript:alert(1)'])
-      expect([to, problems({ contributes: { 'nav.item@1': [{ id: 'x', label: 'x', to }] } })]).toEqual([to, [expect.stringMatching(/Emaki 里的地址/)]]);
-    expect(checkManifest({ id: 'x' }, VERSION)).toMatchObject({ manifest: null, problems: [expect.stringMatching(/清单里的 name/), expect.stringMatching(/清单里的 version/)] });
+      expect([to, problems({ contributes: { 'nav.item@1': [{ id: 'x', label: 'x', to }] } })]).toEqual([
+        to,
+        [expect.stringMatching(/Emaki 里的地址/)],
+      ]);
+    expect(checkManifest({ id: 'x' }, VERSION)).toMatchObject({
+      manifest: null,
+      problems: [expect.stringMatching(/清单里的 name/), expect.stringMatching(/清单里的 version/)],
+    });
   });
 });
 
@@ -191,7 +220,10 @@ describe('从 zip 装：授权单、装上、撤销、卸载', () => {
   });
 
   it('授权单：列出要的全部权限；文件夹默认放在第一个自动识别的图库文件夹下，可以改', async () => {
-    const root = ds.ctx.db.prepare("INSERT INTO library_roots (path, enabled, content_mode) VALUES ('/lib', 1, 'auto') RETURNING id").pluck().get() as number;
+    const root = ds.ctx.db
+      .prepare("INSERT INTO library_roots (path, enabled, content_mode) VALUES ('/lib', 1, 'auto') RETURNING id")
+      .pluck()
+      .get() as number;
     const perms = {
       scopes: ['read', 'import'],
       folders: [{ id: 'downloads', purpose: '下载的图放在这里', suggest: '下载图片/Pixiv' }],
@@ -229,7 +261,10 @@ describe('从 zip 装：授权单、装上、撤销、卸载', () => {
 
 describe('更新', () => {
   it('只列新要的权限；保持原来的启用状态和选好的文件夹', async () => {
-    const root = ds.ctx.db.prepare("INSERT INTO library_roots (path, enabled, content_mode) VALUES ('/lib', 1, 'auto') RETURNING id").pluck().get() as number;
+    const root = ds.ctx.db
+      .prepare("INSERT INTO library_roots (path, enabled, content_mode) VALUES ('/lib', 1, 'auto') RETURNING id")
+      .pluck()
+      .get() as number;
     const v1 = { scopes: ['read'], folders: [{ id: 'dl', purpose: '放下载的图' }] };
     const { id } = await install(inspectZip(withPerms(v1)), { dl: { rootId: String(root), dir: '我选的' } });
     await run('plugins.setEnabled', { id, enabled: false });
@@ -240,7 +275,11 @@ describe('更新', () => {
     expect(pkg.folderDefaults).toEqual({ dl: { rootId: root, dir: '我选的' } });
     const r = await install(pkg);
     expect(r.message).toBe('已把「权限样例」更新到 0.2.0');
-    expect(await plugin(id)).toMatchObject({ version: '0.2.0', enabled: false, grant: { network: ['example.com'], folders: [{ dir: '我选的' }] } });
+    expect(await plugin(id)).toMatchObject({
+      version: '0.2.0',
+      enabled: false,
+      grant: { network: ['example.com'], folders: [{ dir: '我选的' }] },
+    });
 
     // 权限没多：added 是空的（网页直接更新，不再出授权单）
     expect(inspectZip(withPerms(v1, { version: '0.3.0' })).added).toEqual({});
@@ -273,28 +312,47 @@ describe('从文件夹装（开发用）、从 git 装', () => {
   it('git：只认 https、ssh、git@；浅克隆，不让 ext::、file:// 执行命令或读本机文件；去掉 .git', async () => {
     for (const bad of ['ext::sh -c touch% /tmp/pwned', '-uhttps://x', 'file:///etc', '/local/repo', 'C:\\repo', 'https://a b'])
       expect(() => checkGitUrl(bad), bad).toThrow();
-    for (const good of ['https://github.com/a/b.git', 'ssh://git@host/a/b', 'git@github.com:a/b.git']) expect(() => checkGitUrl(good)).not.toThrow();
+    for (const good of ['https://github.com/a/b.git', 'ssh://git@host/a/b', 'git@github.com:a/b.git'])
+      expect(() => checkGitUrl(good)).not.toThrow();
 
     const calls: string[][] = [];
     const tmp = makeTmpDir('plugin-git');
-    const packages = new PluginPackages(tmp, () => now, async (args) => {
-      calls.push(args);
-      const dest = args.at(-1)!;
-      mkdirSync(path.join(dest, '.git'), { recursive: true });
-      cpSync(path.join(EXAMPLES_DIR, 'random-browse'), dest, { recursive: true });
-    });
+    const packages = new PluginPackages(
+      tmp,
+      () => now,
+      async (args) => {
+        calls.push(args);
+        const dest = args.at(-1)!;
+        mkdirSync(path.join(dest, '.git'), { recursive: true });
+        cpSync(path.join(EXAMPLES_DIR, 'random-browse'), dest, { recursive: true });
+      },
+    );
     const s = await packages.stageGit('https://example.com/p.git', 'v0.1.0');
     expect(calls[0]).toEqual(
-      expect.arrayContaining(['-c', 'protocol.ext.allow=never', 'protocol.file.allow=never', 'clone', '--depth', '1', '--branch', 'v0.1.0', '--']),
+      expect.arrayContaining([
+        '-c',
+        'protocol.ext.allow=never',
+        'protocol.file.allow=never',
+        'clone',
+        '--depth',
+        '1',
+        '--branch',
+        'v0.1.0',
+        '--',
+      ]),
     );
     expect(calls[0]!.slice(-3)).toEqual(['--', 'https://example.com/p.git', s.root]);
     expect(existsSync(path.join(s.root, '.git'))).toBe(false);
     expect(existsSync(path.join(s.root, 'emaki-plugin.json'))).toBe(true);
     await expect(packages.stageGit('https://example.com/p.git', '--upload-pack=evil')).rejects.toThrow(/写法不对/);
 
-    const failing = new PluginPackages(tmp, () => now, async () => {
-      throw Object.assign(new Error('x'), { stderr: 'Cloning into...\nfatal: repository not found\n' });
-    });
+    const failing = new PluginPackages(
+      tmp,
+      () => now,
+      async () => {
+        throw Object.assign(new Error('x'), { stderr: 'Cloning into...\nfatal: repository not found\n' });
+      },
+    );
     await expect(failing.stageGit('https://example.com/none.git', null)).rejects.toThrow('git 下载失败：fatal: repository not found');
   });
 });

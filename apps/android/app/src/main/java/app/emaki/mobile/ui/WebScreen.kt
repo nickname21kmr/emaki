@@ -69,6 +69,11 @@ fun interface AlbumSyncRequest {
     fun request(mode: String)
 }
 
+/** 网页上打开插件对应的外部网站（window.EmakiApp.openSite(plugin, site)，docs/plugins.md 第 6 节 site@1）：Activity 打开站内浏览（SiteActivity） */
+fun interface SiteOpener {
+    fun open(address: HostPort, pluginId: String, siteId: String)
+}
+
 /**
  * 主界面：全屏 WebView 加载电脑上的网页 `https://<地址>:<端口>/`（docs/mobile.md 3.1）。
  *
@@ -79,7 +84,8 @@ fun interface AlbumSyncRequest {
  *   网页连不上电脑时调 `connectionLost()`（apps/web/src/lib/connection.ts），App 核实后换到「电脑不在线」；
  *   `paper(color)` 是 App 自己注入的脚本用的，把网页的纸色报上来，状态栏、导航栏跟着换颜色；
  *   `pickImages()`：网页上「传到电脑」里的「选图片」，打开系统的选图界面，选完在后台传给电脑（docs/mobile.md 5.4）；
- *   `syncAlbums(mode)`：网页上的「同步相册」，盘点（inventory）或者现在同步一次（sync），在后台做（5.5）。
+ *   `syncAlbums(mode)`：网页上的「同步相册」，盘点（inventory）或者现在同步一次（sync），在后台做（5.5）；
+ *   `openSite(plugin, site)`：在 App 里打开插件对应的外部网站本身（比如 Pixiv），加上插件的按钮（SiteActivity）。
  */
 @Composable
 fun WebScreen(
@@ -90,6 +96,7 @@ fun WebScreen(
     fileChooser: FileChooser,
     imagePicker: ImagePicker,
     albumSync: AlbumSyncRequest,
+    siteOpener: SiteOpener,
     onPaper: (Color) -> Unit,
     onPath: (String) -> Unit,
     onUnpaired: (String) -> Unit,
@@ -118,6 +125,7 @@ fun WebScreen(
             fileChooser,
             imagePicker,
             albumSync,
+            siteOpener,
             object : WebEvents {
                 override fun history(view: WebView, path: String?) {
                     canGoBack = view.canGoBack()
@@ -237,6 +245,7 @@ private fun createWebView(
     fileChooser: FileChooser,
     imagePicker: ImagePicker,
     albumSync: AlbumSyncRequest,
+    siteOpener: SiteOpener,
     events: WebEvents,
 ): WebView {
     WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
@@ -283,6 +292,12 @@ private fun createWebView(
             fun syncAlbums(mode: String?) {
                 val m = if (mode == "inventory") "inventory" else "sync"
                 main.post { albumSync.request(m) }
+            }
+
+            @JavascriptInterface
+            fun openSite(pluginId: String?, siteId: String?) {
+                if (pluginId.isNullOrBlank() || siteId.isNullOrBlank()) return
+                main.post { siteOpener.open(address, pluginId, siteId) }
             }
 
             @JavascriptInterface

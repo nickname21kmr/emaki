@@ -40,6 +40,7 @@ import {
   type PluginManifest,
   type PluginPackage,
   type PluginRecord,
+  type PluginSite,
   type PluginsState,
   type NavIcon,
   type NavItemContribution as NavItemContributionInput,
@@ -397,6 +398,26 @@ export class Plugins {
     const info = this.state().plugins.find((p) => p.id === id);
     if (!info?.enabled || !info.grant) return null;
     return { version: info.version, scopes: [...info.grant.scopes] };
+  }
+
+  /**
+   * 启用着的插件给外部网站用的脚本（site@1）：安卓 App 打开网站时加载（docs/plugins.md 第 6 节）。
+   * 脚本读不到的跳过（插件页上的问题里已经写了）
+   */
+  sites(): PluginSite[] {
+    const enabled = new Set(this.state().plugins.filter((p) => p.enabled).map((p) => p.id));
+    return this.load(false).flatMap((p) => {
+      if (!p.installed || !enabled.has(p.manifest.id) || p.problems.length) return [];
+      const dir = this.packages.resolve(p.installed.package_dir);
+      return (p.manifest.contributes['site@1'] ?? []).flatMap((site) => {
+        try {
+          const code = readFileSync(path.join(dir, ...site.script.split('/')), 'utf8');
+          return [{ ...site, pluginId: p.manifest.id, version: p.manifest.version, code }];
+        } catch {
+          return [];
+        }
+      });
+    });
   }
 
   /** 插件服务端现在的授权（每次请求现查：授权在详情里改了马上生效）；停用了、没有了 → null */

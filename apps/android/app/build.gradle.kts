@@ -27,8 +27,8 @@ android {
         // 取 TLS 证书（SslError.certificate.x509Certificate）要 Android 10
         minSdk = 29
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.4.0"
+        versionCode = 8
+        versionName = "0.5.0"
     }
 
     signingConfigs {

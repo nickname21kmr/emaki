@@ -17,7 +17,7 @@ import { fork, type ChildProcess } from 'node:child_process';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { open, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
-import type { CommandContribution, Grant, ImportImagesResult, ServerEvent } from '@emaki/shared';
+import { hostAllowed, type CommandContribution, type Grant, type ImportImagesResult, type ServerEvent } from '@emaki/shared';
 import { z } from 'zod';
 import type { CommandDef, Engine } from '../../../commands/registry.ts';
 import type { JobContext } from '../../../core/jobs.ts';
@@ -106,12 +106,6 @@ interface Proc {
 const pluginError = (message: string) => new HttpError(502, 'internal', message);
 
 const within = (p: string, dir: string) => p === dir || p.startsWith(dir.endsWith(path.sep) ? dir : dir + path.sep);
-
-const hostAllowed = (host: string, allowed: readonly string[]) =>
-  allowed.some((a) => {
-    const h = a.toLowerCase().replace(/^\*\./, '');
-    return host === h || host.endsWith(`.${h}`);
-  });
 
 export class PluginRuntime {
   private readonly procs = new Map<string, Proc>();

@@ -14,7 +14,7 @@
  *
  * 这几个不走注册表：调用是转发到注册表里的命令和查询，本身不是一个命令；图片是文件。权限检查在这里做，和注册表同一个口径。
  */
-import { type PluginView, type Scope } from '@emaki/shared';
+import { commandToolName, SCOPES, type PluginView, type Scope } from '@emaki/shared';
 import { PluginViewInput } from '@emaki/shared/schemas';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { FastifyInstance } from 'fastify';
@@ -110,7 +110,13 @@ export function pluginViewRoutes(app: FastifyInstance, engine: SqliteDataSource)
     if (!take(id)) throw new HttpError(429, 'too_many_requests', `调用太频繁了（每秒最多 ${CALL_LIMIT.perSecond} 次）`);
     const scopes = effective(g.scopes);
     const tool = toolsFor(id, g.version, scopes).find((t) => t.name === body.name);
-    if (!tool) return failed(`这一页不能用「${body.name}」：没有这个工具，或者插件没有它要的权限`);
+    if (!tool) {
+      // 插件有这个权限、是这台设备没有（手机上用插件，生效的是两边的交集）：说清楚缺哪一个、去哪里给
+      const def = engine.registry.commands().find((d) => commandToolName(d.name) === body.name);
+      if (def && g.scopes.includes(def.scope) && !scopes.has(def.scope))
+        return failed(`这台设备没有「${SCOPES[def.scope].split(/[，（]/)[0]}」的权限：在电脑上的「设置 → 手机访问」里给这台设备加上`);
+      return failed(`这一页不能用「${body.name}」：没有这个工具，或者插件没有它要的权限`);
+    }
     const args = z.object(tool.inputSchema).safeParse(body.arguments);
     if (!args.success) {
       const i = args.error.issues[0]!;

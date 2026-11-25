@@ -28,6 +28,7 @@
 - `nav.item@1`：侧栏里的一项，指向 Emaki 里的地址（`"to"`，可以带筛选参数，比如 `/gallery?sort=random`），或者自己的一页（`"page": "main"`）；图标从 `house`、`images`、`clock`、`star`、`bookmark`、`folder`、`chart`、`compass`、`download`、`heart`、`puzzle` 这些里选；
 - `override@1`：设置注册表里登记过的值，现在只有 `images.defaultSort`（`addedAt`、`modifiedAt`、`fileName`、`bytes`、`random`）；
 - `page@1`：自己画的一页（`{ "id": "main", "view": "index.html", "title": "…" }`），地址是 `/p/<插件 id>/<页面 id>`；
+- `site@1`：给一个外部网站用的脚本（`{ "id", "title", "url", "matches", "script" }`），在安卓 App 里打开那个网站本身时加载，往网站上加按钮；脚本经 `window.__emakiSite.call(命令, 输入)` 调这个插件自己的命令。`page@1` 写 `"site"` 指向它，在 App 里打开这一页就是打开网站。例子见 Pixiv 浏览的 `site/pixiv.js`；
 - 服务端逻辑（清单写 `"server": "server/index.mjs"`）和它的 `command@1`（命令）、`job.kind@1`（后台任务）、`setting@1`（设置、登录凭证），见下面「写服务端逻辑」。
 
 改内部（`permissions.unsafe`）要等以后的版本，清单里用到的话会写明「这个版本的 Emaki 还不支持」，装不上。

@@ -753,6 +753,18 @@ export const InstalledPageSchema = z.object({
   id: z.string().regex(LOCAL_ID),
   view: z.string().max(200).regex(VIEW_FILE, '视图要写包里的 HTML 文件，比如 views/stats.html'),
   title: z.string().trim().min(1).max(40).optional(),
+  site: z.string().regex(LOCAL_ID).optional(),
+});
+/** site@1（E5）：插件给外部网站用的脚本 */
+export const InstalledSiteSchema = z.object({
+  id: z.string().regex(LOCAL_ID),
+  title: z.string().trim().min(1).max(40),
+  url: z.string().max(500).regex(/^https:\/\//, '起始页要是 https 地址'),
+  matches: z
+    .array(z.string().trim().toLowerCase().regex(/^(\*\.)?[a-z0-9.-]+$/, '写域名，比如 www.pixiv.net'))
+    .min(1)
+    .max(10),
+  script: z.string().max(200).regex(PACKAGE_FILE, '要写包里的文件，比如 site/pixiv.js').regex(/\.js$/, '脚本要是 .js'),
 });
 
 const PackageSource = z.discriminatedUnion('kind', [

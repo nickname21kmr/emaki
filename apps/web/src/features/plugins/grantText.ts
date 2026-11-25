@@ -39,6 +39,12 @@ export function contributionLines(m: PluginManifest): GrantLine[] {
       });
   for (const n of m.contributes['nav.item@1'] ?? [])
     lines.push({ key: `nav:${n.id}`, text: `在侧栏加「${n.label}」`, detail: n.page !== undefined ? '打开它的那一页' : `打开 ${n.to}` });
+  for (const site of m.contributes['site@1'] ?? [])
+    lines.push({
+      key: `site:${site.id}`,
+      text: `在 App 里打开 ${site.title} 时，往网站上加它的按钮`,
+      detail: `只在 ${site.matches.join('、')} 上；网站原来的样子不动，按钮经 Emaki 调它自己的命令`,
+    });
   if (m.server)
     lines.push({
       key: 'server',

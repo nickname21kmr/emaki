@@ -18,6 +18,8 @@ import {
   type JobKindContribution,
   type NavItemContribution,
   type SettingContribution,
+  type SiteContribution,
+  hostAllowed,
   type OverrideKey,
   type PageContribution,
   type PluginManifest,
@@ -30,6 +32,7 @@ import {
   InstalledNavItemSchema,
   InstalledPageSchema,
   InstalledSettingSchema,
+  InstalledSiteSchema,
   PluginManifestSchema,
   ServerEntrySchema,
 } from '@emaki/shared/schemas';
@@ -181,11 +184,30 @@ export function checkManifest(raw: unknown, emakiVersion: string, opts: { ai?: b
       }
       if (new Set(r.data.map((x) => x.id)).size !== r.data.length) problems.push('setting@1 里有重复的 id');
       contributes['setting@1'] = r.data as SettingContribution[];
+    } else if (point === 'site@1') {
+      const r = InstalledSiteSchema.array().min(1).max(5).safeParse(value);
+      if (!r.success) {
+        const i = r.error.issues[0]!;
+        problems.push(`site@1 的 ${i.path.join('.')}：${i.message}`);
+        continue;
+      }
+      if (new Set(r.data.map((x) => x.id)).size !== r.data.length) problems.push('site@1 里有重复的 id');
+      // 脚本只加在声明过、授权单上列出来的网站上
+      const network = (perms.network ?? []).map((h) => h.toLowerCase());
+      for (const site of r.data) {
+        for (const host of site.matches)
+          if (!hostAllowed(host.replace(/^\*\./, ''), network)) problems.push(`网站「${site.title}」的 ${host} 不在 permissions.network 里`);
+        if (!hostAllowed(new URL(site.url).hostname, site.matches)) problems.push(`网站「${site.title}」的起始页不在它的 matches 里`);
+      }
+      contributes['site@1'] = r.data as SiteContribution[];
     }
   }
   // 命令、任务由服务端逻辑实现；后台任务要授权「在后台运行」
   if (!server && (contributes['command@1']?.length || contributes['job.kind@1']?.length)) problems.push('有命令或后台任务，但清单里没有 server（服务端逻辑的入口）');
   if (contributes['job.kind@1']?.length && !perms.background) problems.push('有后台任务，要在 permissions 里写 "background": true');
+  // 页面对应的网站要有
+  for (const pg of contributes['page@1'] ?? [])
+    if (pg.site !== undefined && !contributes['site@1']?.some((x) => x.id === pg.site)) problems.push(`页面「${pg.title ?? pg.id}」对应的网站「${pg.site}」在 site@1 里没有`);
   // 导航项指向自己的页面：要有这一页
   for (const n of contributes['nav.item@1'] ?? [])
     if (n.page !== undefined && !contributes['page@1']?.some((p) => p.id === n.page)) problems.push(`导航项「${n.label}」指向的页面「${n.page}」在 page@1 里没有`);
@@ -233,6 +255,11 @@ export function checkPackageFiles(dir: string, m: PluginManifest): string[] {
     const size = fileSize(path.join(dir, ...p.view.split('/')));
     if (size === null) problems.push(`页面「${p.title ?? p.id}」的视图文件 ${p.view} 不在包里`);
     else if (size > MAX_VIEW_BYTES) problems.push(`页面「${p.title ?? p.id}」的视图文件 ${p.view} 太大（最多 ${MAX_VIEW_BYTES / 1024 / 1024} MB）`);
+  }
+  for (const site of m.contributes['site@1'] ?? []) {
+    const size = fileSize(path.join(dir, ...site.script.split('/')));
+    if (size === null) problems.push(`网站「${site.title}」的脚本 ${site.script} 不在包里`);
+    else if (size > MAX_VIEW_BYTES) problems.push(`网站「${site.title}」的脚本 ${site.script} 太大（最多 ${MAX_VIEW_BYTES / 1024 / 1024} MB）`);
   }
   return problems;
 }

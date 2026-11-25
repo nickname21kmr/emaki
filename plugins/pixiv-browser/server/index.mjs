@@ -205,27 +205,40 @@ export async function activate(emaki) {
 
   // ---------------------------------------------------------------- 下载
 
-  emaki.commands.handle('download', async ({ ids }) => {
-    const unique = [...new Set(ids.map(String))];
-    const first = seen.get(unique[0]);
+  // ids：只给作品 id（插件自己去查每一页的原图）；works：Pixiv 页面上加的按钮（App 里的站内浏览）给的，
+  // 带标题和原图地址（页面用你在 App 里的登录查好的，R-18 也查得到），插件不用登录
+  emaki.commands.handle('download', async ({ ids = [], works = [] }) => {
+    const list = [];
+    for (const w of works) list.push({ id: String(w.id), ...(w.title && { title: String(w.title) }), ...(w.urls?.length && { urls: w.urls.filter(isOriginal) }) });
+    for (const id of ids) if (!list.some((w) => w.id === String(id))) list.push({ id: String(id) });
+    const unique = list.filter((w, i) => list.findIndex((x) => x.id === w.id) === i);
+    if (!unique.length) throw new Error('要给 ids 或 works');
+    for (const w of unique) if (w.title) seen.set(w.id, { ...seen.get(w.id), id: w.id, title: w.title });
+    const first = seen.get(unique[0].id);
     const title = unique.length === 1 && first ? `下载「${first.title}」` : `下载 ${unique.length} 个 Pixiv 作品`;
-    const job = await emaki.jobs.start('download', { ids: unique }, { title });
+    const job = await emaki.jobs.start('download', { works: unique }, { title });
     return { jobId: job.id, message: `已开始${title}，进度在任务列表里` };
   });
 
-  emaki.jobs.register('download', async ({ ids }, job) => {
+  emaki.jobs.register('download', async (input, job) => {
+    // 老的任务只有 ids
+    const list = input.works ?? (input.ids ?? []).map((id) => ({ id: String(id) }));
+    const ids = list.map((w) => w.id);
     job.setTotal(ids.length);
     let works = 0;
     let added = 0;
     let existing = 0;
     const failed = [];
-    for (const id of ids) {
+    for (const work of list) {
+      const id = work.id;
       if (job.signal.aborted) throw new Error('取消了');
       const meta = seen.get(id);
-      const label = meta ? `「${meta.title}」` : id;
+      const label = meta?.title ? `「${meta.title}」` : id;
       try {
         if (meta?.type === 'ugoira') throw new Error('动图（ugoira）暂时下载不了');
-        const pages = await api(`/ajax/illust/${id}/pages?lang=zh`, { login: false });
+        const pages = work.urls?.length
+          ? work.urls.map((original) => ({ urls: { original } }))
+          : await api(`/ajax/illust/${id}/pages?lang=zh`, { login: false });
         if (!Array.isArray(pages) || !pages.length) throw new Error('没有找到这个作品的图');
         const saved = [];
         for (let i = 0; i < pages.length; i++) {
@@ -268,6 +281,16 @@ export async function activate(emaki) {
 }
 
 // ---------------------------------------------------------------- 小工具
+
+/** Pixiv 的原图地址（i.pximg.net 的 https）：页面给的地址只认这种 */
+function isOriginal(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && u.hostname === 'i.pximg.net';
+  } catch {
+    return false;
+  }
+}
 
 function typeOf(n) {
   return n === 1 ? 'manga' : n === 2 ? 'ugoira' : 'illust';

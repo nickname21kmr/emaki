@@ -171,6 +171,8 @@ describe('视图的桥接', () => {
     expect(v.tools.map((t) => t.name)).toEqual(['read_library', 'read_media']);
     expect((await call('example.stats', 'curation_set_favorite', { operationId: 'x', ids: ['1'], value: true })).json).toMatchObject({
       isError: true,
+      // 插件有、设备没有：说清楚缺哪一个
+      content: [{ text: expect.stringMatching(/这台设备没有「改单张图的决定.*」的权限/) }],
     });
     device = ['curate'];
     expect((await get('/api/plugins/example.stats/pages/main')).status).toBe(403);

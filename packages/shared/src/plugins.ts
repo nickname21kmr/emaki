@@ -53,6 +53,43 @@ export interface PageContribution {
   view?: string;
   /** 页头上的标题（不写用插件的名字） */
   title?: string;
+  /**
+   * 这一页对应插件的一个外部网站（site@1 的 id）：能直接打开网站、给网站加按钮的地方（安卓 App）打开那个网站，
+   * 不能的（电脑上的浏览器）照常显示视图
+   */
+  site?: string;
+}
+
+/**
+ * site@1：插件给一个外部网站用的脚本（docs/plugins.md 第 6 节，E5）。能打开网站的宿主（安卓 App 里的站内浏览）打开 url，
+ * 在 matches 的网站上加载 script（加多选、「下载到 Emaki」这类按钮）。脚本经宿主调这个插件自己的命令（window.__emakiSite.call）。
+ * matches 里的域名要在 permissions.network 里
+ */
+export interface SiteContribution {
+  id: string;
+  title: string;
+  /** 打开时的起始页 */
+  url: string;
+  /** 在哪些网站上加载脚本（域名，和 permissions.network 同样写法） */
+  matches: string[];
+  /** 脚本：包里的 .js */
+  script: string;
+}
+
+/** 域名在不在列表里：列表里的 pixiv.net 也算 www.pixiv.net（子域名），*.pixiv.net 同样 */
+export const hostAllowed = (host: string, allowed: readonly string[]): boolean =>
+  allowed.some((a) => {
+    const h = a.toLowerCase().replace(/^\*\./, '');
+    const x = host.toLowerCase();
+    return x === h || x.endsWith(`.${h}`);
+  });
+
+/** GET /api/plugins/sites：启用着的插件的站点脚本（给安卓 App） */
+export interface PluginSite extends SiteContribution {
+  pluginId: string;
+  version: string;
+  /** 脚本的内容 */
+  code: string;
 }
 
 /** 插件的视图页面在网页上的地址 */
@@ -130,6 +167,7 @@ export interface Contributes {
   'command@1'?: CommandContribution[];
   'job.kind@1'?: JobKindContribution[];
   'setting@1'?: SettingContribution[];
+  'site@1'?: SiteContribution[];
 }
 
 export interface PluginManifest {
@@ -152,7 +190,7 @@ export interface PluginManifest {
 export const SLOT_POINT_KEYS = ['page.action@1', 'menu.item@1', 'lightbox.toolbar@1', 'lightbox.panel@1'] as const;
 
 /** 装的插件现在能贡献的：不跑代码的那几种、视图页面（E4）、服务端逻辑的命令、任务、设置（E5）。区块、看图器按钮这些以后开放 */
-export const INSTALLABLE_POINTS = ['nav.item@1', 'override@1', 'page@1', 'command@1', 'job.kind@1', 'setting@1'] as const;
+export const INSTALLABLE_POINTS = ['nav.item@1', 'override@1', 'page@1', 'command@1', 'job.kind@1', 'setting@1', 'site@1'] as const;
 
 // ---------------------------------------------------------------- 授权（docs/plugins.md 第 4 节）
 

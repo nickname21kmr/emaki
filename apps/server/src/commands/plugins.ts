@@ -20,6 +20,7 @@ import {
   SetPluginSettingsInput,
 } from '@emaki/shared/schemas';
 import { config } from '../config.ts';
+import { z } from 'zod';
 import { BadRequestError } from '../http/errors.ts';
 import { defineCommand, defineQuery } from './registry.ts';
 
@@ -44,7 +45,16 @@ export const pluginQueries = [
     http: [{ method: 'GET', path: '/api/plugins/packages/:token' }],
     run: (e, q) => e.plugins.stagedPackage(q.token),
   }),
+  defineQuery({
+    name: 'plugins.sites',
+    summary: '启用着的插件给外部网站用的脚本（site@1）：安卓 App 打开网站（比如 Pixiv）时加载，脚本加的按钮调这个插件自己的命令',
+    input: z.object({}),
+    scope: 'read',
+    http: [{ method: 'GET', path: '/api/plugins/sites' }],
+    run: (e) => e.plugins.sites(),
+  }),
 ];
+
 
 export const pluginCommands = [
   defineCommand({

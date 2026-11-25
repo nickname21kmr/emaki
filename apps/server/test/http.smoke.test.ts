@@ -1204,6 +1204,10 @@ describe('插件（注册表：plugins.*，docs/plugins.md 第 9 节）', () => 
     expect(await get('cache/none.png')).toBe(404);
     expect((await app.inject({ method: 'GET', url: '/api/plugin-media/nope/file/a.png' })).statusCode).toBe(404);
   });
+  route('GET /api/plugins/sites', async () => {
+    // 演示环境里没有带网站脚本的插件
+    expect(await call('GET', '/api/plugins/sites')).toMatchObject({ status: 200, json: [] });
+  });
   route('POST /api/plugins/:id/settings', async () => {
     await installView();
     // 这个插件没有设置

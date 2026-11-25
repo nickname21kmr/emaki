@@ -4,7 +4,7 @@
 在局域网里找电脑、请求连接（6 位校验码）、保存凭证、认准电脑的证书、之后每次打开自动连上、被电脑移除时回到原生页面。
 设计见 [docs/mobile.md](../../docs/mobile.md) 第 2、3 节；配对协议见 `apps/server/src/access/pairing.ts` 的文件头。
 
-- applicationId `app.emaki.mobile`，版本 0.4.0（versionCode 7），Android 10 以上（minSdk 29），targetSdk 35。
+- applicationId `app.emaki.mobile`，版本 0.5.0（versionCode 8），Android 10 以上（minSdk 29），targetSdk 35。
 - 装好的 APK 在 [Releases](https://github.com/zhaochengggg/emaki/releases) 下载（用下面「签名密钥」里那把密钥签的）；也可以自己构建。
 - 依赖：Compose（Material 3）、OkHttp、zxing-android-embedded（扫码，不依赖 Google Play 服务）。没有统计、推送、广告。
 - 这个目录没有 package.json，npm 的 workspaces 不会管它。
@@ -28,6 +28,8 @@
 不显示网页自己的「连接到电脑」页；`apps/web/src/lib/connection.ts` 连不上电脑时调 `EmakiApp.connectionLost()`，不显示网页自己的提示条；
 图库页头的「传到电脑」图标（`features/gallery/components/SendToComputer.tsx`）在有 `EmakiApp.pickImages` 时显示；
 有 `EmakiApp.syncAlbums`（0.3.0 起）时点开是一个面板：「选图片上传」+「同步相册」（`features/access/AlbumSync.tsx`），老版本直接打开选图界面。
+插件对应的外部网站（docs/plugins.md 第 6 节 `site@1`，0.5.0 起）：网页在 App 里打开这种插件页面时调 `EmakiApp.openSite(插件, 网站)`，
+App 打开 `SiteActivity`（站内浏览：网站本身加上插件的脚本，`core/SiteBridge.kt` 是和安卓无关的部分，有单元测试）。
 
 ## 构建
 

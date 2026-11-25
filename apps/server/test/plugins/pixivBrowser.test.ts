@@ -3,7 +3,7 @@
  * 子进程。Pixiv 换成假的（不联网）：浏览排行、取缩略图、批量下载（后台任务：进度、取消），放进授权给的文件夹，
  * 图库里已经有的不再放一份。
  */
-import type { PluginsState } from '@emaki/shared';
+import type { PluginSite, PluginsState } from '@emaki/shared';
 import { mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -238,7 +238,7 @@ describe('附带的 Pixiv 浏览', () => {
     expect(readdirSync(path.join(lib, '下载图片', 'Pixiv')).sort()).toEqual(['111_p0.png', '111_p1.png', '222_p0.png']);
     // 导入记成插件；临时文件删掉了
     expect(ds.ctx.db.prepare("SELECT DISTINCT actor FROM command_log WHERE command = 'library.import'").pluck().all()).toEqual([
-      'plugin:pixiv-browser@0.2.0',
+      'plugin:pixiv-browser@0.3.0',
     ]);
     expect(readdirSync(ds.plugins.dataDir(ID))).not.toContain('dl');
     // 页面上标「已下载」
@@ -258,6 +258,43 @@ describe('附带的 Pixiv 浏览', () => {
     expect(job2.title).toBe('下载「一张的」');
     expect(job2.message).toBe('下载完了 1 个作品，新加 0 张，1 张图库里已经有了');
     expect(readdirSync(path.join(lib, '下载图片', 'Pixiv'))).toHaveLength(3);
+  });
+
+  it('App 里的站内浏览：网站脚本发给 App；Pixiv 页面查好的原图地址直接下载（插件不用登录），只认 i.pximg.net', async () => {
+    await enable();
+    const sites = await ds.registry.query<PluginSite[]>('plugins.sites', {});
+    expect(sites).toEqual([
+      expect.objectContaining({
+        pluginId: ID,
+        id: 'pixiv',
+        url: 'https://www.pixiv.net/',
+        matches: ['www.pixiv.net'],
+        code: expect.stringContaining('__emakiSite'),
+      }),
+    ]);
+    const before = requests.length;
+    const r = await call<{ jobId: string; message: string }>('pixiv-browser.download', {
+      works: [
+        {
+          id: '555',
+          title: '站内选的',
+          urls: ['https://i.pximg.net/img-original/img/555_p0.png', 'https://i.pximg.net/img-original/img/555_p1.png'],
+        },
+        { id: '666', title: '地址不对的', urls: ['https://evil.example/x.png'] },
+      ],
+    });
+    expect(r.message).toMatch(/已开始下载 2 个 Pixiv 作品/);
+    const job = await until(() => ds.ctx.jobs.get(r.jobId)!.status === 'done' && ds.ctx.jobs.get(r.jobId)!, '下载完');
+    expect(job.message).toMatch(/下载完了 2 个作品/);
+    // 555 用给的地址，没去查作品页；666 的地址不认，退回去查
+    const asked = requests.slice(before).map((x) => new URL(x.url).pathname);
+    expect(asked).not.toContain('/ajax/illust/555/pages');
+    expect(asked).toContain('/ajax/illust/666/pages');
+    expect(asked).not.toContain('/x.png');
+    expect(readdirSync(path.join(lib, '下载图片', 'Pixiv')).sort()).toEqual(['555_p0.png', '555_p1.png', '666_p0.png']);
+    // 停用了就不发
+    await call('plugins.setEnabled', { id: ID, enabled: false });
+    expect(await ds.registry.query('plugins.sites', {})).toEqual([]);
   });
 
   it('取消下载：任务停下，算取消', async () => {
