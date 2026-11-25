@@ -81,6 +81,13 @@
         background: var(--color-background-primary, #fff);
         box-shadow: var(--shadow-sm, none);
       }
+      .account {
+        margin-left: auto;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        font-size: var(--font-text-sm-size, 13px);
+      }
       .grow {
         flex: 1;
         min-width: 10em;
@@ -219,6 +226,11 @@
         display: block;
         margin: 20px auto 0;
       }
+      /* 上面的 display 会压过 hidden 属性 */
+      #more[hidden],
+      #note[hidden] {
+        display: none;
+      }
       .actions {
         position: fixed;
         left: 50%;
@@ -256,6 +268,7 @@
         <button data-tab="following">关注</button>
       </div>
       <span id="controls" class="bar" style="margin: 0"></span>
+      <span id="account" class="account"></span>
     </div>
     <p id="note" class="note" hidden></p>
     <div id="grid" class="grid"></div>
@@ -309,10 +322,60 @@
         $('note').className = error ? 'note error' : 'note';
         $('note').innerHTML = text ?? '';
         $('note')
-          .querySelector('[data-settings]')
-          ?.addEventListener('click', () => view.open('/plugins/pixiv-browser'));
+          .querySelector('[data-login]')
+          ?.addEventListener('click', () => startLogin());
       };
-      const LOGIN = '要登录：到 <a data-settings>插件详情</a> 里填 Pixiv 登录（PHPSESSID）。';
+      const LOGIN = '<a data-login>登录 Pixiv</a>（在电脑上弹出 Pixiv 的登录页，登录好自己关掉）。';
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      // 右上角：登录了哪个账号、登录 / 退出
+      function renderAccount() {
+        const a = $('account');
+        if (status.session) {
+          a.innerHTML = `<span class="muted">Pixiv：${esc(status.account?.name ?? status.account?.id ?? '已登录')}</span> <button id="logout">退出</button>`;
+          $('logout').onclick = async () => {
+            await view.call('pixiv-browser.logout', {}).catch(() => {});
+            status = { ...status, session: false, account: null };
+            renderAccount();
+            reload();
+          };
+        } else if (status.login?.state === 'waiting') {
+          a.innerHTML = '<span class="muted">正在电脑上登录 Pixiv…</span>';
+        } else {
+          a.innerHTML = '<button id="login">登录 Pixiv</button>';
+          $('login').onclick = () => startLogin();
+        }
+      }
+
+      /** 登录：插件在电脑上开登录窗口，这里等它登录好（窗口关了、超时就停） */
+      async function startLogin() {
+        try {
+          const r = await view.call('pixiv-browser.login', {});
+          note(esc(r.message));
+        } catch (e) {
+          note(esc(e.message ?? e), true);
+          return;
+        }
+        status = { ...status, login: { state: 'waiting' } };
+        renderAccount();
+        for (let i = 0; i < 400; i++) {
+          await sleep(2000);
+          const s = await view.call('pixiv-browser.status', {}).catch(() => null);
+          if (!s) continue;
+          status = s;
+          if (s.session) {
+            renderAccount();
+            await reload();
+            if (!$('note').classList.contains('error')) note(`已登录 Pixiv${s.account?.name ? `：${esc(s.account.name)}` : ''}`);
+            return;
+          }
+          if (s.login?.state !== 'waiting') {
+            renderAccount();
+            if (s.login?.error) note(`没有登录上：${esc(s.login.error)}`, true);
+            return;
+          }
+        }
+      }
 
       function renderControls() {
         for (const b of document.querySelectorAll('[data-tab]')) b.setAttribute('aria-pressed', String(b.dataset.tab === state.tab));
@@ -386,7 +449,7 @@
         if (state.tab === 'following' && !status.session) {
           next = null;
           $('more').hidden = true;
-          return note(`看关注的新作${LOGIN}`);
+          return note(`看关注的新作要先登录：${LOGIN}`);
         }
         await loadMore();
       }
@@ -411,7 +474,7 @@
         } catch (e) {
           if (gen !== generation) return;
           const msg = String(e.message ?? e);
-          note(/登录/.test(msg) ? `${esc(msg.replace(/。$/, ''))}。${LOGIN}` : esc(msg), true);
+          note(/登录/.test(msg) ? `${esc(msg.replace(/。$/, ''))}：${LOGIN}` : esc(msg), true);
           next = null;
         } finally {
           if (loadingGen === gen) loadingGen = -1;
@@ -548,6 +611,7 @@
       });
 
       status = await view.call('pixiv-browser.status', {}).catch(() => ({ session: false }));
+      renderAccount();
       await reload();
     </script>
   </body>

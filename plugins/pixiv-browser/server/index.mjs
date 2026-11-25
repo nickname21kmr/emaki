@@ -55,16 +55,16 @@ export async function activate(emaki) {
     return run;
   };
 
+  /** 登录以后的 Cookie（经登录窗口拿到，存在插件的凭证里，页面读不到） */
   async function session() {
-    const raw = ((await emaki.settings.get('session')) ?? '').trim();
-    if (!raw) return null;
-    return raw.includes('=') ? raw : `PHPSESSID=${raw}`;
+    const raw = ((await emaki.secrets.get('session')) ?? '').trim();
+    return raw ? `PHPSESSID=${raw}` : null;
   }
 
   /** www.pixiv.net 的接口：返回 body（JSON 的 error 为 true 时抛出） */
   async function api(pathAndQuery, { login = false } = {}) {
     const cookie = await session();
-    if (login && !cookie) throw new Error('要先在插件设置里填 Pixiv 登录（PHPSESSID）');
+    if (login && !cookie) throw new Error('要先登录 Pixiv');
     const r = await paced(() =>
       emaki.fetch(`${WWW}${pathAndQuery}`, {
         headers: {
@@ -78,7 +78,7 @@ export async function activate(emaki) {
       }),
     );
     if (r.status === 401 || r.status === 403)
-      throw new Error(cookie ? 'Pixiv 拒绝了请求：登录可能失效了，到插件设置里重新填' : 'Pixiv 拒绝了请求：这个要登录');
+      throw new Error(cookie ? 'Pixiv 拒绝了请求：登录可能过期了，重新登录 Pixiv' : 'Pixiv 拒绝了请求：这个要先登录 Pixiv');
     if (r.status === 429) throw new Error('Pixiv 说请求太频繁了，过一会儿再试');
     if (!r.ok) throw new Error(`Pixiv 返回 HTTP ${r.status}`);
     const json = r.body;
@@ -89,7 +89,7 @@ export async function activate(emaki) {
   // ---------------------------------------------------------------- 浏览
 
   emaki.commands.handle('ranking', async ({ mode = 'daily', page = 1, date }) => {
-    if (mode.endsWith('_r18') && !(await session())) throw new Error('R-18 的排行要先在插件设置里填 Pixiv 登录');
+    if (mode.endsWith('_r18') && !(await session())) throw new Error('R-18 的排行要先登录 Pixiv');
     const q = new URLSearchParams({ mode, p: String(page), format: 'json' });
     if (date) q.set('date', date);
     const r = await api(`/ranking.php?${q}`, { login: mode.endsWith('_r18') });
@@ -112,7 +112,7 @@ export async function activate(emaki) {
   });
 
   emaki.commands.handle('search', async ({ word, page = 1, order = 'date_d', mode = 'safe', match = 'tag' }) => {
-    if (mode !== 'safe' && !(await session())) throw new Error('看 R-18 的要先在插件设置里填 Pixiv 登录');
+    if (mode !== 'safe' && !(await session())) throw new Error('看 R-18 的要先登录 Pixiv');
     const sMode = { tag: 's_tag_full', partial: 's_tag', text: 's_tc' }[match] ?? 's_tag_full';
     const q = new URLSearchParams({ word, order, mode, p: String(page), s_mode: sMode, type: 'illust_and_ugoira', lang: 'zh' });
     const r = await api(`/ajax/search/illustrations/${encodeURIComponent(word)}?${q}`);
@@ -128,10 +128,55 @@ export async function activate(emaki) {
     return { items: remember(items), next: r.page?.isLastPage ? null : page + 1 };
   });
 
+  // ---------------------------------------------------------------- 登录
+
+  // 正在登录（开着登录窗口）、上次登录失败的原因
+  let login = null;
+
   emaki.commands.handle('status', async ({ ids = [] }) => ({
     session: !!(await session()),
+    account: (await emaki.storage.get('account')) ?? null,
+    login,
     downloaded: ids.filter((id) => downloaded.has(String(id))),
   }));
+
+  // 不让你去浏览器里翻 Cookie：在电脑上开一个 Pixiv 的登录页，你登录好以后 Emaki 读到登录的 Cookie，窗口自己关掉
+  emaki.commands.handle('login', async () => {
+    if (login?.state === 'waiting') return { message: '登录窗口已经开着了，在电脑上登录 Pixiv' };
+    const win = await emaki.login.browser({
+      url: 'https://accounts.pixiv.net/login?return_to=https%3A%2F%2Fwww.pixiv.net%2F&lang=zh&source=pc&view_type=page',
+      cookieUrl: 'https://www.pixiv.net/',
+      cookie: 'PHPSESSID',
+      // 登录以后是「<用户 id>_…」，没登录的访客不是
+      pattern: '^\\d+_',
+    });
+    login = { state: 'waiting' };
+    win.done.then(
+      async (value) => {
+        await emaki.secrets.set('session', value);
+        const id = value.split('_')[0];
+        let name = null;
+        try {
+          name = (await api(`/ajax/user/${id}?lang=zh`, { login: true })).name ?? null;
+        } catch (e) {
+          emaki.log(`取账号名字失败：${e.message}`);
+        }
+        await emaki.storage.set('account', { id, name });
+        login = null;
+      },
+      (e) => {
+        login = { state: 'failed', error: e.message };
+      },
+    );
+    return { message: '在电脑上弹出了 Pixiv 的登录页：在那里登录，登录好窗口会自己关掉' };
+  });
+
+  emaki.commands.handle('logout', async () => {
+    await emaki.secrets.delete('session');
+    await emaki.storage.delete('account');
+    login = null;
+    return { message: '已退出 Pixiv' };
+  });
 
   // 缩略图：i.pximg.net 要带 Referer，页面里的 <img> 带不了，也连不了外站。取到自己的文件夹，页面经 Emaki 的地址显示
   emaki.commands.handle('thumbs', async ({ urls }) => {

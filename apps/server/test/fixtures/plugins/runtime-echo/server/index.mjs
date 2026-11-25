@@ -54,6 +54,14 @@ export async function activate(emaki) {
         return await emaki.library.import(arg);
       case 'job':
         return await emaki.jobs.start('count', arg, { title: `数到 ${arg.n}` });
+      case 'login': {
+        const win = await emaki.login.browser(arg);
+        win.done.then(
+          (v) => emaki.storage.set('login', { value: v }),
+          (e) => emaki.storage.set('login', { error: e.message }),
+        );
+        return { opened: true };
+      }
       case 'lastChange':
         return { changes: (await emaki.storage.get('lastChange')) ?? null };
       default:

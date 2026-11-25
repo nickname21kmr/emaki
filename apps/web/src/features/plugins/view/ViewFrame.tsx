@@ -36,13 +36,14 @@ export function ViewFrame({ view, label }: { view: PluginView; label: string }) 
     let alive = true;
     let conn: ConnectedView | null = null;
     let iframe: HTMLIFrameElement | null = null;
-    const fail = (message: string) => {
+    /** blame：是插件的问题（记一次错，出错多次自动停用）；Emaki 自己的（运行库没加载出来）不算插件的 */
+    const fail = (message: string, blame = true) => {
       if (!alive) return;
       alive = false;
       setState({ error: message });
       iframe?.remove();
       void conn?.close();
-      void api.pluginError(view.pluginId, message).catch(() => {});
+      if (blame) void api.pluginError(view.pluginId, message).catch(() => {});
     };
     const timer = setTimeout(() => fail(`页面 ${HANDSHAKE_MS / 1000} 秒内没有连上 Emaki（页面里要调用 Emaki.connect()）`), HANDSHAKE_MS);
     let pending: string | null = null;
@@ -89,7 +90,7 @@ export function ViewFrame({ view, label }: { view: PluginView; label: string }) 
           if (alive) setState('ready');
         });
       },
-      () => fail('页面的运行库没有加载出来，刷新一下再试'),
+      () => fail('Emaki 显示插件页面用的运行库没有加载出来（不是这个插件的问题），刷新整个页面再试', false),
     );
     return () => {
       alive = false;

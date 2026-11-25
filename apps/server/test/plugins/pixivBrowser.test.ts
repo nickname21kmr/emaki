@@ -11,6 +11,7 @@ import { config } from '../../src/config.ts';
 import { EventBus } from '../../src/core/events.ts';
 import { sharp } from '../../src/services/image/sharpConfig.ts';
 import { PluginRuntime, type RuntimeOptions } from '../../src/services/plugins/runtime/host.ts';
+import type { LoginWindow, LoginWindowOptions } from '../../src/services/plugins/runtime/loginWindow.ts';
 import { SqliteDataSource } from '../helpers/client.ts';
 import { makeTmpDir } from '../helpers/tmp.ts';
 
@@ -22,6 +23,19 @@ let lib: string;
 let rootId: number;
 let runtime: PluginRuntime;
 let requests: { url: string; headers: Record<string, string> }[];
+/** 假的登录窗口：测试里决定登录好还是关掉 */
+let logins: { o: LoginWindowOptions; finish(v: string): void; fail(m: string): void }[];
+const fakeLogin = async (o: LoginWindowOptions): Promise<LoginWindow> => {
+  let finish!: (v: string) => void;
+  let fail!: (m: string) => void;
+  const done = new Promise<string>((resolve, reject) => {
+    finish = resolve;
+    fail = (m) => reject(new Error(m));
+  });
+  done.catch(() => {});
+  logins.push({ o, finish, fail });
+  return { done, close: () => fail('登录取消了') };
+};
 const png = new Map<string, Buffer>();
 
 /** 每个地址一张不同的图（颜色按地址算） */
@@ -91,6 +105,8 @@ const fakePixiv: RuntimeOptions['fetch'] = async (url, init) => {
       body: Array.from({ length: n }, (_, i) => ({ urls: { original: `https://i.pximg.net/img-original/img/${id}_p${i}.png` } })),
     });
   }
+  if (u.hostname === 'www.pixiv.net' && u.pathname === '/ajax/user/12345')
+    return init.headers?.cookie ? json({ error: false, body: { userId: '12345', name: '测试账号' } }) : new Response('', { status: 401 });
   if (u.hostname === 'www.pixiv.net' && u.pathname.startsWith('/ajax/follow_latest'))
     return init.headers?.cookie
       ? json({ error: false, body: { thumbnails: { illust: [] }, page: { isLastPage: true } } })
@@ -112,7 +128,8 @@ beforeEach(async () => {
     .pluck()
     .get(lib, 'auto') as number;
   requests = [];
-  runtime = new PluginRuntime(ds, { fetch: fakePixiv, log: () => {} });
+  logins = [];
+  runtime = new PluginRuntime(ds, { fetch: fakePixiv, log: () => {}, loginWindow: fakeLogin });
   runtime.start();
 });
 afterEach(async () => {
@@ -122,11 +139,11 @@ afterEach(async () => {
 
 const call = <T = Record<string, any>>(name: string, input: unknown = {}) => ds.registry.execute<T>(name, input);
 
-async function until<T>(fn: () => T, what: string, ms = 20_000): Promise<Exclude<T, false | null | undefined>> {
+async function until<T>(fn: () => T | Promise<T>, what: string, ms = 20_000): Promise<Exclude<T, false | null | undefined | ''>> {
   const end = Date.now() + ms;
   for (;;) {
-    const v = fn();
-    if (v) return v as Exclude<T, false | null | undefined>;
+    const v = await fn();
+    if (v) return v as Exclude<T, false | null | undefined | ''>;
     if (Date.now() > end) throw new Error(`等不到：${what}`);
     await new Promise((r) => setTimeout(r, 25));
   }
@@ -169,10 +186,45 @@ describe('附带的 Pixiv 浏览', () => {
     // 带了 Referer
     expect(requests.find((x) => x.url.includes('i.pximg.net'))!.headers.referer).toBe('https://www.pixiv.net/');
     // 关注要登录
-    await expect(call('pixiv-browser.following', {})).rejects.toThrow(/Pixiv 登录/);
-    await call('plugins.setSettings', { id: ID, values: { session: 'abc123' } });
+    await expect(call('pixiv-browser.following', {})).rejects.toThrow(/要先登录 Pixiv/);
+  });
+
+  it('登录：在电脑上开 Pixiv 的登录页，读到登录以后的 Cookie（不用你去翻 PHPSESSID），存进凭证；能退出', async () => {
+    await enable();
+    // 插件详情里没有要填的设置了
+    expect((await ds.registry.query<PluginsState>('plugins.state', {})).plugins.find((p) => p.id === ID)!.settings).toBeUndefined();
+    const r = await call<{ message: string }>('pixiv-browser.login');
+    expect(r.message).toMatch(/在电脑上弹出了 Pixiv 的登录页/);
+    expect(logins[0]!.o).toMatchObject({ cookieUrl: 'https://www.pixiv.net/', cookie: 'PHPSESSID' });
+    expect(logins[0]!.o.url).toMatch(/^https:\/\/accounts\.pixiv\.net\/login/);
+    // 访客的 Cookie 不算，登录以后的才算
+    expect(logins[0]!.o.pattern!.test('abcdef')).toBe(false);
+    expect(logins[0]!.o.pattern!.test('12345_abcdef')).toBe(true);
+    expect(await call('pixiv-browser.status')).toMatchObject({ session: false, login: { state: 'waiting' } });
+    // 开着的时候再点：不再开一个
+    expect((await call<{ message: string }>('pixiv-browser.login')).message).toMatch(/已经开着了/);
+    expect(logins).toHaveLength(1);
+
+    logins[0]!.finish('12345_abcdef');
+    const s = await until(async () => {
+      const x = await call<{ session: boolean; account: unknown; login: unknown }>('pixiv-browser.status');
+      return x.session && x.account && x;
+    }, '登录好');
+    expect(s).toMatchObject({ session: true, account: { id: '12345', name: '测试账号' }, login: null });
     expect(await call('pixiv-browser.following', {})).toMatchObject({ items: [], next: null });
-    expect(requests.at(-1)!.headers.cookie).toBe('PHPSESSID=abc123');
+    expect(requests.at(-1)!.headers.cookie).toBe('PHPSESSID=12345_abcdef');
+    // 凭证视图读不到
+    expect(JSON.stringify(ds.plugins.storage.keys(ID).map((k) => ds.plugins.storage.get(ID, k)))).not.toContain('abcdef');
+
+    await call('pixiv-browser.logout');
+    expect(await call('pixiv-browser.status')).toMatchObject({ session: false, account: null });
+
+    // 窗口关了没登录：说清楚
+    await call('pixiv-browser.login');
+    logins[1]!.fail('登录窗口关掉了，还没有登录好');
+    expect(
+      await until(async () => (await call<{ login: { error?: string } | null }>('pixiv-browser.status')).login?.error, '失败的原因'),
+    ).toBe('登录窗口关掉了，还没有登录好');
   });
 
   it('批量下载：后台任务有进度，全部页放进授权的文件夹；动图跳过；再下载一次不再放一份', async () => {
@@ -186,11 +238,14 @@ describe('附带的 Pixiv 浏览', () => {
     expect(readdirSync(path.join(lib, '下载图片', 'Pixiv')).sort()).toEqual(['111_p0.png', '111_p1.png', '222_p0.png']);
     // 导入记成插件；临时文件删掉了
     expect(ds.ctx.db.prepare("SELECT DISTINCT actor FROM command_log WHERE command = 'library.import'").pluck().all()).toEqual([
-      'plugin:pixiv-browser@0.1.0',
+      'plugin:pixiv-browser@0.2.0',
     ]);
     expect(readdirSync(ds.plugins.dataDir(ID))).not.toContain('dl');
     // 页面上标「已下载」
-    expect(await call('pixiv-browser.status', { ids: ['111', '222', '333'] })).toEqual({ session: false, downloaded: ['111', '222'] });
+    expect(await call('pixiv-browser.status', { ids: ['111', '222', '333'] })).toMatchObject({
+      session: false,
+      downloaded: ['111', '222'],
+    });
     expect((await call<{ items: { downloaded: boolean }[] }>('pixiv-browser.ranking', {})).items.map((i) => i.downloaded)).toEqual([
       true,
       true,

@@ -68,6 +68,19 @@ function makeEmaki(init) {
         return p;
       },
     }),
+    login: Object.freeze({
+      /**
+       * 在这台电脑上开一个浏览器窗口让你登录（网站自己的登录页），读到登录以后的 Cookie：
+       * { url（登录页）, cookieUrl（读哪个地址会带上的 Cookie，要在授权的域名里）, cookie（名字）, pattern（值的样子，正则字符串） }。
+       * 窗口开好就返回 { done }：done 等你登录好，给 Cookie 的值；窗口关了、超时就失败
+       */
+      browser: async (o) => {
+        const { id } = await request('login.open', o);
+        const done = request('login.wait', { id });
+        done.catch(() => {});
+        return { done };
+      },
+    }),
     library: Object.freeze({
       /** files: [{ path（数据目录里的，相对或绝对）, fileName? }]；folder：清单 permissions.folders 里的 id（不写用第一个） */
       import: (o) => request('library.import', o),

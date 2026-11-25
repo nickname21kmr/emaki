@@ -88,6 +88,7 @@ export async function activate(emaki) {
 - `emaki.call(命令或查询, 输入)`：调 Emaki 的命令和查询，受授权限制，记成这个插件做的（能撤销的照样能撤销）；
 - `emaki.fetch(地址, { method, headers, body, json, as, saveAs })`：走 Emaki 的代理设置；`as` 是 `json`、`text`、`bytes`（不写按返回的类型猜）；`saveAs` 直接存成文件；
 - `emaki.storage`：键值，和插件的视图共用；`emaki.settings.get(id)`：你在插件详情里填的设置（`setting@1`）；`emaki.secrets`：登录凭证这类，视图读不到；
+- `emaki.login.browser({ url, cookieUrl, cookie, pattern })`：要登录的网站，在电脑上开一个浏览器窗口让你在网站自己的登录页登录，返回 `{ done }`，`done` 给登录以后的 Cookie（`cookieUrl` 要在授权的域名里），自己存进 `emaki.secrets`；
 - `emaki.files`：自己的文件夹（`dir`、`path(...)`）；`emaki.on('changed', fn)`：图库变了以后旁观（要 `"background": true`）；`emaki.log(...)`：写进 Emaki 的日志。
 
 视图里调自己的命令直接写命令名：`await view.call('my-plugin.search', { word })`。视图不能连外站，外站的图由服务端取到自己的文件夹，

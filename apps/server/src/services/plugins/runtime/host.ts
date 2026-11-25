@@ -23,6 +23,7 @@ import type { CommandDef, Engine } from '../../../commands/registry.ts';
 import type { JobContext } from '../../../core/jobs.ts';
 import { ConflictError, HttpError } from '../../../http/errors.ts';
 import { httpFetch, type HttpInit } from '../../../net/http.ts';
+import { openLoginWindow, type LoginWindow, type LoginWindowOptions } from './loginWindow.ts';
 import { currentActor, pluginActor, runCall } from '../../../propagation/actor.ts';
 
 const CHILD = path.join(import.meta.dirname, 'child.cjs');
@@ -49,6 +50,8 @@ export interface RuntimeOptions {
   memoryMb?: number;
   /** emaki.fetch 用的（测试里换掉） */
   fetch?: (url: string, init: HttpInit) => Promise<Response>;
+  /** emaki.login.browser 用的登录窗口（测试里换掉） */
+  loginWindow?: (o: LoginWindowOptions) => Promise<LoginWindow>;
 }
 
 const DEFAULTS = {
@@ -95,6 +98,8 @@ interface Proc {
   crashes: number;
   fatal: string | null;
   timers: Set<NodeJS.Timeout>;
+  /** 开着的登录窗口（emaki.login.browser） */
+  logins: Map<number, LoginWindow>;
 }
 
 /** 插件那边的错：原样告诉调用方（502，信息是插件给的） */
@@ -191,6 +196,7 @@ export class PluginRuntime {
       crashes: 0,
       fatal: null,
       timers: new Set(),
+      logins: new Map(),
     };
     this.procs.set(spec.id, p);
     for (const c of spec.manifest.contributes['command@1'] ?? []) {
@@ -294,6 +300,8 @@ export class PluginRuntime {
     for (const d of p.defs) this.engine.registry.undefine(d);
     p.ready.reject(new ConflictError('插件的服务端停了'));
     this.failAll(p, '插件停用了');
+    for (const w of p.logins.values()) w.close();
+    p.logins.clear();
     const child = p.child;
     p.child = null;
     if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
@@ -569,6 +577,17 @@ export class PluginRuntime {
       }
       case 'library.import':
         return this.importFiles(p, grant, actor, scoped, a);
+      case 'login.open':
+        return this.openLogin(p, grant, a);
+      case 'login.wait': {
+        const w = p.logins.get(Number(a.id));
+        if (!w) throw new Error('没有这个登录窗口');
+        try {
+          return await w.done;
+        } finally {
+          p.logins.delete(Number(a.id));
+        }
+      }
       case 'jobs.start': {
         if (!grant.background) throw new Error('没有授权在后台运行（清单 permissions.background）');
         const kind = String(a.kind);
@@ -582,6 +601,47 @@ export class PluginRuntime {
       default:
         throw new Error(`不认识的请求：${op}`);
     }
+  }
+
+  /**
+   * emaki.login.browser：在这台电脑上开一个浏览器窗口让你登录，读到登录以后的 Cookie 交给插件（插件自己存进 secrets）。
+   * 只读插件授权连接的网站的 Cookie；一个插件同时只开一个
+   */
+  private async openLogin(p: Proc, grant: Grant, a: Record<string, unknown>): Promise<{ id: number }> {
+    let url: URL;
+    let cookieUrl: URL;
+    try {
+      url = new URL(String(a.url));
+      cookieUrl = new URL(String(a.cookieUrl ?? a.url));
+    } catch {
+      throw new Error('登录窗口的地址不对');
+    }
+    if (!/^https?:$/.test(url.protocol) || !/^https?:$/.test(cookieUrl.protocol)) throw new Error('登录窗口只能开 http、https 的地址');
+    if (!hostAllowed(cookieUrl.hostname.toLowerCase(), grant.network))
+      throw new Error(`没有授权连接 ${cookieUrl.hostname}，读不了它的登录（在清单的 permissions.network 里声明）`);
+    if (typeof a.cookie !== 'string' || !a.cookie) throw new Error('要写读哪个 Cookie（cookie）');
+    if (p.logins.size) throw new Error('登录窗口已经开着了');
+    let pattern: RegExp | undefined;
+    if (typeof a.pattern === 'string' && a.pattern) {
+      if (a.pattern.length > 200) throw new Error('pattern 太长了');
+      pattern = new RegExp(a.pattern);
+    }
+    const timeoutMs = Math.min(Math.max(Number(a.timeoutMs) || 10 * 60_000, 30_000), 30 * 60_000);
+    const w = await (this.o.loginWindow ?? openLoginWindow)({
+      url: url.href,
+      cookieUrl: cookieUrl.href,
+      cookie: a.cookie,
+      pattern,
+      timeoutMs,
+    });
+    // 插件在等的时候停了：stop() 关掉窗口
+    if (p.state === 'stopped') {
+      w.close();
+      throw new Error('插件停了');
+    }
+    const id = ++this.seq;
+    p.logins.set(id, w);
+    return { id };
   }
 
   /** 数据目录里的一个路径（相对的按数据目录算）；mustExist 时按真实路径再查一遍（不能经链接跳出去） */

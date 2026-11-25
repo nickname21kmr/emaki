@@ -9,6 +9,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../../src/core/events.ts';
 import { PluginRuntime, type RuntimeOptions } from '../../src/services/plugins/runtime/host.ts';
+import type { LoginWindow, LoginWindowOptions } from '../../src/services/plugins/runtime/loginWindow.ts';
 import { SqliteDataSource } from '../helpers/client.ts';
 import { makeTmpDir } from '../helpers/tmp.ts';
 
@@ -236,6 +237,33 @@ describe('插件的服务端逻辑', () => {
     await call('plugins.rename', { id: ID, name: '回声 2' });
     const r = await until(async () => (await host<{ changes: string[] | null }>('lastChange')).changes, '收到变化');
     expect(r).toContain('plugins.changed');
+  });
+
+  it('登录窗口：只能读授权连接的网站的登录；一次开一个；插件停了窗口跟着关', async () => {
+    const opened: { o: LoginWindowOptions; finish(v: string): void; closed: boolean }[] = [];
+    const loginWindow = async (o: LoginWindowOptions): Promise<LoginWindow> => {
+      let finish!: (v: string) => void;
+      let fail!: (e: Error) => void;
+      const done = new Promise<string>((a, b) => ((finish = a), (fail = b)));
+      done.catch(() => {});
+      const w = { o, finish, closed: false };
+      opened.push(w);
+      return { done, close: () => ((w.closed = true), fail(new Error('登录取消了'))) };
+    };
+    await start({ loginWindow });
+    const arg = { url: 'https://img.example.test/login', cookieUrl: 'https://img.example.test/', cookie: 'sid', pattern: '^u_' };
+    await expect(host('login', { ...arg, cookieUrl: 'https://evil.example.org/' })).rejects.toThrow(/没有授权连接 evil\.example\.org/);
+    await expect(host('login', { ...arg, url: 'file:///etc/passwd' })).rejects.toThrow(/http、https/);
+    expect(await host('login', arg)).toEqual({ opened: true });
+    expect(opened[0]!.o).toMatchObject({ url: arg.url, cookieUrl: arg.cookieUrl, cookie: 'sid' });
+    expect(opened[0]!.o.pattern!.source).toBe('^u_');
+    await expect(host('login', arg)).rejects.toThrow(/已经开着了/);
+    opened[0]!.finish('u_123');
+    expect(await until(() => ds.plugins.storage.get(ID, 'login'), '登录好')).toEqual({ value: 'u_123' });
+    // 再开一个，插件停了：窗口跟着关
+    await host('login', arg);
+    await call('plugins.setEnabled', { id: ID, enabled: false });
+    await until(() => opened[1]!.closed, '窗口关了');
   });
 
   it('附带的插件：没装的列在 bundled 里，装了就不列', async () => {
