@@ -77,6 +77,9 @@ export const PLUGIN_GRANTABLE_SCOPES: readonly Scope[] = [
 /** AI 助手做的页面最多能要的范围：不超过助手自己的，也不超过插件能要的（docs/plugins.md 5.1） */
 export const AI_VIEW_SCOPES: readonly Scope[] = ASSISTANT_SCOPES.filter((s) => PLUGIN_GRANTABLE_SCOPES.includes(s));
 
+/** 命令名 → 工具名（MCP 工具、插件视图里调用用的名字）：curation.setFavorite → curation_set_favorite */
+export const commandToolName = (command: string): string => command.replace(/\./g, '_').replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+
 /** GET /api/commands：注册表里的一项 */
 export interface CommandInfo {
   name: string;

@@ -1,3 +1,4 @@
+import { jobTitle } from '@emaki/shared';
 import type { ID } from '@emaki/shared';
 import { AnimatePresence, motion } from 'motion/react';
 import { JobFilmstrip } from '@/components/media/JobFilmstrip';
@@ -46,7 +47,7 @@ export function JobBanner() {
               <span className="absolute inset-0 animate-ping rounded-full bg-shu opacity-50" />
               <span className="relative size-2 rounded-full bg-shu" />
             </span>
-            <span className="shrink-0 font-medium">{JOB_LABEL[job.kind]}</span>
+            <span className="shrink-0 font-medium">{jobTitle(job)}</span>
             {detail && <span className="min-w-0 truncate text-fg-subtle">{detail}</span>}
             {job.kind === 'tag' && <JobFilmstrip jobId={job.id} className="ml-auto shrink-0" />}
 

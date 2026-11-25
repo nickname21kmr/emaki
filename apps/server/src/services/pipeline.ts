@@ -283,6 +283,10 @@ export class Pipeline {
       if (!this.d.danbooru) throw new NotImplementedError('T11', 'Danbooru 同步');
       return this.d.danbooru.run(ctx);
     });
+    // 插件的任务：执行体在插件的子进程里，排队时直接给（JobQueue.enqueueTask），不经这张表
+    this.registerKind('plugin', async () => {
+      throw new NotImplementedError('插件的任务要经插件启动');
+    });
     this.registerKind('pose', async (ctx) => {
       if (!this.d.pose) throw new NotImplementedError('pose', '提取姿势');
       if (!this.d.pose.enabled()) return '提取姿势：设置里没有打开';

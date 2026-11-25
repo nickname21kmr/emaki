@@ -1,3 +1,4 @@
+import { jobTitle } from '@emaki/shared';
 import { JOB_LABEL, matchesQuery, NAV_SECTIONS, type MutationResult, type NavEntry, type NavSection, type Settings, type ThemePreference } from '@emaki/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -70,7 +71,7 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
   const canVisit = useCanVisit();
 
   const startJob = useStartJob((job) => {
-    const label = JOB_LABEL[job.kind];
+    const label = jobTitle(job);
     return job.status === 'queued' ? `${label}已加入任务队列` : `已开始${label}`;
   });
 

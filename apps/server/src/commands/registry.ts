@@ -148,6 +148,20 @@ export class Registry {
     return this.defs.get(name);
   }
 
+  /**
+   * 运行时登记一个命令（插件的命令，docs/plugins.md 第 6 节：启用时登记、停用时撤掉）。和内置的撞名报错；
+   * 登记以后通用入口（POST /api/commands/:name）、插件视图和 AI 助手的工具（按名字现查）都能调到
+   */
+  define(def: Def): void {
+    if (this.defs.has(def.name)) throw new Error(`命令 / 查询 ${def.name} 已经有了`);
+    this.defs.set(def.name, def);
+  }
+
+  /** 撤掉 define 登记的命令（只认同一个定义：撤不掉内置的） */
+  undefine(def: Def): void {
+    if (this.defs.get(def.name) === def) this.defs.delete(def.name);
+  }
+
   /** GET /api/commands：注册表的清单（下一阶段的插件、AI 生成的页面按它找能用的接口和权限范围） */
   catalog(): CommandInfo[] {
     return this.list().map((d) => ({

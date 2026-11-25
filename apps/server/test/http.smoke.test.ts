@@ -6,7 +6,7 @@
  * 最后一条用例列出全部路由（命令 / 查询注册表里的地址，加上 src/app.ts、src/http/*.ts 里手写的），确保这里每个都测到了（新增路由忘了补冒烟会失败）。
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { SCOPES } from '@emaki/shared';
@@ -1188,6 +1188,27 @@ describe('插件（注册表：plugins.*，docs/plugins.md 第 9 节）', () => 
     const images = (await call('GET', '/api/images?limit=1')).json.items as { id: string }[];
     if (images[0]) expect((await app.inject({ method: 'GET', url: `${json.mediaBase}/thumb/${images[0].id}` })).statusCode).not.toBe(403);
     expect((await app.inject({ method: 'GET', url: '/api/plugin-media/nope/thumb/1' })).statusCode).toBe(404);
+  });
+  route('GET /api/plugin-media/:token/file/*', async () => {
+    await installView();
+    const { json } = await call('GET', '/api/plugins/example.view/pages/main');
+    const dir = ds.plugins.dataDir('example.view');
+    mkdirSync(path.join(dir, 'cache'), { recursive: true });
+    writeFileSync(path.join(dir, 'cache', 'a.png'), 'png');
+    writeFileSync(path.join(dir, 'notes.txt'), 'txt');
+    const get = async (rel: string) => (await app.inject({ method: 'GET', url: `${json.mediaBase}/file/${rel}` })).statusCode;
+    expect(await get('cache/a.png')).toBe(200);
+    // 只给插件文件夹里的图片
+    expect(await get('notes.txt')).toBe(404);
+    expect(await get('..%2F..%2F..%2Femaki.sqlite')).toBe(404);
+    expect(await get('cache/none.png')).toBe(404);
+    expect((await app.inject({ method: 'GET', url: '/api/plugin-media/nope/file/a.png' })).statusCode).toBe(404);
+  });
+  route('POST /api/plugins/:id/settings', async () => {
+    await installView();
+    // 这个插件没有设置
+    expect(await call('POST', '/api/plugins/example.view/settings', { values: { a: 'b' } })).toMatchObject({ status: 400 });
+    expect((await call('POST', '/api/plugins/nope/settings', { values: {} })).status).toBe(404);
   });
   route('POST /api/plugins/ai-views', async () => {
     const r = await call('POST', '/api/plugins/ai-views', { name: 'smoke', title: '冒烟页', html: '<p>ai</p>' });

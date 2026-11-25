@@ -8,7 +8,7 @@
  * 这个文件不加载 MCP SDK（只用类型），插件视图的桥接在启动时就能用。
  */
 import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
-import { ASSISTANT_SCOPES, type ImportImagesResult, type Scope } from '@emaki/shared';
+import { ASSISTANT_SCOPES, commandToolName, type ImportImagesResult, type Scope } from '@emaki/shared';
 import { z } from 'zod';
 import { readFile } from 'node:fs/promises';
 import { openSharp } from '../services/image/pixels.ts';
@@ -22,8 +22,8 @@ export const READ_TOOLS = ['read_library', 'read_media'] as const;
 
 export const json = (data: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data) }] });
 
-/** 命令名 → 工具名：curation.setFavorite → curation_set_favorite */
-export const toolName = (command: string) => command.replace(/\./g, '_').replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+/** 命令名 → 工具名：curation.setFavorite → curation_set_favorite（@emaki/shared，插件视图的库也用） */
+export const toolName = commandToolName;
 
 /** 手写成工具的命令（不按通用的方式生成）：AI 做页面要在对话里出卡片 */
 const CUSTOM_TOOL_COMMANDS = new Set(['plugins.saveView']);

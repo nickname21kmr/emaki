@@ -1,0 +1,87 @@
+{
+  "id": "pixiv-browser",
+  "name": "Pixiv 浏览",
+  "version": "0.1.0",
+  "description": "在 Emaki 里看 Pixiv 的排行、搜索和关注的新作，多选以后批量下载进图库（相同的图不会再放一份）。随 Emaki 附带，默认没装。",
+  "author": "Emaki",
+  "engines": { "emaki": ">=0.1.17" },
+  "permissions": {
+    "scopes": ["read", "import"],
+    "folders": [{ "id": "downloads", "purpose": "下载的图放在这里", "suggest": "下载图片/Pixiv" }],
+    "network": ["www.pixiv.net", "i.pximg.net"],
+    "background": true
+  },
+  "contributes": {
+    "page@1": [{ "id": "browse", "view": "views/browse.html", "title": "Pixiv" }],
+    "nav.item@1": [{ "id": "browse", "label": "Pixiv", "page": "browse", "icon": "compass", "section": "main" }],
+    "command@1": [
+      {
+        "name": "pixiv-browser.ranking",
+        "summary": "Pixiv 的排行（日、周、月、新人、原创、AI、男性向、女性向；R-18 的要登录）",
+        "scope": "read",
+        "input": {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string", "enum": ["daily", "weekly", "monthly", "rookie", "original", "daily_ai", "male", "female", "daily_r18", "weekly_r18"] },
+            "page": { "type": "integer", "minimum": 1, "maximum": 10 },
+            "date": { "type": "string", "pattern": "^\\d{8}$" }
+          }
+        }
+      },
+      {
+        "name": "pixiv-browser.search",
+        "summary": "按标签、关键词搜 Pixiv 的插画（R-18 的要登录）",
+        "scope": "read",
+        "input": {
+          "type": "object",
+          "properties": {
+            "word": { "type": "string", "minLength": 1, "maxLength": 100 },
+            "page": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "order": { "type": "string", "enum": ["date_d", "date"] },
+            "mode": { "type": "string", "enum": ["safe", "all", "r18"] },
+            "match": { "type": "string", "enum": ["tag", "partial", "text"] }
+          },
+          "required": ["word"]
+        }
+      },
+      {
+        "name": "pixiv-browser.following",
+        "summary": "关注的画师的新作（要在插件设置里填登录）",
+        "scope": "read",
+        "input": { "type": "object", "properties": { "page": { "type": "integer", "minimum": 1, "maximum": 50 }, "r18": { "type": "boolean" } } }
+      },
+      {
+        "name": "pixiv-browser.thumbs",
+        "summary": "把 Pixiv 的缩略图取到插件的文件夹（页面里显示用）",
+        "scope": "read",
+        "input": { "type": "object", "properties": { "urls": { "type": "array", "items": { "type": "string" }, "maxItems": 60 } }, "required": ["urls"] }
+      },
+      {
+        "name": "pixiv-browser.status",
+        "summary": "登录填没填；这些作品里哪些已经下载过",
+        "scope": "read",
+        "input": { "type": "object", "properties": { "ids": { "type": "array", "items": { "type": "string" }, "maxItems": 500 } } }
+      },
+      {
+        "name": "pixiv-browser.download",
+        "summary": "把这些 Pixiv 作品（全部页）下载进图库：后台任务，进度、取消在任务列表里；图库里已经有的不再放一份",
+        "scope": "import",
+        "input": {
+          "type": "object",
+          "properties": { "ids": { "type": "array", "items": { "type": "string", "pattern": "^\\d{1,12}$" }, "minItems": 1, "maxItems": 200 } },
+          "required": ["ids"]
+        }
+      }
+    ],
+    "job.kind@1": [{ "kind": "download", "label": "下载 Pixiv 作品" }],
+    "setting@1": [
+      {
+        "id": "session",
+        "label": "Pixiv 登录（PHPSESSID）",
+        "type": "secret",
+        "hint": "看关注的新作、R-18 要登录：在浏览器里登录 pixiv.net，把 Cookie 里 PHPSESSID 的值填在这里。只有这个插件在电脑上运行的程序读得到。"
+      }
+    ]
+  },
+  "server": "server/index.mjs"
+}

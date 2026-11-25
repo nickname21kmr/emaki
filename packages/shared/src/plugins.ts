@@ -91,6 +91,32 @@ export interface SlotEntryContribution {
   id: string;
 }
 
+/**
+ * command@1：插件自己的命令（服务端逻辑实现，E5，docs/plugins.md 第 6 节）。名字带插件前缀（<插件 id>.<名字>），
+ * 进命令注册表，和内置命令一样能被视图、AI 助手和 HTTP 调用；调用的人要有 scope
+ */
+export interface CommandContribution {
+  name: string;
+  summary: string;
+  scope: Scope;
+  /** 输入的 JSON Schema（对象）；不写就是什么参数都不要 */
+  input?: Record<string, unknown>;
+}
+
+/** job.kind@1：插件的后台任务种类（E5）。进现有的任务列表：进度、取消都和内置的一样；要授权「在后台运行」 */
+export interface JobKindContribution {
+  kind: string;
+  label: string;
+}
+
+/** setting@1：插件自己的设置，宿主在插件详情里统一画（E5）。secret 是登录凭证这类：只有插件的服务端读得到，视图读不到 */
+export interface SettingContribution {
+  id: string;
+  label: string;
+  type: 'string' | 'secret';
+  hint?: string;
+}
+
 export interface Contributes {
   'page@1'?: PageContribution[];
   'nav.item@1'?: NavItemContribution[];
@@ -101,6 +127,9 @@ export interface Contributes {
   'lightbox.panel@1'?: SlotEntryContribution[];
   /** override@1：设置注册表里登记过的值（OVERRIDES） */
   'override@1'?: Partial<Record<OverrideKey, unknown>>;
+  'command@1'?: CommandContribution[];
+  'job.kind@1'?: JobKindContribution[];
+  'setting@1'?: SettingContribution[];
 }
 
 export interface PluginManifest {
@@ -115,13 +144,15 @@ export interface PluginManifest {
   /** 装的插件要的权限（授权单上列出来，docs/plugins.md 4.2） */
   permissions?: PluginPermissions;
   contributes: Contributes;
+  /** 服务端逻辑的入口（包里的 .js / .mjs / .cjs，E5）：每个插件一个 Node 子进程 */
+  server?: string;
 }
 
 /** 条目类的贡献点（E3）：它们的条目停用时一起不画 */
 export const SLOT_POINT_KEYS = ['page.action@1', 'menu.item@1', 'lightbox.toolbar@1', 'lightbox.panel@1'] as const;
 
-/** 装的插件现在能贡献的：不跑代码的那几种，加上视图页面（E4）。区块、看图器按钮这些以后开放，命令、任务要等服务端运行（E5） */
-export const INSTALLABLE_POINTS = ['nav.item@1', 'override@1', 'page@1'] as const;
+/** 装的插件现在能贡献的：不跑代码的那几种、视图页面（E4）、服务端逻辑的命令、任务、设置（E5）。区块、看图器按钮这些以后开放 */
+export const INSTALLABLE_POINTS = ['nav.item@1', 'override@1', 'page@1', 'command@1', 'job.kind@1', 'setting@1'] as const;
 
 // ---------------------------------------------------------------- 授权（docs/plugins.md 第 4 节）
 
@@ -330,7 +361,8 @@ export const BUILTIN_PLUGINS: readonly BuiltinPlugin[] = [
 // ---------------------------------------------------------------- GET /api/plugins
 
 /** 插件页上显示的类型（从贡献推出来，不另存） */
-export type PluginKind = 'page' | 'override';
+/** 用户看到的类型（从贡献推出来，9.0）：页面、覆盖、功能（有服务端逻辑） */
+export type PluginKind = 'page' | 'override' | 'feature';
 
 /** 装的插件从哪来；ai 是 AI 助手做的页面（docs/plugins.md 5.1，算「我的」） */
 export type PackageKind = 'file' | 'folder' | 'git' | 'ai';
@@ -377,6 +409,25 @@ export interface PluginInfo {
   /** 最近的出错记录（新的在前）；自动停用时写明原因 */
   errors?: PluginErrorInfo[];
   disabledReason?: string | null;
+  /** 清单里 setting@1 登记的设置现在的值（凭证只说填没填，值不给网页） */
+  settings?: PluginSettingValue[];
+}
+
+/** 插件的一项设置现在的值：普通的给值；凭证（secret）value 一律是 null，只看 filled */
+export interface PluginSettingValue {
+  id: string;
+  value: string | null;
+  filled: boolean;
+}
+
+/** 随 Emaki 一起发的插件（仓库的 plugins/ 下，docs/plugins.md 第 6 节）：默认没装，在「插件」页「附带的」里启用，走一样的授权单 */
+export interface BundledPlugin {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  /** 文件夹（按文件夹装：plugins.inspect { kind: 'folder', path }） */
+  path: string;
 }
 
 /**
@@ -466,6 +517,8 @@ export interface PluginsState {
   disabledBlocks: string[];
   disabledEntries: string[];
   overrides: Record<OverrideKey, OverrideState>;
+  /** 附带的插件里还没装的（服务端填；安全模式下没有） */
+  bundled?: BundledPlugin[];
 }
 
 /** 插件显示的名字：改过就用改的 */
@@ -493,13 +546,14 @@ export interface PluginRecord {
   /** 不能启用的原因：有的话按停用算 */
   problems?: string[];
   /** 原样带到 PluginInfo 上的（装的插件的来源、授权、出错记录） */
-  extra?: Pick<PluginInfo, 'installed' | 'permissions' | 'grant' | 'errors' | 'disabledReason'>;
+  extra?: Pick<PluginInfo, 'installed' | 'permissions' | 'grant' | 'errors' | 'disabledReason' | 'settings'>;
 }
 
 export function kindsOf(c: Contributes): PluginKind[] {
   const kinds: PluginKind[] = [];
   if (c['page@1']?.length || c['nav.item@1']?.length) kinds.push('page');
   if (c['override@1'] && Object.keys(c['override@1']).length) kinds.push('override');
+  if (c['command@1']?.length || c['job.kind@1']?.length) kinds.push('feature');
   return kinds;
 }
 

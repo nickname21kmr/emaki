@@ -141,6 +141,7 @@ export const TABLE_OWNERS: Record<string, ModuleId> = {
   installed_plugins: 'plugins',
   plugin_grants: 'plugins',
   plugin_storage: 'plugins',
+  plugin_settings: 'plugins',
   plugin_errors: 'plugins',
 };
 

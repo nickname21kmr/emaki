@@ -55,6 +55,8 @@ export const config = {
   libraryDir: demo ? path.join(dataDir, 'demo') : dataDir,
   /** 生产模式下由后端直接托管前端构建产物 */
   webDist: path.join(repoRoot, 'apps/web/dist'),
+  /** 随 Emaki 一起发的插件（docs/plugins.md 第 6 节）：默认没装，在「插件」页「附带的」里启用 */
+  bundledPluginsDir: path.join(repoRoot, 'plugins'),
   /** 随仓库分发的数据文件（离线对照表、词库） */
   assetsDir: path.join(repoRoot, 'apps/server/assets'),
   /** 用户自己放的 PoseWear 线稿（按姿势找图的封面）：免安装包的根目录、开发时仓库根目录下的 pose-covers/ */

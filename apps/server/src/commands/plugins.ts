@@ -17,7 +17,9 @@ import {
   SetNavInput,
   SetOverrideValuesInput,
   SetPluginEnabledInput,
+  SetPluginSettingsInput,
 } from '@emaki/shared/schemas';
+import { config } from '../config.ts';
 import { BadRequestError } from '../http/errors.ts';
 import { defineCommand, defineQuery } from './registry.ts';
 
@@ -28,7 +30,11 @@ export const pluginQueries = [
     input: PluginsStateInput,
     scope: 'read',
     http: [{ method: 'GET', path: '/api/plugins' }],
-    run: (e, q) => e.plugins.state({ safe: q.safe }),
+    run: (e, q) => {
+      const state = e.plugins.state({ safe: q.safe });
+      // 附带的插件里还没装的（「插件」页的「附带的」一组）
+      return state.safeMode ? state : { ...state, bundled: e.plugins.bundled(config.bundledPluginsDir) };
+    },
   }),
   defineQuery({
     name: 'plugins.package',
@@ -41,6 +47,18 @@ export const pluginQueries = [
 ];
 
 export const pluginCommands = [
+  defineCommand({
+    name: 'plugins.setSettings',
+    summary: '改插件的设置（清单里 setting@1 登记的；凭证只写不读，空的是清掉）。插件自己的配置，不进撤销栈',
+    input: SetPluginSettingsInput,
+    // 凭证是你的账号：和装插件一样只由你在页面上填（不给 AI 助手，设备默认也没有）
+    scope: 'install-plugins',
+    undoable: false,
+    barrier: false,
+    idempotent: false,
+    http: [{ method: 'POST', path: '/api/plugins/:id/settings' }],
+    run: (e, { id, values }) => e.plugins.setSettings(id, values),
+  }),
   defineCommand({
     name: 'plugins.setEnabled',
     summary: '启用或停用一个插件（停用内置的页面：导航和入口一起不见，不改数据；必需的不能停用）',

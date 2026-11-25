@@ -8,6 +8,7 @@
  *   记成 plugin:<id>@<版本>，进审计，可撤销的修改进撤销栈；
  * - POST /api/plugins/:id/storage：插件自己的键值存储（emaki/storage/*，domain/plugins/storage.ts）；只看得到自己的；
  * - POST /api/plugins/:id/errors：宿主发现视图坏了（握手超时、自己跳走了……）记一次错，多次自动停用；
+ * - GET  /api/plugin-media/:token/file/<路径>：插件自己文件夹里的图片（E5，插件的服务端下载的缩略图这类）；
  * - GET  /api/plugin-media/:token/thumb|original/:imageId：视图里的图片。匿名来源的请求不带 Cookie，凭地址里的令牌
  *   （services/plugins/media.ts）；局域网入口上它不要设备凭证（access/lan.ts 的 PUBLIC_ROUTES）。
  *
@@ -17,6 +18,8 @@ import { type PluginView, type Scope } from '@emaki/shared';
 import { PluginViewInput } from '@emaki/shared/schemas';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { FastifyInstance } from 'fastify';
+import { realpathSync, statSync } from 'node:fs';
+import path from 'node:path';
 import { z } from 'zod';
 import { libraryTools, type LibraryTool } from '../assistant/libraryTools.ts';
 import type { SqliteDataSource } from '../datasource/sqlite/SqliteDataSource.ts';
@@ -163,4 +166,40 @@ export function pluginViewRoutes(app: FastifyInstance, engine: SqliteDataSource)
     );
     return sendFile(req, reply, file, FILE_QUERIES[name]!);
   });
+
+  /**
+   * 插件自己文件夹里的图（E5）：插件的服务端下载的缩略图这类（视图的安全策略只放行宿主的地址，外站的图要经插件下到自己的文件夹）。
+   * 只给插件的数据目录（<数据目录>/plugins/data/<id>/）里的图片文件，按真实路径查，不能经链接跳出去
+   */
+  app.get('/api/plugin-media/:token/file/*', async (req, reply) => {
+    const { token } = parse(z.object({ token: z.string().min(1).max(100) }), req.params);
+    const rel = String((req.params as { '*': string })['*'] ?? '');
+    const g = engine.pluginMedia.check(token);
+    if (!g) throw new NotFoundError('图片地址过期了，重新打开这一页');
+    if (!engine.plugins.callGrant(g.pluginId)) {
+      engine.pluginMedia.revoke(g.pluginId);
+      throw new NotFoundError('这个插件停用了');
+    }
+    const type = IMAGE_TYPES[path.extname(rel).toLowerCase()];
+    if (!type) throw new NotFoundError('插件文件夹里的这个文件');
+    let file: string;
+    try {
+      const dir = realpathSync(engine.plugins.dataDir(g.pluginId));
+      file = realpathSync(path.resolve(dir, ...rel.split('/')));
+      if (!file.startsWith(dir + path.sep) || !statSync(file).isFile()) throw new Error('outside');
+    } catch {
+      throw new NotFoundError('插件文件夹里的这个文件');
+    }
+    return sendFile(req, reply, { kind: 'path', filePath: file, contentType: type }, 'private, max-age=86400');
+  });
 }
+
+/** 插件文件夹里能给视图的文件：只有图片 */
+const IMAGE_TYPES: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+};

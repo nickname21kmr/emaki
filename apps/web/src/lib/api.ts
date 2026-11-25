@@ -326,6 +326,9 @@ export const api = {
   /** 全部插件和生效的结果；safe：按安全模式算（网址带 ?safe） */
   plugins: (safe = false) => get<PluginsState>('/plugins', safe ? { safe: 1 } : undefined),
   setPluginEnabled: (id: string, enabled: boolean) => post<MutationResult>(`/plugins/${encodeURIComponent(id)}/enabled`, { enabled }),
+  /** 插件的设置（setting@1）：凭证只写不读；空字符串是清掉 */
+  setPluginSettings: (id: string, values: Record<string, string | null>) =>
+    post<MutationResult>(`/plugins/${encodeURIComponent(id)}/settings`, { values }),
   renamePlugin: (id: string, name: string | null) => post<MutationResult>(`/plugins/${encodeURIComponent(id)}/name`, { name }),
   removePlugin: (id: string) => del<MutationResult>(`/plugins/${encodeURIComponent(id)}`),
   createOverride: (body: { name: string; values: Record<string, string>; enabled?: boolean }) =>

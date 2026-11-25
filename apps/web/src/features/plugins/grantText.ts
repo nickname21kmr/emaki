@@ -39,6 +39,12 @@ export function contributionLines(m: PluginManifest): GrantLine[] {
       });
   for (const n of m.contributes['nav.item@1'] ?? [])
     lines.push({ key: `nav:${n.id}`, text: `在侧栏加「${n.label}」`, detail: n.page !== undefined ? '打开它的那一页' : `打开 ${n.to}` });
+  if (m.server)
+    lines.push({
+      key: 'server',
+      text: '在这台电脑上运行它自己的程序',
+      detail: '单独一个进程：只能读写它自己的文件夹，经 Emaki 做下面允许的事；崩了不影响 Emaki',
+    });
   for (const [k, v] of Object.entries(m.contributes['override@1'] ?? {})) {
     const def = OVERRIDES[k as OverrideKey];
     const opt = def?.options.find((o) => o.value === v);

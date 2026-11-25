@@ -8,7 +8,7 @@
  * Emaki 自己的方法（emaki/…）在那边没有，这里退化——跳转、打开看图器什么都不做，存储放在内存里，图片经 read_media 取成 data: 地址。
  */
 import { App, applyDocumentTheme, applyHostFonts, applyHostStyleVariables } from '@modelcontextprotocol/ext-apps/app-with-deps';
-import { EMAKI_CHANGED_NOTIFICATION, EMAKI_VIEW_API_VERSION, EMAKI_VIEW_METHODS as M } from '@emaki/shared';
+import { commandToolName, EMAKI_CHANGED_NOTIFICATION, EMAKI_VIEW_API_VERSION, EMAKI_VIEW_METHODS as M } from '@emaki/shared';
 // 匿名来源的 iframe 不一定是安全上下文（局域网 http）：用带退路的 uuid
 import { uuid } from '@/lib/random';
 
@@ -22,7 +22,10 @@ export interface EmakiView {
   readonly app: App;
   /** 在 Emaki 里（有 emaki/ 方法）；在 Claude 等别的宿主里是 false */
   readonly inEmaki: boolean;
-  /** 调一个工具，返回解析好的结果（文本是 JSON 就解析）；工具报错时抛出。写操作没给 operationId 自动补一个 */
+  /**
+   * 调一个工具，返回解析好的结果（文本是 JSON 就解析）；工具报错时抛出。写操作没给 operationId 自动补一个。
+   * 也可以直接写命令名（带点的，比如插件自己的 pixiv-browser.download），自动换成工具名
+   */
   call<T = Json>(name: string, args?: Record<string, unknown>): Promise<T>;
   /** read_library：按 Emaki 的地址读图库（/api/works?limit=20），返回解析好的 JSON */
   read<T = Json>(path: string): Promise<T>;
@@ -30,6 +33,8 @@ export interface EmakiView {
   thumb(imageId: string | number, width?: number): Promise<string>;
   /** 一张图的原图地址 */
   original(imageId: string | number): Promise<string>;
+  /** 插件自己文件夹里一张图的地址（插件的服务端下载的缩略图这类，img.src 用）；只在 Emaki 里有，别的宿主是 null */
+  file(path: string): string | null;
   /** 跳到 Emaki 里的一个地址（只在 Emaki 里有） */
   open(to: string): void;
   /** 用看图器打开几张图（只在 Emaki 里有） */
@@ -89,7 +94,8 @@ export async function connect(info: { name?: string; version?: string } = {}): P
   const request = (method: string, params: Record<string, unknown> = {}) => app.request({ method, params }, any) as Promise<Json>;
   const context: { mediaBase: string | null } = inEmaki ? await request(M.context) : { mediaBase: null };
 
-  const call = async (name: string, args: Record<string, unknown> = {}) => {
+  const call = async (command: string, args: Record<string, unknown> = {}) => {
+    const name = command.includes('.') ? commandToolName(command) : command;
     // 写工具都要 operationId（重试时用同一个），没给就补一个；读工具多一个参数也不碍事
     const withOp = name.startsWith('read_') || 'operationId' in args ? args : { operationId: uuid(), ...args };
     return unwrap((await app.callServerTool({ name, arguments: withOp })) as Parameters<typeof unwrap>[0]);
@@ -108,6 +114,7 @@ export async function connect(info: { name?: string; version?: string } = {}): P
     read: (path) => call('read_library', { path }),
     thumb: (id, width) => media('thumb', id, width),
     original: (id) => media('original', id),
+    file: (path) => (context.mediaBase ? `${context.mediaBase}/file/${path.split('/').map(encodeURIComponent).join('/')}` : null),
     open(to) {
       if (inEmaki) void request(M.navigate, { to });
     },

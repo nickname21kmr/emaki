@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { PageBody } from '@/components/layout/PageHeader';
 import { DetailHeader } from '@/features/characters/detail/DetailHeader';
-import { Badge, Button, EmptyState, SectionTitle, Segmented, Switch } from '@/components/ui';
+import { Badge, Button, EmptyState, Input, SectionTitle, Segmented, Switch } from '@/components/ui';
 import { api } from '@/lib/api';
 import { useCan } from '@/lib/capabilities';
 import { cn } from '@/lib/cn';
@@ -127,8 +127,10 @@ export function PluginDetailPage() {
             <p className="mt-0.5 text-fg-muted">
               {p.required
                 ? '必需的插件不能停用。'
-                : p.kinds.includes('page')
-                  ? '停用以后这些页面和通往它们的入口都收起来；图库里的数据、后台的识别照常。'
+                : p.kinds.includes('feature')
+                  ? '停用以后它的页面、入口和在电脑上运行的程序一起停下；已经放进图库的图留着。'
+                  : p.kinds.includes('page')
+                    ? '停用以后这些页面和通往它们的入口都收起来；图库里的数据、后台的识别照常。'
                   : '停用以后它改的值回到原来的默认。'}
             </p>
           </div>
@@ -140,6 +142,7 @@ export function PluginDetailPage() {
           />
         </div>
         <Contributions plugin={p} can={can} />
+        {!!p.contributes['setting@1']?.length && <SettingsSection plugin={p} />}
         {p.installed && <GrantSection plugin={p} />}
         {!!p.errors?.length && <ErrorsSection plugin={p} />}
       </PageBody>
@@ -197,6 +200,76 @@ function GrantSection({ plugin: p }: { plugin: PluginInfo }) {
   );
 }
 
+/**
+ * 插件的设置（setting@1，docs/plugins.md 第 6 节）：宿主统一画。凭证（secret）只写不读：填过的只显示「已填写」，
+ * 留空不改，可以清掉；只有插件在电脑上运行的程序读得到，它的页面读不到
+ */
+function SettingsSection({ plugin: p }: { plugin: PluginInfo }) {
+  const can = useCan('install-plugins');
+  const declared = p.contributes['setting@1'] ?? [];
+  const current = new Map((p.settings ?? []).map((s) => [s.id, s]));
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const save = useMutate((values: Record<string, string | null>) => api.setPluginSettings(p.id, values), {
+    onSuccess: () => setDraft({}),
+  });
+  // 凭证留空是不改（清掉用「清掉」）
+  const values = Object.fromEntries(Object.entries(draft).filter(([k, v]) => v !== '' || declared.find((d) => d.id === k)?.type !== 'secret'));
+  const changed = Object.keys(values).length > 0;
+  return (
+    <section>
+      <SectionTitle numbered={false} hint="只有它在电脑上运行的程序读得到；登录凭证这类只写不读">
+        设置
+      </SectionTitle>
+      <form
+        className="flex flex-col gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (changed) save.mutate(values);
+        }}
+      >
+        {declared.map((s) => {
+          const now = current.get(s.id);
+          const secret = s.type === 'secret';
+          const value = draft[s.id] ?? (secret ? '' : (now?.value ?? ''));
+          return (
+            <div key={s.id} className="flex flex-col gap-1">
+              <label htmlFor={`setting-${s.id}`} className="flex items-baseline gap-2 text-[13px] font-medium">
+                {s.label}
+                {secret && <span className="text-[12px] font-normal text-fg-subtle">{now?.filled ? '已填写' : '没填'}</span>}
+              </label>
+              <div className="flex items-center gap-2">
+                <Input
+                  id={`setting-${s.id}`}
+                  type={secret ? 'password' : 'text'}
+                  autoComplete="off"
+                  className="flex-1"
+                  disabled={!can}
+                  value={value}
+                  placeholder={secret && now?.filled ? '已填写，留空不改' : undefined}
+                  onChange={(e) => setDraft((d) => ({ ...d, [s.id]: e.target.value }))}
+                />
+                {secret && now?.filled && can && (
+                  <Button type="button" variant="ghost" size="sm" loading={save.isPending} onClick={() => save.mutate({ [s.id]: null })}>
+                    清掉
+                  </Button>
+                )}
+              </div>
+              {s.hint && <p className="text-[12px] text-fg-muted">{s.hint}</p>}
+            </div>
+          );
+        })}
+        {can && (
+          <div>
+            <Button type="submit" variant="secondary" size="sm" disabled={!changed} loading={save.isPending}>
+              保存设置
+            </Button>
+          </div>
+        )}
+      </form>
+    </section>
+  );
+}
+
 function ErrorsSection({ plugin: p }: { plugin: PluginInfo }) {
   return (
     <section>
@@ -221,6 +294,8 @@ function Contributions({ plugin: p, can }: { plugin: PluginInfo; can: boolean })
   const navs = p.contributes['nav.item@1'] ?? [];
   const blocks = p.contributes['block@1'] ?? [];
   const overrides = Object.entries(p.contributes['override@1'] ?? {}) as [OverrideKey, string][];
+  const commands = p.contributes['command@1'] ?? [];
+  const jobs = p.contributes['job.kind@1'] ?? [];
   return (
     <>
       {pages.length > 0 && (
@@ -276,6 +351,27 @@ function Contributions({ plugin: p, can }: { plugin: PluginInfo; can: boolean })
             {blocks.map((b) => (
               <li key={b.id} className="rounded-md bg-sunken px-2.5 py-1">
                 {b.id}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {(commands.length > 0 || jobs.length > 0) && (
+        <section>
+          <SectionTitle numbered={false} hint="它自己的程序在电脑上运行：只能读写它自己的文件夹，崩了不影响 Emaki">
+            功能
+          </SectionTitle>
+          <ul className="flex flex-col gap-1.5 text-[13px]">
+            {commands.map((c) => (
+              <li key={c.name} className="flex flex-wrap items-baseline gap-x-2">
+                <span>{c.summary}</span>
+                <span className="font-mono text-[11.5px] text-fg-subtle">{c.name}</span>
+              </li>
+            ))}
+            {jobs.map((j) => (
+              <li key={j.kind} className="flex flex-wrap items-baseline gap-x-2">
+                <span>后台任务「{j.label}」</span>
+                <span className="text-[12px] text-fg-subtle">在任务列表里看进度、取消</span>
               </li>
             ))}
           </ul>

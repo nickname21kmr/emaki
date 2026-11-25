@@ -1,0 +1,32 @@
+{
+  "id": "test.echo",
+  "name": "回声",
+  "version": "0.1.0",
+  "description": "运行时测试用的插件（test/plugins/runtime.test.ts）",
+  "permissions": {
+    "scopes": ["read", "import"],
+    "folders": [{ "id": "downloads", "purpose": "下载的图放在这里", "suggest": "下载" }],
+    "network": ["img.example.test"],
+    "background": true
+  },
+  "contributes": {
+    "command@1": [
+      {
+        "name": "test.echo.echo",
+        "summary": "原样返回",
+        "scope": "read",
+        "input": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] }
+      },
+      { "name": "test.echo.probe", "summary": "试着读写别处的文件", "scope": "read", "input": { "type": "object", "properties": { "outside": { "type": "string" } } } },
+      { "name": "test.echo.host", "summary": "经宿主做事", "scope": "read", "input": { "type": "object", "properties": { "op": { "type": "string" }, "arg": {} } } },
+      { "name": "test.echo.crash", "summary": "崩一下", "scope": "read" },
+      { "name": "test.echo.hang", "summary": "不回应", "scope": "read" }
+    ],
+    "job.kind@1": [{ "kind": "count", "label": "数数" }],
+    "setting@1": [
+      { "id": "token", "label": "令牌", "type": "secret" },
+      { "id": "name", "label": "名字", "type": "string" }
+    ]
+  },
+  "server": "server/index.mjs"
+}

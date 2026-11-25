@@ -37,7 +37,7 @@ const COOKIE_ATTRS = 'HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=3153600
 
 /** 不要凭证的路由（路由表里的模板）：App 先问 hello，再走配对 */
 // 插件视图里的图片凭地址里的短期令牌（http/pluginViews.ts）：隔离的 iframe 是匿名来源，请求不带 Cookie
-const PUBLIC_ROUTES = new Set(['/api/v1/hello', '/api/v1/pair', '/api/v1/pair/:id', '/api/v1/pair/:id/reveal', '/api/plugin-media/:token/:size/:imageId']);
+const PUBLIC_ROUTES = new Set(['/api/v1/hello', '/api/v1/pair', '/api/v1/pair/:id', '/api/v1/pair/:id/reveal', '/api/plugin-media/:token/:size/:imageId', '/api/plugin-media/:token/file/*']);
 
 /** 请求的来源地址（IPv4 映射成 IPv6 的去掉前缀） */
 export const addressOf = (req: FastifyRequest): string | null => (req.ip ? req.ip.replace(/^::ffff:/, '') : null);

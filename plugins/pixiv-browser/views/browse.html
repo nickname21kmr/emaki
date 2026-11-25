@@ -1,0 +1,554 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Pixiv</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 2px 2px 88px;
+        font-family: var(--font-sans, system-ui, sans-serif);
+        font-size: var(--font-text-md-size, 14px);
+        line-height: 1.5;
+        color: var(--color-text-primary, #222);
+        background: var(--color-background-primary, #fff);
+      }
+      button,
+      input,
+      select {
+        font: inherit;
+        font-size: var(--font-text-sm-size, 13px);
+        color: inherit;
+      }
+      button {
+        padding: 4px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--color-border-primary, #ddd);
+        background: transparent;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      button:hover:not(:disabled) {
+        background: var(--color-background-tertiary, #eee);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      button.primary {
+        background: var(--color-background-inverse, #222);
+        color: var(--color-text-inverse, #fff);
+        border-color: transparent;
+      }
+      button.primary:hover:not(:disabled) {
+        background: var(--color-background-inverse, #222);
+        opacity: 0.9;
+      }
+      input,
+      select {
+        padding: 4px 10px;
+        border-radius: var(--border-radius-sm, 8px);
+        border: 1px solid var(--color-border-primary, #ddd);
+        background: var(--color-background-secondary, #f6f6f6);
+      }
+      .muted {
+        color: var(--color-text-secondary, #666);
+      }
+      .bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+      .tabs {
+        display: inline-flex;
+        padding: 2px;
+        border-radius: 999px;
+        background: var(--color-background-tertiary, #eee);
+      }
+      .tabs button {
+        border: 0;
+        padding: 3px 14px;
+      }
+      .tabs button[aria-pressed='true'] {
+        background: var(--color-background-primary, #fff);
+        box-shadow: var(--shadow-sm, none);
+      }
+      .grow {
+        flex: 1;
+        min-width: 10em;
+      }
+      .note {
+        margin: 0 0 12px;
+        padding: 8px 12px;
+        border-radius: var(--border-radius-md, 12px);
+        background: var(--color-background-secondary, #f6f6f6);
+        font-size: var(--font-text-sm-size, 13px);
+      }
+      .note.error {
+        background: var(--color-background-danger, #fee);
+        color: var(--color-text-danger, #c00);
+      }
+      .note a {
+        color: inherit;
+        cursor: pointer;
+        text-decoration: underline;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 14px 10px;
+      }
+      .card {
+        position: relative;
+        min-width: 0;
+        cursor: pointer;
+        user-select: none;
+      }
+      .card .pic {
+        position: relative;
+        aspect-ratio: 1;
+        border-radius: var(--border-radius-md, 12px);
+        overflow: hidden;
+        background: var(--color-background-tertiary, #eee);
+      }
+      .card img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      .card[aria-selected='true'] .pic {
+        outline: 3px solid var(--color-text-info, #c33);
+        outline-offset: 2px;
+      }
+      .card[aria-disabled='true'] {
+        cursor: default;
+      }
+      .card[aria-disabled='true'] img {
+        opacity: 0.55;
+      }
+      .check {
+        position: absolute;
+        top: 6px;
+        left: 6px;
+        width: 22px;
+        height: 22px;
+        border-radius: 999px;
+        border: 2px solid #fff;
+        background: rgba(0, 0, 0, 0.25);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+        display: grid;
+        place-items: center;
+        color: #fff;
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .card[aria-selected='true'] .check {
+        background: var(--color-text-info, #c33);
+        border-color: var(--color-text-info, #c33);
+      }
+      .badges {
+        position: absolute;
+        top: 6px;
+        right: 6px;
+        display: flex;
+        gap: 4px;
+      }
+      .badge {
+        padding: 0 6px;
+        border-radius: 6px;
+        font-size: 11px;
+        line-height: 18px;
+        color: #fff;
+        background: rgba(0, 0, 0, 0.55);
+      }
+      .badge.r18 {
+        background: #d33;
+      }
+      .badge.done {
+        position: absolute;
+        left: 6px;
+        bottom: 6px;
+        background: rgba(20, 120, 60, 0.85);
+      }
+      .rank {
+        position: absolute;
+        left: 6px;
+        bottom: 6px;
+        font-weight: 700;
+        color: #fff;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+      }
+      .card .t {
+        margin-top: 6px;
+        font-size: var(--font-text-sm-size, 13px);
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .card .u {
+        display: flex;
+        gap: 6px;
+        font-size: var(--font-text-xs-size, 12px);
+        color: var(--color-text-secondary, #666);
+        white-space: nowrap;
+      }
+      .card .u span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .card .u a {
+        margin-left: auto;
+        color: inherit;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      .card .u a:hover {
+        text-decoration: underline;
+      }
+      #more {
+        display: block;
+        margin: 20px auto 0;
+      }
+      .actions {
+        position: fixed;
+        left: 50%;
+        bottom: 16px;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 8px 8px 8px 16px;
+        border-radius: 999px;
+        background: var(--color-background-primary, #fff);
+        box-shadow: var(--shadow-lg, 0 4px 20px rgba(0, 0, 0, 0.2));
+        border: 1px solid var(--color-border-primary, #ddd);
+        max-width: calc(100% - 16px);
+      }
+      .actions[hidden] {
+        display: none;
+      }
+      @media (max-width: 560px) {
+        .grid {
+          grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+          gap: 10px 6px;
+        }
+        .card .u a {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <div class="tabs" role="group" aria-label="看什么">
+        <button data-tab="ranking">排行</button>
+        <button data-tab="search">搜索</button>
+        <button data-tab="following">关注</button>
+      </div>
+      <span id="controls" class="bar" style="margin: 0"></span>
+    </div>
+    <p id="note" class="note" hidden></p>
+    <div id="grid" class="grid"></div>
+    <button id="more" hidden>加载更多</button>
+    <div id="actions" class="actions" hidden>
+      <span id="count"></span>
+      <button id="all">全选这一页</button>
+      <button id="clear">清除</button>
+      <button id="download" class="primary">下载到图库</button>
+    </div>
+
+    <script src="/plugin-sdk/app.js"></script>
+    <script type="module">
+      const view = await Emaki.connect({ name: 'pixiv-browser', version: '0.1.0' });
+      const $ = (id) => document.getElementById(id);
+      const esc = (s) =>
+        String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+      const RANKING_MODES = [
+        ['daily', '日榜'],
+        ['weekly', '周榜'],
+        ['monthly', '月榜'],
+        ['rookie', '新人'],
+        ['original', '原创'],
+        ['daily_ai', 'AI'],
+        ['male', '男性向'],
+        ['female', '女性向'],
+        ['daily_r18', 'R-18 日榜'],
+        ['weekly_r18', 'R-18 周榜'],
+      ];
+      const saved = (await view.storage.get('state')) ?? {};
+      const state = {
+        tab: saved.tab ?? 'ranking',
+        mode: saved.mode ?? 'daily',
+        word: saved.word ?? '',
+        order: saved.order ?? 'date_d',
+        searchMode: saved.searchMode ?? 'safe',
+        r18: !!saved.r18,
+      };
+      let status = { session: false };
+      let items = [];
+      let next = null;
+      /** 正在加载的是哪一轮（切标签、换条件就是新的一轮；上一轮还在路上的不挡这一轮） */
+      let loadingGen = -1;
+      let generation = 0;
+      const selected = new Set();
+
+      const save = () => view.storage.set('state', state).catch(() => {});
+      const note = (text, error = false) => {
+        $('note').hidden = !text;
+        $('note').className = error ? 'note error' : 'note';
+        $('note').innerHTML = text ?? '';
+        $('note')
+          .querySelector('[data-settings]')
+          ?.addEventListener('click', () => view.open('/plugins/pixiv-browser'));
+      };
+      const LOGIN = '要登录：到 <a data-settings>插件详情</a> 里填 Pixiv 登录（PHPSESSID）。';
+
+      function renderControls() {
+        for (const b of document.querySelectorAll('[data-tab]')) b.setAttribute('aria-pressed', String(b.dataset.tab === state.tab));
+        const c = $('controls');
+        if (state.tab === 'ranking') {
+          c.innerHTML = `<select id="mode" aria-label="哪个榜">${RANKING_MODES.map(
+            ([v, l]) =>
+              `<option value="${v}" ${v === state.mode ? 'selected' : ''} ${v.endsWith('_r18') && !status.session ? 'disabled' : ''}>${l}</option>`,
+          ).join('')}</select>`;
+          $('mode').onchange = (e) => {
+            state.mode = e.target.value;
+            save();
+            reload();
+          };
+        } else if (state.tab === 'search') {
+          c.innerHTML = `
+            <span class="bar" style="margin:0">
+              <input id="word" class="grow" placeholder="标签或关键词，比如 初音ミク" value="${esc(state.word)}" />
+              <select id="order" aria-label="顺序"><option value="date_d">最新</option><option value="date">最早</option></select>
+              <select id="smode" aria-label="分级">
+                <option value="safe">全年龄</option>
+                <option value="all" ${status.session ? '' : 'disabled'}>全部</option>
+                <option value="r18" ${status.session ? '' : 'disabled'}>R-18</option>
+              </select>
+              <button id="go" class="primary">搜</button>
+            </span>`;
+          $('order').value = state.order;
+          $('smode').value = state.searchMode;
+          // 隔离的框里不能提交表单（没开 allow-forms）：按钮和回车键
+          const go = () => {
+            state.word = $('word').value.trim();
+            state.order = $('order').value;
+            state.searchMode = $('smode').value;
+            save();
+            reload();
+          };
+          $('go').onclick = go;
+          $('word').onkeydown = (e) => {
+            if (e.key === 'Enter' && !e.isComposing) go();
+          };
+        } else {
+          c.innerHTML = `<label class="muted"><input type="checkbox" id="r18" ${state.r18 ? 'checked' : ''} /> 只看 R-18</label>`;
+          $('r18').onchange = (e) => {
+            state.r18 = e.target.checked;
+            save();
+            reload();
+          };
+        }
+      }
+
+      function query(page) {
+        if (state.tab === 'ranking') return ['pixiv-browser.ranking', { mode: state.mode, page }];
+        if (state.tab === 'search') return ['pixiv-browser.search', { word: state.word, page, order: state.order, mode: state.searchMode }];
+        return ['pixiv-browser.following', { page, r18: state.r18 }];
+      }
+
+      async function reload() {
+        generation += 1;
+        items = [];
+        next = 1;
+        selected.clear();
+        $('grid').innerHTML = '';
+        note(null);
+        renderControls();
+        renderActions();
+        if (state.tab === 'search' && !state.word) {
+          next = null;
+          $('more').hidden = true;
+          return note('输入标签或关键词搜一搜。');
+        }
+        if (state.tab === 'following' && !status.session) {
+          next = null;
+          $('more').hidden = true;
+          return note(`看关注的新作${LOGIN}`);
+        }
+        await loadMore();
+      }
+
+      async function loadMore() {
+        if (loadingGen === generation || next === null) return;
+        const gen = generation;
+        loadingGen = gen;
+        $('more').hidden = false;
+        $('more').disabled = true;
+        $('more').textContent = '加载中…';
+        try {
+          const [name, input] = query(next);
+          const r = await view.call(name, input);
+          if (gen !== generation) return;
+          const fresh = r.items.filter((it) => !items.some((x) => x.id === it.id));
+          items.push(...fresh);
+          next = r.next ?? null;
+          appendCards(fresh);
+          if (!items.length) note('这里没有作品。');
+          void loadThumbs(fresh, gen);
+        } catch (e) {
+          if (gen !== generation) return;
+          const msg = String(e.message ?? e);
+          note(/登录/.test(msg) ? `${esc(msg.replace(/。$/, ''))}。${LOGIN}` : esc(msg), true);
+          next = null;
+        } finally {
+          if (loadingGen === gen) loadingGen = -1;
+          if (gen === generation) {
+            $('more').disabled = false;
+            $('more').textContent = '加载更多';
+            $('more').hidden = next === null;
+          }
+        }
+      }
+
+      function appendCards(list) {
+        const html = list
+          .map((it) => {
+            const off = it.type === 'ugoira';
+            return `<div class="card" data-id="${it.id}" role="checkbox" aria-selected="false" aria-disabled="${off}" title="${esc(it.title)}">
+              <div class="pic">
+                <img alt="" data-thumb="${esc(it.thumb)}" />
+                <span class="check">${off ? '' : '✓'}</span>
+                <span class="badges">
+                  ${it.r18 ? '<span class="badge r18">R-18</span>' : ''}
+                  ${off ? '<span class="badge">动图</span>' : ''}
+                  ${it.pages > 1 ? `<span class="badge">${it.pages} 张</span>` : ''}
+                </span>
+                ${it.downloaded ? '<span class="badge done">已下载</span>' : it.rank ? `<span class="rank">${it.rank}</span>` : ''}
+              </div>
+              <div class="t">${esc(it.title)}</div>
+              <div class="u"><span>${esc(it.user)}</span><a data-open="${it.id}" title="在 Pixiv 打开">打开 ↗</a></div>
+            </div>`;
+          })
+          .join('');
+        $('grid').insertAdjacentHTML('beforeend', html);
+      }
+
+      // 缩略图：插件的服务端取到它自己的文件夹，这里经 Emaki 的地址显示（一次 30 张）
+      async function loadThumbs(list, gen) {
+        for (let i = 0; i < list.length; i += 30) {
+          const urls = list
+            .slice(i, i + 30)
+            .map((it) => it.thumb)
+            .filter(Boolean);
+          let files = {};
+          try {
+            files = (await view.call('pixiv-browser.thumbs', { urls })).files;
+          } catch {
+            continue;
+          }
+          if (gen !== generation) return;
+          for (const img of document.querySelectorAll('img[data-thumb]')) {
+            const rel = files[img.dataset.thumb];
+            const src = rel && view.file(rel);
+            if (src && !img.src) img.src = src;
+          }
+        }
+      }
+
+      function renderActions() {
+        $('actions').hidden = selected.size === 0;
+        $('count').textContent = `已选 ${selected.size} 个`;
+        for (const card of document.querySelectorAll('.card')) card.setAttribute('aria-selected', String(selected.has(card.dataset.id)));
+      }
+
+      $('grid').addEventListener('click', (e) => {
+        const open = e.target.closest('[data-open]');
+        if (open) {
+          view.app.openLink({ url: `https://www.pixiv.net/artworks/${open.dataset.open}` });
+          return;
+        }
+        const card = e.target.closest('.card');
+        if (!card || card.getAttribute('aria-disabled') === 'true') return;
+        const id = card.dataset.id;
+        if (selected.has(id)) selected.delete(id);
+        else selected.add(id);
+        renderActions();
+      });
+      $('all').onclick = () => {
+        for (const it of items) if (it.type !== 'ugoira' && !it.downloaded) selected.add(it.id);
+        renderActions();
+      };
+      $('clear').onclick = () => {
+        selected.clear();
+        renderActions();
+      };
+      $('download').onclick = async () => {
+        const ids = [...selected];
+        $('download').disabled = true;
+        try {
+          const messages = [];
+          for (let i = 0; i < ids.length; i += 200)
+            messages.push((await view.call('pixiv-browser.download', { ids: ids.slice(i, i + 200) })).message);
+          note(esc(messages.join('；')));
+          selected.clear();
+          renderActions();
+        } catch (e) {
+          note(esc(e.message ?? e), true);
+        } finally {
+          $('download').disabled = false;
+        }
+      };
+      $('more').onclick = () => loadMore();
+      for (const b of document.querySelectorAll('[data-tab]'))
+        b.addEventListener('click', () => {
+          if (state.tab === b.dataset.tab) return;
+          state.tab = b.dataset.tab;
+          save();
+          reload();
+        });
+
+      // 滚到底自动加载下一页
+      new IntersectionObserver((entries) => {
+        if (entries.some((e) => e.isIntersecting) && !$('more').hidden) loadMore();
+      }).observe($('more'));
+
+      // 图库变了（下载的图放进去了）：重新标「已下载」
+      let refreshing = null;
+      view.onChanged(() => {
+        // 下载以后缩略图、查重这些任务会接连推变化：1.5 秒里最多查一次，但一定会查
+        if (refreshing) return;
+        refreshing = setTimeout(async () => {
+          refreshing = null;
+          const ids = items.map((it) => it.id);
+          if (!ids.length) return;
+          const r = await view.call('pixiv-browser.status', { ids: ids.slice(-500) }).catch(() => null);
+          if (!r) return;
+          for (const id of r.downloaded) {
+            const it = items.find((x) => x.id === id);
+            if (!it || it.downloaded) continue;
+            it.downloaded = true;
+            const pic = document.querySelector(`.card[data-id="${id}"] .pic`);
+            pic?.querySelector('.rank')?.remove();
+            pic?.insertAdjacentHTML('beforeend', '<span class="badge done">已下载</span>');
+          }
+        }, 1500);
+      });
+
+      status = await view.call('pixiv-browser.status', {}).catch(() => ({ session: false }));
+      await reload();
+    </script>
+  </body>
+</html>

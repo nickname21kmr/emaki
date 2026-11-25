@@ -1,3 +1,4 @@
+import { jobTitle } from '@emaki/shared';
 import type { Job } from '@emaki/shared';
 import { ChevronDown, Play, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
@@ -138,7 +139,7 @@ function JobRow({ job, now }: { job: Job; now: number }) {
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">{JOB_LABEL[job.kind]}</span>
+          <span className="text-sm font-medium">{jobTitle(job)}</span>
           <Badge tone={status.tone} dot={running}>
             {status.label}
           </Badge>

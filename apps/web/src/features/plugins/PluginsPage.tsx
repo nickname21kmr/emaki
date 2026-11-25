@@ -2,12 +2,15 @@ import {
   NAV_SECTIONS,
   OVERRIDES,
   pluginLabel,
+  type BundledPlugin,
   type NavEntry,
   type NavSection,
   type PluginInfo,
   type PluginKind,
+  type PluginPackage,
   type PluginSource,
 } from '@emaki/shared';
+import { useMutation } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, Download, Ellipsis, PencilLine, Plus, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
@@ -18,13 +21,14 @@ import { useCan } from '@/lib/capabilities';
 import { cn } from '@/lib/cn';
 import { usePlugins } from '@/lib/plugins';
 import { useMutate } from '@/lib/queries';
-import { ConfirmPackage, InstallDialog } from './InstallDialogs';
+import { toast } from 'sonner';
+import { ConfirmPackage, GrantSheet, InstallDialog } from './InstallDialogs';
 import { NewOverrideDialog, RemoveDialog, RenameDialog } from './PluginDialogs';
 import { UpdateCheck, useCheckUpdate } from './UpdateCheck';
 import { Slot } from '@/blocks/Slot';
 
 export const SOURCE_LABEL: Record<PluginSource, string> = { builtin: '内置', mine: '我的', installed: '装的' };
-export const KIND_LABEL: Record<PluginKind, string> = { page: '页面', override: '覆盖' };
+export const KIND_LABEL: Record<PluginKind, string> = { page: '页面', override: '覆盖', feature: '功能' };
 const SECTION_LABEL: Record<NavSection, string> = { main: '主要', triage: '整理', footer: '底部' };
 
 type View = 'all' | 'pages';
@@ -139,6 +143,12 @@ function AllView({ can }: { can: boolean }) {
           (status === 'trouble' && troubled(p))),
     );
   }, [state.plugins, q, kind, status]);
+  const bundled = (state.bundled ?? []).filter(
+    (b) =>
+      status === 'any' &&
+      kind === 'any' &&
+      (!q.trim() || [b.name, b.description ?? '', b.id].some((s) => s.toLowerCase().includes(q.trim().toLowerCase()))),
+  );
   const groups = (['builtin', 'mine', 'installed'] as const)
     .map((source) => ({ source, items: list.filter((p) => p.source === source) }))
     .filter((g) => g.items.length);
@@ -155,6 +165,7 @@ function AllView({ can }: { can: boolean }) {
             { value: 'any', label: '全部类型' },
             { value: 'page', label: '页面' },
             { value: 'override', label: '覆盖' },
+            { value: 'feature', label: '功能' },
           ]}
         />
         <Segmented
@@ -170,7 +181,7 @@ function AllView({ can }: { can: boolean }) {
           ]}
         />
       </div>
-      {groups.length === 0 && <p className="py-10 text-center text-[13px] text-fg-muted">没有符合条件的插件</p>}
+      {groups.length === 0 && !bundled.length && <p className="py-10 text-center text-[13px] text-fg-muted">没有符合条件的插件</p>}
       {groups.map((g) => (
         <section key={g.source}>
           <SectionTitle numbered={false} hint={`${g.items.length} 个`}>
@@ -183,7 +194,48 @@ function AllView({ can }: { can: boolean }) {
           </ul>
         </section>
       ))}
+      {bundled.length > 0 && (
+        <section>
+          <SectionTitle numbered={false} hint="随 Emaki 一起发，默认没装；启用时和别的插件一样先看授权单">
+            附带的
+          </SectionTitle>
+          <ul className="divide-y divide-line rounded-lg bg-raised ring-1 ring-line">
+            {bundled.map((b) => (
+              <BundledRow key={b.id} plugin={b} />
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
+  );
+}
+
+/** 附带的、还没装的插件：「启用…」就是按文件夹装，出一样的授权单 */
+function BundledRow({ plugin: b }: { plugin: BundledPlugin }) {
+  const { state } = usePlugins();
+  const canInstall = useCan('install-plugins') && !state.safeMode;
+  const [pkg, setPkg] = useState<PluginPackage | null>(null);
+  const inspect = useMutation({
+    mutationFn: () => api.inspectPlugin({ kind: 'folder', path: b.path }),
+    onSuccess: setPkg,
+    onError: (e) => toast.error(e instanceof Error ? e.message : String(e)),
+  });
+  return (
+    <li className="flex items-center gap-3 px-4 py-3">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="text-[14px] font-semibold tracking-tight text-fg-muted">{b.name}</span>
+          <span className="font-mono text-[11.5px] text-fg-subtle">{b.version}</span>
+        </div>
+        {b.description && <p className="mt-0.5 truncate text-[12.5px] text-fg-muted">{b.description}</p>}
+      </div>
+      {canInstall && (
+        <Button variant="secondary" size="sm" loading={inspect.isPending} onClick={() => inspect.mutate()}>
+          启用…
+        </Button>
+      )}
+      {pkg && <GrantSheet pkg={pkg} open onOpenChange={(o) => !o && setPkg(null)} />}
+    </li>
   );
 }
 

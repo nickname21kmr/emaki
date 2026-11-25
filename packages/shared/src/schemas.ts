@@ -648,6 +648,11 @@ export const PluginsStateInput = z.object({ safe: qBool.optional().describe('安
 export const SetPluginEnabledInput = z.object({ id: PluginId, enabled: z.boolean() });
 export const RenamePluginInput = z.object({ id: PluginId, name: PluginName.nullable().describe('null = 恢复原名') });
 export const PluginIdInput = z.object({ id: PluginId });
+/** 插件的设置（setting@1，E5）：只能填清单里登记的；空字符串、null 是清掉 */
+export const SetPluginSettingsInput = z.object({
+  id: PluginId,
+  values: z.record(z.string().max(40), z.string().max(4000).nullable()),
+});
 export const CreateOverridePluginInput = z.object({
   name: PluginName,
   values: OverrideValues.describe('要覆盖的值，例如 {"images.defaultSort":"modifiedAt"}；能用的键和值见 GET /api/plugins 的 overrides'),
@@ -696,7 +701,7 @@ export const PluginManifestSchema = z.object({
     })
     .optional(),
   contributes: z.record(z.string().max(60), z.unknown()).default({}),
-  /** 服务端代码的入口（E5） */
+  /** 服务端代码的入口（E5）；具体的检查在服务端（ServerEntrySchema） */
   server: z.string().max(200).optional(),
 });
 
@@ -716,6 +721,30 @@ export const InstalledNavItemSchema = z
     hiddenByDefault: z.boolean().optional(),
   })
   .refine((n) => (n.to === undefined) !== (n.page === undefined), { message: 'to 和 page 要写一个，只写一个', path: ['to'] });
+
+/** 包里的相对路径：只用 / 分隔，不能往上跳、不能是绝对路径 */
+const PACKAGE_FILE = /^(?!.*(^|\/)\.\.?(\/|$))[\w.-]+(\/[\w.-]+)*$/;
+/** 服务端逻辑的入口（E5）：包里的 .js / .mjs / .cjs */
+export const ServerEntrySchema = z.string().max(200).regex(PACKAGE_FILE, '要写包里的文件，比如 server/index.js').regex(/\.[cm]?js$/, '入口要是 .js、.mjs 或 .cjs');
+/** command@1（E5）：名字带插件前缀，在服务端按清单里的插件 id 再查 */
+export const InstalledCommandSchema = z.object({
+  name: z.string().max(120).regex(/^[a-z0-9][a-z0-9.-]*\.[a-zA-Z][a-zA-Z0-9]{0,39}$/, '命令名写成 <插件 id>.<名字>，比如 pixiv-browser.download'),
+  summary: z.string().trim().min(1).max(200),
+  scope: z.string().max(40),
+  input: z.record(z.string(), z.unknown()).optional(),
+});
+/** job.kind@1（E5） */
+export const InstalledJobKindSchema = z.object({
+  kind: z.string().regex(LOCAL_ID),
+  label: z.string().trim().min(1).max(20),
+});
+/** setting@1（E5） */
+export const InstalledSettingSchema = z.object({
+  id: z.string().regex(LOCAL_ID),
+  label: z.string().trim().min(1).max(40),
+  type: z.enum(['string', 'secret']).default('string'),
+  hint: z.string().trim().max(200).optional(),
+});
 
 /** 视图文件：包里的相对路径，.html 结尾，不能往上跳 */
 const VIEW_FILE = /^(?!.*(^|\/)\.\.?(\/|$))[\w.-]+(\/[\w.-]+)*\.html?$/;

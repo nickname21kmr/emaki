@@ -34,6 +34,7 @@ import {
   type Grant,
   type ID,
   type PackageKind,
+  type BundledPlugin,
   type PluginErrorInfo,
   type PluginInfo,
   type PluginManifest,
@@ -44,7 +45,7 @@ import {
   type NavItemContribution as NavItemContributionInput,
   type Scope,
 } from '@emaki/shared';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { Db } from '../../db/connection.ts';
 import { iso, parseId } from '../../datasource/sqlite/sql.ts';
@@ -53,7 +54,8 @@ import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors
 import { ROOT_ACTIVE } from '../../readmodel/terms.ts';
 import type { PluginPackages, Staged } from '../../services/plugins/packages.ts';
 import { normalizeSubdir } from '../library/move.ts';
-import { checkManifest, checkViewFiles, MANIFEST_FILE, readManifest } from './manifest.ts';
+import { checkManifest, checkPackageFiles, MANIFEST_FILE, readManifest } from './manifest.ts';
+import { PluginSettings } from './settings.ts';
 import { PluginStorage } from './storage.ts';
 
 /** 自动停用：这么久之内出错这么多次 */
@@ -94,6 +96,8 @@ export class Plugins {
   private readonly db: Db;
   /** 插件自己的键值存储（E4 的视图、E5 的服务端逻辑用） */
   readonly storage: PluginStorage;
+  /** 插件的设置和凭证（E5 的服务端逻辑读，网页只看得到凭证填没填） */
+  readonly settings: PluginSettings;
 
   constructor(
     private readonly ctx: SqliteContext,
@@ -105,12 +109,27 @@ export class Plugins {
   ) {
     this.db = ctx.db;
     this.storage = new PluginStorage(ctx);
+    this.settings = new PluginSettings(ctx);
   }
 
   /** 启动时：清掉没装完的包、没有插件指向的包 */
   cleanup(): void {
     const dirs = this.db.prepare("SELECT package_dir FROM installed_plugins WHERE source_kind != 'folder'").pluck().all() as string[];
     this.packages.cleanup(dirs);
+    // 插件服务端的数据目录（E5）：卸载了的一起删
+    const ids = new Set(this.db.prepare('SELECT id FROM installed_plugins').pluck().all() as string[]);
+    const root = this.dataRoot();
+    if (existsSync(root))
+      for (const name of readdirSync(root)) if (!ids.has(name)) rmSync(path.join(root, name), { recursive: true, force: true });
+  }
+
+  /** 插件服务端能写的地方（E5）：<数据目录>/plugins/data/<id>/，emaki.files 和临时文件都在这里，卸载以后下次启动删掉 */
+  dataDir(id: string): string {
+    return path.join(this.dataRoot(), id);
+  }
+
+  private dataRoot(): string {
+    return path.join(this.ctx.dataDir, 'plugins', 'data');
   }
 
   // ---------------------------------------------------------------- 读
@@ -185,11 +204,13 @@ export class Plugins {
       u.set('plugin_state', 'id = ?', [id]);
       u.set('plugin_grants', 'plugin_id = ?', [id]);
       u.set('plugin_storage', 'plugin_id = ?', [id]);
+      u.set('plugin_settings', 'plugin_id = ?', [id]);
       this.db.prepare('DELETE FROM user_plugins WHERE id = ?').run(id);
       this.db.prepare('DELETE FROM installed_plugins WHERE id = ?').run(id);
       this.db.prepare('DELETE FROM plugin_state WHERE id = ?').run(id);
       this.db.prepare('DELETE FROM plugin_grants WHERE plugin_id = ?').run(id);
       this.db.prepare('DELETE FROM plugin_storage WHERE plugin_id = ?').run(id);
+      this.db.prepare('DELETE FROM plugin_settings WHERE plugin_id = ?').run(id);
       this.db.prepare('DELETE FROM plugin_errors WHERE plugin_id = ?').run(id);
       this.changed();
       return { message: `已${p.source === 'installed' ? '卸载' : '删除'}「${pluginLabel(this.info(p))}」` };
@@ -376,6 +397,74 @@ export class Plugins {
     const info = this.state().plugins.find((p) => p.id === id);
     if (!info?.enabled || !info.grant) return null;
     return { version: info.version, scopes: [...info.grant.scopes] };
+  }
+
+  /** 插件服务端现在的授权（每次请求现查：授权在详情里改了马上生效）；停用了、没有了 → null */
+  serverGrant(id: string): { version: string; grant: Grant } | null {
+    const info = this.state().plugins.find((p) => p.id === id);
+    if (!info?.enabled || !info.grant) return null;
+    return { version: info.version, grant: info.grant };
+  }
+
+  /**
+   * 要跑服务端逻辑的插件（E5，docs/plugins.md 第 6 节）：装的、启用着、清单写了 server、没有问题的。
+   * 运行时（services/plugins/runtime/）按它起停子进程；dir 是包（只读），dataDir 是它能写的地方
+   */
+  serverPlugins(): { id: string; version: string; name: string; dir: string; entry: string; dataDir: string; manifest: PluginManifest }[] {
+    if (this.safeMode) return [];
+    const enabled = new Set(this.state().plugins.filter((p) => p.enabled).map((p) => p.id));
+    return this.load(false).flatMap((p) =>
+      p.installed && p.manifest.server && enabled.has(p.manifest.id) && !p.problems.length
+        ? [
+            {
+              id: p.manifest.id,
+              version: p.manifest.version,
+              name: pluginLabel(this.info(p)),
+              dir: this.packages.resolve(p.installed.package_dir),
+              entry: p.manifest.server,
+              dataDir: this.dataDir(p.manifest.id),
+              manifest: p.manifest,
+            },
+          ]
+        : [],
+    );
+  }
+
+  /** 改插件的设置（setting@1）：只能填清单里登记的；凭证只写不读。插件自己的配置，不进撤销栈 */
+  setSettings(id: string, values: Record<string, string | null>): { message: string } {
+    const p = this.require(id);
+    const declared = p.manifest.contributes['setting@1'] ?? [];
+    if (!declared.length) throw new BadRequestError(`「${pluginLabel(this.info(p))}」没有设置`);
+    // 网页要知道凭证填没填了：推 plugins.changed（不进撤销栈）
+    return this.ctx.apply(() => {
+      this.settings.setDeclared(id, declared, values);
+      this.changed();
+      return { message: `已保存「${pluginLabel(this.info(p))}」的设置` };
+    });
+  }
+
+  /**
+   * 附带的插件（随 Emaki 一起发，在仓库的 plugins/ 下）里还没装的：「插件」页上列在「附带的」里，
+   * 启用就是按文件夹装（plugins.inspect，走一样的授权单）。清单坏了的不列
+   */
+  bundled(dir: string): BundledPlugin[] {
+    if (this.safeMode || !existsSync(dir)) return [];
+    const have = new Set(this.load(false).map((p) => p.manifest.id));
+    const out: BundledPlugin[] = [];
+    for (const name of readdirSync(dir).sort()) {
+      const folder = path.join(dir, name);
+      if (!existsSync(path.join(folder, MANIFEST_FILE))) continue;
+      const { manifest } = readManifest(folder, this.emakiVersion);
+      if (!manifest || have.has(manifest.id)) continue;
+      out.push({
+        id: manifest.id,
+        name: manifest.name,
+        version: manifest.version,
+        ...(manifest.description && { description: manifest.description }),
+        path: folder,
+      });
+    }
+    return out;
   }
 
   /**
@@ -582,7 +671,7 @@ export class Plugins {
       const dir = this.packages.resolve(r.package_dir);
       if (!existsSync(path.join(dir, MANIFEST_FILE)))
         problems.push(r.source_kind === 'folder' ? `文件夹不见了（${r.package_dir}）` : '插件的文件不见了，重新安装');
-      else if (checked.manifest) problems.push(...checkViewFiles(dir, checked.manifest));
+      else if (checked.manifest) problems.push(...checkPackageFiles(dir, checked.manifest));
       const m = checked.manifest ?? broken(r.id);
       // 导航项的 id 带上插件的 id，和内置的、别的插件的不撞；指向自己页面的填上地址
       const navs = m.contributes['nav.item@1']?.map((n) => ({ ...n, id: `${r.id}/${n.id}`, ...(n.page !== undefined && { to: pluginPagePath(r.id, n.page) }) }));
@@ -625,6 +714,9 @@ export class Plugins {
             },
             permissions: p.manifest.permissions ?? {},
             grant: p.grant ?? EMPTY_GRANT,
+            ...(p.manifest.contributes['setting@1']?.length && {
+              settings: this.settings.values(p.manifest.id, p.manifest.contributes['setting@1']),
+            }),
           }),
         },
       }),

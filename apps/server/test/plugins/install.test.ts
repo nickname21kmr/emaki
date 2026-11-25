@@ -115,7 +115,19 @@ describe('清单检查', () => {
       '要的权限「管理手机等设备」只给人和设备，插件拿不到',
       '要的权限「nope」Emaki 不认识',
     ]);
-    expect(problems({ server: 'server/index.js' })).toEqual([expect.stringMatching(/服务端代码/)]);
+    // 服务端逻辑（E5）：入口要是包里的 .js；命令名带插件前缀、范围插件能用；有命令要有 server，有任务要能在后台跑
+    expect(problems({ server: 'server/index.js' })).toEqual([]);
+    expect(problems({ server: '../evil.js' })).toEqual([expect.stringMatching(/^server：/)]);
+    expect(problems({ server: 'server/index.ts' })).toEqual([expect.stringMatching(/\.mjs/)]);
+    const cmd = (c: object) => ({ server: 'server/index.js', contributes: { 'command@1': [{ name: 'example.random-browse.go', summary: '走', scope: 'read', ...c }] } });
+    expect(problems(cmd({}))).toEqual([]);
+    expect(problems(cmd({ name: 'other.go' }))).toEqual([expect.stringMatching(/要以插件 id 开头/)]);
+    expect(problems(cmd({ scope: 'devices' }))).toEqual([expect.stringMatching(/插件用不了/)]);
+    expect(problems(cmd({ input: { type: 'string' } }))).toEqual([expect.stringMatching(/对象的 JSON Schema/)]);
+    expect(problems({ contributes: cmd({}).contributes })).toEqual([expect.stringMatching(/没有 server/)]);
+    expect(problems({ server: 'server/index.js', contributes: { 'job.kind@1': [{ kind: 'dl', label: '下载' }] } })).toEqual([
+      expect.stringMatching(/"background": true/),
+    ]);
     expect(problems({ permissions: { unsafe: true } })).toEqual([expect.stringMatching(/内部/)]);
     expect(problems({ contributes: { 'override@1': { 'images.defaultSort': 'sideways' } } })).toEqual([expect.stringMatching(/不能是「sideways」/)]);
     expect(problems({ contributes: { 'override@1': { 'no.such': 'x' } } })).toEqual([expect.stringMatching(/不认识/)]);

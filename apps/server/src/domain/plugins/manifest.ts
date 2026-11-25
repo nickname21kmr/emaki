@@ -14,14 +14,26 @@ import {
   validRange,
   validVersion,
   type Contributes,
+  type CommandContribution,
+  type JobKindContribution,
   type NavItemContribution,
+  type SettingContribution,
   type OverrideKey,
   type PageContribution,
   type PluginManifest,
   type PluginPermissions,
   type Scope,
 } from '@emaki/shared';
-import { InstalledNavItemSchema, InstalledPageSchema, PluginManifestSchema } from '@emaki/shared/schemas';
+import {
+  InstalledCommandSchema,
+  InstalledJobKindSchema,
+  InstalledNavItemSchema,
+  InstalledPageSchema,
+  InstalledSettingSchema,
+  PluginManifestSchema,
+  ServerEntrySchema,
+} from '@emaki/shared/schemas';
+import { z } from 'zod';
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
@@ -74,7 +86,12 @@ export function checkManifest(raw: unknown, emakiVersion: string, opts: { ai?: b
   const folderIds = (perms.folders ?? []).map((f) => f.id);
   if (new Set(folderIds).size !== folderIds.length) problems.push('permissions.folders 里有重复的 id');
   if (perms.unsafe) problems.push('它要改 Emaki 的内部（第 3 层），这个版本的 Emaki 还不支持');
-  if (m.server) problems.push('它带服务端代码，这个版本的 Emaki 还不能运行');
+  let server: string | undefined;
+  if (m.server !== undefined) {
+    const r = ServerEntrySchema.safeParse(m.server);
+    if (r.success) server = r.data;
+    else problems.push(`server：${r.error.issues[0]!.message}`);
+  }
   const permissions: PluginPermissions = {
     ...(scopes.length && { scopes }),
     ...(perms.folders?.length && { folders: perms.folders }),
@@ -123,8 +140,52 @@ export function checkManifest(raw: unknown, emakiVersion: string, opts: { ai?: b
       const ids = r.data.map((p) => p.id);
       if (new Set(ids).size !== ids.length) problems.push('page@1 里有重复的 id');
       contributes['page@1'] = r.data as PageContribution[];
+    } else if (point === 'command@1') {
+      const r = InstalledCommandSchema.array().max(50).safeParse(value);
+      if (!r.success) {
+        const i = r.error.issues[0]!;
+        problems.push(`command@1 的 ${i.path.join('.')}：${i.message}`);
+        continue;
+      }
+      const names = r.data.map((c) => c.name);
+      if (new Set(names).size !== names.length) problems.push('command@1 里有重复的命令名');
+      for (const c of r.data) {
+        if (!c.name.startsWith(`${m.id}.`) || c.name.slice(m.id.length + 1).includes('.'))
+          problems.push(`命令「${c.name}」要以插件 id 开头：${m.id}.<名字>`);
+        if (!(c.scope in SCOPES)) problems.push(`命令「${c.name}」的权限范围「${c.scope}」Emaki 不认识`);
+        else if (!PLUGIN_GRANTABLE_SCOPES.includes(c.scope as Scope)) problems.push(`命令「${c.name}」的权限范围「${scopeName(c.scope as Scope)}」插件用不了`);
+        if (c.input) {
+          try {
+            if (!(z.fromJSONSchema(c.input) instanceof z.ZodObject)) problems.push(`命令「${c.name}」的 input 要是一个对象的 JSON Schema（type: object）`);
+          } catch (e) {
+            problems.push(`命令「${c.name}」的 input 不是能用的 JSON Schema：${(e as Error).message.slice(0, 100)}`);
+          }
+        }
+      }
+      contributes['command@1'] = r.data as CommandContribution[];
+    } else if (point === 'job.kind@1') {
+      const r = InstalledJobKindSchema.array().max(20).safeParse(value);
+      if (!r.success) {
+        const i = r.error.issues[0]!;
+        problems.push(`job.kind@1 的 ${i.path.join('.')}：${i.message}`);
+        continue;
+      }
+      if (new Set(r.data.map((j) => j.kind)).size !== r.data.length) problems.push('job.kind@1 里有重复的任务种类');
+      contributes['job.kind@1'] = r.data as JobKindContribution[];
+    } else if (point === 'setting@1') {
+      const r = InstalledSettingSchema.array().max(20).safeParse(value);
+      if (!r.success) {
+        const i = r.error.issues[0]!;
+        problems.push(`setting@1 的 ${i.path.join('.')}：${i.message}`);
+        continue;
+      }
+      if (new Set(r.data.map((x) => x.id)).size !== r.data.length) problems.push('setting@1 里有重复的 id');
+      contributes['setting@1'] = r.data as SettingContribution[];
     }
   }
+  // 命令、任务由服务端逻辑实现；后台任务要授权「在后台运行」
+  if (!server && (contributes['command@1']?.length || contributes['job.kind@1']?.length)) problems.push('有命令或后台任务，但清单里没有 server（服务端逻辑的入口）');
+  if (contributes['job.kind@1']?.length && !perms.background) problems.push('有后台任务，要在 permissions 里写 "background": true');
   // 导航项指向自己的页面：要有这一页
   for (const n of contributes['nav.item@1'] ?? [])
     if (n.page !== undefined && !contributes['page@1']?.some((p) => p.id === n.page)) problems.push(`导航项「${n.label}」指向的页面「${n.page}」在 page@1 里没有`);
@@ -140,6 +201,7 @@ export function checkManifest(raw: unknown, emakiVersion: string, opts: { ai?: b
     ...(range !== undefined && { engines: { emaki: range } }),
     ...(Object.keys(permissions).length && { permissions }),
     contributes,
+    ...(server && { server }),
   };
   return { manifest, problems };
 }
@@ -158,13 +220,14 @@ export function readManifest(dir: string, emakiVersion: string, opts: { ai?: boo
   } catch (e) {
     return { manifest: null, problems: [`${MANIFEST_FILE} 不是合法的 JSON：${(e as Error).message}`] };
   }
-  if (checked.manifest) checked.problems.push(...checkViewFiles(dir, checked.manifest));
+  if (checked.manifest) checked.problems.push(...checkPackageFiles(dir, checked.manifest));
   return checked;
 }
 
-/** 视图文件在不在包里、大不大（装的时候查，之后每次算状态再查：文件夹装的可能改了） */
-export function checkViewFiles(dir: string, m: PluginManifest): string[] {
+/** 视图文件、服务端逻辑的入口在不在包里，视图大不大（装的时候查，之后每次算状态再查：文件夹装的可能改了） */
+export function checkPackageFiles(dir: string, m: PluginManifest): string[] {
   const problems: string[] = [];
+  if (m.server && fileSize(path.join(dir, ...m.server.split('/'))) === null) problems.push(`服务端逻辑的入口 ${m.server} 不在包里`);
   for (const p of m.contributes['page@1'] ?? []) {
     if (!p.view) continue;
     const size = fileSize(path.join(dir, ...p.view.split('/')));
