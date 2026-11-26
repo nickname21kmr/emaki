@@ -3,9 +3,13 @@
 // 再经 emaki.library.import 放进授权单上选的文件夹——去重、入库、识别都走 Emaki 现有的路。
 //
 // 请求要节流：Pixiv 的接口两次之间至少隔 PACE_MS，图片同时最多取几张；只拿你的账号本来就能看到的内容。
+//
+// 动图（ugoira）在 Pixiv 上是一个 zip（每一帧一张 JPEG / PNG）加一份每帧停多久的列表：拆开以后存成 HTML 动图
+// （帧原样放进去，不重新压缩；用浏览器直接打开就能播放），Emaki 认得这种文件（services/image/htmlAnimation.ts）。
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { inflateRawSync } from 'node:zlib';
 
 const WWW = 'https://www.pixiv.net';
 const REFERER = 'https://www.pixiv.net/';
@@ -14,6 +18,9 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 const PACE_MS = 600;
 /** 缩略图缓存最多留多少张（启动时清掉旧的） */
 const MAX_THUMBS = 3000;
+/** Emaki 收的 HTML 动图最大 128 MiB、最多 1000 帧、每帧停 1–60000 毫秒（services/image/htmlAnimation.ts） */
+const MAX_HTML = 128 * 1024 * 1024;
+const MAX_FRAMES = 1000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -206,10 +213,18 @@ export async function activate(emaki) {
   // ---------------------------------------------------------------- 下载
 
   // ids：只给作品 id（插件自己去查每一页的原图）；works：Pixiv 页面上加的按钮（App 里的站内浏览）给的，
-  // 带标题和原图地址（页面用你在 App 里的登录查好的，R-18 也查得到），插件不用登录
+  // 带标题和原图地址（页面用你在 App 里的登录查好的，R-18 也查得到），插件不用登录；动图给 ugoira（zip 的地址和每帧停多久）
   emaki.commands.handle('download', async ({ ids = [], works = [] }) => {
     const list = [];
-    for (const w of works) list.push({ id: String(w.id), ...(w.title && { title: String(w.title) }), ...(w.urls?.length && { urls: w.urls.filter(isOriginal) }) });
+    for (const w of works) {
+      const ugoira = w.ugoira ? ugoiraOf(w.ugoira) : null;
+      list.push({
+        id: String(w.id),
+        ...(w.title && { title: String(w.title) }),
+        ...(w.urls?.length && { urls: w.urls.filter(isOriginal) }),
+        ...(ugoira && { ugoira }),
+      });
+    }
     for (const id of ids) if (!list.some((w) => w.id === String(id))) list.push({ id: String(id) });
     const unique = list.filter((w, i) => list.findIndex((x) => x.id === w.id) === i);
     if (!unique.length) throw new Error('要给 ids 或 works');
@@ -219,6 +234,34 @@ export async function activate(emaki) {
     const job = await emaki.jobs.start('download', { works: unique }, { title });
     return { jobId: job.id, message: `已开始${title}，进度在任务列表里` };
   });
+
+  /** 动图的帧：zip 的地址（原尺寸的）、每帧停多久。R-18 的要登录 */
+  async function ugoiraMeta(id) {
+    const m = await api(`/ajax/illust/${id}/ugoira_meta?lang=zh`);
+    const u = ugoiraOf({ zip: m?.originalSrc || m?.src, frames: m?.frames });
+    if (!u) throw new Error('Pixiv 没给这个动图的帧');
+    return u;
+  }
+
+  /** 下载动图的 zip，拆开，存成 HTML 动图（帧原样放进去）：返回给 library.import 的文件 */
+  async function saveUgoira(id, title, ugoira, progress) {
+    progress(`动图，${ugoira.frames.length} 帧`);
+    const r = await emaki.fetch(ugoira.zip, { saveAs: `dl/${id}_ugoira.zip`, headers: { referer: REFERER, 'user-agent': UA } });
+    if (!r.ok) throw new Error(`动图的帧取不到（HTTP ${r.status}）`);
+    const entries = readZip(readFileSync(r.path));
+    const frames = ugoira.frames.map((f) => {
+      const data = entries.get(f.file);
+      if (!data) throw new Error(`动图的 zip 里少了 ${f.file}`);
+      return { data, delay: f.delay };
+    });
+    const html = ugoiraHtml(title, frames);
+    if (html.length > MAX_HTML) throw new Error(`动图太大（${Math.round(html.length / 1048576)} MB），Emaki 最多收 128 MB`);
+    const fileName = `${id}_ugoira.html`;
+    const file = files.path(`dl/${fileName}`);
+    writeFileSync(file, html);
+    rmSync(r.path, { force: true });
+    return { path: file, fileName };
+  }
 
   emaki.jobs.register('download', async (input, job) => {
     // 老的任务只有 ids
@@ -235,12 +278,19 @@ export async function activate(emaki) {
       const meta = seen.get(id);
       const label = meta?.title ? `「${meta.title}」` : id;
       try {
-        if (meta?.type === 'ugoira') throw new Error('动图（ugoira）暂时下载不了');
-        const pages = work.urls?.length
-          ? work.urls.map((original) => ({ urls: { original } }))
-          : await api(`/ajax/illust/${id}/pages?lang=zh`, { login: false });
-        if (!Array.isArray(pages) || !pages.length) throw new Error('没有找到这个作品的图');
-        const saved = [];
+        let ugoira = work.ugoira ?? (meta?.type === 'ugoira' ? await ugoiraMeta(id) : null);
+        let pages = ugoira
+          ? []
+          : work.urls?.length
+            ? work.urls.map((original) => ({ urls: { original } }))
+            : await api(`/ajax/illust/${id}/pages?lang=zh`, { login: false });
+        // 不知道是不是动图（只给了 id）：动图的「页」是第一帧（<id>_ugoira0.jpg），不当静态图下
+        if (!ugoira && /_ugoira0\./.test(pages[0]?.urls?.original ?? '')) {
+          ugoira = await ugoiraMeta(id);
+          pages = [];
+        }
+        if (!ugoira && (!Array.isArray(pages) || !pages.length)) throw new Error('没有找到这个作品的图');
+        const saved = ugoira ? [await saveUgoira(id, meta?.title ?? work.title ?? id, ugoira, (m) => job.setMessage(`下载 ${works + 1}/${ids.length}：${label}（${m}）`))] : [];
         for (let i = 0; i < pages.length; i++) {
           if (job.signal.aborted) throw new Error('取消了');
           job.setMessage(`下载 ${works + 1}/${ids.length}：${label}${pages.length > 1 ? `（第 ${i + 1}/${pages.length} 张）` : ''}`);
@@ -281,6 +331,93 @@ export async function activate(emaki) {
 }
 
 // ---------------------------------------------------------------- 小工具
+
+/** 页面、Pixiv 给的动图信息 → 检查过的 { zip, frames }；不对的返回 null */
+function ugoiraOf(u) {
+  let zip;
+  try {
+    zip = new URL(String(u?.zip ?? ''));
+  } catch {
+    return null;
+  }
+  if (zip.protocol !== 'https:' || zip.hostname !== 'i.pximg.net' || !/\/img-zip-ugoira\/.+\.zip$/.test(zip.pathname)) return null;
+  if (!Array.isArray(u.frames) || !u.frames.length || u.frames.length > MAX_FRAMES) return null;
+  const frames = [];
+  for (const f of u.frames) {
+    const file = String(f?.file ?? '');
+    if (!/^[\w.-]{1,64}$/.test(file)) return null;
+    // Emaki 收 1–60000 毫秒
+    frames.push({ file, delay: Math.min(60000, Math.max(1, Math.round(Number(f.delay) || 0))) });
+  }
+  return { zip: zip.href, frames };
+}
+
+/** zip 里的文件（名字 → 内容）：Pixiv 的动图 zip 不压缩（stored），也认 deflate */
+function readZip(buf) {
+  let end = buf.length - 22;
+  const stop = Math.max(0, buf.length - 22 - 65535);
+  while (end >= stop && buf.readUInt32LE(end) !== 0x06054b50) end--;
+  if (end < stop) throw new Error('动图的 zip 坏了');
+  const count = buf.readUInt16LE(end + 10);
+  let p = buf.readUInt32LE(end + 16);
+  const out = new Map();
+  for (let i = 0; i < count; i++) {
+    if (buf.readUInt32LE(p) !== 0x02014b50) throw new Error('动图的 zip 坏了');
+    const method = buf.readUInt16LE(p + 10);
+    const size = buf.readUInt32LE(p + 20);
+    const nameLen = buf.readUInt16LE(p + 28);
+    const skip = nameLen + buf.readUInt16LE(p + 30) + buf.readUInt16LE(p + 32);
+    const local = buf.readUInt32LE(p + 42);
+    const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
+    const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+    const raw = buf.subarray(start, start + size);
+    if (method === 0) out.set(name, raw);
+    else if (method === 8) out.set(name, inflateRawSync(raw));
+    else throw new Error(`动图的 zip 用了不认识的压缩方式（${method}）`);
+    p += 46 + skip;
+  }
+  return out;
+}
+
+/** 帧的类型（只收 JPEG、PNG：Emaki 的 HTML 动图只认图片帧） */
+function frameType(data) {
+  if (data[0] === 0xff && data[1] === 0xd8) return 'image/jpeg';
+  if (data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png';
+  throw new Error('动图的帧不是 JPEG、PNG');
+}
+
+/**
+ * HTML 动图：帧列表 frames_info（每帧 data: 地址 + 停多久，放在最前面——Emaki 只看开头 64 KB 认这种文件）和一个小播放器。
+ * Emaki 不跑里面的脚本，只读帧列表；用浏览器打开时脚本在画布上循环播放，点一下暂停
+ */
+function ugoiraHtml(title, frames) {
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const head = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${esc(title)}</title>
+<style>html,body{margin:0;height:100%;background:#111}body{display:flex;align-items:center;justify-content:center}canvas{max-width:100%;max-height:100%}</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>var frames_info=[`;
+  const parts = [Buffer.from(head)];
+  frames.forEach((f, i) => {
+    parts.push(Buffer.from(`${i ? ',' : ''}{"file":"data:${frameType(f.data)};base64,`), Buffer.from(f.data.toString('base64')), Buffer.from(`","delay":${f.delay}}`));
+  });
+  parts.push(
+    Buffer.from(`];</script>
+<script>(function(){var c=document.getElementById('c'),x=c.getContext('2d'),im=[],left=frames_info.length,i=0,t=null;
+function draw(){x.clearRect(0,0,c.width,c.height);x.drawImage(im[i],0,0);t=setTimeout(function(){i=(i+1)%im.length;draw();},frames_info[i].delay);}
+frames_info.forEach(function(f,n){var m=new Image();m.onload=function(){if(--left===0){c.width=im[0].naturalWidth;c.height=im[0].naturalHeight;draw();}};m.src=f.file;im[n]=m;});
+c.addEventListener('click',function(){if(t){clearTimeout(t);t=null;}else if(!left)draw();});})();</script>
+</body>
+</html>
+`),
+  );
+  return Buffer.concat(parts);
+}
 
 /** Pixiv 的原图地址（i.pximg.net 的 https）：页面给的地址只认这种 */
 function isOriginal(url) {

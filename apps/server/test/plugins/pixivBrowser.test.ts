@@ -1,14 +1,16 @@
 /**
  * 附带的 Pixiv 浏览插件（plugins/pixiv-browser，docs/plugins.md 第 6 节）：和第三方插件走一样的路——按文件夹装、授权单、
  * 子进程。Pixiv 换成假的（不联网）：浏览排行、取缩略图、批量下载（后台任务：进度、取消），放进授权给的文件夹，
- * 图库里已经有的不再放一份。
+ * 图库里已经有的不再放一份；动图（帧的 zip + 每帧停多久）存成 HTML 动图。
  */
 import type { PluginSite, PluginsState } from '@emaki/shared';
-import { mkdirSync, readdirSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { crc32 } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { config } from '../../src/config.ts';
 import { EventBus } from '../../src/core/events.ts';
+import { parseHtmlAnimation } from '../../src/services/image/htmlAnimation.ts';
 import { sharp } from '../../src/services/image/sharpConfig.ts';
 import { PluginRuntime, type RuntimeOptions } from '../../src/services/plugins/runtime/host.ts';
 import type { LoginWindow, LoginWindowOptions } from '../../src/services/plugins/runtime/loginWindow.ts';
@@ -52,6 +54,52 @@ async function imageFor(url: string): Promise<Buffer> {
 }
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+
+/** 动图的两帧（同样大小、颜色不同）和每帧停多久 */
+const UGOIRA_DELAYS = [50, 80];
+const ugoiraFrame = (id: string, i: number) => imageFor(`ugoira:${id}:${i}`);
+
+/** 和 Pixiv 一样不压缩（stored）的 zip */
+function storedZip(files: [string, Buffer][]): Buffer {
+  const local: Buffer[] = [];
+  const central: Buffer[] = [];
+  let offset = 0;
+  for (const [name, data] of files) {
+    const n = Buffer.from(name);
+    const h = Buffer.alloc(30);
+    h.writeUInt32LE(0x04034b50, 0);
+    h.writeUInt16LE(10, 4);
+    h.writeUInt32LE(crc32(data), 14);
+    h.writeUInt32LE(data.length, 18);
+    h.writeUInt32LE(data.length, 22);
+    h.writeUInt16LE(n.length, 26);
+    local.push(h, n, data);
+    const c = Buffer.alloc(46);
+    c.writeUInt32LE(0x02014b50, 0);
+    c.writeUInt16LE(10, 4);
+    c.writeUInt16LE(10, 6);
+    c.writeUInt32LE(crc32(data), 16);
+    c.writeUInt32LE(data.length, 20);
+    c.writeUInt32LE(data.length, 24);
+    c.writeUInt16LE(n.length, 28);
+    c.writeUInt32LE(offset, 42);
+    central.push(c, n);
+    offset += 30 + n.length + data.length;
+  }
+  const cd = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(cd.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...local, cd, end]);
+}
+const zipUrl = (id: string) => `https://i.pximg.net/img-zip-ugoira/img/2026/11/24/${id}_ugoira1920x1080.zip`;
+const ugoiraInfo = (id: string) => ({
+  zip: zipUrl(id),
+  frames: UGOIRA_DELAYS.map((delay, i) => ({ file: `00000${i}.png`, delay })),
+});
 
 const fakePixiv: RuntimeOptions['fetch'] = async (url, init) => {
   requests.push({ url, headers: init.headers ?? {} });
@@ -97,13 +145,27 @@ const fakePixiv: RuntimeOptions['fetch'] = async (url, init) => {
       date: '20261124',
     });
   const pages = /^\/ajax\/illust\/(\d+)\/pages$/.exec(u.pathname);
+  // 333、152442850 是动图：「页」是第一帧
+  const isUgoira = (id: string) => id === '333' || id === '152442850';
   if (u.hostname === 'www.pixiv.net' && pages) {
     const id = pages[1]!;
+    if (isUgoira(id)) return json({ error: false, body: [{ urls: { original: `https://i.pximg.net/img-original/img/${id}_ugoira0.jpg` } }] });
     const n = id === '111' ? 2 : 1;
     return json({
       error: false,
       body: Array.from({ length: n }, (_, i) => ({ urls: { original: `https://i.pximg.net/img-original/img/${id}_p${i}.png` } })),
     });
+  }
+  const meta = /^\/ajax\/illust\/(\d+)\/ugoira_meta$/.exec(u.pathname);
+  if (u.hostname === 'www.pixiv.net' && meta && isUgoira(meta[1]!)) {
+    const { zip, frames } = ugoiraInfo(meta[1]!);
+    return json({ error: false, body: { src: zip.replace('1920x1080', '600x600'), originalSrc: zip, mime_type: 'image/png', frames } });
+  }
+  const zip = /\/(\d+)_ugoira1920x1080\.zip$/.exec(u.pathname);
+  if (u.hostname === 'i.pximg.net' && zip) {
+    if (init.headers?.referer !== 'https://www.pixiv.net/') return new Response('', { status: 403 });
+    const id = zip[1]!;
+    return new Response(storedZip(await Promise.all(UGOIRA_DELAYS.map(async (_, i) => [`00000${i}.png`, await ugoiraFrame(id, i)] as [string, Buffer]))));
   }
   if (u.hostname === 'www.pixiv.net' && u.pathname === '/ajax/user/12345')
     return init.headers?.cookie ? json({ error: false, body: { userId: '12345', name: '测试账号' } }) : new Response('', { status: 401 });
@@ -159,6 +221,19 @@ async function enable() {
   expect(pkg.added).toMatchObject({ scopes: ['read', 'import'], network: ['www.pixiv.net', 'i.pximg.net'], background: true });
   await call('plugins.install', { token: pkg.token, folders: { downloads: { rootId: String(rootId), dir: '下载图片/Pixiv' } } });
   await runtime.ready(ID);
+}
+
+/** 下载好的动图：HTML 里是原样的两帧和每帧停多久，图库认成动图（作品号像真的那样长时，也认出 Pixiv 来源） */
+async function expectUgoira(id: string) {
+  const file = path.join(lib, '下载图片', 'Pixiv', `${id}_ugoira.html`);
+  const frames = parseHtmlAnimation(readFileSync(file));
+  expect(frames.map((f) => f.delay)).toEqual(UGOIRA_DELAYS);
+  for (const [i, f] of frames.entries())
+    expect(Buffer.from(f.file.slice(f.file.indexOf(',') + 1), 'base64').equals(await ugoiraFrame(id, i))).toBe(true);
+  const real = id.length >= 4;
+  expect(
+    ds.ctx.db.prepare('SELECT format, frame_count, animated, source_site, source_post_id FROM images WHERE file_name = ?').get(`${id}_ugoira.html`),
+  ).toEqual({ format: 'html', frame_count: 2, animated: 1, source_site: real ? 'pixiv' : null, source_post_id: real ? id : null });
 }
 
 describe('附带的 Pixiv 浏览', () => {
@@ -227,29 +302,30 @@ describe('附带的 Pixiv 浏览', () => {
     ).toBe('登录窗口关掉了，还没有登录好');
   });
 
-  it('批量下载：后台任务有进度，全部页放进授权的文件夹；动图跳过；再下载一次不再放一份', async () => {
+  it('批量下载：后台任务有进度，全部页放进授权的文件夹；动图存成 HTML 动图；再下载一次不再放一份', async () => {
     await enable();
     await call('pixiv-browser.ranking', { mode: 'daily' });
     const r = await call<{ jobId: string; message: string }>('pixiv-browser.download', { ids: ['111', '222', '333'] });
     expect(r.message).toMatch(/已开始下载 3 个 Pixiv 作品/);
     const job = await until(() => ['done', 'failed'].includes(ds.ctx.jobs.get(r.jobId)!.status) && ds.ctx.jobs.get(r.jobId)!, '下载完');
     expect(job).toMatchObject({ status: 'done', kind: 'plugin', plugin: ID, title: '下载 3 个 Pixiv 作品', progress: 3, total: 3 });
-    expect(job.message).toMatch(/下载完了 2 个作品，新加 3 张，1 个失败（「动图」：动图/);
-    expect(readdirSync(path.join(lib, '下载图片', 'Pixiv')).sort()).toEqual(['111_p0.png', '111_p1.png', '222_p0.png']);
+    expect(job.message).toBe('下载完了 3 个作品，新加 4 张');
+    expect(readdirSync(path.join(lib, '下载图片', 'Pixiv')).sort()).toEqual(['111_p0.png', '111_p1.png', '222_p0.png', '333_ugoira.html']);
+    await expectUgoira('333');
     // 导入记成插件；临时文件删掉了
     expect(ds.ctx.db.prepare("SELECT DISTINCT actor FROM command_log WHERE command = 'library.import'").pluck().all()).toEqual([
-      'plugin:pixiv-browser@0.3.0',
+      'plugin:pixiv-browser@0.4.0',
     ]);
     expect(readdirSync(ds.plugins.dataDir(ID))).not.toContain('dl');
     // 页面上标「已下载」
     expect(await call('pixiv-browser.status', { ids: ['111', '222', '333'] })).toMatchObject({
       session: false,
-      downloaded: ['111', '222'],
+      downloaded: ['111', '222', '333'],
     });
     expect((await call<{ items: { downloaded: boolean }[] }>('pixiv-browser.ranking', {})).items.map((i) => i.downloaded)).toEqual([
       true,
       true,
-      false,
+      true,
     ]);
 
     // 再下载一次：图库里已经有了，不再放一份
@@ -257,7 +333,17 @@ describe('附带的 Pixiv 浏览', () => {
     const job2 = await until(() => ds.ctx.jobs.get(again.jobId)!.status === 'done' && ds.ctx.jobs.get(again.jobId)!, '再下载完');
     expect(job2.title).toBe('下载「一张的」');
     expect(job2.message).toBe('下载完了 1 个作品，新加 0 张，1 张图库里已经有了');
-    expect(readdirSync(path.join(lib, '下载图片', 'Pixiv'))).toHaveLength(3);
+    expect(readdirSync(path.join(lib, '下载图片', 'Pixiv'))).toHaveLength(4);
+  });
+
+  it('只给作品 id、不知道是不是动图：从第一页认出来，存成 HTML 动图，不把第一帧当静态图下', async () => {
+    await enable();
+    const r = await call<{ jobId: string }>('pixiv-browser.download', { ids: ['152442850'] });
+    const job = await until(() => ['done', 'failed'].includes(ds.ctx.jobs.get(r.jobId)!.status) && ds.ctx.jobs.get(r.jobId)!, '下载完');
+    expect(job.message).toBe('下载完了 1 个作品，新加 1 张');
+    expect(readdirSync(path.join(lib, '下载图片', 'Pixiv'))).toEqual(['152442850_ugoira.html']);
+    expect(requests.some((x) => x.url.includes('_ugoira0.jpg'))).toBe(false);
+    await expectUgoira('152442850');
   });
 
   it('App 里的站内浏览：网站脚本发给 App；Pixiv 页面查好的原图地址直接下载（插件不用登录），只认 i.pximg.net', async () => {
@@ -281,17 +367,23 @@ describe('附带的 Pixiv 浏览', () => {
           urls: ['https://i.pximg.net/img-original/img/555_p0.png', 'https://i.pximg.net/img-original/img/555_p1.png'],
         },
         { id: '666', title: '地址不对的', urls: ['https://evil.example/x.png'] },
+        // 动图：页面查好的帧的 zip 地址、每帧停多久
+        { id: '333', title: '站内选的动图', ugoira: ugoiraInfo('333') },
+        { id: '777', title: 'zip 地址不对的', ugoira: { ...ugoiraInfo('777'), zip: 'https://evil.example/777_ugoira1920x1080.zip' } },
       ],
     });
-    expect(r.message).toMatch(/已开始下载 2 个 Pixiv 作品/);
+    expect(r.message).toMatch(/已开始下载 4 个 Pixiv 作品/);
     const job = await until(() => ds.ctx.jobs.get(r.jobId)!.status === 'done' && ds.ctx.jobs.get(r.jobId)!, '下载完');
-    expect(job.message).toMatch(/下载完了 2 个作品/);
-    // 555 用给的地址，没去查作品页；666 的地址不认，退回去查
+    expect(job.message).toMatch(/下载完了 4 个作品/);
+    // 555 用给的地址，没去查作品页；666 的地址不认，退回去查；333 的帧用给的（没去查动图信息），777 的 zip 地址不认，退回去查（不是动图）
     const asked = requests.slice(before).map((x) => new URL(x.url).pathname);
     expect(asked).not.toContain('/ajax/illust/555/pages');
     expect(asked).toContain('/ajax/illust/666/pages');
     expect(asked).not.toContain('/x.png');
-    expect(readdirSync(path.join(lib, '下载图片', 'Pixiv')).sort()).toEqual(['555_p0.png', '555_p1.png', '666_p0.png']);
+    expect(asked.filter((a) => a.startsWith('/ajax/illust/333'))).toEqual([]);
+    expect(requests.slice(before).some((x) => x.url.startsWith('https://evil.example'))).toBe(false);
+    expect(readdirSync(path.join(lib, '下载图片', 'Pixiv')).sort()).toEqual(['333_ugoira.html', '555_p0.png', '555_p1.png', '666_p0.png', '777_p0.png']);
+    await expectUgoira('333');
     // 停用了就不发
     await call('plugins.setEnabled', { id: ID, enabled: false });
     expect(await ds.registry.query('plugins.sites', {})).toEqual([]);

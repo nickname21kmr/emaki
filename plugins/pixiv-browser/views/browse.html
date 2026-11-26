@@ -136,12 +136,6 @@
         outline: 3px solid var(--color-text-info, #c33);
         outline-offset: 2px;
       }
-      .card[aria-disabled='true'] {
-        cursor: default;
-      }
-      .card[aria-disabled='true'] img {
-        opacity: 0.55;
-      }
       .check {
         position: absolute;
         top: 6px;
@@ -489,14 +483,14 @@
       function appendCards(list) {
         const html = list
           .map((it) => {
-            const off = it.type === 'ugoira';
-            return `<div class="card" data-id="${it.id}" role="checkbox" aria-selected="false" aria-disabled="${off}" title="${esc(it.title)}">
+            const anim = it.type === 'ugoira';
+            return `<div class="card" data-id="${it.id}" role="checkbox" aria-selected="false" title="${esc(it.title)}">
               <div class="pic">
                 <img alt="" data-thumb="${esc(it.thumb)}" />
-                <span class="check">${off ? '' : '✓'}</span>
+                <span class="check">✓</span>
                 <span class="badges">
                   ${it.r18 ? '<span class="badge r18">R-18</span>' : ''}
-                  ${off ? '<span class="badge">动图</span>' : ''}
+                  ${anim ? '<span class="badge">动图</span>' : ''}
                   ${it.pages > 1 ? `<span class="badge">${it.pages} 张</span>` : ''}
                 </span>
                 ${it.downloaded ? '<span class="badge done">已下载</span>' : it.rank ? `<span class="rank">${it.rank}</span>` : ''}
@@ -544,14 +538,14 @@
           return;
         }
         const card = e.target.closest('.card');
-        if (!card || card.getAttribute('aria-disabled') === 'true') return;
+        if (!card) return;
         const id = card.dataset.id;
         if (selected.has(id)) selected.delete(id);
         else selected.add(id);
         renderActions();
       });
       $('all').onclick = () => {
-        for (const it of items) if (it.type !== 'ugoira' && !it.downloaded) selected.add(it.id);
+        for (const it of items) if (!it.downloaded) selected.add(it.id);
         renderActions();
       };
       $('clear').onclick = () => {

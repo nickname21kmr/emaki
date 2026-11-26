@@ -2,6 +2,7 @@
 // - 每个作品缩略图左上角一个选择圈，底部一条「已选 N 个 · 下载到 Emaki」；作品页上没选的时候是「下载这个作品」；
 // - 下载过的作品标「已下载」。
 // 原图地址在这里查（用你在 App 里的 Pixiv 登录，R-18 也查得到），连同标题交给插件的 download 命令：后台下载、去重、放进授权的文件夹都在电脑上做。
+// 动图查的是帧的 zip 地址和每帧停多久，电脑上拆开存成 HTML 动图。
 // 经 App 注入的 window.__emakiSite.call(命令, 输入) 调这个插件自己的命令。只认作品链接（/artworks/<id>），不靠 Pixiv 的样式名。
 (() => {
   if (window.__emakiPixiv || !window.__emakiSite) return;
@@ -151,7 +152,7 @@
     }
   });
 
-  /** 一个作品：标题、类型、每一页的原图地址（用这里的登录查） */
+  /** 一个作品：标题、每一页的原图地址；动图是帧的 zip 地址和每帧停多久（用这里的登录查） */
   async function lookup(id, title) {
     const get = async (path) => {
       const r = await fetch(path, { credentials: 'include', headers: { accept: 'application/json' } });
@@ -160,8 +161,12 @@
       return j.body;
     };
     const info = await get(`/ajax/illust/${id}?lang=zh`);
-    if (Number(info.illustType) === 2) throw new Error('动图暂时下载不了');
     const name = info.illustTitle || info.title || title || id;
+    if (Number(info.illustType) === 2) {
+      const meta = await get(`/ajax/illust/${id}/ugoira_meta?lang=zh`);
+      const frames = (meta.frames ?? []).map((f) => ({ file: f.file, delay: f.delay }));
+      return { id, title: name, ugoira: { zip: meta.originalSrc || meta.src, frames } };
+    }
     if ((info.pageCount ?? 1) <= 1 && info.urls?.original) return { id, title: name, urls: [info.urls.original] };
     const pages = await get(`/ajax/illust/${id}/pages?lang=zh`);
     return { id, title: name, urls: pages.map((p) => p.urls?.original).filter(Boolean) };
