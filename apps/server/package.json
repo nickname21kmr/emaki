@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch --import tsx src/index.ts",
-    "dev:demo": "node --watch --import tsx src/index.ts --demo",
+    "dev": "node scripts/dev-watch.mjs",
+    "dev:demo": "node scripts/dev-watch.mjs --demo",
     "start": "tsx src/index.ts",
     "typecheck": "tsc -p tsconfig.json",
     "tagger": "tsx src/services/tagger/cli.ts",
