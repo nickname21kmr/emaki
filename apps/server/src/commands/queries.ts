@@ -17,6 +17,7 @@ import {
   ListImagesInput,
   ListUnrecognizedInput,
   ListWorksInput,
+  PixivPostsInput,
   SearchInput,
   TagPhraseInput,
   TagSuggestionsInput,
@@ -31,6 +32,7 @@ import { config } from '../config.ts';
 import { describeKindReason, hydrateImages, IMAGE_COLS, type ImageRow } from '../datasource/sqlite/hydrate.ts';
 import { imageArtists, listArtists } from '../datasource/sqlite/artists.ts';
 import { listImages } from '../datasource/sqlite/queries/listImages.ts';
+import { pixivPosts } from '../datasource/sqlite/queries/pixivPosts.ts';
 import { MIME, parseId, toId } from '../datasource/sqlite/sql.ts';
 import { loadSuggestions } from '../datasource/sqlite/suggestions.ts';
 import { NotFoundError } from '../http/errors.ts';
@@ -372,6 +374,13 @@ export const queries = [
       const query = q.sort || q.poseClass || q.posewearPose ? q : { ...q, sort: e.plugins.overrideValue('images.defaultSort') };
       return listImages(e.ctx.db, query, (key, compute) => e.results.get('count:' + key, compute) as number);
     },
+  }),
+  defineQuery({
+    name: 'images.pixivPosts',
+    summary: '这些 Pixiv 作品号在图库里各有几张（不算回收站里的、不在了的）、几张动图、一共几页（查过 Pixiv 才知道）：只列图库里有的',
+    input: PixivPostsInput,
+    scope: 'read',
+    run: (e, q) => ({ posts: pixivPosts(e.ctx.db, q.ids) }),
   }),
   defineQuery({
     name: 'images.get',

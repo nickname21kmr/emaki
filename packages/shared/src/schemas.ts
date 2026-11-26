@@ -538,6 +538,8 @@ export const ListImagesInput = z.object({
   limit: qNumber.min(1).max(200).optional(),
 });
 export const ThumbInput = z.object({ id: Id, w: qNumber.optional() });
+/** 这些 Pixiv 作品在图库里各有几张（插件标「已下载」「下了一部分」用，images.pixivPosts） */
+export const PixivPostsInput = z.object({ ids: z.array(z.string().regex(/^\d{1,12}$/)).max(500) });
 export const ListWorksInput = z.object({ sort: z.enum(['imageCount', 'recent', 'name']).optional() });
 const workFilter = z.string().min(1).optional();
 export const ListCharactersInput = z.object({

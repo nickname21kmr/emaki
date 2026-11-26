@@ -33,17 +33,42 @@ export async function activate(emaki) {
   rmSync(dlDir, { recursive: true, force: true });
   pruneThumbs(thumbsDir);
 
-  // 下载过的作品（只有插件自己用：页面上标「已下载」）
-  const doneFile = files.path('downloaded.json');
-  const downloaded = new Set(readJson(doneFile, []));
-  const saveDownloaded = () => writeFileSync(doneFile, JSON.stringify([...downloaded]));
+  // 作品一共几页（插件自己下过的，下次标「已下载」「下了 2/5 张」用；浏览时见过的在 seen 里）
+  const pagesFile = files.path('pages.json');
+  const knownPages = new Map(Object.entries(readJson(pagesFile, {})));
+  const savePages = () => {
+    if (knownPages.size > 20000) for (const k of [...knownPages.keys()].slice(0, knownPages.size - 15000)) knownPages.delete(k);
+    writeFileSync(pagesFile, JSON.stringify(Object.fromEntries(knownPages)));
+  };
+  // 以前只记了下载过哪些（0.3.0）：现在按图库算，不用了
+  rmSync(files.path('downloaded.json'), { force: true });
 
   // 浏览时见过的作品：下载时就不用再查一次标题、类型
   const seen = new Map();
-  const remember = (items) => {
+
+  /**
+   * 这些作品在图库里有几张、一共几页（不管是这个插件下的还是别的工具下的：Emaki 按图片的来源认作品号）。
+   * have 够了 pages（或者不知道几页）算下载过；只列图库里有的
+   */
+  async function inLibrary(ids) {
+    const out = {};
+    for (let i = 0; i < ids.length; i += 500) {
+      const { posts } = await emaki.call('images.pixivPosts', { ids: ids.slice(i, i + 500) });
+      for (const [id, p] of Object.entries(posts)) {
+        const pages = seen.get(id)?.pages ?? knownPages.get(id) ?? p.pages ?? null;
+        out[id] = { have: p.images, pages, animated: p.animated > 0 };
+      }
+    }
+    return out;
+  }
+  const isFull = (w) => !!w && (w.pages == null || w.have >= w.pages);
+
+  /** 列表里的作品：记下来，标上图库里有几张 */
+  const remember = async (items) => {
     for (const it of items) seen.set(it.id, it);
     if (seen.size > 5000) for (const k of [...seen.keys()].slice(0, seen.size - 4000)) seen.delete(k);
-    return items.map((it) => ({ ...it, downloaded: downloaded.has(it.id) }));
+    const lib = await inLibrary(items.map((it) => it.id));
+    return items.map((it) => ({ ...it, have: lib[it.id]?.have ?? 0, downloaded: isFull(lib[it.id]) }));
   };
 
   // ---------------------------------------------------------------- 请求 Pixiv
@@ -115,7 +140,7 @@ export async function activate(emaki) {
       height: c.height,
       rank: c.rank,
     }));
-    return { items: remember(items), next: r.next ? Number(r.next) : null, date: r.date ?? null };
+    return { items: await remember(items), next: r.next ? Number(r.next) : null, date: r.date ?? null };
   });
 
   emaki.commands.handle('search', async ({ word, page = 1, order = 'date_d', mode = 'safe', match = 'tag' }) => {
@@ -125,14 +150,14 @@ export async function activate(emaki) {
     const r = await api(`/ajax/search/illustrations/${encodeURIComponent(word)}?${q}`);
     const block = r.illust ?? { data: [], total: 0, lastPage: 1 };
     const items = (block.data ?? []).filter((d) => d && d.id && !d.isAdContainer).map(fromThumbnail);
-    return { items: remember(items), next: page < (block.lastPage ?? 1) ? page + 1 : null, total: block.total ?? items.length };
+    return { items: await remember(items), next: page < (block.lastPage ?? 1) ? page + 1 : null, total: block.total ?? items.length };
   });
 
   emaki.commands.handle('following', async ({ page = 1, r18 = false }) => {
     const q = new URLSearchParams({ p: String(page), mode: r18 ? 'r18' : 'all', lang: 'zh' });
     const r = await api(`/ajax/follow_latest/illust?${q}`, { login: true });
     const items = (r.thumbnails?.illust ?? []).map(fromThumbnail);
-    return { items: remember(items), next: r.page?.isLastPage ? null : page + 1 };
+    return { items: await remember(items), next: r.page?.isLastPage ? null : page + 1 };
   });
 
   // ---------------------------------------------------------------- 登录
@@ -140,12 +165,17 @@ export async function activate(emaki) {
   // 正在登录（开着登录窗口）、上次登录失败的原因
   let login = null;
 
-  emaki.commands.handle('status', async ({ ids = [] }) => ({
-    session: !!(await session()),
-    account: (await emaki.storage.get('account')) ?? null,
-    login,
-    downloaded: ids.filter((id) => downloaded.has(String(id))),
-  }));
+  // works：图库里有的作品各有几张、一共几页（不知道是 null）；downloaded：其中下全了的（或者不知道几页的）
+  emaki.commands.handle('status', async ({ ids = [] }) => {
+    const lib = await inLibrary(ids.map(String));
+    return {
+      session: !!(await session()),
+      account: (await emaki.storage.get('account')) ?? null,
+      login,
+      downloaded: Object.keys(lib).filter((id) => isFull(lib[id])),
+      works: Object.fromEntries(Object.entries(lib).map(([id, w]) => [id, { have: w.have, pages: w.pages }])),
+    };
+  });
 
   // 不让你去浏览器里翻 Cookie：在电脑上开一个 Pixiv 的登录页，你登录好以后 Emaki 读到登录的 Cookie，窗口自己关掉
   emaki.commands.handle('login', async () => {
@@ -290,6 +320,15 @@ export async function activate(emaki) {
           pages = [];
         }
         if (!ugoira && (!Array.isArray(pages) || !pages.length)) throw new Error('没有找到这个作品的图');
+        // 图库里已经有这个动图了（比如别的工具下的 HTML）：内容不一样，再存一份就重复了
+        if (ugoira && (await inLibrary([id]))[id]?.animated) {
+          existing += 1;
+          works += 1;
+          knownPages.set(id, 1);
+          savePages();
+          job.advance(1);
+          continue;
+        }
         const saved = ugoira ? [await saveUgoira(id, meta?.title ?? work.title ?? id, ugoira, (m) => job.setMessage(`下载 ${works + 1}/${ids.length}：${label}（${m}）`))] : [];
         for (let i = 0; i < pages.length; i++) {
           if (job.signal.aborted) throw new Error('取消了');
@@ -310,8 +349,8 @@ export async function activate(emaki) {
         }
         const bad = result.items.filter((it) => it.status === 'failed');
         if (bad.length) throw new Error(bad[0].error ?? '放进图库失败');
-        downloaded.add(id);
-        saveDownloaded();
+        knownPages.set(id, ugoira ? 1 : pages.length);
+        savePages();
         works += 1;
       } catch (e) {
         if (job.signal.aborted) throw e;

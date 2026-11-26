@@ -1,6 +1,7 @@
 // Pixiv 浏览给 pixiv.net 加的按钮（site@1，docs/plugins.md 第 6 节）：安卓 App 里打开 Pixiv 网站本身时加载，网站原来的样子、功能都不动，只加：
 // - 每个作品缩略图左上角一个选择圈，底部一条「已选 N 个 · 下载到 Emaki」；作品页上没选的时候是「下载这个作品」；
-// - 下载过的作品标「已下载」。
+// - 图库里有的作品标「已下载」，只下了一部分的标「已下载 2/5」（不管是这个插件下的还是别的工具下的：电脑按图片的来源认作品号）；
+//   作品页上是「补齐剩下的 3 张」。一共几页电脑不知道的，在这里查一次（只查图库里有的），记在这台设备上。
 // 原图地址在这里查（用你在 App 里的 Pixiv 登录，R-18 也查得到），连同标题交给插件的 download 命令：后台下载、去重、放进授权的文件夹都在电脑上做。
 // 动图查的是帧的 zip 地址和每帧停多久，电脑上拆开存成 HTML 动图。
 // 经 App 注入的 window.__emakiSite.call(命令, 输入) 调这个插件自己的命令。只认作品链接（/artworks/<id>），不靠 Pixiv 的样式名。
@@ -11,9 +12,30 @@
   const ARTWORK = /\/artworks\/(\d+)/;
 
   const selected = new Map(); // id → 标题
-  const downloaded = new Set();
+  const library = new Map(); // id → { have, pages }：图库里有几张、一共几页（不知道是 null）
   const asked = new Set();
   let toStatus = new Set();
+
+  // 一共几页（电脑不知道的在这里查过的）：存在这台设备上，Pixiv 的作品很少再加页
+  const PAGES_KEY = 'emaki-pixiv-pages';
+  let pageCache = {};
+  try {
+    pageCache = JSON.parse(localStorage.getItem(PAGES_KEY) || '{}');
+  } catch {}
+  const savePageCache = () => {
+    const keys = Object.keys(pageCache);
+    if (keys.length > 5000) for (const k of keys.slice(0, keys.length - 4000)) delete pageCache[k];
+    try {
+      localStorage.setItem(PAGES_KEY, JSON.stringify(pageCache));
+    } catch {}
+  };
+  /** 图库里的情况：{ have, pages, full }；图库里没有是 null */
+  const inLibrary = (id) => {
+    const w = library.get(id);
+    if (!w) return null;
+    const pages = w.pages ?? pageCache[id] ?? null;
+    return { have: w.have, pages, full: pages == null || w.have >= pages };
+  };
 
   const style = document.createElement('style');
   style.textContent = `
@@ -25,6 +47,7 @@
     .emk-check[aria-pressed="true"]::after { content: '✓'; }
     .emk-done { position: absolute; left: 6px; bottom: 6px; z-index: 5; padding: 0 7px; border-radius: 6px; background: rgba(20,120,60,.88);
       color: #fff; font: 600 11px/19px system-ui, sans-serif; pointer-events: none; }
+    .emk-done.emk-part { background: rgba(176,110,0,.92); }
     .emk-bar { position: fixed; left: 50%; bottom: calc(14px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 2147483000;
       display: none; gap: 8px; align-items: center; padding: 7px 7px 7px 16px; border-radius: 999px; background: #1f1d1a; color: #f4f1ea;
       box-shadow: 0 6px 24px rgba(0,0,0,.28); font: 14px/1.4 system-ui, sans-serif; white-space: nowrap; max-width: calc(100vw - 16px); }
@@ -63,15 +86,32 @@
   function render() {
     const n = selected.size;
     const work = currentWork();
+    const w = work ? inLibrary(work) : null;
     bar.classList.toggle('on', n > 0 || !!work);
-    bar.querySelector('.emk-count').textContent = n ? `已选 ${n} 个` : downloaded.has(work) ? '这个作品已经下载过' : '这个作品';
+    bar.querySelector('.emk-count').textContent = n
+      ? `已选 ${n} 个`
+      : !w
+        ? '这个作品'
+        : w.full
+          ? '这个作品已经下载过'
+          : `已下载 ${w.have}/${w.pages} 张`;
     bar.querySelector('[data-act="clear"]').hidden = n === 0;
-    bar.querySelector('[data-act="dl"]').textContent = n ? '下载到 Emaki' : '下载这个作品';
+    bar.querySelector('[data-act="dl"]').textContent = n ? '下载到 Emaki' : w && !w.full ? `补齐剩下的 ${w.pages - w.have} 张` : '下载这个作品';
     for (const b of document.querySelectorAll('.emk-check')) b.setAttribute('aria-pressed', String(selected.has(b.dataset.emkId)));
     for (const a of document.querySelectorAll('a[data-emk]')) {
-      const id = a.dataset.emk;
-      const has = a.querySelector('.emk-done');
-      if (downloaded.has(id) && !has) a.insertAdjacentHTML('beforeend', '<span class="emk-done">已下载</span>');
+      const lib = inLibrary(a.dataset.emk);
+      let badge = a.querySelector('.emk-done');
+      if (!lib) {
+        badge?.remove();
+        continue;
+      }
+      if (!badge) {
+        badge = document.createElement('span');
+        a.append(badge);
+      }
+      badge.className = lib.full ? 'emk-done' : 'emk-done emk-part';
+      const text = lib.full ? '已下载' : `已下载 ${lib.have}/${lib.pages}`;
+      if (badge.textContent !== text) badge.textContent = text;
     }
   }
 
@@ -109,13 +149,49 @@
       for (const id of ids) asked.add(id);
       try {
         const r = await site.call('pixiv-browser.status', { ids });
-        for (const id of r.downloaded ?? []) downloaded.add(String(id));
+        const works = r.works ?? {};
+        for (const id of ids) {
+          const w = works[id];
+          if (!w) library.delete(id);
+          else {
+            library.set(id, { have: w.have, pages: w.pages ?? null });
+            if (w.pages == null && !(id in pageCache)) askPages(id);
+          }
+        }
         render();
       } catch {
         // 连不上电脑：不标
       }
       if (toStatus.size) scheduleStatus();
     }, 600);
+  }
+
+  // 图库里有、电脑不知道一共几页的作品：一个一个查（间隔一点，别给 Pixiv 添堵）
+  const pageQueue = [];
+  let pageBusy = false;
+  function askPages(id) {
+    if (!pageQueue.includes(id)) pageQueue.push(id);
+    if (pageBusy) return;
+    pageBusy = true;
+    (async () => {
+      while (pageQueue.length) {
+        const next = pageQueue.shift();
+        try {
+          const r = await fetch(`/ajax/illust/${next}?lang=zh`, { credentials: 'include', headers: { accept: 'application/json' } });
+          const j = await r.json();
+          const n = Number(j?.body?.illustType) === 2 ? 1 : Number(j?.body?.pageCount);
+          if (r.ok && !j.error && n > 0) {
+            pageCache[next] = n;
+            savePageCache();
+            render();
+          }
+        } catch {
+          // 查不到：照样标「已下载」
+        }
+        await new Promise((ok) => setTimeout(ok, 350));
+      }
+      pageBusy = false;
+    })();
   }
   function recheck(ids) {
     for (const id of ids) {
@@ -162,6 +238,11 @@
     };
     const info = await get(`/ajax/illust/${id}?lang=zh`);
     const name = info.illustTitle || info.title || title || id;
+    const count = Number(info.illustType) === 2 ? 1 : Number(info.pageCount);
+    if (count > 0) {
+      pageCache[id] = count;
+      savePageCache();
+    }
     if (Number(info.illustType) === 2) {
       const meta = await get(`/ajax/illust/${id}/ugoira_meta?lang=zh`);
       const frames = (meta.frames ?? []).map((f) => ({ file: f.file, delay: f.delay }));

@@ -180,6 +180,9 @@
         bottom: 6px;
         background: rgba(20, 120, 60, 0.85);
       }
+      .badge.done.part {
+        background: rgba(176, 110, 0, 0.9);
+      }
       .rank {
         position: absolute;
         left: 6px;
@@ -493,7 +496,7 @@
                   ${anim ? '<span class="badge">动图</span>' : ''}
                   ${it.pages > 1 ? `<span class="badge">${it.pages} 张</span>` : ''}
                 </span>
-                ${it.downloaded ? '<span class="badge done">已下载</span>' : it.rank ? `<span class="rank">${it.rank}</span>` : ''}
+                ${doneBadge(it) || (it.rank ? `<span class="rank">${it.rank}</span>` : '')}
               </div>
               <div class="t">${esc(it.title)}</div>
               <div class="u"><span>${esc(it.user)}</span><a data-open="${it.id}" title="在 Pixiv 打开">打开 ↗</a></div>
@@ -582,7 +585,13 @@
         if (entries.some((e) => e.isIntersecting) && !$('more').hidden) loadMore();
       }).observe($('more'));
 
-      // 图库变了（下载的图放进去了）：重新标「已下载」
+      /** 图库里有的：下全了「已下载」，只下了一部分「已下载 2/5」（别的工具下的也算） */
+      function doneBadge(it) {
+        if (!it.have) return '';
+        return it.downloaded ? '<span class="badge done">已下载</span>' : `<span class="badge done part">已下载 ${it.have}/${it.pages}</span>`;
+      }
+
+      // 图库变了（下载的图放进去了、删了几张）：重新标「已下载」
       let refreshing = null;
       view.onChanged(() => {
         // 下载以后缩略图、查重这些任务会接连推变化：1.5 秒里最多查一次，但一定会查
@@ -591,15 +600,25 @@
           refreshing = null;
           const ids = items.map((it) => it.id);
           if (!ids.length) return;
-          const r = await view.call('pixiv-browser.status', { ids: ids.slice(-500) }).catch(() => null);
+          const asked = ids.slice(-500);
+          const r = await view.call('pixiv-browser.status', { ids: asked }).catch(() => null);
           if (!r) return;
-          for (const id of r.downloaded) {
+          const full = new Set(r.downloaded);
+          for (const id of asked) {
             const it = items.find((x) => x.id === id);
-            if (!it || it.downloaded) continue;
-            it.downloaded = true;
+            if (!it) continue;
+            const have = r.works?.[id]?.have ?? 0;
+            if (have === (it.have ?? 0) && full.has(id) === !!it.downloaded) continue;
+            it.have = have;
+            it.downloaded = full.has(id);
             const pic = document.querySelector(`.card[data-id="${id}"] .pic`);
-            pic?.querySelector('.rank')?.remove();
-            pic?.insertAdjacentHTML('beforeend', '<span class="badge done">已下载</span>');
+            if (!pic) continue;
+            pic.querySelector('.badge.done')?.remove();
+            const badge = doneBadge(it);
+            if (badge) {
+              pic.querySelector('.rank')?.remove();
+              pic.insertAdjacentHTML('beforeend', badge);
+            }
           }
         }, 1500);
       });
