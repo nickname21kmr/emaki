@@ -7,7 +7,7 @@ import { useCapabilities } from '@/lib/capabilities';
 import { cn } from '@/lib/cn';
 import { useRunningJobs } from '@/lib/events';
 import { useHealth, useSummary } from '@/lib/queries';
-import { useCanVisit } from '@/pages';
+import { useCanVisit, useShowsEntry } from '@/pages';
 import { usePlugins } from '@/lib/plugins';
 import { activeNav, JobRing, moreAlert, sidebarCount, tabBarItems, type NavItem } from './Sidebar';
 
@@ -19,12 +19,12 @@ import { activeNav, JobRing, moreAlert, sidebarCount, tabBarItems, type NavItem 
 export function TabBar() {
   const { data: s } = useSummary();
   const { ready } = useCapabilities();
-  const canVisit = useCanVisit();
+  const showsEntry = useShowsEntry();
   const { pathname, search } = useLocation();
   const [open, setOpen] = useState(false);
   const plugins = usePlugins();
   // 和侧栏一样等 GET /api/me 和插件回来再画；没权限、停用的不显示（先过滤再分常驻和「更多」，前四个总是能去的）
-  const items = tabBarItems(s, plugins.state.nav, canVisit);
+  const items = tabBarItems(s, plugins.state.nav, showsEntry);
   const shown = ready && plugins.ready;
   const tabs = shown ? items.tabs : [];
   const more = shown ? items.more : [];

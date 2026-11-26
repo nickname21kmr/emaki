@@ -200,12 +200,14 @@ export function MenuSeparator() {
 
 /**
  * 右键菜单（触屏上长按）：和 Menu 同一个样子。侧栏上的「调整页面顺序…」用它（docs/plugins.md 9.6）。
- * children 是被右键的那一块（asChild）。
+ * children 是被右键的那一块（asChild）。disabled：不弹（右键回到浏览器自己的菜单）。
  */
-export function ContextMenu({ content, children }: { content: ReactNode; children: ReactNode }) {
+export function ContextMenu({ content, disabled, children }: { content: ReactNode; disabled?: boolean; children: ReactNode }) {
   return (
     <C.Root>
-      <C.Trigger asChild>{children}</C.Trigger>
+      <C.Trigger asChild disabled={disabled}>
+        {children}
+      </C.Trigger>
       <C.Portal>
         <C.Content className={contentClass}>{content}</C.Content>
       </C.Portal>

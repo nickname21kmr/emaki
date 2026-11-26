@@ -25,7 +25,7 @@ import { placeText } from '@/lib/undoPlace';
 import { useOverlays, usePrefs, useUndoStore } from '@/lib/stores';
 import { navIcon } from '@/components/layout/Sidebar';
 import { useNav } from '@/lib/plugins';
-import { pageNeed, useCanVisit } from '@/pages';
+import { pageNeed, useShowsEntry } from '@/pages';
 import { GLOBAL_KEYS, PAGE_JUMPS, type KeyCombo } from '../shortcuts';
 
 export interface PaletteCommand {
@@ -68,7 +68,7 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
   // 计数读汇总接口（附录 #28）
   const { data: summary } = useSummary();
   const nav = useNav();
-  const canVisit = useCanVisit();
+  const showsEntry = useShowsEntry();
 
   const startJob = useStartJob((job) => {
     const label = jobTitle(job);
@@ -106,7 +106,7 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
   };
 
   // 前往：侧栏的导航项（插件的 nav.item，docs/plugins.md 9.6）——停用的页面不列，改的名字跟着变，不在侧栏里的页面（「插件」）也能从这里去
-  const goItems: PaletteCommand[] = paletteGoItems(nav, canVisit).map((n) => ({
+  const goItems: PaletteCommand[] = paletteGoItems(nav, showsEntry).map((n) => ({
     value: `go:${n.to}`,
     section: 'go' as const,
     label: n.label,
@@ -219,14 +219,14 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
 const PALETTE_ORDER = ['home', 'gallery', 'characters', 'unrecognized', 'duplicates', 'annex', 'collections', 'excluded', 'settings'];
 
 /**
- * 命令面板的「前往」（纯函数，测试直接调）：全部导航项（在不在侧栏都算），去不了的（没权限、插件停用了）不要，
+ * 命令面板的「前往」（纯函数，测试直接调）：全部导航项（在不在侧栏都算），不放入口的（没权限、插件停用了、pages.ts 的 entry）不要，
  * 「原创」这种要按图库情况填地址的捷径不要；数字键跳页的标上键。
  */
 export function paletteGoItems(
   nav: Record<NavSection, NavEntry[]>,
-  canVisit: (to: string) => boolean,
+  showsEntry: (to: string) => boolean,
 ): (NavEntry & { key?: string })[] {
-  const all = NAV_SECTIONS.flatMap((s) => nav[s]).filter((n) => !n.to.includes(':') && canVisit(n.to));
+  const all = NAV_SECTIONS.flatMap((s) => nav[s]).filter((n) => !n.to.includes(':') && showsEntry(n.to));
   const rank = (n: NavEntry) => {
     const i = PALETTE_ORDER.indexOf(n.id);
     return i < 0 ? PALETTE_ORDER.length : i;

@@ -1,6 +1,7 @@
 /**
  * 页面（路由）和它需要的能力（docs/mobile.md 4.4，lib/capabilities.ts）。router.tsx 只从这里生成路由；
- * 侧栏、命令面板、数字键跳页、首页的「去处理」这类链接都按目标地址查这里，没权限的不显示。
+ * 侧栏、命令面板、数字键跳页、首页的「去处理」这类链接都按目标地址查这里，没权限的不显示；
+ * 侧栏、底部「更多」、命令面板的入口还看 entry（showsEntry）。
  * 直接打开没权限的地址时显示说明页（features/access/NoAccessPage.tsx）。
  * 每一页属于一个内置插件（@emaki/shared 的 BUILTIN_PLUGINS，docs/plugins.md 9.4）：插件停用了，这一页和通往它的入口一起不见，
  * 直接打开地址显示「这一页已停用」（features/plugins/DisabledPage.tsx）。
@@ -19,6 +20,11 @@ export interface PageDef {
   /** 说明页的标题 */
   title: string;
   need: Need;
+  /**
+   * 侧栏、底部「更多」、命令面板里放入口另外要的能力（有其中一个就放）：页面能看、但这台设备在里面什么都改不了时不占入口。
+   * 直接打开地址、页面里的链接照常（还是按 need）
+   */
+  entry?: readonly Capability[];
 }
 
 export const PAGES = {
@@ -40,8 +46,9 @@ export const PAGES = {
   // 看得到排除了什么；加规则、恢复规则（rules）、恢复单张（curate）在页面里各自判断
   excluded: { path: '/excluded', title: '已排除', need: 'read' },
   settings: { path: '/settings', title: '设置', need: 'settings' },
-  // 插件（docs/plugins.md 9.7）：谁都能看，改要 plugins（页面里各自判断）
-  plugins: { path: '/plugins', title: '插件', need: 'read' },
+  // 插件（docs/plugins.md 9.7）：谁都能看，改要 plugins、装要 install-plugins（页面里各自判断）；
+  // 两个都没有的设备在里面什么都改不了，侧栏、「更多」、命令面板里不放它（用户 2026-11-26），地址照常能开
+  plugins: { path: '/plugins', title: '插件', need: 'read', entry: ['plugins', 'install-plugins'] },
   plugin: { path: '/plugins/:id', title: '插件', need: 'read' },
   // 插件自己画的页面（视图，docs/plugins.md 第 5 节）：标题来自插件
   pluginView: { path: '/p/:plugin/:page', title: '插件', need: 'read' },
@@ -72,9 +79,23 @@ export const canVisit = (caps: ReadonlySet<Capability>, to: string, disabled: Re
 };
 const NONE: ReadonlySet<string> = new Set();
 
+/** 侧栏、底部「更多」、命令面板里放不放去这个地址的入口：能去，而且那一页声明了 entry 时有其中一个能力 */
+export const showsEntry = (caps: ReadonlySet<Capability>, to: string, disabled: ReadonlySet<string> = NONE): boolean => {
+  if (!canVisit(caps, to, disabled)) return false;
+  const entry = (PAGES[pageOf(to)] as PageDef).entry;
+  return !entry || entry.some((c) => caps.has(c));
+};
+
 /** 当前设备能不能去某个地址（还不知道是谁时按本机入口算；停用的插件的页面不能去） */
 export function useCanVisit(): (to: string) => boolean {
   const { caps } = useCapabilities();
   const disabled = useDisabledPages();
   return useCallback((to: string) => canVisit(caps, to, disabled), [caps, disabled]);
+}
+
+/** 当前设备上放不放去某个地址的入口（侧栏、底部「更多」、命令面板用；见 showsEntry） */
+export function useShowsEntry(): (to: string) => boolean {
+  const { caps } = useCapabilities();
+  const disabled = useDisabledPages();
+  return useCallback((to: string) => showsEntry(caps, to, disabled), [caps, disabled]);
 }

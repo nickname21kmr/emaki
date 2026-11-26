@@ -242,7 +242,8 @@
   本机入口上权限不会变，不取。
 - **声明式**：各处只声明需要哪个能力（`need`），过滤集中在 `capabilities.ts`，不在组件里判断是不是手机：
   - 页面：`apps/web/src/pages.ts` 登记路径和 need，`router.tsx` 只从这里生成路由，每页套 `PageGate`；侧栏、命令面板的「前往」、数字键跳页、
-    帮助里的跳转、首页待处理卡片、各处去设置 / 重复的链接都按目标页过滤；
+    帮助里的跳转、首页待处理卡片、各处去设置 / 重复的链接都按目标页过滤；能看但这台设备在里面什么都改不了的页，可以用 `entry` 让侧栏、
+    「更多」、命令面板不放入口（地址照常能开），现在只有「插件」（要 plugins 或 install-plugins，2026-11-26）；
   - 设置的分区：`features/settings/sections.ts`，编号按看得到的那些排；
   - 命令面板的命令、看图器（`IMAGE_ACTION_NEEDS`）、多选栏（`GALLERY_SELECTION_NEEDS`、详情页 `SelectionAction.need`）的操作。
   测试（`pages.test.tsx`）保证每个路由、侧栏项、设置分区都声明了 need。

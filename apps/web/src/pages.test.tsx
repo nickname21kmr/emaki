@@ -25,7 +25,7 @@ import { SelectionBar, type SelectionAction } from '@/features/characters/detail
 import { GALLERY_SELECTION_NEEDS } from '@/features/gallery/components/SelectionBar';
 import { ALL_CAPABILITIES, allowedActions, capabilitiesOf, type Need } from '@/lib/capabilities';
 import { qk } from '@/lib/queries';
-import { canVisit, PAGES, pageOf, type PageId } from './pages';
+import { canVisit, PAGES, pageOf, showsEntry, type PageId } from './pages';
 import { routes } from './router';
 
 const local: Me = { kind: 'local', scopes: Object.keys(SCOPES) as Scope[] };
@@ -141,6 +141,25 @@ describe('侧栏', () => {
   it('数字键跳页、命令面板的「前往」也按页过滤：手机上没有 5（重复）', () => {
     expect(PAGE_JUMPS.filter((p) => canVisit(phone, p.to)).map((p) => p.key)).toEqual(['1', '2', '3', '4', '6']);
   });
+
+  it('「插件」页：plugins、install-plugins 都没有的设备不放入口（侧栏、「更多」），地址照常能开（用户 2026-11-26）', () => {
+    // 11-24 以前批准的平板：默认权限里还没有 plugins
+    const tablet = capabilitiesOf(device(DEVICE_DEFAULT_SCOPES.filter((s) => s !== 'plugins')));
+    const installOnly = capabilitiesOf(device([...DEVICE_DEFAULT_SCOPES.filter((s) => s !== 'plugins'), 'install-plugins']));
+    for (const to of ['/plugins', '/plugins/pixiv-browser']) expect([to, canVisit(tablet, to)]).toEqual([to, true]);
+    expect(showsEntry(tablet, '/plugins')).toBe(false);
+    for (const caps of [phone, installOnly, desk]) expect(showsEntry(caps, '/plugins')).toBe(true);
+    // 别的页不受影响
+    expect(showsEntry(tablet, '/gallery')).toBe(true);
+    expect(showsEntry(tablet, '/settings')).toBe(false);
+    // 在侧栏显示「插件」以后：手机（默认权限）的「更多」里有，那台平板的没有
+    const nav = builtinPluginsState().nav;
+    const shown = { ...nav, footer: nav.footer.map((n) => (n.to === '/plugins' ? { ...n, visible: true } : n)) };
+    const more = (caps: ReturnType<typeof capabilitiesOf>) =>
+      tabBarItems(summary, shown, (to) => showsEntry(caps, to)).more.map((i) => i.label);
+    expect(more(phone)).toContain('插件');
+    expect(more(tablet)).not.toContain('插件');
+  });
 });
 
 /** 静态渲染：查询缓存里放好 /api/me 的结果（undefined = 还没回来） */
@@ -187,6 +206,12 @@ describe('命令面板', () => {
     for (const v of ['go:/', 'go:/gallery', 'go:/unrecognized', 'act:blur', 'act:help']) expect(phoneList).toContain(v);
     const deskList = render(<Probe />, local).split(' ');
     for (const v of hidden) expect(deskList).toContain(v);
+  });
+
+  it('前往「插件」：plugins、install-plugins 都没有的设备不列', () => {
+    expect(render(<Probe />, device()).split(' ')).toContain('go:/plugins');
+    const tablet = device(DEVICE_DEFAULT_SCOPES.filter((s) => s !== 'plugins'));
+    expect(render(<Probe />, tablet).split(' ')).not.toContain('go:/plugins');
   });
 });
 

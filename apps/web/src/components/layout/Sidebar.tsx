@@ -33,7 +33,7 @@ import { useHealth, useSummary } from '@/lib/queries';
 import { Badge, ContextMenu, ContextMenuItem, RollingNumber, Tooltip } from '@/components/ui';
 import { Emblem } from '@/components/ui/Emblem';
 import { usePlugins } from '@/lib/plugins';
-import { useCanVisit } from '@/pages';
+import { useCanVisit, useShowsEntry } from '@/pages';
 
 export interface NavItem {
   /** 导航项的 id（插件的 nav.item）；「更多」这种临时的没有 */
@@ -97,7 +97,7 @@ export function activeNav(items: readonly { to: string }[], pathname: string, se
 /**
  * 侧栏的导航项（纯函数，测试直接调）：顺序、名字、在不在侧栏来自插件（docs/plugins.md 9.6，lib/plugins.ts 的 useNav），
  * 这里只给每一项加上图库的情况（计数、朱点、说明、原创的地址）。每项的 to 对应 src/pages.ts 里的一页，
- * 需要的能力由那一页声明，没权限、插件停用的由调用方按 canVisit 过滤（docs/mobile.md 4.4）。
+ * 需要的能力由那一页声明，没权限、插件停用的由调用方按 showsEntry 过滤（docs/mobile.md 4.4）。
  * 计数都读汇总接口：服务端按命名口径算好，这里不加减（附录 #28）
  */
 export function sidebarItems(
@@ -151,17 +151,17 @@ const TAB_COUNT = 4;
 
 /**
  * 底部标签栏的项（纯函数）：按侧栏的顺序，前四个（「原创」这种捷径不算）常驻，其余进「更多」，
- * 顺序、计数、说明和侧栏完全一样（都来自 sidebarItems）。能力过滤由调用方做，和侧栏同一个 canVisit。
+ * 顺序、计数、说明和侧栏完全一样（都来自 sidebarItems）。能力过滤由调用方做，和侧栏同一个 showsEntry。
  * 默认是首页、图库、角色、合集常驻，其余（原创、别册、未识别、重复、已排除、设置）进「更多」。
  * moreAlert：「更多」里有待处理的（未识别、重复有数，或者带朱点的项）时，「更多」标签上也点一个朱点。
  */
 export function tabBarItems(
   s: LibrarySummary | undefined,
   nav?: Record<NavSection, NavEntry[]>,
-  canVisit: (to: string) => boolean = () => true,
+  showsEntry: (to: string) => boolean = () => true,
 ): { tabs: NavItem[]; more: NavItem[] } {
   const { main, triage, footer } = sidebarItems(s, nav);
-  const all = [...main, ...triage, ...footer].filter((i) => canVisit(i.to));
+  const all = [...main, ...triage, ...footer].filter((i) => showsEntry(i.to));
   const tabs = all.filter((i) => !i.shortcut).slice(0, TAB_COUNT);
   const more = all.filter((i) => !tabs.includes(i));
   return { tabs, more };
@@ -180,13 +180,14 @@ export function Sidebar() {
   const { data: s } = useSummary();
   const jobs = useRunningJobs();
   const demo = useHealth().data?.dataSource === 'demo';
-  const { ready } = useCapabilities();
+  const { ready, can } = useCapabilities();
   const plugins = usePlugins();
   const navigate = useNavigate();
   const canVisit = useCanVisit();
+  const showsEntry = useShowsEntry();
   const items = sidebarItems(s, plugins.state.nav);
   // 等 GET /api/me 和插件都回来再画：局域网入口上不先闪出没权限的项，改过顺序的不先闪出默认顺序
-  const visible = (list: NavItem[]) => (ready && plugins.ready ? list.filter((item) => canVisit(item.to)) : []);
+  const visible = (list: NavItem[]) => (ready && plugins.ready ? list.filter((item) => showsEntry(item.to)) : []);
   const main = visible(items.main);
   const triage = visible(items.triage);
   const footer = visible(items.footer);
@@ -197,8 +198,9 @@ export function Sidebar() {
     // 窗口矮（768 的笔记本、计数和任务环都在）时侧栏自己滚，不把整个页面撑高
     // 触屏而且矮（平板横屏 720 高，touch-low）：不放徽记、间距收紧，十项导航一屏放得下（2026-11-19 平板实测最后一项被截掉）
     // 手机横屏（高度 compact）：同样不放徽记，上下留白收紧；左边让出刘海（safe-area）
-    // 右键（触屏上长按）：调整页面顺序（docs/plugins.md 9.6）
+    // 右键（触屏上长按）：调整页面顺序（docs/plugins.md 9.6）；改顺序要 plugins，没有的设备不弹这个菜单
     <ContextMenu
+      disabled={!can('plugins')}
       content={
         <ContextMenuItem icon={<ListOrdered />} onSelect={() => navigate('/plugins?view=pages')}>
           调整页面顺序…
