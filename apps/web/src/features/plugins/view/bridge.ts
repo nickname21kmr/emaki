@@ -10,6 +10,7 @@ import { AppBridge, PostMessageTransport } from '@modelcontextprotocol/ext-apps/
 import { EMAKI_CHANGED_NOTIFICATION, EMAKI_VIEW_API_VERSION, EMAKI_VIEW_METHODS as M, type PluginView } from '@emaki/shared';
 import { api } from '@/lib/api';
 import { hostStyles, themeOf } from './frame';
+import { viewContextText } from './viewContext';
 
 /** 不校验的 schema：参数在下面按需要取 */
 type Params = Record<string, unknown>;
@@ -31,6 +32,10 @@ export interface ViewHost {
   onMutation(result: { undoToken: string; message: string }): void;
   /** 从插件接管的链接打开的（link@1，docs/plugins.md 12.7）：那个链接；视图在 emaki/context 里拿到 */
   link?: string | null;
+  /** 页面请你问 AI 助手一句话（ui/message）：打开助手、放进输入框（你按发送才发）；助手用不了时返回 false */
+  ask?(text: string): boolean;
+  /** 页面报「现在显示的是什么」（ui/update-model-context）：你在这一页问助手时一起发 */
+  setModelContext?(text: string): void;
 }
 
 export interface ConnectedView {
@@ -65,6 +70,9 @@ export function connectView(iframe: HTMLIFrameElement, view: PluginView, host: V
       serverTools: {},
       openLinks: {},
       logging: {},
+      // 页面能请你问 AI 助手（放进输入框，你按发送才发）、能告诉助手页面上显示的是什么（docs/plugins.md 12.8）
+      message: { text: {} },
+      updateModelContext: { text: {}, structuredContent: {} },
       experimental: { emaki: { version: EMAKI_VIEW_API_VERSION, methods: Object.values(M) } },
     },
     { hostContext: context() },
@@ -92,12 +100,28 @@ export function connectView(iframe: HTMLIFrameElement, view: PluginView, host: V
     return {};
   };
   bridge.onloggingmessage = () => {};
+  bridge.onmessage = async ({ content }) => {
+    const text = (content ?? [])
+      .filter((c) => c.type === 'text')
+      .map((c) => (c as { text: string }).text)
+      .join('\n')
+      .trim()
+      .slice(0, 4000);
+    // 不替你发：只放进助手的输入框。助手关着、这台设备用不了时说没成
+    return text && host.ask?.(text) ? {} : { isError: true };
+  };
+  bridge.onupdatemodelcontext = async (params) => {
+    host.setModelContext?.(viewContextText(params as Parameters<typeof viewContextText>[0]));
+    return {};
+  };
 
   bridge.setRequestHandler(M.context, { params: any, result: any }, () => ({
     pluginId,
     pageId: view.pageId,
     mediaBase: view.mediaBase,
     link: host.link ?? null,
+    // 这一页能调的工具（按授权过滤过的；官方 App 没有列服务端工具的方法）
+    tools: view.tools.map((t) => ({ name: t.name, description: t.description })),
   }));
   bridge.setRequestHandler(M.navigate, { params: any, result: any }, (p: Params) => {
     if (!internal(p.to)) throw new Error('只能跳到 Emaki 里的地址（以 / 开头）');

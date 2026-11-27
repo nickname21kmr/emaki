@@ -8,7 +8,10 @@ import { useCan } from '@/lib/capabilities';
 import { onLibraryChanged } from '@/lib/events';
 import { useMutate } from '@/lib/queries';
 import { useLightbox, useUndoStore } from '@/lib/stores';
+import { askAssistant } from '@/features/assistant/dock';
+import { useAssistantSettings } from '@/features/assistant/client';
 import type { ConnectedView } from './bridge';
+import { useViewContext } from './viewContext';
 import { themeOf, viewSrcdoc } from './frame';
 
 /** 视图多久没连上算坏了 */
@@ -30,6 +33,11 @@ export function ViewFrame({ view, label, link = null }: { view: PluginView; labe
   // 回调里用最新的 navigate，不让 effect 因它重跑（重跑就是重新载入视图）
   const nav = useRef(navigate);
   nav.current = navigate;
+  // AI 助手开着、这台设备能用（ui/message 才放进输入框）
+  const canAssistant = useCan('assistant');
+  const assistantOn = useAssistantSettings().data?.enabled ?? false;
+  const assistant = useRef(false);
+  assistant.current = canAssistant && assistantOn;
 
   useEffect(() => {
     const container = box.current!;
@@ -85,6 +93,12 @@ export function ViewFrame({ view, label, link = null }: { view: PluginView; labe
           onMutation: (r) =>
             useUndoStore.getState().push({ token: r.undoToken, label: `${label}：${r.message}`, by: `plugin:${view.pluginId}` }),
           link,
+          ask: (text) => {
+            if (!assistant.current) return false;
+            askAssistant(text);
+            return true;
+          },
+          setModelContext: (text) => useViewContext.setState({ current: { plugin: view.pluginId, page: view.pageId, text } }),
         });
         void conn.ready.then(() => {
           clearTimeout(timer);
@@ -101,6 +115,9 @@ export function ViewFrame({ view, label, link = null }: { view: PluginView; labe
       themeWatch.disconnect();
       iframe?.remove();
       void conn?.close();
+      // 离开这一页：它报的上下文不再随问题发
+      const cur = useViewContext.getState().current;
+      if (cur?.plugin === view.pluginId && cur.page === view.pageId) useViewContext.setState({ current: null });
     };
     // 换了链接（看图器里点了另一张图的来源）：重新载入，视图按新的链接画
   }, [view, label, attempt, link]);

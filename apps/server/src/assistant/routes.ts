@@ -47,7 +47,13 @@ export function assistantRoutes(app: FastifyInstance, ds: SqliteDataSource) {
   app.delete('/api/assistant/sessions', async () => { service.assertEnabled(); return { deleted: await service.removeAll() }; });
   app.get('/api/assistant/sessions/:id/models', (req) => { service.assertEnabled(); return service.models(id(req.params)); });
   app.post('/api/assistant/sessions/:id/messages', (req) => service.send(id(req.params), parse(z.object({ requestId: z.uuid(), text: z.string().min(1).max(30000), model: z.string().min(1).max(500), effort: z.string().max(50).default(''),
-    context: z.object({ page: z.string().max(5000), imageIds: z.array(z.string().max(100)).max(5000), selectionScope: z.string().max(300).optional() }) }), req.body)));
+    context: z.object({
+      page: z.string().max(5000),
+      imageIds: z.array(z.string().max(100)).max(5000),
+      selectionScope: z.string().max(300).optional(),
+      // 插件页面报的「现在显示的是什么」（ui/update-model-context）：原样交给模型，和页面、选择一样放在 pageContext 里
+      view: z.object({ plugin: z.string().max(80), page: z.string().max(40), text: z.string().max(8000) }).optional(),
+    }) }), req.body)));
   app.post('/api/assistant/sessions/:id/stop', async (req) => { service.assertEnabled(); await service.stop(id(req.params)); return { ok: true }; });
   app.post('/api/assistant/sessions/:id/resume', (req) => service.resume(id(req.params), parse(z.object({ requestId: z.uuid(), messageId: z.string().min(1).max(200), model: z.string().min(1).max(500), effort: z.string().max(50).default('') }), req.body)));
   app.post('/api/assistant/sessions/:id/answer', async (req) => { const body = parse(z.object({ requestId: z.string().max(200), value: z.string().max(10000) }), req.body); await service.answer(id(req.params), body.requestId, body.value); return { ok: true }; });

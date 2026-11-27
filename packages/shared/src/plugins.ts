@@ -583,7 +583,7 @@ export interface PluginCallResult {
  */
 export const EMAKI_VIEW_API_VERSION = 1;
 export const EMAKI_VIEW_METHODS = {
-  /** 这个视图是谁、图片地址的前缀、从哪个接管的链接打开的（{ pluginId, pageId, mediaBase, link }） */
+  /** 这个视图是谁、图片地址的前缀、从哪个接管的链接打开的、能调的工具（{ pluginId, pageId, mediaBase, link, tools }） */
   context: 'emaki/context',
   /** 跳到 Emaki 里的一个地址（{ to: '/gallery?favorite=1' }） */
   navigate: 'emaki/navigate',

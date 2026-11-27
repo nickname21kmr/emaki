@@ -16,7 +16,13 @@ export interface AssistantModel {
   defaultEffort?: string;
   vision: boolean;
 }
-export interface AssistantContext { page: string; imageIds: string[]; selectionScope?: string }
+export interface AssistantContext {
+  page: string;
+  imageIds: string[];
+  selectionScope?: string;
+  /** 在插件的页面上问的：页面自己报的「现在显示的是什么」（MCP Apps 的 ui/update-model-context，docs/plugins.md 12.8） */
+  view?: { plugin: string; page: string; text: string };
+}
 export interface AssistantCard {
   id: string;
   title: string;

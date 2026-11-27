@@ -110,6 +110,7 @@
       <span class="muted">排序</span>
       <button data-sort="imageCount">按张数</button>
       <button data-sort="recent">按最近新增</button>
+      <button id="ask" hidden>问 AI 助手</button>
     </div>
     <div id="list"><p class="muted">加载中…</p></div>
 
@@ -138,6 +139,10 @@
         for (const b of document.querySelectorAll('[data-sort]')) b.setAttribute('aria-pressed', String(b.dataset.sort === sort));
         const top = works.slice(0, 15);
         const key = sort === 'recent' ? 'recentImageCount' : 'imageCount';
+        // 告诉 AI 助手这一页显示的是什么：你在这一页问它时一起发过去（docs/plugins.md 12.8）
+        view.setContext(
+          `作品排行（${sort === 'recent' ? '按最近新增' : '按张数'}，前 ${top.length} 部）：` + top.map((w, i) => `${i + 1}. ${w.name} ${w[key]} 张`).join('；'),
+        );
         const max = Math.max(1, ...top.map((w) => w[key]));
         $('list').innerHTML = top
           .map(
@@ -164,6 +169,11 @@
           await view.storage.set('sort', sort);
           await render();
         });
+      // 请你问 AI 助手一句：放进助手的输入框，你按发送才发（助手没开时按钮不显示）
+      $('ask').hidden = !view.inEmaki;
+      $('ask').onclick = async () => {
+        if (!(await view.ask('看看这个作品排行：哪几部作品还有很多图没认出角色？'))) $('ask').textContent = 'AI 助手没开';
+      };
       view.onChanged(() => render());
       await render();
     </script>

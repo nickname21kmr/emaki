@@ -51,6 +51,8 @@ export const VIEW_GUIDE = `视图的写法（MCP Apps 的 HTML 视图；在隔�
   view.open('/gallery?workId=12');                             // 跳到 Emaki 的一页；view.openImages(ids) 用看图器打开
   await view.storage.set('lastTab', 'works');                  // 这一页自己的存储（键值）
   view.onChanged(() => render());                              // 图库变了（整理、导入以后）重新取数
+  view.setContext('现在显示的是收藏最多的 20 部作品：…');      // 告诉你（AI 助手）这一页显示的是什么：用户在这一页问你时一起发来
+  // view.ask('帮我看看排第一的这部作品还缺哪些角色');          // 请用户问你一句：放进助手的输入框，用户按发送才发
 </script></body></html>
 - 只用分页和统计的查询（/api/stats、/api/summary、/api/works、/api/characters?sort=…&limit=…、/api/images?limit=…），不要一次拉全部图片；数据多时分页取。
 - 只读的页面 scopes 用默认的 ["read"]；要改数据才加对应的范围（不能超过你自己的）。

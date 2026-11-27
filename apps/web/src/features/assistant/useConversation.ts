@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import type { AssistantBackend, AssistantCard, AssistantContext, AssistantModel, AssistantSession } from '@emaki/shared';
+import { pluginPagePath, type AssistantBackend, type AssistantCard, type AssistantContext, type AssistantModel, type AssistantSession } from '@emaki/shared';
 import { ApiRequestError } from '@/lib/api';
 import { useLightbox, useSelection, useUndoStore } from '@/lib/stores';
 import { undo as undoMutation } from '@/lib/queries';
@@ -12,6 +12,7 @@ import { openSessionEvents } from './sessionEvents';
 import { composerContext, erratumOf, reconcileModelSelection, toggleResultImage, type ResultSelection } from './presentation';
 import { focusComposer, useAssistantDock } from './dock';
 import { useAssistantView, type UndoResult } from './viewState';
+import { useViewContext } from '@/features/plugins/view/viewContext';
 
 export type SessionSummary = Pick<AssistantSession, 'id' | 'title' | 'backend' | 'updatedAt'>;
 
@@ -107,7 +108,18 @@ export function useConversation(backend: AssistantBackend | null): ConversationV
   // 读模型列表会临时拉起 Agent 进程，只在打开后读
   const models = useQuery({ queryKey: ['assistant-models', sessionId], queryFn: () => assistantApi.models(sessionId), enabled: open && Boolean(sessionId), staleTime: 60000, retry: false });
   const running = session?.status === 'running' || session?.status === 'waiting';
-  const context = composerContext(location.pathname + location.search, scope, selected, viewedId, resultSelection);
+  // 在插件的页面上：页面报的「现在显示的是什么」随问题一起发（docs/plugins.md 12.8）
+  const viewContext = useViewContext(s => s.current);
+  const onView = viewContext && location.pathname === pluginPagePath(viewContext.plugin, viewContext.page) ? viewContext : null;
+  const context = { ...composerContext(location.pathname + location.search, scope, selected, viewedId, resultSelection), ...(onView && { view: onView }) };
+  // 插件页面请你问的一句（askAssistant）：接在输入框里，不替你发
+  const incoming = useAssistantDock(s => s.incoming);
+  useEffect(() => {
+    if (!incoming || !sessionId) return;
+    useAssistantView.getState().setDraft(sessionId, cur => (cur.trim() ? `${cur.trimEnd()}\n${incoming}` : incoming));
+    useAssistantDock.setState({ incoming: null });
+    requestAnimationFrame(() => focusComposer(true));
+  }, [incoming, sessionId]);
   const interruptedRequest = session?.messages.find(m => m.id === session.interruption?.messageId);
 
   useEffect(() => { setResultSelection(null); }, [sessionId, location.pathname, location.search, selected, scope]);

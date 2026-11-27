@@ -27,6 +27,15 @@ export interface EmakiView {
    * 视图按它显示；直接打开这一页、在别的宿主里是 null
    */
   readonly link: string | null;
+  /** 这一页能调的工具（名字、说明；按授权过滤过的）。在别的宿主里是空的 */
+  readonly tools: { name: string; description: string }[];
+  /**
+   * 请你问 AI 助手一句话（MCP Apps 的 ui/message，docs/plugins.md 12.8）：在 Emaki 里是打开助手、放进输入框（你按发送才发），
+   * 在 Claude 里是发进对话。助手用不了时返回 false
+   */
+  ask(text: string): Promise<boolean>;
+  /** 告诉 AI 助手这一页现在显示的是什么（ui/update-model-context）：你在这一页问助手时一起发；每次覆盖上一次 */
+  setContext(text: string, data?: unknown): Promise<void>;
   /**
    * 调一个工具，返回解析好的结果（文本是 JSON 就解析）；工具报错时抛出。写操作没给 operationId 自动补一个。
    * 也可以直接写命令名（带点的，比如插件自己的 pixiv-browser.download），自动换成工具名
@@ -97,7 +106,9 @@ export async function connect(info: { name?: string; version?: string } = {}): P
   const emaki = (app.getHostCapabilities()?.experimental as Record<string, { version?: number }> | undefined)?.emaki;
   const inEmaki = app.getHostVersion()?.name === 'Emaki' && (emaki?.version ?? 0) >= EMAKI_VIEW_API_VERSION;
   const request = (method: string, params: Record<string, unknown> = {}) => app.request({ method, params }, any) as Promise<Json>;
-  const context: { mediaBase: string | null; link?: string | null } = inEmaki ? await request(M.context) : { mediaBase: null };
+  const context: { mediaBase: string | null; link?: string | null; tools?: { name: string; description: string }[] } = inEmaki
+    ? await request(M.context)
+    : { mediaBase: null };
 
   const call = async (command: string, args: Record<string, unknown> = {}) => {
     const name = command.includes('.') ? commandToolName(command) : command;
@@ -116,6 +127,18 @@ export async function connect(info: { name?: string; version?: string } = {}): P
     app,
     inEmaki,
     link: typeof context.link === 'string' ? context.link : null,
+    tools: Array.isArray(context.tools) ? context.tools : [],
+    async ask(text) {
+      try {
+        const r = (await app.sendMessage({ role: 'user', content: [{ type: 'text', text }] })) as { isError?: boolean };
+        return !r?.isError;
+      } catch {
+        return false;
+      }
+    },
+    async setContext(text, data) {
+      await app.updateModelContext({ content: [{ type: 'text', text }], ...(data !== undefined && { structuredContent: data as Record<string, unknown> }) }).catch(() => {});
+    },
     call,
     read: (path) => call('read_library', { path }),
     thumb: (id, width) => media('thumb', id, width),
