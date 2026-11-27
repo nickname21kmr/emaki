@@ -373,6 +373,153 @@ export function openEventStream(
   };
 }
 
+export type StreamHandlers = Parameters<typeof openEventStream>[0];
+
+/** 几个标签页之间转发事件的频道上的消息 */
+type SharedMessage =
+  | { type: 'ask' }
+  | { type: 'state'; open: boolean; hello: string | null }
+  | { type: 'open' }
+  | { type: 'message'; data: string }
+  | { type: 'error' }
+  | { type: 'closed' };
+
+export interface SharedStreamDeps {
+  locks: Pick<LockManager, 'request'>;
+  channel: { postMessage: (m: SharedMessage) => void; onmessage: ((e: { data: SharedMessage }) => void) | null; close: () => void };
+  /** 这个标签页现在在不在前台 */
+  visible: () => boolean;
+  /** 回到前台时调 fn；返回取消 */
+  onVisible: (fn: () => void) => () => void;
+  make?: () => EventSource;
+}
+
+const SHARED_LOCK = 'emaki-events';
+
+function sharedDeps(): SharedStreamDeps | null {
+  if (typeof navigator === 'undefined' || !navigator.locks || typeof BroadcastChannel === 'undefined' || typeof document === 'undefined')
+    return null;
+  return {
+    locks: navigator.locks,
+    channel: new BroadcastChannel(SHARED_LOCK) as unknown as SharedStreamDeps['channel'],
+    visible: () => document.visibilityState === 'visible',
+    onVisible: (fn) => {
+      const h = () => document.visibilityState === 'visible' && fn();
+      document.addEventListener('visibilitychange', h);
+      return () => document.removeEventListener('visibilitychange', h);
+    },
+  };
+}
+
+/**
+ * 同一个浏览器里开着几个 Emaki 标签页时只连一条 /api/events。浏览器对同一个网站最多同时开 6 个连接（HTTP/1.1），
+ * 以前每个标签页各占一条长连接，开上几个，新页面的图片就一直排队、一直转圈。
+ * 用 Web Locks 选一个标签页去连（拿着锁的那个），它收到的事件经 BroadcastChannel 转给别的标签页，各自照常处理（刷新自己的查询）。
+ * 回到前台的标签页把锁抢过来自己连（在后台的标签页可能被浏览器冻住，前台的这个总能收到）；拿着锁的关掉了，排着队的下一个接上，
+ * 连上时带着自己收到的最后一条的 id，中间漏的服务端补发。后开的标签页问一声现在连没连上、拿到最近的 hello。
+ * 没有 Web Locks / BroadcastChannel 的环境各连各的。
+ */
+export function openSharedEventStream(on: StreamHandlers, deps: SharedStreamDeps | null = sharedDeps()): () => void {
+  if (!deps) return openEventStream(on);
+  const { locks, channel } = deps;
+  let disposed = false;
+  /** 正在连着（拿着锁）：调它关掉连接、放开锁 */
+  let leading: (() => void) | null = null;
+  /** 排队等锁的那次请求 */
+  let queued: AbortController | null = null;
+  /** 拿着锁时：连没连上、最近的 hello（转给后开的标签页） */
+  let state = { open: false, hello: null as string | null };
+  /** 跟着别人收时：还没连上过、或者断了（下次连上要跑 on.open） */
+  let broken = true;
+
+  const lead = (release: () => void) => {
+    const close = openEventStream(
+      {
+        open: () => {
+          state.open = true;
+          broken = false;
+          on.open();
+          channel.postMessage({ type: 'open' });
+        },
+        message: (data) => {
+          if (data.includes('"type":"hello"')) state.hello = data;
+          on.message(data);
+          channel.postMessage({ type: 'message', data });
+        },
+        error: () => {
+          state.open = false;
+          on.error?.();
+          channel.postMessage({ type: 'error' });
+        },
+        closed: () => {
+          on.closed?.();
+          channel.postMessage({ type: 'closed' });
+        },
+      },
+      deps.make,
+    );
+    leading = () => {
+      leading = null;
+      state = { open: false, hello: null };
+      close();
+      release();
+    };
+  };
+
+  const request = (steal: boolean) => {
+    queued?.abort();
+    const mine = steal ? null : new AbortController();
+    queued = mine;
+    locks
+      .request(SHARED_LOCK, steal ? { steal: true } : { signal: mine!.signal }, () => {
+        if (queued === mine) queued = null;
+        return new Promise<void>((release) => (disposed ? release() : lead(release)));
+      })
+      .catch(() => {
+        // 自己撤掉的排队（要抢锁、卸载了）不算；被别的标签页抢走了：关掉自己的连接，跟着它收，排队等下次
+        if (mine?.signal.aborted || disposed) return;
+        leading?.();
+        request(false);
+      });
+  };
+
+  channel.onmessage = ({ data: m }) => {
+    if (leading) {
+      if (m.type === 'ask') channel.postMessage({ type: 'state', ...state });
+      return;
+    }
+    if (m.type === 'state' || m.type === 'open') {
+      if (m.type === 'state' && !m.open) return;
+      if (broken) {
+        broken = false;
+        on.open();
+        if (m.type === 'state' && m.hello) on.message(m.hello);
+      }
+    } else if (m.type === 'message') on.message(m.data);
+    else if (m.type === 'error') {
+      broken = true;
+      on.error?.();
+    } else if (m.type === 'closed') on.closed?.();
+  };
+
+  const offVisible = deps.onVisible(() => {
+    if (!leading && !disposed) request(true);
+  });
+  if (deps.visible()) request(true);
+  else {
+    request(false);
+    channel.postMessage({ type: 'ask' });
+  }
+
+  return () => {
+    disposed = true;
+    offVisible();
+    queued?.abort();
+    leading?.();
+    channel.close();
+  };
+}
+
 /** 图库变了（changed 事件）时要知道的：插件的视图转给 iframe（emaki/changed，features/plugins/view/） */
 const libraryChangeListeners = new Set<(reason: string) => void>();
 export function onLibraryChanged(fn: (reason: string) => void): () => void {
@@ -476,7 +623,8 @@ export function useServerEvents() {
         .catch(() => {});
     };
     const onMessage = (data: string) => handleServerEvent(client, invalidate, JSON.parse(data) as ServerEvent);
-    const close = openEventStream({
+    // 几个标签页共用一条连接（openSharedEventStream）
+    const close = openSharedEventStream({
       // 连上了：断过的话算重新连上（lib/connection.ts：提示收起、全部重新取、失败过的图片重新加载）
       open: () => {
         streamOpened();

@@ -198,9 +198,18 @@ export function useConversation(backend: AssistantBackend | null): ConversationV
     // eslint-disable-next-line react-hooks/exhaustive-deps -- chooseSession / create 每次渲染都是新的
   }, [open, backend, sessionId, sessions.data]);
 
+  // 会话的实时推送只在助手开着、或者正在跑时连：每条推送占一个连接，浏览器对同一个网站最多同时开 6 个，
+  // 收起以后还连着的话，开几个标签页图片就排不上队了。收起、没在跑时只取一次快照（胶囊的状态）
+  const listening = open || running;
   useEffect(() => {
     if (!sessionId) return;
     let disposed = false;
+    if (!listening) {
+      void assistantApi.session(sessionId).then(s => { if (!disposed) setSession(s); }).catch(e => {
+        if (!disposed && isMissing(e)) forgetSession();
+      });
+      return () => { disposed = true; };
+    }
     // 又连上了：之前「后端暂时连不上」那类报错不再成立
     const reconnected = () => {
       setConnected(true);
@@ -235,7 +244,7 @@ export function useConversation(backend: AssistantBackend | null): ConversationV
     });
     return () => { disposed = true; closeEvents(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- forgetSession / dropSessions 每次渲染都是新的
-  }, [sessionId, client, connectionAttempt]);
+  }, [sessionId, client, connectionAttempt, listening]);
 
   // 助手在这次会话里新改的图库也进顶栏撤销栈（Ctrl+Z / ↶）；第一份快照里的算历史，不记
   useEffect(() => {

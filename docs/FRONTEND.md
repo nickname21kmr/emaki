@@ -125,7 +125,7 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - `lib/queries.ts`：全部数据 hook；修改一律用 `useMutate(fn)`，自动结果 toast + 撤销 + 刷新。界面上显示的计数读 `useSummary()`（汇总接口，见下面「数字从哪来」）
 - `lib/stores.ts`：`usePrefs`（本机偏好：模糊开关与范围、照片 / 文字模糊、悬停显示、底色、网格密度、书架 / 列表、行高、图库类型、收拢组图、阅读器单双页与翻页方向）`useLightbox`（`show(ids, index)` 打开看图器）`useSelection`（多选）`useOverlays` `useUndoStore`
 - `lib/viewport.ts`（`useViewport` 和排法规则）、`lib/gestures.ts`（触屏手势的判定）、`lib/useLongPress.ts`、`lib/pager/`（播放器的翻页和缩放，见下面「播放器」）
-- `lib/motion.ts`、`lib/viewTransition.ts`、`lib/kinds.ts`（类型的图标、`ANIMATED_LABEL`；类型名、印章字、说明转自 `packages/shared`）、`lib/blur.ts`（转出 `packages/shared` 的 `blurReason`）、`lib/format.ts`（`formatCount` `formatCompact` `formatBytes` `formatRelative` `formatDate`；`RATING_LABEL` 转自 shared）、`lib/hotkeys.ts`（`useHotkey('mod+k', fn)`）、`lib/events.ts`（SSE：`changed` 按变化类型只让相关的 query 失效（`REFRESH`），写操作等自己那条事件的刷新（`settleRefresh`），助手的可撤销修改进撤销栈；识别进行中排名类列表最多一分钟重拉一次，未识别列表只标记过期）、`lib/urlPrefs.ts`（收拢组图的模式进 URL）
+- `lib/motion.ts`、`lib/viewTransition.ts`、`lib/kinds.ts`（类型的图标、`ANIMATED_LABEL`；类型名、印章字、说明转自 `packages/shared`）、`lib/blur.ts`（转出 `packages/shared` 的 `blurReason`）、`lib/format.ts`（`formatCount` `formatCompact` `formatBytes` `formatRelative` `formatDate`；`RATING_LABEL` 转自 shared）、`lib/hotkeys.ts`（`useHotkey('mod+k', fn)`）、`lib/events.ts`（SSE：`changed` 按变化类型只让相关的 query 失效（`REFRESH`），写操作等自己那条事件的刷新（`settleRefresh`），助手的可撤销修改进撤销栈；识别进行中排名类列表最多一分钟重拉一次，未识别列表只标记过期；同一个浏览器里几个标签页共用一条 `/api/events`（`openSharedEventStream`：Web Locks 选一个标签页去连、BroadcastChannel 转给别的，回到前台的标签页把连接抢过来）——浏览器对同一个网站最多同时开 6 个连接，以前每个标签页各占一条长连接，开上几个标签页图片就排不上队；助手会话的推送也只在助手开着或正在跑时连）、`lib/urlPrefs.ts`（收拢组图的模式进 URL）
 - `blocks/`：页面区块注册表 `registry.ts` 和按注册表渲染的 `PageBlocks`（见下面「页面区块」）
 
 ### 按能力显示入口（docs/mobile.md 4.4）
