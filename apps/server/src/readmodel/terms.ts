@@ -190,8 +190,19 @@ export const WORK_HAS_ILLUSTRATION = `(EXISTS (SELECT 1 FROM image_copyrights x 
 export const COUNT_UNIT = (a = 'i'): string => `${a}.id`;
 export const COUNT_UNIT_POINT = 'term:count.unit';
 
-/** 口径里登记成内部点的（引擎开的时候登记，core/points.ts）。改了它们的用法（拼进 SQL 的方式）就把 version 加一 */
-export const TERM_POINTS = [{ name: COUNT_UNIT_POINT, label: '排名的张数怎么数', version: 1, base: COUNT_UNIT }] as const;
+/**
+ * 口径里登记成内部点的（引擎开的时候登记，core/points.ts）。改了它们的用法（拼进 SQL 的方式）就把 version 加一。
+ * probe：插件加载完拿加了补丁的口径拼一条查询试跑（只看前几十张图），SQL 坏了当加载失败、记在插件头上，不等到排名的时候才炸
+ */
+export const TERM_POINTS = [
+  {
+    name: COUNT_UNIT_POINT,
+    label: '排名的张数怎么数',
+    version: 1,
+    base: COUNT_UNIT,
+    probe: (unit: typeof COUNT_UNIT) => `SELECT COUNT(DISTINCT ${unit('i')}) FROM (SELECT * FROM v_illust_images LIMIT 50) i`,
+  },
+] as const;
 
 // ------------------------------------------------------------------ 其他展示口径
 

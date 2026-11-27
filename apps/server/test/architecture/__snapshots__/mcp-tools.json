@@ -1527,6 +1527,32 @@
     }
   },
   {
+    "name": "plugins_disable_internal",
+    "command": "plugins.disableInternal",
+    "scope": "plugins",
+    "undoable": true,
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "本次操作的唯一标识，重试使用同一个值"
+        }
+      },
+      "required": [
+        "operationId"
+      ],
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
     "name": "plugins_list",
     "annotations": {
       "readOnlyHint": true,

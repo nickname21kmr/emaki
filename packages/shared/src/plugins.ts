@@ -693,6 +693,11 @@ export interface PluginsState {
   patched?: PatchedPoint[];
   /** 网页要加载的改网页的模块（服务端填；安全模式下没有） */
   webPatches?: WebPatchModule[];
+  /**
+   * 网页的安全模式（?safe）下，服务端还在跑的改内部的插件：网页的安全模式管不到服务端，它们的补丁还在（张数这类还是改过的）。
+   * 「插件」页给「全部停用」（plugins.disableInternal）。后端以 --safe 启动、或者没有在跑的时候没有（docs/plugins.md 第 8 节）
+   */
+  internalRunning?: { id: string; name: string }[];
 }
 
 /** 插件显示的名字：改过就用改的 */

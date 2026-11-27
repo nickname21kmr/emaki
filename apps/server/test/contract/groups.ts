@@ -8,6 +8,9 @@ import { makeTmpDir } from '../helpers/tmp.ts';
 import type { BulkImagesBody } from '@emaki/shared';
 import { canon, contract, NOW, type ContractEnv, type ContractFactory } from './harness.ts';
 
+// 图库路径按 Windows 的盘符路径（D:/…，datasource/sqlite/settings.ts 的 normalizeRootPath）：Linux 上 path.isAbsolute 不认，用到它的几个只在 Windows 上跑
+const WINDOWS = process.platform === 'win32';
+
 function useEnv(make: ContractFactory): () => ContractEnv {
   let env: ContractEnv;
   beforeEach(async () => {
@@ -113,7 +116,7 @@ export function settingsContract(make: ContractFactory) {
       expect((await e.ds.getSettings()).browse.customThemes).toEqual([b]);
     });
 
-    it('添加文件夹：规范化路径，重复添加报错', async () => {
+    it.runIf(WINDOWS)('添加文件夹：规范化路径，重复添加报错', async () => {
       const e = env();
       // sqlite 会检查文件夹是否存在，所以用一个真实的临时目录
       const dir = makeTmpDir('root');
@@ -129,7 +132,7 @@ export function settingsContract(make: ContractFactory) {
       }
     });
 
-    it('添加父文件夹：先问，确认后合并；再加子文件夹提示已包含', async () => {
+    it.runIf(WINDOWS)('添加父文件夹：先问，确认后合并；再加子文件夹提示已包含', async () => {
       const e = env();
       const dir = makeTmpDir('parent');
       try {
@@ -838,7 +841,7 @@ export function exclusionsContract(make: ContractFactory) {
       expect(await e.ds.listExclusions()).toHaveLength(2);
     });
 
-    it('按文件夹 / 标签新建规则', async () => {
+    it.runIf(WINDOWS)('按文件夹 / 标签新建规则', async () => {
       const e = env();
       await e.ds.createExclusion({ kind: 'folder', target: 'D:/Pics/角色' });
       expect((await e.ds.getStats()).imageCount).toBe(7); // 只剩未识别的 i24–i30

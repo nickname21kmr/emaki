@@ -895,7 +895,8 @@ export type ServerEvent =
 
 /**
  * 插件的通知（docs/plugins.md 第 8 节）：「出错太多次，自动停用了」（auto-disabled）、「改内部的插件改的点变了，自动停用了」
- * （points-changed，第 7 节）。网页上弹一条，点「去看看」到插件详情。带 id、断线重连补发（漏了就不知道插件停了）
+ * （points-changed，第 7 节）、「Emaki 连着几次启动就停，改内部的插件自动停用了」（crash-loop）。网页上弹一条，点「去看看」到插件详情。
+ * 带 id、断线重连补发（漏了就不知道插件停了）；后端重启前的补不上，原因在插件页、详情上照样写着
  */
 export interface PluginNoticeEvent {
   type: 'plugin-notice';
@@ -903,7 +904,7 @@ export interface PluginNoticeEvent {
   plugin: string;
   /** 插件显示的名字（你改过的名字） */
   name: string;
-  kind: 'auto-disabled' | 'points-changed';
+  kind: 'auto-disabled' | 'points-changed' | 'crash-loop';
   /** 原因（插件详情上同一句） */
   message: string;
 }

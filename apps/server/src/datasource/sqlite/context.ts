@@ -64,7 +64,14 @@ export function createContext(init: {
   /** 正在进行的 mutate 的撤销记录（嵌套的 mutate 并进它） */
   let active: UndoRecorder | null = null;
   const points = new Points();
-  for (const t of TERM_POINTS) points.define(t.name, { kind: 'term', label: t.label, version: t.version }, t.base);
+  for (const t of TERM_POINTS) {
+    const check = (patched: typeof t.base) => {
+      const sql = patched('i');
+      if (typeof sql !== 'string') throw new Error(`返回的不是 SQL（${typeof sql}）`);
+      init.db.prepare(t.probe(patched)).all();
+    };
+    points.define(t.name, { kind: 'term', label: t.label, version: t.version, check }, t.base);
+  }
   // 网页的点（补丁在网页上加）：只为了查有没有、算指纹
   defineWebPoints(points);
   // 后台任务的执行体也是内部点（job:<种类>）：队列在这之前就建好了，这里接上（单元测试里的假队列没有这个方法）

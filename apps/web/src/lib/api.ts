@@ -326,6 +326,8 @@ export const api = {
   /** 全部插件和生效的结果；safe：按安全模式算（网址带 ?safe） */
   plugins: (safe = false) => get<PluginsState>('/plugins', safe ? { safe: 1 } : undefined),
   setPluginEnabled: (id: string, enabled: boolean) => post<MutationResult>(`/plugins/${encodeURIComponent(id)}/enabled`, { enabled }),
+  /** 停用全部改内部的插件（安全模式下「插件」页的「全部停用」） */
+  disableInternalPlugins: () => post<MutationResult>('/plugins/disable-internal', {}),
   /** 插件的设置（setting@1）：凭证只写不读；空字符串是清掉 */
   setPluginSettings: (id: string, values: Record<string, string | null>) =>
     post<MutationResult>(`/plugins/${encodeURIComponent(id)}/settings`, { values }),

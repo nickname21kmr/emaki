@@ -72,6 +72,15 @@ export function PluginsPage() {
                     安装…
                   </Button>
                 ),
+              // 安全模式（docs/plugins.md 第 8 节）：插件把页面弄坏了时，这个标签页只用内置插件、全部按原样打开；看得到这一页就能进
+              'plugins.safeMode': () =>
+                !state.safeMode && (
+                  <Tooltip content="这个标签页只用内置插件、全部按原来的样子打开；插件把页面弄坏了时用">
+                    <Button variant="ghost" size="sm" icon={<ShieldAlert />} onClick={() => window.location.assign('?safe')}>
+                      安全模式
+                    </Button>
+                  </Tooltip>
+                ),
             }}
           />
         }
@@ -111,15 +120,34 @@ export function PluginsPage() {
 }
 
 function SafeModeNote() {
+  const { state } = usePlugins();
+  const running = state.internalRunning ?? [];
+  const canStop = useCan('plugins');
+  const stop = useMutate(() => api.disableInternalPlugins());
   return (
     <div className="flex items-start gap-3 rounded-lg bg-warn-soft px-4 py-3 text-[13px] leading-relaxed">
       <ShieldAlert className="mt-0.5 size-4 shrink-0 text-warn" />
-      <span className="flex-1">
-        现在是<b className="font-semibold">安全模式</b>：只用内置插件，全部按原来的样子；你的覆盖、改的名字和侧栏顺序都先不生效，也不能改。
-        <a href="?safe=0" className="ml-1 font-medium text-fg underline-offset-2 hover:underline">
-          退出安全模式
-        </a>
-      </span>
+      <div className="flex flex-1 flex-col gap-2">
+        <span>
+          现在是<b className="font-semibold">安全模式</b>：只用内置插件，全部按原来的样子；你的覆盖、改的名字和侧栏顺序都先不生效，也不能改。
+          <a href="?safe=0" className="ml-1 font-medium text-fg underline-offset-2 hover:underline">
+            退出安全模式
+          </a>
+        </span>
+        {/* 网页的安全模式管不到服务端：改内部的插件的补丁还在（第 8 节），给一键停用 */}
+        {running.length > 0 && (
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <span className="flex-1">
+              改内部的插件在 Emaki 的服务端里跑，安全模式管不到它们，还在生效：{running.map((p) => `「${p.name}」`).join('、')}。
+            </span>
+            {canStop && (
+              <Button variant="secondary" size="sm" loading={stop.isPending} onClick={() => stop.mutate(undefined)}>
+                全部停用
+              </Button>
+            )}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

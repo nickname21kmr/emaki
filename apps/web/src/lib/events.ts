@@ -6,6 +6,7 @@ import type {
   Job,
   JobItemEvent,
   LibraryChangedReason,
+  PluginNoticeEvent,
   ServerEvent,
 } from '@emaki/shared';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
@@ -244,6 +245,13 @@ export function createInvalidator(client: QueryClient) {
 // ------------------------------------------------------------------ 事件 id：写操作等自己的那条事件（只刷新一遍）
 
 /** 这次连着的后端的启动 id、收到的最后一条可补发事件的 id */
+/** 插件自动停用的通知的标题（docs/plugins.md 第 7、8 节） */
+const NOTICE_TITLE: Record<PluginNoticeEvent['kind'], (name: string) => string> = {
+  'auto-disabled': (name) => `「${name}」出错太多次，已经自动停用`,
+  'points-changed': (name) => `「${name}」改的地方变了，已经自动停用`,
+  'crash-loop': (name) => `「${name}」可能让 Emaki 启动就停，已经自动停用`,
+};
+
 const position = { boot: null as string | null, last: 0 };
 /** 每条 changed 事件触发的那次刷新（写操作等它） */
 const refreshes = new Map<number, Promise<void>>();
@@ -575,8 +583,8 @@ export function handleServerEvent(client: QueryClient, invalidate: ReturnType<ty
       break;
     case 'plugin-notice':
       noteEvent(event.id);
-      // 插件出错太多次、改内部的插件改的地方变了，自动停用了（docs/plugins.md 第 7、8 节）：说一声，点「去看看」到插件详情
-      toast.warning(event.kind === 'points-changed' ? `「${event.name}」改的地方变了，已经自动停用` : `「${event.name}」出错太多次，已经自动停用`, {
+      // 插件出错太多次、改内部的插件改的地方变了、可能让 Emaki 启动就崩，自动停用了（docs/plugins.md 第 7、8 节）：说一声，点「去看看」到插件详情
+      toast.warning(NOTICE_TITLE[event.kind](event.name), {
         description: event.message,
         duration: 12_000,
         action: { label: '去看看', onClick: () => goTo(`/plugins/${encodeURIComponent(event.plugin)}`) },

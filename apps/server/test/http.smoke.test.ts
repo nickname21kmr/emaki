@@ -1062,6 +1062,10 @@ describe('插件（注册表：plugins.*，docs/plugins.md 第 9 节）', () => 
     expect((await call('POST', '/api/plugins/core.settings/enabled', { enabled: false })).status).toBe(400);
     expect((await call('POST', '/api/plugins/nope/enabled', { enabled: true })).status).toBe(404);
   });
+  route('POST /api/plugins/disable-internal', async () => {
+    // 没有在跑的改内部的插件（在跑的、全部停用、撤销见 test/plugins/internal.test.ts）
+    expect(await call('POST', '/api/plugins/disable-internal', {})).toMatchObject({ status: 400, json: { error: '没有在跑的改内部的插件' } });
+  });
   route('POST /api/plugins/:id/name', async () => {
     expect(await call('POST', '/api/plugins/core.annex/name', { name: '杂项' })).toMatchObject({ status: 200, json: { message: '已改名为「杂项」' } });
     expect((await call('POST', '/api/plugins/core.annex/name', { name: '' })).status).toBe(400);

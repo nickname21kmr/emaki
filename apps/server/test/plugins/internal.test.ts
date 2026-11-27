@@ -4,7 +4,7 @@
  * 「仍然启用」以后照常；清单里没列的点改不了；这个版本没有的点装不上；activate 出错、补丁出错记在插件头上。
  */
 import type { PluginInfo, PluginsState, ServerEvent } from '@emaki/shared';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../../src/core/events.ts';
@@ -13,7 +13,7 @@ import { checkManifest } from '../../src/domain/plugins/manifest.ts';
 import { COUNT_UNIT, COUNT_UNIT_POINT } from '../../src/readmodel/terms.ts';
 import { pointContracts } from '../../src/core/pointContracts.ts';
 import { defineWebPoints } from '../../src/services/plugins/webPoints.ts';
-import { InternalPlugins } from '../../src/services/plugins/internal.ts';
+import { CRASH_STARTS, InternalPlugins } from '../../src/services/plugins/internal.ts';
 import { SqliteDataSource } from '../helpers/client.ts';
 import { makeTmpDir } from '../helpers/tmp.ts';
 
@@ -243,6 +243,108 @@ describe('改内部的插件', () => {
     expect(loader!.isLoaded('test.sneaky')).toBe(false);
     expect(ds.ctx.points.patched()).toEqual([]);
     expect(await counts()).toEqual(BUILTIN);
+  });
+
+  it('口径的补丁给的 SQL 坏了：加载完试跑出来，当加载失败记在插件头上，排名照常', async () => {
+    await startLoader();
+    await install(
+      writePlugin('test.badsql', [COUNT_UNIT_POINT], `export function activate(internal) {
+         internal.patch('term:count.unit', { around: (next, a = 'i') => a + '.no_such_column' });
+       }`),
+    );
+    await install(writePlugin('test.notsql', [COUNT_UNIT_POINT], `export function activate(internal) { internal.patch('term:count.unit', { after: () => 42 }); }`));
+    await until(async () => (await info('test.badsql')).errors?.length && (await info('test.notsql')).errors?.length, '记了错');
+    expect((await info('test.badsql')).errors![0]).toMatchObject({
+      source: '改内部',
+      message: expect.stringMatching(/加载不了：改过的「排名的张数怎么数」用不了：.*no_such_column/),
+    });
+    expect((await info('test.notsql')).errors![0]).toMatchObject({ message: expect.stringMatching(/用不了：返回的不是 SQL（number）/) });
+    expect(loader!.isLoaded('test.badsql')).toBe(false);
+    expect(loader!.isLoaded('test.notsql')).toBe(false);
+    expect(ds.ctx.points.patched()).toEqual([]);
+    expect(await counts()).toEqual(BUILTIN);
+    // 好的补丁照样试过、照常加载
+    await install(EXAMPLE);
+    await until(() => loader!.isLoaded(ID), '加载');
+    await until(async () => (await counts()).character === 3, '张数按投稿数');
+  });
+
+  it(`接连崩溃：连着 ${CRASH_STARTS} 次启动没跑稳，下一次不加载改内部的插件、自动停用、发通知；跑稳了、正常退出就从头算`, async () => {
+    const bootFile = path.join(dir, 'data', 'plugins', 'internal-boot.json');
+    const mark = () => (existsSync(bootFile) ? JSON.parse(readFileSync(bootFile, 'utf8')) : null);
+    const boot = (stableMs = 60_000) => {
+      loader = new InternalPlugins(ds, { log: (m) => logs.push(m), bootFile, stableMs });
+      return loader.start();
+    };
+    // 崩了：进程没了，启动时记的那一笔没擦（这里关掉加载器、把那一笔放回去）
+    const crash = () => {
+      const m = mark();
+      loader!.close();
+      if (m) writeFileSync(bootFile, JSON.stringify(m));
+    };
+    await startLoader();
+    await install(EXAMPLE);
+    await until(() => loader!.isLoaded(ID), '加载');
+    loader!.close();
+
+    await boot();
+    expect(loader!.isLoaded(ID)).toBe(true);
+    expect(mark()).toMatchObject({ starts: 1, plugins: [ID] });
+    crash();
+    await boot();
+    expect(loader!.isLoaded(ID)).toBe(true);
+    expect(mark()).toMatchObject({ starts: 2, plugins: [ID] });
+    crash();
+
+    events.length = 0;
+    await boot();
+    expect(loader!.isLoaded(ID)).toBe(false);
+    const p = await info();
+    expect(p.enabled).toBe(false);
+    expect(p.disabledReason).toMatch(/连着 2 次启动后没多久就停了.*自动停用/);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'plugin-notice', plugin: ID, kind: 'crash-loop', message: p.disabledReason }));
+    expect(await counts()).toEqual(BUILTIN);
+    expect(mark()).toBeNull();
+
+    // 你再启用：照常加载（这次启动不再记）
+    await exec('plugins.setEnabled', { id: ID, enabled: true });
+    await until(() => loader!.isLoaded(ID), '再启用以后加载');
+    expect((await info()).disabledReason).toBeNull();
+    loader!.close();
+
+    // 跑稳了就擦掉：之后崩一次从 1 算起
+    await boot(20);
+    expect(mark()).toMatchObject({ starts: 1 });
+    await until(() => mark() === null, '跑稳以后擦掉');
+    crash();
+    await boot();
+    expect(mark()).toMatchObject({ starts: 1 });
+    // 正常退出也擦掉
+    loader!.close();
+    expect(mark()).toBeNull();
+    expect((await info()).enabled).toBe(true);
+  });
+
+  it('网页的安全模式管不到服务端：列出在跑的改内部的插件，「全部停用」一步停掉、能撤销', async () => {
+    await startLoader();
+    await install(EXAMPLE);
+    await until(() => loader!.isLoaded(ID), '加载');
+    const safe = await q<PluginsState>('plugins.state', { safe: true });
+    expect(safe.safeMode).toBe(true);
+    expect(safe.internalRunning).toEqual([{ id: ID, name: '一个作品算一张' }]);
+    // 不是安全模式不列（「谁改了哪里」里有）
+    expect((await q<PluginsState>('plugins.state')).internalRunning).toBeUndefined();
+
+    const r = await exec<{ undoToken: string; message: string }>('plugins.disableInternal');
+    expect(r.message).toBe('已停用 1 个改内部的插件');
+    await until(() => !loader!.isLoaded(ID), '撤掉');
+    expect(await counts()).toEqual(BUILTIN);
+    expect((await q<PluginsState>('plugins.state', { safe: true })).internalRunning).toBeUndefined();
+    await expect(exec('plugins.disableInternal')).rejects.toThrow(/没有在跑的改内部的插件/);
+
+    await exec('history.undo', { token: r.undoToken });
+    await until(() => loader!.isLoaded(ID), '撤销以后又加载');
+    await until(async () => (await counts()).character === 3, '又按投稿数');
   });
 
   it('补丁能改命令和查询，叠起来后加的在外层；补丁抛的错照样抛、记在插件头上', async () => {

@@ -43,7 +43,12 @@ let timer = null;
 let changed = [];
 
 function start() {
-  const me = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts', ...process.argv.slice(2)], { cwd: server, stdio: 'inherit' });
+  // 多一条 IPC 通道：重启时让后端自己正常退出（Windows 上没有信号，kill 就是强杀：数据库没关好、改内部的插件的启动记录没擦，
+  // 下次启动会当成崩了，见 services/plugins/internal.ts）
+  const me = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts', ...process.argv.slice(2)], {
+    cwd: server,
+    stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
+  });
   child = me;
   me.on('exit', (code, signal) => {
     if (child !== me) return; // 重启时是这里关掉的
@@ -62,7 +67,9 @@ function stopChild() {
       clearTimeout(force);
       resolve();
     });
-    c.kill('SIGTERM');
+    // 通道断了（后端正在退出）就照旧发信号；5 秒还没退就强杀
+    if (c.connected) c.send({ type: 'emaki:shutdown' }, (err) => err && c.kill('SIGTERM'));
+    else c.kill('SIGTERM');
   });
 }
 

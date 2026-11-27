@@ -30,6 +30,11 @@ export interface PointSpec {
   signature?: () => string;
   /** 行为变了、源码却没变时手动加一（口径这种被别处拼进 SQL 的） */
   version?: number;
+  /**
+   * 试一下加了补丁以后还能不能用（verify）：拿到加了补丁的函数，坏了就抛错。口径是拼进 SQL 的片段，
+   * 坏了要到别处查询时才炸、也看不出是谁：插件加载完马上试（services/plugins/internal.ts），坏了当加载失败记在它头上
+   */
+  check?: (patched: Fn) => void;
 }
 
 export interface PointInfo {
@@ -79,6 +84,12 @@ export class Points extends PatchStack {
       .digest('hex')
       .slice(0, 16);
     return p.print;
+  }
+
+  /** 试一下这个点加了补丁以后还能不能用（PointSpec.check；没写 check 的不试）：坏了抛错 */
+  verify(name: string): void {
+    const p = this.points.get(name);
+    p?.check?.(this.wrap(name, p.base));
   }
 
   /** 登记过的点（「插件」页、文档用） */

@@ -50,6 +50,7 @@ import {
   type NavItemContribution as NavItemContributionInput,
   type PatchContribution,
   type PatchInfo,
+  type PluginNoticeEvent,
   type Scope,
   type WebPatchModule,
   isWebPoint,
@@ -77,6 +78,9 @@ const recentReason = (recent: number, message: string) =>
 /** 改内部的插件改的点变了：自动停用的原因（插件详情上、通知里同一句） */
 const pointsReason = (labels: string[]) =>
   `Emaki 更新以后，它改的${labels.map((l) => `「${l}」`).join('、')}变了，自动停用了。改内部的插件要按新的样子确认还能用；确认没问题可以「仍然启用」`;
+
+const crashReason = (starts: number) =>
+  `Emaki 连着 ${starts} 次启动后没多久就停了，可能是改内部的插件引起的（它跑在 Emaki 自己的进程里），自动停用了。确认不是它的问题可以再启用`;
 
 /** plugin_point_state 里记改内部的插件的指纹：point = 'patch'，key = 插件 id，value = { 点: 指纹 } */
 const PATCH_STATE = 'patch';
@@ -166,7 +170,11 @@ export class Plugins {
       overrideChoices: safe ? {} : this.overrideChoices(),
       safeMode: safe,
     });
-    if (safe) return resolved;
+    if (safe) {
+      // 网页的安全模式管不到服务端：还在跑的改内部的插件列出来，「插件」页给「全部停用」
+      const running = this.internalRunning();
+      return running.length ? { ...resolved, internalRunning: running } : resolved;
+    }
     // 网页要加载的改网页的模块；「谁改了哪里」：服务端现在加了补丁的点（按加上的顺序，后面的在外层），加上网页的
     const webPatches = this.webPatches(resolved.plugins);
     const patched = this.ctx.points.patched().map((x) => ({ point: x.name, label: x.label, plugins: x.owners }));
@@ -212,6 +220,36 @@ export class Plugins {
       this.changed();
       return { message: `${enabled ? '已启用' : '已停用'}「${pluginLabel(this.info(p))}」` };
     });
+  }
+
+  /**
+   * 停用全部改内部的插件（网页的安全模式下「插件」页的「全部停用」，docs/plugins.md 第 8 节）：服务端加了补丁的、
+   * 启用着要改服务端的点的，一次停掉（一步撤销）。只改网页的不管（安全模式下网页本来就不加载）
+   */
+  disableInternal() {
+    const ids = this.internalRunning().map((p) => p.id);
+    if (!ids.length) throw new BadRequestError('没有在跑的改内部的插件');
+    return this.ctx.mutate((u) => {
+      const now = iso(this.ctx.clock());
+      const write = this.db.prepare(
+        `INSERT INTO plugin_state (id, enabled, updated_at) VALUES (?, 0, ?)
+         ON CONFLICT(id) DO UPDATE SET enabled = 0, updated_at = excluded.updated_at`,
+      );
+      for (const id of ids) {
+        u.set('plugin_state', 'id = ?', [id]);
+        write.run(id, now);
+      }
+      this.changed();
+      return { message: `已停用 ${ids.length} 个改内部的插件` };
+    });
+  }
+
+  /** 服务端在跑的改内部的插件：加了补丁的，加上启用着、要改服务端的点的（还没加载完的也算）；后端 --safe 时没有 */
+  private internalRunning(): { id: string; name: string }[] {
+    if (this.safeMode) return [];
+    const loaded = this.load(false);
+    const ids = new Set([...this.ctx.points.patched().flatMap((x) => x.owners), ...this.internalPlugins().filter((s) => s.entry).map((s) => s.id)]);
+    return loaded.filter((p) => ids.has(p.manifest.id)).map((p) => ({ id: p.manifest.id, name: pluginLabel(this.info(p)) }));
   }
 
   rename(id: string, name: string | null) {
@@ -601,17 +639,28 @@ export class Plugins {
    * 你再启用（「仍然启用」）就按现在的样子重新记指纹（setEnabled）
    */
   autoDisableChanged(id: string, points: string[]): void {
-    const p = this.require(id);
-    const reason = pointsReason(points.map((n) => this.ctx.points.label(n)));
+    this.autoDisable([id], pointsReason(points.map((n) => this.ctx.points.label(n))), 'points-changed');
+  }
+
+  /**
+   * 改内部的插件可能让 Emaki 一启动就崩（第 8 节，services/plugins/internal.ts 连着几次启动没跑稳）：这次不加载、自动停用，
+   * 写明原因、发通知。不知道是哪一个，那几次要加载的一起停；不进撤销栈，你再启用就照常
+   */
+  autoDisableCrashed(ids: string[], starts: number): void {
+    const have = new Set(this.load(false).map((p) => p.manifest.id));
+    this.autoDisable(ids.filter((id) => have.has(id)), crashReason(starts), 'crash-loop');
+  }
+
+  private autoDisable(ids: string[], reason: string, kind: PluginNoticeEvent['kind']): void {
+    if (!ids.length) return;
     this.ctx.apply(() => {
-      this.db
-        .prepare(
-          `INSERT INTO plugin_state (id, enabled, disabled_reason, updated_at) VALUES (?, 0, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET enabled = 0, disabled_reason = excluded.disabled_reason, updated_at = excluded.updated_at`,
-        )
-        .run(id, reason, iso(this.ctx.clock()));
+      const write = this.db.prepare(
+        `INSERT INTO plugin_state (id, enabled, disabled_reason, updated_at) VALUES (?, 0, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET enabled = 0, disabled_reason = excluded.disabled_reason, updated_at = excluded.updated_at`,
+      );
+      for (const id of ids) write.run(id, reason, iso(this.ctx.clock()));
       this.changed();
-      this.ctx.bus.publish({ type: 'plugin-notice', plugin: id, name: pluginLabel(this.info(p)), kind: 'points-changed', message: reason });
+      for (const id of ids) this.ctx.bus.publish({ type: 'plugin-notice', plugin: id, name: pluginLabel(this.info(this.require(id))), kind, message: reason });
     });
   }
 

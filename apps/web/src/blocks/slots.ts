@@ -111,7 +111,7 @@ export const SLOTS = {
   'page.duplicates': { point: 'page.action@1', title: '重复的页头', entries: [e('duplicates.rescan', '重新查重')] },
   'page.excluded': { point: 'page.action@1', title: '已排除的页头', entries: [e('excluded.addRule', '添加规则')] },
   'page.annex': { point: 'page.action@1', title: '别册的页头', entries: [e('annex.comicView', '成册 / 散页')] },
-  'page.plugins': { point: 'page.action@1', title: '插件的页头', entries: [e('plugins.newOverride', '新建覆盖'), e('plugins.install', '安装')] },
+  'page.plugins': { point: 'page.action@1', title: '插件的页头', entries: [e('plugins.newOverride', '新建覆盖'), e('plugins.install', '安装'), e('plugins.safeMode', '安全模式')] },
   'page.plugin': {
     point: 'page.action@1',
     title: '插件详情的页头',

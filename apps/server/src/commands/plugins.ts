@@ -92,6 +92,16 @@ export const pluginCommands = [
     tx: (e, { id, enabled }) => e.plugins.setEnabled(id, enabled),
   }),
   defineCommand({
+    name: 'plugins.disableInternal',
+    summary: '停用全部改内部的插件（网页的安全模式管不到服务端，它们的补丁还在时用）；能撤销',
+    input: z.object({}),
+    scope: 'plugins',
+    undoable: true,
+    idempotent: true,
+    http: [{ method: 'POST', path: '/api/plugins/disable-internal' }],
+    tx: (e) => e.plugins.disableInternal(),
+  }),
+  defineCommand({
     name: 'plugins.rename',
     summary: '改插件显示的名字（页面插件的导航项跟着变）；name 为 null 恢复原名',
     input: RenamePluginInput,

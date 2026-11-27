@@ -10,10 +10,15 @@
  * - 加载：import 入口（地址带版本和文件的修改时间：同一个进程里换了代码也能重新加载），调它导出的 activate(internal)。
  *   internal.patch 只能改清单 patch@1 里列的点；internal.engine 是整个引擎（没登记的内部，完全不保证兼容）。
  *   activate 抛错：撤掉已经加上的补丁，记一次错误。
+ * - 加载完马上试一下它改的点（Points.verify）：口径是拼进 SQL 的片段，坏了要到排名时才炸、也看不出是谁，这里试跑一条查询，
+ *   坏了当加载失败（撤掉补丁、记在它头上）。
  * - 补丁自己抛的错记在这个插件头上（短时间内多次就自动停用，和别的插件出错一样），照样往外抛。
  * - 加上、撤掉补丁以后声明 plugins.changed：派生的缓存强刷新、网页重新取（张数这类数跟着变）。
+ * - 接连崩溃的恢复（第 8 节）：改内部的代码跑在 Emaki 自己的进程里，坏了能让后端一启动就崩。启动时加载前先记一笔
+ *   （bootFile：这次要加载哪几个、这是连着第几次），跑稳 stableMs 或者正常退出就擦掉。连着 CRASH_STARTS 次没擦掉，
+ *   这次就不加载它们、自动停用（写明原因、发通知），别的照常——等于退回没有它们的那份配置。只改网页的不算（不在这个进程里跑）。
  */
-import { statSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Engine } from '../../commands/registry.ts';
@@ -36,6 +41,20 @@ export interface InternalApi {
 
 export interface InternalOptions {
   log?: (message: string) => void;
+  /** 接连崩溃的恢复记在这个文件里（不给就不管：测试、演示）。一般是 <数据目录>/plugins/internal-boot.json */
+  bootFile?: string;
+  /** 加载完跑多久算跑稳，默认 30 秒 */
+  stableMs?: number;
+}
+
+/** 连着这么多次启动加载完没跑稳（崩了、被强杀），下一次就不加载、自动停用 */
+export const CRASH_STARTS = 2;
+
+/** 启动时记的一笔：这次加载哪几个（有服务端代码的）、这是连着第几次 */
+interface BootMark {
+  starts: number;
+  plugins: string[];
+  at: string;
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -47,6 +66,7 @@ export class InternalPlugins {
   /** 一次只对一遍（import 是异步的） */
   private queue: Promise<void> = Promise.resolve();
   private pending = false;
+  private stable: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly engine: Engine,
@@ -71,12 +91,20 @@ export class InternalPlugins {
         }),
       ),
     );
-    return this.reconcile();
+    this.guardBoot();
+    return this.reconcile().then(() => {
+      if (!this.o.bootFile || this.closed) return;
+      // 跑稳了：擦掉这次记的（不拖住进程退出）
+      this.stable = setTimeout(() => this.clearBoot(), this.o.stableMs ?? 30_000);
+      this.stable.unref();
+    });
   }
 
-  /** 撤掉全部补丁（Emaki 退出时） */
+  /** 撤掉全部补丁（Emaki 退出时）；正常退出不算崩溃，擦掉启动时记的 */
   close(): void {
+    if (!this.closed) this.clearBoot();
     this.closed = true;
+    if (this.stable) clearTimeout(this.stable);
     for (const off of this.offs.splice(0)) off();
     for (const id of this.loaded.keys()) this.engine.ctx.points.removeOwner(id);
     this.loaded.clear();
@@ -100,6 +128,46 @@ export class InternalPlugins {
       this.pending = false;
       void this.reconcile();
     });
+  }
+
+  /**
+   * 加载前：上几次启动都没跑稳就先停掉那几次要加载的（不知道是哪一个，一起停），再记下这一次的。
+   * 读写这个文件出错不挡启动
+   */
+  private guardBoot(): void {
+    const file = this.o.bootFile;
+    if (!file) return;
+    const plugins = this.engine.plugins;
+    const mark = readMark(file);
+    let running = plugins.internalPlugins().filter((s) => s.entry).map((s) => s.id);
+    let starts = (mark?.starts ?? 0) + 1;
+    if (mark && mark.starts >= CRASH_STARTS) {
+      const suspects = running.filter((id) => mark.plugins.includes(id));
+      if (suspects.length) {
+        this.log(`Emaki 连着 ${mark.starts} 次启动后没多久就停了，这次不加载改内部的插件：${suspects.join('、')}`);
+        plugins.autoDisableCrashed(suspects, mark.starts);
+        running = running.filter((id) => !suspects.includes(id));
+      }
+      starts = 1;
+    }
+    try {
+      if (!running.length) rmSync(file, { force: true });
+      else {
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, JSON.stringify({ starts, plugins: running, at: new Date().toISOString() } satisfies BootMark));
+      }
+    } catch (e) {
+      this.log(`记不了改内部的插件的启动记录：${message(e)}`);
+    }
+  }
+
+  private clearBoot(): void {
+    if (!this.o.bootFile) return;
+    try {
+      rmSync(this.o.bootFile, { force: true });
+    } catch {
+      // 下次启动再算
+    }
   }
 
   private async reconcileNow(): Promise<void> {
@@ -168,11 +236,29 @@ export class InternalPlugins {
       log: (...args) => this.log(`[${spec.name}] ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}`),
     };
     await activate(api);
+    // 试一下它改的点（口径：拼进 SQL 试跑）；坏了当加载失败，调用的地方撤掉补丁、记在它头上
+    for (const point of spec.points) {
+      try {
+        points.verify(point);
+      } catch (e) {
+        throw new Error(`改过的「${points.label(point)}」用不了：${message(e)}`);
+      }
+    }
     this.loaded.set(spec.id, { spec, key });
   }
 
   private log(m: string): void {
     this.o.log?.(m);
+  }
+}
+
+/** 启动时记的那一笔；没有（上次跑稳了）、坏了是 null，从头算 */
+function readMark(file: string): BootMark | null {
+  try {
+    const m = JSON.parse(readFileSync(file, 'utf8')) as Partial<BootMark>;
+    return typeof m.starts === 'number' && Array.isArray(m.plugins) ? { starts: m.starts, plugins: m.plugins.map(String), at: String(m.at) } : null;
+  } catch {
+    return null;
   }
 }
 

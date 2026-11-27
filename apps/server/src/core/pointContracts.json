@@ -239,6 +239,11 @@
     "undoable: true",
     "input: {\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":40},\"values\":{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\",\"maxLength\":80},\"additionalProperties\":{\"type\":\"string\",\"maxLength\":80},\"description\":\"要覆盖的值，例如 {\\\"images.defaultSort\\\":\\\"modifiedAt\\\"}；能用的键和值见 GET /api/plugins 的 overrides\"},\"enabled\":{\"description\":\"默认 true：建好就启用\",\"type\":\"boolean\"}},\"required\":[\"name\",\"values\"]}"
   ],
+  "command:plugins.disableInternal": [
+    "scope: plugins",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
   "command:plugins.inspect": [
     "scope: install-plugins",
     "undoable: false",
