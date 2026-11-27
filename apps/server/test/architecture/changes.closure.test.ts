@@ -120,7 +120,7 @@ describe('附录 #13：所有改来源的路径走同一个 image.sourceChanged'
     const env = await engine();
     await addImage(env, { id: 1, rel: 'pics/98785437_p0.png', file: true });
     const db = env.ds.ctx.db;
-    db.prepare("INSERT INTO pixiv_character_checks (image_id, post_id, modified_at, checked_at, result) VALUES (1, '98785437', ?, ?, 'suggested')").run(OLD.toISOString(), OLD.toISOString());
+    db.prepare("INSERT INTO pixiv_character_checks (image_id, post_id, sha256, checked_at, result) SELECT id, '98785437', sha256, ?, 'suggested' FROM images WHERE id=1").run(OLD.toISOString());
     db.prepare("INSERT INTO character_evidence (image_id, tag, score, provider) VALUES (1, 'alice_(game_a)', 0, 'pixiv')").run();
     return env;
   }

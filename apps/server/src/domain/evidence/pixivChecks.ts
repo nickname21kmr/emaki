@@ -9,8 +9,8 @@ export function dismissPixivCharacterChecks(db: Db, undo: UndoRecorder | null, i
   if (!images.length) return;
   const json = JSON.stringify(images);
   undo?.set('pixiv_character_checks', 'image_id IN (SELECT value FROM json_each(?))', [json]);
-  db.prepare(`INSERT INTO pixiv_character_checks(image_id,post_id,modified_at,checked_at,result)
-    SELECT id,source_post_id,modified_at,?,'dismissed' FROM images WHERE id IN (SELECT value FROM json_each(?))
-    ON CONFLICT(image_id) DO UPDATE SET post_id=excluded.post_id,modified_at=excluded.modified_at,
+  db.prepare(`INSERT INTO pixiv_character_checks(image_id,post_id,sha256,checked_at,result)
+    SELECT id,source_post_id,sha256,?,'dismissed' FROM images WHERE id IN (SELECT value FROM json_each(?))
+    ON CONFLICT(image_id) DO UPDATE SET post_id=excluded.post_id,sha256=excluded.sha256,
       checked_at=excluded.checked_at,result=excluded.result`).run(now,json);
 }

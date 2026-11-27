@@ -32,7 +32,7 @@ import path from 'node:path';
 import type { UndoStack } from '../../core/undo.ts';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
 import { sha256Buffer } from '../../services/fs/hash.ts';
-import { toAbs } from '../../services/fs/paths.ts';
+import { isoFromMs, toAbs } from '../../services/fs/paths.ts';
 import { probeImage, type Probe } from '../../services/image/probe.ts';
 import { htmlAnimationCache } from '../../services/image/htmlAnimation.ts';
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
@@ -120,7 +120,7 @@ function swap(
       bytes: next.bytes,
       format: next.format,
       sha256: next.sha256,
-      modifiedAt: statSync(to).mtime.toISOString(),
+      modifiedAt: isoFromMs(statSync(to).mtimeMs),
       relPath: next.rel_path,
       fileName: next.file_name,
     };

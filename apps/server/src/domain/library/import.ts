@@ -10,7 +10,7 @@ import { open, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
 import { sha256Buffer } from '../../services/fs/hash.ts';
-import { isImageFile, toAbs } from '../../services/fs/paths.ts';
+import { isImageFile, isoFromMs, toAbs } from '../../services/fs/paths.ts';
 import { probeImage } from '../../services/image/probe.ts';
 import { htmlAnimationCache } from '../../services/image/htmlAnimation.ts';
 import { ComicAreas } from '../../services/classify/comicAreas.ts';
@@ -161,7 +161,7 @@ export async function importImages(ctx: SqliteContext, body: ImportImagesBody, o
             releasePath(ctx.db, old);
           const id = insertImage(ctx.db, { rootId:root.id,relPath:rel,fileName:path.basename(target),
             width:probe.width,height:probe.height,format:probe.format,bytes:bytes.length,sha256:sha,
-            modifiedAt:statSync(target).mtime.toISOString(),addedAt:now,rating:comic?.rating ?? 'general',
+            modifiedAt:isoFromMs(statSync(target).mtimeMs),addedAt:now,rating:comic?.rating ?? 'general',
             site:source?.site ?? null,postId:source?.postId ?? null,artist:source?.artist ?? null,url:source?.url ?? null });
           declareAdded(ctx, [id], [{id,frames:probe.pages,camera:probe.camera}]);
           return id;

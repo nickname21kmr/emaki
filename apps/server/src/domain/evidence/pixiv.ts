@@ -9,8 +9,9 @@
  * 资格（要不要联网去查）和模型一致：插画、漫画（动的插画、动的漫画也在内，D5；漫画页不看「未识别里也列出漫画页」，附录 #1）、没放下、
  * 不在整本处理的合集里、不在漫画区、来源是 Pixiv 投稿、还没有角色、投稿不是明确不存在的。模型分数落在哪一档都不影响。
  */
+import { z } from 'zod';
 import type { Db } from '../../db/connection.ts';
-import { PixivArtworkSchema, type PixivArtwork } from '../../services/pixiv/client.ts';
+import { PixivArtworkSchema } from '../../services/pixiv/client.ts';
 import { CharacterCatalog } from '../catalog/characterCatalog.ts';
 import { stmt } from '../tx.ts';
 import type { CharacterCandidate } from './store.ts';
@@ -32,9 +33,9 @@ export const PIXIV_ELIGIBLE_BASE = `i.source_site='pixiv' AND i.source_post_id I
   AND ${ART_SCOPE} AND ${NO_CHARACTER('i')}
   AND NOT EXISTS (SELECT 1 FROM pixiv_unavailable_posts p WHERE p.post_id=i.source_post_id)`;
 export const PIXIV_ELIGIBLE = `${PIXIV_ELIGIBLE_BASE} AND i.original_at IS NULL`;
-/** 登记了、还没查的 */
+/** 登记了、还没查的：用内容哈希识别文件版本，改时间或移动文件不会让记录失效。 */
 export const PIXIV_PENDING = `${PIXIV_ELIGIBLE} AND EXISTS (SELECT 1 FROM pixiv_character_checks p WHERE p.image_id=i.id
-  AND p.checked_at IS NULL AND p.post_id=i.source_post_id AND p.modified_at=i.modified_at)`;
+  AND p.checked_at IS NULL AND p.post_id=i.source_post_id AND p.sha256=i.sha256)`;
 
 /**
  * 登记待查：ids 给了 = 自动登记（只登记这些图、只在投稿或文件变了时重来）；不给 = 显式补跑，还重查未匹配、失败、跳过，
@@ -42,11 +43,11 @@ export const PIXIV_PENDING = `${PIXIV_ELIGIBLE} AND EXISTS (SELECT 1 FROM pixiv_
  */
 export function queuePixivImages(db: Db, ids?: number[]): void {
   const automatic = ids !== undefined;
-  db.prepare(`INSERT INTO pixiv_character_checks(image_id,post_id,modified_at)
-    SELECT i.id,i.source_post_id,i.modified_at FROM v_counted_images i WHERE ${PIXIV_ELIGIBLE}
+  db.prepare(`INSERT INTO pixiv_character_checks(image_id,post_id,sha256)
+    SELECT i.id,i.source_post_id,i.sha256 FROM v_counted_images i WHERE ${PIXIV_ELIGIBLE}
     ${automatic ? 'AND i.id IN (SELECT value FROM json_each(?))' : ''}
-    ON CONFLICT(image_id) DO UPDATE SET post_id=excluded.post_id,modified_at=excluded.modified_at,checked_at=NULL,result=NULL
-    WHERE pixiv_character_checks.post_id<>excluded.post_id OR pixiv_character_checks.modified_at<>excluded.modified_at
+    ON CONFLICT(image_id) DO UPDATE SET post_id=excluded.post_id,sha256=excluded.sha256,checked_at=NULL,result=NULL
+    WHERE pixiv_character_checks.post_id<>excluded.post_id OR pixiv_character_checks.sha256<>excluded.sha256
     ${automatic ? '' : `OR COALESCE(pixiv_character_checks.result,'') NOT IN ('linked','original','suggested','dismissed')
       OR (pixiv_character_checks.result='suggested' AND EXISTS
         (SELECT 1 FROM v_character_suggestions cs WHERE cs.image_id=excluded.image_id))`}`)
@@ -75,8 +76,7 @@ export function clearPendingPixivCache(db: Db): void {
 export function completePixivCheck(db: Db, imageId: number, at: string, result: string): void {
   stmt(
     db,
-    `UPDATE pixiv_character_checks SET checked_at=?,result=?,
-       modified_at=(SELECT modified_at FROM images WHERE id=pixiv_character_checks.image_id) WHERE image_id=?`,
+    `UPDATE pixiv_character_checks SET checked_at=?,result=? WHERE image_id=?`,
   ).run(at, result, imageId);
 }
 
@@ -85,23 +85,27 @@ export function markPixivPostUnavailable(db: Db, postId: string, at: string): vo
   stmt(db, 'INSERT OR IGNORE INTO pixiv_unavailable_posts(post_id,checked_at) VALUES (?,?)').run(postId, at);
 }
 
+// 旧缓存没有请求语言标记。即使这次响应没有译名，也记下已经请求过英文。
+const CachedArtwork = PixivArtworkSchema.extend({ englishTagsRequested: z.literal(true).optional() });
+type CachedArtwork = z.infer<typeof CachedArtwork>;
+
 /** 投稿缓存：只存来源的元数据，不存匹配结论（本地规则会变） */
-export function cachedArtwork(db: Db, id: string): PixivArtwork | undefined {
+export function cachedArtwork(db: Db, id: string): CachedArtwork | undefined {
   const raw = db.prepare('SELECT artwork FROM pixiv_artwork_cache WHERE post_id=?').pluck().get(id) as string | undefined;
   if (raw === undefined) return;
   try {
-    const parsed = PixivArtworkSchema.safeParse(JSON.parse(raw));
+    const parsed = CachedArtwork.safeParse(JSON.parse(raw));
     if (parsed.success && parsed.data.id === id) return parsed.data;
   } catch {
     /* 旧的、坏的缓存重新获取 */
   }
 }
 
-export function cacheArtwork(db: Db, artwork: PixivArtwork, fetchedAt: string): void {
+export function cacheArtwork(db: Db, artwork: CachedArtwork, fetchedAt: string): void {
   db.prepare(`INSERT INTO pixiv_artwork_cache(post_id,artwork,fetched_at) VALUES (?,?,?)
     ON CONFLICT(post_id) DO UPDATE SET artwork=excluded.artwork,fetched_at=excluded.fetched_at`).run(
     artwork.id,
-    JSON.stringify(PixivArtworkSchema.parse(artwork)),
+    JSON.stringify(CachedArtwork.parse(artwork)),
     fetchedAt,
   );
 }

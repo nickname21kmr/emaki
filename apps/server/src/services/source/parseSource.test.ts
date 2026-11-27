@@ -21,6 +21,8 @@ describe('parseSource', () => {
     ['144506494_A summer day_0.jpg', pixiv('144506494')],
     ['downloads/151522860___01.png', pixiv('151522860')],
     ['151522860___10 (1).png', pixiv('151522860')],
+    ['downloads/TTAKO - クルル・ツェペシ (Krul Tepes) (148461567) p32.jpg', pixiv('148461567')],
+    ['Artist Name - Title (2025) and 98765432_p2 (148461567) p01 (1).png', pixiv('148461567')],
     ['144506494_标题里有98765432_p0_3.jpg', pixiv('144506494')],
     ['104714967_３人で奉仕.jpg', pixiv('104714967')],
     ['108301050_ヘルモルト姉妹丼　その３.jpg', pixiv('108301050')],
@@ -72,6 +74,11 @@ describe('parseSource', () => {
     'IMG_00012.png',
     '2024-01-01 123456.png',
     'wallpaper_1920x1080.png',
+    'Holiday (148461567) p02.jpg',
+    'Artist - Title (148461567).jpg',
+    'Artist - Title (148461567) page 2.jpg',
+    'Artist - Title (148461567) p02 extra.jpg',
+    'Artist - Title (148461567000) p02.jpg',
     'Screenshot_2024.png',
     '20250618_001222.jpg',
     '20250618_001222_3.jpg',
@@ -107,6 +114,11 @@ describe('parseSource', () => {
   ])('strict mode skips downloader title %s by default', (name) => {
     expect(parseSource(name)).toBeNull();
     expect(parseSource(name, 'broad')?.postId).toBe(name.split('_')[0]);
+  });
+
+  it('严格模式跳过作者和标题模板里的投稿号，也不会误用标题里另一串号码', () => {
+    expect(parseSource('Artist - Title (148461567) p01.jpg')).toBeNull();
+    expect(parseSource('Artist - Title 98765432_p2 (148461567) p01.jpg')).toBeNull();
   });
 
   it.each(['98765432_p0.jpg', '98765432_ugoira.jpg', '98765432_ugoira0.jpg',

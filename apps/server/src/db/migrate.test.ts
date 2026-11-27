@@ -49,6 +49,26 @@ describe('migrate', () => {
     expect(db.prepare('SELECT count(*) FROM duplicate_comparisons').pluck().get()).toBe(0);
   });
 
+  it('057：迁移时恢复修改时间不一致的待查项，保留已查和撤销记录', () => {
+    copyMigrations(dir, 56);
+    migrate(db, { dir });
+    db.exec(`INSERT INTO library_roots (id, path) VALUES (1, 'D:/x');
+      INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
+        VALUES (1, 1, 'a.png', 'a.png', 1, 1, 1, 'png', 'file-a', 'x', '2026-11-27T00:00:00.621Z'),
+               (2, 1, 'b.png', 'b.png', 1, 1, 1, 'png', 'file-b', 'x', '2026-11-27T00:00:00.621Z'),
+               (3, 1, 'c.png', 'c.png', 1, 1, 1, 'png', 'file-c', 'x', '2026-11-27T00:00:00.621Z');
+      INSERT INTO pixiv_character_checks (image_id, post_id, modified_at, checked_at, result)
+        VALUES (1, '123', '2026-11-27T00:00:00.622Z', NULL, NULL),
+               (2, '123', '2026-11-27T00:00:00.622Z', 'before', 'dismissed'),
+               (3, '123', '2026-11-27T00:00:00.622Z', 'before', 'suggested');`);
+    migrate(db);
+    expect(db.prepare('SELECT * FROM pixiv_character_checks ORDER BY image_id').all()).toEqual([
+      { image_id: 1, post_id: '123', sha256: 'file-a', checked_at: null, result: null },
+      { image_id: 2, post_id: '123', sha256: 'file-b', checked_at: 'before', result: 'dismissed' },
+      { image_id: 3, post_id: '123', sha256: 'file-c', checked_at: 'before', result: 'suggested' },
+    ]);
+  });
+
   it('坏迁移整体回滚，user_version 不变', () => {
     // 复制一份迁移目录，追加一个会失败的迁移
     copyMigrations(dir);

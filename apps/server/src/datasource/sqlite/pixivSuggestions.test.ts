@@ -177,7 +177,7 @@ it.each(['bulk','image'])('人工移除角色后保留其他建议，%s 操作�
   db().prepare("UPDATE images SET source_site='pixiv',source_post_id='123',content_kind='illustration' WHERE id=?").run(id);
   await ds.bulkImages({ids:[img('i27')],action:{type:'assign',characterId:character}});
   pixiv('i27',other);
-  db().prepare("INSERT INTO pixiv_character_checks(image_id,post_id,modified_at,checked_at,result) SELECT id,source_post_id,modified_at,'before','suggested' FROM images WHERE id=?").run(id);
+  db().prepare("INSERT INTO pixiv_character_checks(image_id,post_id,sha256,checked_at,result) SELECT id,source_post_id,sha256,'before','suggested' FROM images WHERE id=?").run(id);
   const before=db().prepare('SELECT * FROM pixiv_character_checks WHERE image_id=?').get(id);
   const removed=via==='bulk'
     ? await ds.bulkImages({ids:[img('i27')],action:{type:'unassign',characterId:character}})

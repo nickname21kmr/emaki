@@ -677,7 +677,8 @@ export class SqliteDataSource {
     const cachedIds = this.ctx.db
       .prepare(
         `SELECT i.id FROM images i JOIN pixiv_character_checks p ON p.image_id = i.id AND p.checked_at IS NULL
-         WHERE i.id IN (SELECT value FROM json_each(?)) AND i.source_post_id IN (SELECT post_id FROM pixiv_artwork_cache)`,
+         WHERE p.post_id=i.source_post_id AND p.sha256=i.sha256
+           AND i.id IN (SELECT value FROM json_each(?)) AND i.source_post_id IN (SELECT post_id FROM pixiv_artwork_cache)`,
       )
       .pluck()
       .all(JSON.stringify(ids)) as number[];
@@ -695,7 +696,7 @@ export class SqliteDataSource {
     // 只挑有缓存的图，client 不会被调用；万一调用了也不联网
     const offline = { artwork: async () => { throw new Error('离线重新匹配不联网'); } };
     try {
-      await syncPixivCharacters(this.ctx, job, this.makeCatalog, offline, 0, undefined, { imageIds: cachedIds });
+      await syncPixivCharacters(this.ctx, job, this.makeCatalog, offline, 0, undefined, { imageIds: cachedIds, recheckCached: true });
     } catch (error) {
       console.warn(`[pixiv-tags] 切换识别方式后本地重新匹配失败：${String(error)}`);
       return 0;

@@ -85,10 +85,10 @@ export async function syncPixivCharacters(
   const pending = options.recheckCached ? `${PIXIV_ELIGIBLE_BASE}
     AND EXISTS (SELECT 1 FROM pixiv_artwork_cache a WHERE a.post_id=i.source_post_id)
     AND EXISTS (SELECT 1 FROM pixiv_character_checks p WHERE p.image_id=i.id
-      AND p.post_id=i.source_post_id AND (
+      AND p.post_id=i.source_post_id AND p.sha256=i.sha256 AND (
         (i.original_at IS NULL AND (p.checked_at IS NULL OR p.result='unmatched' OR (
           p.result='suggested' AND EXISTS (SELECT 1 FROM v_character_suggestions s WHERE s.image_id=i.id)
-        ))) OR (p.result='original' AND i.original_decision='auto' AND i.original_evidence_provider='pixiv' AND p.modified_at=i.modified_at)
+        ))) OR (p.result='original' AND i.original_decision='auto' AND i.original_evidence_provider='pixiv')
       ))` : PIXIV_PENDING;
   const scope=options.imageIds===undefined ? '' : ' AND i.id IN (SELECT value FROM json_each(@imageIds))';
   const scopeParams=options.imageIds===undefined ? {} : {imageIds:JSON.stringify(options.imageIds)};
@@ -112,11 +112,8 @@ export async function syncPixivCharacters(
     }
     return match;
   };
-  const current = db.prepare(`SELECT i.id,i.original_decision FROM v_counted_images i WHERE ${pending} AND i.source_post_id=@postId${scope}`);
-  const completePost = (id: string, result: string) => db.transaction(() => {
-    const at = iso(ctx.clock());
-    for (const row of current.all({...scopeParams,postId:id}) as {id:number}[]) completePixivCheck(db, row.id, at, result);
-  })();
+  const selectCurrent = db.prepare(`SELECT i.id,i.sha256 FROM v_counted_images i WHERE ${pending} AND i.source_post_id=@postId${scope}`);
+  const current = (postId: string) => selectCurrent.all({ ...scopeParams, postId }) as { id: number; sha256: string }[];
   const liveCustom = db.prepare('SELECT 1 FROM characters WHERE id=? AND danbooru_tag IS NULL');
   // 这一轮自动加的（反应 reevaluateAuto 按 Pixiv 证据加的）：这张图上依据 Pixiv、在这一轮开始之后加的
   const roundLinks = db.prepare(`SELECT image_id, character_id, added_at FROM image_characters
@@ -133,21 +130,33 @@ export async function syncPixivCharacters(
     let artwork = cachedArtwork(db, post.id);
     if (options.recheckCached && !artwork) { job.advance(1, summary()); continue; }
     if (artwork) await yieldToEventLoop(undefined, { signal: job.signal });
-    // Cached matching is local and needs no network pacing. Still yield between posts.
-    if (!artwork && requested && intervalMs) await sleep(intervalMs, undefined, { signal: job.signal });
+    // 旧缓存先按新规则复用；只有缺译名且可能确认身份时，才按投稿补取一次。
+    const fetchArtwork = !artwork || (!options.recheckCached && !artwork.englishTagsRequested
+      && matcher(makeCatalog().catalog.verificationRevision)(artwork, true).needsEnglishTranslation);
+    if (fetchArtwork && requested && intervalMs) await sleep(intervalMs, undefined, { signal: job.signal });
     // 同道有更急的任务（扫描、缩略图、查重）：让出。放在间隔之后，续跑时第一个请求离上一个也隔够了；没查的行 checked_at 仍为空
     if (job.shouldYield()) { job.requeue(); return `${summary()}（已让出，稍后继续）`; }
-    job.setMessage(`${artwork ? '匹配已缓存的' : '读取'} Pixiv 标签 ${n + 1}/${posts.length} · ${summary()}`);
+    // 请求回来后同时复核资格与出发时的文件版本。换过文件的待查项留给下一轮。
+    const versions = new Map(current(post.id).map(({ id, sha256 }) => [id, sha256]));
+    if (!versions.size) { job.advance(1, summary()); continue; }
+    const stillCurrent = () => current(post.id).filter(({ id, sha256 }) => versions.get(id) === sha256);
+    const completePost = (result: string) => db.transaction(() => {
+      const at = iso(ctx.clock());
+      for (const { id } of stillCurrent()) completePixivCheck(db, id, at, result);
+    })();
+    job.setMessage(`${fetchArtwork ? '读取' : '匹配已缓存的'} Pixiv 标签 ${n + 1}/${posts.length} · ${summary()}`);
     try {
-      if (!artwork) {
+      if (fetchArtwork) {
         requested++;
         const fetched = await client.artwork(post.id, job.signal);
         job.signal.throwIfAborted();
-        if (fetched) {
-          if (fetched.id !== post.id) throw new Error('Pixiv 返回的作品 ID 不匹配');
-          cacheArtwork(db, fetched, iso(ctx.clock()));
+        if (fetched && fetched.id !== post.id) throw new Error('Pixiv 返回的作品 ID 不匹配');
+        // 补译名时投稿若已下架，已有缓存仍能继续提供原来的标签。
+        artwork = fetched ?? artwork;
+        if (artwork) {
+          artwork = { ...artwork, englishTagsRequested: true };
+          cacheArtwork(db, artwork, iso(ctx.clock()));
         }
-        artwork = fetched ?? undefined;
       } else cached++;
       if (artwork && discover && !options.recheckCached && !hasOriginalTag(artwork)) {
         try {
@@ -169,7 +178,7 @@ export async function syncPixivCharacters(
       console.warn(`[pixiv-tags] ${post.id}: ${String(error)}`);
       if (error instanceof PixivPostError) {
         // Pixiv 明确拒绝这个投稿：记为查过，自动补充不再请求，手动补跑会重试；不算连续失败，免得卡住后面的投稿
-        completePost(post.id, 'skipped');
+        completePost('skipped');
         job.advance(1, summary());
         continue;
       }
@@ -186,7 +195,7 @@ export async function syncPixivCharacters(
     job.signal.throwIfAborted();
     if (!artwork) {
       db.transaction(() => {
-        completePost(post.id, 'unavailable');
+        completePost('unavailable');
         markPixivPostUnavailable(db, post.id, iso(ctx.clock()));
       })();
       unavailable++; job.advance(1, summary()); continue;
@@ -207,7 +216,7 @@ export async function syncPixivCharacters(
     const candidates = pixivCandidates(db, result);
     // 整体替换这几张图的 Pixiv 证据；关联、原创由反应 reevaluateAuto 决定（同一个事务）。job:pixiv-tags 弱刷新
     const rows = ctx.apply(() => {
-      const rows = current.all({ ...scopeParams, postId: post.id }) as { id: number; original_decision: string | null }[];
+      const rows = stillCurrent();
       const wasAuto = new Set(rows.filter((r) => autoOriginal.get(r.id)).map((r) => r.id));
       replaceEvidence(ctx, null, 'pixiv', rows.map((r) => ({ imageId: r.id, at: since, original: isOriginal, characters: candidates })));
       for (const r of rows) completePixivCheck(db, r.id, since, outcome);
