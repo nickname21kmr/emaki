@@ -1,7 +1,7 @@
 import { pluginLabel, type PluginView } from '@emaki/shared';
 import { ExternalLink, Puzzle } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { PageBody, PageHeader } from '@/components/layout/PageHeader';
 import { Button, EmptyState, Spinner } from '@/components/ui';
 import { api } from '@/lib/api';
@@ -18,6 +18,10 @@ import { ViewFrame } from './ViewFrame';
 export function PluginViewPage() {
   const { plugin = '', page = '' } = useParams();
   const navigate = useNavigate();
+  // 从插件接管的链接打开的（link@1，12.7）：交给视图
+  const [params] = useSearchParams();
+  const raw = params.get('link');
+  const link = raw && raw.length <= 2000 && /^https?:\/\//i.test(raw) ? raw : null;
   const { state, ready } = usePlugins();
   const can = useCan('plugins');
   const enable = useMutate((id: string) => api.setPluginEnabled(id, true));
@@ -109,7 +113,7 @@ export function PluginViewPage() {
       <PageHeader title={view.data?.title ?? name} />
       <div className="min-h-0 flex-1 px-8 pb-6 narrow:px-5 compact:px-4 compact:pb-4">
         {view.data ? (
-          <ViewFrame view={view.data} label={view.data.title} />
+          <ViewFrame view={view.data} label={view.data.title} link={link} />
         ) : (
           <div className="flex h-full items-center justify-center text-fg-subtle">
             <Spinner />

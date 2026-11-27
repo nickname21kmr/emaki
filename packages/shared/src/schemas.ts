@@ -28,7 +28,7 @@ import {
   type LibraryRootMode,
   type Rating,
 } from './domain.ts';
-import { NAV_ICONS, NAV_SECTIONS } from './plugins.ts';
+import { NAV_ICONS, NAV_SECTIONS, SOURCE_SITES } from './plugins.ts';
 import { POSEWEAR_POSE_ID } from './pose.ts';
 
 /** shared 不带 DOM / node 的类型：这里只用到 URL 的这几个字段（运行时是全局的 URL） */
@@ -768,6 +768,30 @@ export const InstalledSiteSchema = z.object({
     .max(10),
   script: z.string().max(200).regex(PACKAGE_FILE, '要写包里的文件，比如 site/pixiv.js').regex(/\.js$/, '脚本要是 .js'),
 });
+/** lightbox.toolbar@1（装的插件，docs/plugins.md 12.7）：看图器顶栏的一个按钮，调自己的命令或者打开图片的来源 */
+export const InstalledLightboxButtonSchema = z
+  .object({
+    id: z.string().regex(LOCAL_ID),
+    label: z.string().trim().min(1).max(12),
+    icon: z.enum(NAV_ICONS).default('puzzle'),
+    sources: z.array(z.enum(SOURCE_SITES)).min(1).max(SOURCE_SITES.length).optional(),
+    command: z.string().max(120).optional(),
+    open: z.literal('source').optional(),
+  })
+  .refine((b) => (b.command === undefined) !== (b.open === undefined), { message: 'command 和 open 要写一个，只写一个', path: ['command'] });
+/** link@1（装的插件，12.7）：接管的链接，在插件的网站（App 里）或页面里打开 */
+export const InstalledLinkSchema = z
+  .object({
+    id: z.string().regex(LOCAL_ID),
+    title: z.string().trim().min(1).max(40),
+    urls: z
+      .array(z.string().trim().max(300).regex(/^https:\/\/[a-z0-9.-]+\/[^\s?#]*$/i, '写成 https://域名/路径，路径里的一段可以是 *，比如 https://www.pixiv.net/artworks/*'))
+      .min(1)
+      .max(10),
+    page: z.string().regex(LOCAL_ID).optional(),
+    site: z.string().regex(LOCAL_ID).optional(),
+  })
+  .refine((l) => l.page !== undefined || l.site !== undefined, { message: 'page 和 site 至少写一个（在哪里打开）', path: ['page'] });
 
 const PackageSource = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('folder'), path: z.string().trim().min(1).max(500).describe('这台电脑上的文件夹（开发用：不复制，改了点「重新读取」）') }),

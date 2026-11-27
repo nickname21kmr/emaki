@@ -16,6 +16,8 @@ import {
   type Contributes,
   type CommandContribution,
   type JobKindContribution,
+  type LightboxButtonContribution,
+  type LinkContribution,
   type NavItemContribution,
   type SettingContribution,
   type SiteContribution,
@@ -29,6 +31,8 @@ import {
 import {
   InstalledCommandSchema,
   InstalledJobKindSchema,
+  InstalledLightboxButtonSchema,
+  InstalledLinkSchema,
   InstalledNavItemSchema,
   InstalledPageSchema,
   InstalledSettingSchema,
@@ -200,6 +204,24 @@ export function checkManifest(raw: unknown, emakiVersion: string, opts: { ai?: b
         if (!hostAllowed(new URL(site.url).hostname, site.matches)) problems.push(`网站「${site.title}」的起始页不在它的 matches 里`);
       }
       contributes['site@1'] = r.data as SiteContribution[];
+    } else if (point === 'lightbox.toolbar@1') {
+      const r = InstalledLightboxButtonSchema.array().min(1).max(5).safeParse(value);
+      if (!r.success) {
+        const i = r.error.issues[0]!;
+        problems.push(`lightbox.toolbar@1 的 ${i.path.join('.')}：${i.message}`);
+        continue;
+      }
+      if (new Set(r.data.map((x) => x.id)).size !== r.data.length) problems.push('lightbox.toolbar@1 里有重复的 id');
+      contributes['lightbox.toolbar@1'] = r.data as LightboxButtonContribution[];
+    } else if (point === 'link@1') {
+      const r = InstalledLinkSchema.array().min(1).max(10).safeParse(value);
+      if (!r.success) {
+        const i = r.error.issues[0]!;
+        problems.push(`link@1 的 ${i.path.join('.')}：${i.message}`);
+        continue;
+      }
+      if (new Set(r.data.map((x) => x.id)).size !== r.data.length) problems.push('link@1 里有重复的 id');
+      contributes['link@1'] = r.data as LinkContribution[];
     }
   }
   // 命令、任务由服务端逻辑实现；后台任务要授权「在后台运行」
@@ -208,6 +230,21 @@ export function checkManifest(raw: unknown, emakiVersion: string, opts: { ai?: b
   // 页面对应的网站要有
   for (const pg of contributes['page@1'] ?? [])
     if (pg.site !== undefined && !contributes['site@1']?.some((x) => x.id === pg.site)) problems.push(`页面「${pg.title ?? pg.id}」对应的网站「${pg.site}」在 site@1 里没有`);
+  // 看图器的按钮调的是自己的命令
+  for (const b of contributes['lightbox.toolbar@1'] ?? [])
+    if (b.command !== undefined && !contributes['command@1']?.some((c) => c.name === b.command)) problems.push(`看图器的按钮「${b.label}」调的命令「${b.command}」在 command@1 里没有`);
+  // 接管的链接：网站要授权过、在哪里打开要有
+  const network = (perms.network ?? []).map((h) => h.toLowerCase());
+  for (const l of contributes['link@1'] ?? []) {
+    const site = l.site === undefined ? undefined : contributes['site@1']?.find((x) => x.id === l.site);
+    if (l.page !== undefined && !contributes['page@1']?.some((p) => p.id === l.page)) problems.push(`链接「${l.title}」在页面「${l.page}」里打开，page@1 里没有这一页`);
+    if (l.site !== undefined && !site) problems.push(`链接「${l.title}」在网站「${l.site}」里打开，site@1 里没有它`);
+    for (const u of l.urls) {
+      const host = /^https:\/\/([^/]+)/i.exec(u)![1]!.toLowerCase();
+      if (!hostAllowed(host, network)) problems.push(`链接「${l.title}」的 ${host} 不在 permissions.network 里`);
+      else if (site && !hostAllowed(host, site.matches)) problems.push(`链接「${l.title}」的 ${host} 不在网站「${site.title}」的 matches 里`);
+    }
+  }
   // 导航项指向自己的页面：要有这一页
   for (const n of contributes['nav.item@1'] ?? [])
     if (n.page !== undefined && !contributes['page@1']?.some((p) => p.id === n.page)) problems.push(`导航项「${n.label}」指向的页面「${n.page}」在 page@1 里没有`);

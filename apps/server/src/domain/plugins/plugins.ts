@@ -696,8 +696,14 @@ export class Plugins {
       const m = checked.manifest ?? broken(r.id);
       // 导航项的 id 带上插件的 id，和内置的、别的插件的不撞；指向自己页面的填上地址
       const navs = m.contributes['nav.item@1']?.map((n) => ({ ...n, id: `${r.id}/${n.id}`, ...(n.page !== undefined && { to: pluginPagePath(r.id, n.page) }) }));
+      // 看图器的按钮同样带上插件的 id（和内置的条目同在 disabledEntries 里）
+      const buttons = m.contributes['lightbox.toolbar@1']?.map((b) => ({ ...b, id: `${r.id}/${b.id}` }));
       installed.push({
-        manifest: { ...m, id: r.id, contributes: { ...m.contributes, ...(navs && { 'nav.item@1': navs }) } },
+        manifest: {
+          ...m,
+          id: r.id,
+          contributes: { ...m.contributes, ...(navs && { 'nav.item@1': navs }), ...(buttons && { 'lightbox.toolbar@1': buttons }) },
+        },
         source: ai ? 'mine' : 'installed',
         required: false,
         row: rows.get(r.id),

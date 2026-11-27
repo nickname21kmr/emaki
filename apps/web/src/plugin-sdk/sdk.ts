@@ -23,6 +23,11 @@ export interface EmakiView {
   /** 在 Emaki 里（有 emaki/ 方法）；在 Claude 等别的宿主里是 false */
   readonly inEmaki: boolean;
   /**
+   * 从插件接管的链接（清单里的 link@1，docs/plugins.md 12.7）打开这一页的：那个链接（比如图片来源的作品页），
+   * 视图按它显示；直接打开这一页、在别的宿主里是 null
+   */
+  readonly link: string | null;
+  /**
    * 调一个工具，返回解析好的结果（文本是 JSON 就解析）；工具报错时抛出。写操作没给 operationId 自动补一个。
    * 也可以直接写命令名（带点的，比如插件自己的 pixiv-browser.download），自动换成工具名
    */
@@ -92,7 +97,7 @@ export async function connect(info: { name?: string; version?: string } = {}): P
   const emaki = (app.getHostCapabilities()?.experimental as Record<string, { version?: number }> | undefined)?.emaki;
   const inEmaki = app.getHostVersion()?.name === 'Emaki' && (emaki?.version ?? 0) >= EMAKI_VIEW_API_VERSION;
   const request = (method: string, params: Record<string, unknown> = {}) => app.request({ method, params }, any) as Promise<Json>;
-  const context: { mediaBase: string | null } = inEmaki ? await request(M.context) : { mediaBase: null };
+  const context: { mediaBase: string | null; link?: string | null } = inEmaki ? await request(M.context) : { mediaBase: null };
 
   const call = async (command: string, args: Record<string, unknown> = {}) => {
     const name = command.includes('.') ? commandToolName(command) : command;
@@ -110,6 +115,7 @@ export async function connect(info: { name?: string; version?: string } = {}): P
   return {
     app,
     inEmaki,
+    link: typeof context.link === 'string' ? context.link : null,
     call,
     read: (path) => call('read_library', { path }),
     thumb: (id, width) => media('thumb', id, width),

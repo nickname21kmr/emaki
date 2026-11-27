@@ -225,8 +225,42 @@
       }
       /* 上面的 display 会压过 hidden 属性 */
       #more[hidden],
-      #note[hidden] {
+      #note[hidden],
+      #work[hidden],
+      #grid[hidden] {
         display: none;
+      }
+      /* 一个作品（从图片的来源点进来） */
+      .work-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 10px 16px;
+        margin-bottom: 14px;
+      }
+      .work-head h2 {
+        margin: 0 0 2px;
+        font-size: var(--font-heading-sm-size, 18px);
+      }
+      .work-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+      .state {
+        padding: 2px 8px;
+        border-radius: 6px;
+        font-size: 12px;
+        color: #fff;
+        background: rgba(20, 120, 60, 0.85);
+      }
+      .state.part {
+        background: rgba(176, 110, 0, 0.9);
+      }
+      .card.page {
+        cursor: default;
       }
       .actions {
         position: fixed;
@@ -263,11 +297,13 @@
         <button data-tab="ranking">排行</button>
         <button data-tab="search">搜索</button>
         <button data-tab="following">关注</button>
+        <button data-tab="work" hidden>作品</button>
       </div>
       <span id="controls" class="bar" style="margin: 0"></span>
       <span id="account" class="account"></span>
     </div>
     <p id="note" class="note" hidden></p>
+    <section id="work" hidden></section>
     <div id="grid" class="grid"></div>
     <button id="more" hidden>加载更多</button>
     <div id="actions" class="actions" hidden>
@@ -313,7 +349,17 @@
       let generation = 0;
       const selected = new Set();
 
-      const save = () => view.storage.set('state', state).catch(() => {});
+      // 从图片的来源（Pixiv 作品页的链接）点进来的：先显示这个作品（不记住，下次打开还是原来的标签）
+      const workId = /^https:\/\/www\.pixiv\.net\/(?:[a-z]{2}\/)?artworks\/(\d{1,12})(?:[/?#]|$)/i.exec(view.link ?? '')?.[1] ?? null;
+      let work = null;
+      if (workId) {
+        state.tab = 'work';
+        document.querySelector('[data-tab="work"]').hidden = false;
+      }
+      /** 缩略图（Pixiv 的地址 → 插件文件夹里的文件），重画以后接着用 */
+      const thumbFiles = {};
+
+      const save = () => view.storage.set('state', { ...state, tab: state.tab === 'work' ? (saved.tab ?? 'ranking') : state.tab }).catch(() => {});
       const note = (text, error = false) => {
         $('note').hidden = !text;
         $('note').className = error ? 'note error' : 'note';
@@ -377,7 +423,9 @@
       function renderControls() {
         for (const b of document.querySelectorAll('[data-tab]')) b.setAttribute('aria-pressed', String(b.dataset.tab === state.tab));
         const c = $('controls');
-        if (state.tab === 'ranking') {
+        if (state.tab === 'work') {
+          c.innerHTML = '';
+        } else if (state.tab === 'ranking') {
           c.innerHTML = `<select id="mode" aria-label="哪个榜">${RANKING_MODES.map(
             ([v, l]) =>
               `<option value="${v}" ${v === state.mode ? 'selected' : ''} ${v.endsWith('_r18') && !status.session ? 'disabled' : ''}>${l}</option>`,
@@ -438,6 +486,13 @@
         note(null);
         renderControls();
         renderActions();
+        $('work').hidden = state.tab !== 'work';
+        $('grid').hidden = state.tab === 'work';
+        if (state.tab === 'work') {
+          next = null;
+          $('more').hidden = true;
+          return loadWork();
+        }
         if (state.tab === 'search' && !state.word) {
           next = null;
           $('more').hidden = true;
@@ -512,20 +567,81 @@
           const urls = list
             .slice(i, i + 30)
             .map((it) => it.thumb)
-            .filter(Boolean);
-          let files = {};
-          try {
-            files = (await view.call('pixiv-browser.thumbs', { urls })).files;
-          } catch {
-            continue;
+            .filter((u) => u && !thumbFiles[u]);
+          if (urls.length) {
+            try {
+              Object.assign(thumbFiles, (await view.call('pixiv-browser.thumbs', { urls })).files);
+            } catch {
+              continue;
+            }
           }
           if (gen !== generation) return;
-          for (const img of document.querySelectorAll('img[data-thumb]')) {
-            const rel = files[img.dataset.thumb];
-            const src = rel && view.file(rel);
-            if (src && !img.src) img.src = src;
-          }
+          showThumbs();
         }
+      }
+      function showThumbs() {
+        for (const img of document.querySelectorAll('img[data-thumb]')) {
+          const rel = thumbFiles[img.dataset.thumb];
+          const src = rel && view.file(rel);
+          if (src && !img.src) img.src = src;
+        }
+      }
+
+      // ---------------------------------------------------------------- 一个作品（从图片的来源点进来）
+
+      async function loadWork() {
+        const gen = generation;
+        $('work').innerHTML = '<p class="muted">加载中…</p>';
+        try {
+          work = await view.call('pixiv-browser.work', { id: workId });
+        } catch (e) {
+          if (gen !== generation) return;
+          $('work').innerHTML = '';
+          const msg = String(e.message ?? e);
+          note(/登录/.test(msg) ? `${esc(msg.replace(/。$/, ''))}：${LOGIN}` : esc(msg), true);
+          return;
+        }
+        if (gen !== generation) return;
+        drawWork();
+        void loadThumbs(work.pageThumbs, gen);
+      }
+
+      function drawWork() {
+        const w = work;
+        const missing = w.pages - (w.have ?? 0);
+        const stateText = !w.have ? '' : w.downloaded ? (w.pages > 1 ? `已经下全了（${w.pages} 张）` : '已下载') : `已下载 ${w.have}/${w.pages} 张`;
+        const action = !w.have ? '下载这个作品' : w.downloaded ? '' : `补齐剩下的 ${missing} 张`;
+        const kind = w.type === 'ugoira' ? '动图' : `${w.pages} 张`;
+        $('work').innerHTML = `
+          <div class="work-head">
+            <div>
+              <h2>${esc(w.title)}</h2>
+              <div class="muted">${esc(w.user)} · ${kind}${w.r18 ? ' · R-18' : ''}${w.ai ? ' · AI' : ''}</div>
+            </div>
+            <div class="work-actions">
+              ${stateText ? `<span class="state ${w.downloaded ? '' : 'part'}">${esc(stateText)}</span>` : ''}
+              ${action ? `<button id="wdl" class="primary">${esc(action)}</button>` : ''}
+              <button id="wopen">在 Pixiv 网站打开 ↗</button>
+            </div>
+          </div>
+          <div class="grid">${w.pageThumbs
+            .map(
+              (p, i) => `<div class="card page"><div class="pic"><img alt="" data-thumb="${esc(p.thumb ?? '')}" /></div>
+                <div class="u"><span>${w.type === 'ugoira' ? '动图（第一帧）' : `第 ${i + 1} 张`}</span></div></div>`,
+            )
+            .join('')}</div>`;
+        showThumbs();
+        $('wopen').onclick = () => view.app.openLink({ url: `https://www.pixiv.net/artworks/${w.id}` });
+        if ($('wdl'))
+          $('wdl').onclick = async () => {
+            $('wdl').disabled = true;
+            try {
+              note(esc((await view.call('pixiv-browser.download', { ids: [w.id] })).message));
+            } catch (e) {
+              note(esc(e.message ?? e), true);
+              $('wdl').disabled = false;
+            }
+          };
       }
 
       function renderActions() {
@@ -598,6 +714,15 @@
         if (refreshing) return;
         refreshing = setTimeout(async () => {
           refreshing = null;
+          if (state.tab === 'work') {
+            if (!work) return;
+            const r = await view.call('pixiv-browser.status', { ids: [work.id] }).catch(() => null);
+            const have = r?.works?.[work.id]?.have ?? 0;
+            const full = !!r?.downloaded.includes(work.id);
+            if (!r || (have === (work.have ?? 0) && full === !!work.downloaded)) return;
+            work = { ...work, have, downloaded: full };
+            return drawWork();
+          }
           const ids = items.map((it) => it.id);
           if (!ids.length) return;
           const asked = ids.slice(-500);

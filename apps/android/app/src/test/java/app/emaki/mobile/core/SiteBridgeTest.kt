@@ -28,6 +28,20 @@ class SiteBridgeTest {
     }
 
     @Test
+    fun `打开到网站上的地址：只认这个网站的 https 地址，别的去起始页`() {
+        val s = SiteBridge.parseSites(sites).single()
+        assertEquals("https://www.pixiv.net/", s.startUrl(null))
+        assertEquals("https://www.pixiv.net/", s.startUrl(""))
+        assertEquals("https://www.pixiv.net/artworks/123", s.startUrl("https://www.pixiv.net/artworks/123"))
+        assertEquals("https://www.pixiv.net/en/artworks/123?x=1", s.startUrl("https://www.pixiv.net/en/artworks/123?x=1"))
+        assertEquals("https://www.pixiv.net/", s.startUrl("http://www.pixiv.net/artworks/123"))
+        assertEquals("https://www.pixiv.net/", s.startUrl("https://evil.example/artworks/123"))
+        assertEquals("https://www.pixiv.net/", s.startUrl("https://u:p@www.pixiv.net/artworks/123"))
+        assertEquals("https://www.pixiv.net/", s.startUrl("javascript:alert(1)"))
+        assertEquals("https://www.pixiv.net/", s.startUrl("https://www.pixiv.net/a b"))
+    }
+
+    @Test
     fun `工具名和 shared 的 commandToolName 一样`() {
         assertEquals("pixiv-browser_download", SiteBridge.toolName("pixiv-browser.download"))
         assertEquals("curation_set_favorite", SiteBridge.toolName("curation.setFavorite"))

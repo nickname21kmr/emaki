@@ -287,20 +287,30 @@ function PluginRow({ plugin: p, can }: { plugin: PluginInfo; can: boolean }) {
           width={180}
           trigger={<IconButton label="更多" size="sm"><Ellipsis /></IconButton>}
         >
-          <MenuItem icon={<PencilLine />} onSelect={() => setDialog('rename')}>
-            改名…
-          </MenuItem>
-          <MenuItem onSelect={() => navigate(`/plugins/${encodeURIComponent(p.id)}`)}>详情</MenuItem>
-          {update.available && (
-            <MenuItem icon={<RefreshCw />} onSelect={update.start}>
-              {update.label}
-            </MenuItem>
-          )}
-          {p.source !== 'builtin' && (
-            <MenuItem danger icon={<Trash2 />} onSelect={() => setDialog('remove')}>
-              {p.source === 'installed' ? '卸载…' : '删除…'}
-            </MenuItem>
-          )}
+          {/* 按登记的顺序（blocks/slots.ts 的 menu.pluginRow） */}
+          <Slot
+            id="menu.pluginRow"
+            render={{
+              'pluginRow.rename': () => (
+                <MenuItem icon={<PencilLine />} onSelect={() => setDialog('rename')}>
+                  改名…
+                </MenuItem>
+              ),
+              'pluginRow.detail': () => <MenuItem onSelect={() => navigate(`/plugins/${encodeURIComponent(p.id)}`)}>详情</MenuItem>,
+              'pluginRow.update': () =>
+                update.available && (
+                  <MenuItem icon={<RefreshCw />} onSelect={update.start}>
+                    {update.label}
+                  </MenuItem>
+                ),
+              'pluginRow.remove': () =>
+                p.source !== 'builtin' && (
+                  <MenuItem danger icon={<Trash2 />} onSelect={() => setDialog('remove')}>
+                    {p.source === 'installed' ? '卸载…' : '删除…'}
+                  </MenuItem>
+                ),
+            }}
+          />
         </Menu>
       )}
       <RenameDialog plugin={p} open={dialog === 'rename'} onOpenChange={(o) => !o && setDialog(null)} />

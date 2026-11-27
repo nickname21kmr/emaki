@@ -16,6 +16,11 @@ export interface SlotEntry {
   readonly id: string;
   /** 给人看的名字（以后的布局设置、「谁改了哪里」里显示） */
   readonly title: string;
+  /**
+   * 快捷键（lib/hotkeys 的写法：f、space、esc）。按钮上的提示和按键都从这里取（useEntryHotkey、shortcutOf），
+   * 条目不画（停用的插件拥有的）时按键也不响应
+   */
+  readonly key?: string;
 }
 
 export interface SlotDef {
@@ -24,12 +29,14 @@ export interface SlotDef {
   /** 这一处叫什么 */
   readonly title: string;
   readonly entries: readonly SlotEntry[];
+  /** 装的插件能往这一处加条目（docs/plugins.md 12.7）：排在这个条目前面（不写就排在最后） */
+  readonly pluginsBefore?: string;
 }
 
 export const SLOT_POINTS = ['page.action@1', 'menu.item@1', 'lightbox.toolbar@1', 'lightbox.panel@1'] as const;
 export type SlotPoint = (typeof SLOT_POINTS)[number];
 
-const e = <const Id extends string>(id: Id, title: string) => ({ id, title }) as const;
+const e = <const Id extends string>(id: Id, title: string, key?: string) => ({ id, title, ...(key && { key }) }) as const;
 
 export const SLOTS = {
   // ---------------------------------------------------------------- 看图器
@@ -37,21 +44,23 @@ export const SLOTS = {
     point: 'lightbox.toolbar@1',
     title: '看图器顶栏',
     entries: [
-      e('lightbox.slideshow', '暂停 / 继续放映'),
-      e('lightbox.kind', '归入…'),
+      e('lightbox.slideshow', '暂停 / 继续放映', 'space'),
+      e('lightbox.kind', '归入…', 'c'),
       e('lightbox.assistant', '问 AI 助手'),
-      e('lightbox.info', '显示 / 收起信息'),
-      e('lightbox.close', '关闭'),
+      e('lightbox.info', '显示 / 收起信息', 'i'),
+      e('lightbox.close', '关闭', 'esc'),
     ],
+    // 装的插件的按钮（lightbox.toolbar@1）排在「信息」「关闭」前面
+    pluginsBefore: 'lightbox.info',
   },
   'lightbox.actions': {
     point: 'lightbox.panel@1',
     title: '看图器信息栏的操作',
     entries: [
-      e('lightbox.favorite', '收藏'),
-      e('lightbox.original', '原创'),
+      e('lightbox.favorite', '收藏', 'f'),
+      e('lightbox.original', '原创', 'o'),
       e('lightbox.reveal', '在文件夹中显示'),
-      e('lightbox.exclude', '排除'),
+      e('lightbox.exclude', '排除', 'e'),
       e('lightbox.trash', '移到回收站'),
     ],
   },
@@ -157,6 +166,21 @@ export const SLOTS = {
       e('group.dismiss', '解散组图'),
     ],
   },
+  'menu.artist': {
+    point: 'menu.item@1',
+    title: '按画师看图时标题旁的「…」',
+    entries: [e('artist.split', '拆开…'), e('artist.merge', '合并到…'), e('artist.restoreAuto', '恢复自动合并')],
+  },
+  'menu.pluginRow': {
+    point: 'menu.item@1',
+    title: '「插件」页一行的「⋯」',
+    entries: [e('pluginRow.rename', '改名…'), e('pluginRow.detail', '详情'), e('pluginRow.update', '检查更新 / 重新读取'), e('pluginRow.remove', '删除 / 卸载…')],
+  },
+  'menu.sidebar': {
+    point: 'menu.item@1',
+    title: '侧栏的右键菜单',
+    entries: [e('sidebar.pageOrder', '调整页面顺序…')],
+  },
 } as const satisfies Record<string, SlotDef>;
 
 export type SlotId = keyof typeof SLOTS;
@@ -167,3 +191,13 @@ export type SlotEntryId<S extends SlotId> = (typeof SLOTS)[S]['entries'][number]
 export const ALL_SLOT_ENTRIES: readonly (SlotEntry & { slot: SlotId; point: SlotPoint })[] = (Object.entries(SLOTS) as [SlotId, SlotDef][]).flatMap(
   ([slot, d]) => d.entries.map((x) => ({ ...x, slot, point: d.point })),
 );
+
+/** 条目的快捷键（登记的写法），没有是 undefined */
+export const entryKey = (id: string): string | undefined => ALL_SLOT_ENTRIES.find((x) => x.id === id)?.key;
+
+/** 条目的快捷键给人看的样子（按钮的提示里）：space → Space、esc → Esc、f → F */
+export function shortcutOf(id: string): string | undefined {
+  const k = entryKey(id);
+  if (!k) return undefined;
+  return k.length === 1 ? k.toUpperCase() : k[0]!.toUpperCase() + k.slice(1);
+}

@@ -9,6 +9,7 @@ import {
   Compass,
   Copy,
   Download,
+  ExternalLink,
   Folder,
   Heart,
   House,
@@ -30,6 +31,7 @@ import { cn } from '@/lib/cn';
 import { useLiveJobs, useRunningJobs } from '@/lib/events';
 import { formatCompact, formatCount } from '@/lib/format';
 import { useHealth, useSummary } from '@/lib/queries';
+import { Slot } from '@/blocks/Slot';
 import { Badge, ContextMenu, ContextMenuItem, RollingNumber, Tooltip } from '@/components/ui';
 import { Emblem } from '@/components/ui/Emblem';
 import { usePlugins } from '@/lib/plugins';
@@ -71,6 +73,7 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   compass: Compass,
   download: Download,
   heart: Heart,
+  'external-link': ExternalLink,
 };
 
 /** 导航项的图标（侧栏、底部标签栏、命令面板同一套） */
@@ -202,9 +205,17 @@ export function Sidebar() {
     <ContextMenu
       disabled={!can('plugins')}
       content={
-        <ContextMenuItem icon={<ListOrdered />} onSelect={() => navigate('/plugins?view=pages')}>
-          调整页面顺序…
-        </ContextMenuItem>
+        // 按登记的顺序（blocks/slots.ts 的 menu.sidebar）
+        <Slot
+          id="menu.sidebar"
+          render={{
+            'sidebar.pageOrder': () => (
+              <ContextMenuItem icon={<ListOrdered />} onSelect={() => navigate('/plugins?view=pages')}>
+                调整页面顺序…
+              </ContextMenuItem>
+            ),
+          }}
+        />
       }
     >
       <aside className="flex w-[76px] shrink-0 flex-col items-center overflow-x-hidden overflow-y-auto py-4 scrollbar-none compact:hidden touch-low:py-2 short:box-content short:py-2 short:pl-[env(safe-area-inset-left)]">

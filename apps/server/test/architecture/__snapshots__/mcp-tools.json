@@ -1696,7 +1696,8 @@
             "chart",
             "compass",
             "download",
-            "heart"
+            "heart",
+            "external-link"
           ]
         }
       },

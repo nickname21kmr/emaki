@@ -1,3 +1,4 @@
+import { useCanVisit } from '@/pages';
 import { collectionTitle, type CollectionKind, type ImageDetail } from '@emaki/shared';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
@@ -15,13 +16,25 @@ import { useQueryClient } from '@tanstack/react-query';
  * 都不在 →「收进组图…」，不在根目录的再给「把这个文件夹成册…」。
  */
 export function PanelCollection({ detail: d, onNavigate }: { detail: ImageDetail; onNavigate: () => void }) {
+  const canVisit = useCanVisit();
   const c = d.collection;
   if (c) {
+    const to = c.kind === 'group' ? `/collections/${c.id}` : `/collections/${c.id}/read?p=${c.pageNo}`;
+    const text = (
+      <>
+        《{collectionTitle(c)}》第 {c.pageNo} / {c.pageCount} {c.kind === 'group' ? '张' : '页'}
+      </>
+    );
     return (
       <span className="inline-flex flex-wrap items-center gap-1.5">
-        <Link to={c.kind === 'group' ? `/collections/${c.id}` : `/collections/${c.id}/read?p=${c.pageNo}`} onClick={onNavigate} className="text-fg transition-colors hover:text-shu">
-          《{collectionTitle(c)}》第 {c.pageNo} / {c.pageCount} {c.kind === 'group' ? '张' : '页'}
-        </Link>
+        {/* 「合集」停用了：照样写在哪一本，不链接（docs/plugins.md 9.4） */}
+        {canVisit(to) ? (
+          <Link to={to} onClick={onNavigate} className="text-fg transition-colors hover:text-shu">
+            {text}
+          </Link>
+        ) : (
+          <span className="text-fg">{text}</span>
+        )}
         <Seal glyph={COLLECTION_META[c.kind].glyph} size={16} />
       </span>
     );
@@ -57,20 +70,25 @@ function AddToGroup({ imageId }: { imageId: string }) {
 function MakeCollection({ imageId, folder, onNavigate }: { imageId: string; folder: string; onNavigate: () => void }) {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
+  const canVisit = useCanVisit();
   const client = useQueryClient();
   const create = useMutate((kind: CollectionKind) => api.createCollection({ fromImageId: imageId, kind }), {
     silent: true,
     onSuccess: (r) => {
       setOpen(false);
       const token = r.undoToken;
+      const to = `/collections/${r.collection.id}`;
       toast.success(r.message, {
-        action: {
-          label: '去看看',
-          onClick: () => {
-            onNavigate();
-            navigate(`/collections/${r.collection.id}`);
+        // 「合集」停用了就不给「去看看」
+        ...(canVisit(to) && {
+          action: {
+            label: '去看看',
+            onClick: () => {
+              onNavigate();
+              navigate(to);
+            },
           },
-        },
+        }),
         ...(token && { cancel: { label: '撤销', onClick: () => void undo(token, client) } }),
       });
     },

@@ -160,6 +160,34 @@ export async function activate(emaki) {
     return { items: await remember(items), next: r.page?.isLastPage ? null : page + 1 };
   });
 
+  // 一个作品（电脑上从图片的来源点进来：Emaki 的「Pixiv」页显示这个作品的每一页、图库里有几张、补齐）
+  emaki.commands.handle('work', async ({ id }) => {
+    const w = await api(`/ajax/illust/${id}?lang=zh`);
+    const type = typeOf(Number(w.illustType));
+    const count = type === 'ugoira' ? 1 : Number(w.pageCount) || 1;
+    let pages = [{ thumb: w.urls?.small ?? w.urls?.thumb ?? null, width: w.width, height: w.height }];
+    if (count > 1) {
+      const ps = await api(`/ajax/illust/${id}/pages?lang=zh`);
+      if (Array.isArray(ps) && ps.length) pages = ps.map((p) => ({ thumb: p.urls?.small ?? p.urls?.thumb_mini ?? null, width: p.width, height: p.height }));
+    }
+    const [item] = await remember([
+      {
+        id: String(id),
+        title: w.title,
+        user: w.userName,
+        userId: String(w.userId),
+        pages: count,
+        type,
+        r18: Number(w.xRestrict) > 0,
+        ai: w.aiType === 2,
+        thumb: pages[0]?.thumb ?? null,
+        width: w.width,
+        height: w.height,
+      },
+    ]);
+    return { ...item, date: w.createDate ?? null, tags: (w.tags?.tags ?? []).map((t) => t.tag).slice(0, 20), pageThumbs: pages };
+  });
+
   // ---------------------------------------------------------------- 登录
 
   // 正在登录（开着登录窗口）、上次登录失败的原因

@@ -1,6 +1,7 @@
 import type { ImageDetail, ImageSource, UpdateImageBody } from '@emaki/shared';
 import { ExternalLink } from 'lucide-react';
 import { useState } from 'react';
+import { SourceLink } from '@/features/plugins/PluginLinks';
 import { api } from '@/lib/api';
 import { useMutate } from '@/lib/queries';
 
@@ -25,10 +26,10 @@ export function PanelSource({ detail, editable = true }: { detail: ImageDetail; 
           {source ? (
             <>
               {source.url ? (
-                <a href={source.url} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1 hover:text-shu-fg hover:underline">
+                <SourceLink href={source.url} className="inline-flex max-w-full items-center gap-1 hover:text-shu-fg hover:underline">
                   <span className="truncate">{SITE_LABEL[source.site]}{source.postId && ` #${source.postId}`}</span>
                   <ExternalLink className="size-3 shrink-0" />
-                </a>
+                </SourceLink>
               ) : SITE_LABEL[source.site]}
               {source.artist && <div className="mt-0.5 break-words text-fg-muted">作者 {source.artist}</div>}
             </>

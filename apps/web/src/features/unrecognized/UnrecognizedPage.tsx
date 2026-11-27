@@ -36,8 +36,10 @@ export function UnrecognizedPage() {
   // 整体的汇总（大类页签用）；分段、印样用按插画 / 漫画筛过的 p.summary
   const summary = useUnrecognizedSummary();
   const { data: stats } = useStats();
-  const pendingBooks = stats?.pendingCollectionCount ?? 0;
-  const p = useUnrecognizedParams(pendingBooks);
+  // 「合集」停用了（docs/plugins.md 9.4）：没有「成册待整理」这一栏（里面的每一本都通到合集页）
+  const books = useCanVisit()('/collections');
+  const pendingBooks = books ? (stats?.pendingCollectionCount ?? 0) : 0;
+  const p = useUnrecognizedParams(pendingBooks, books);
   const viewKey = `${p.bucket}:${p.artKind ?? 'all'}`;
   const allow = useAllowedActions(HEADER_NEEDS);
 

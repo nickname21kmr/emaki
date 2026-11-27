@@ -150,13 +150,40 @@ const fakePixiv: RuntimeOptions['fetch'] = async (url, init) => {
   const pages = /^\/ajax\/illust\/(\d+)\/pages$/.exec(u.pathname);
   // 33300003、152442850 是动图：「页」是第一帧
   const isUgoira = (id: string) => id === '33300003' || id === '152442850';
+  // 一个作品（电脑上从图片的来源点进来，pixiv-browser.work）
+  const illust = /^\/ajax\/illust\/(\d+)$/.exec(u.pathname);
+  if (u.hostname === 'www.pixiv.net' && illust && illust[1] === '11100001')
+    return json({
+      error: false,
+      body: {
+        title: '两张的',
+        userName: '画师甲',
+        userId: '9',
+        illustType: 0,
+        pageCount: 2,
+        xRestrict: 0,
+        aiType: 1,
+        width: 1200,
+        height: 1600,
+        createDate: '2026-11-24T00:00:00+09:00',
+        urls: { small: 'https://i.pximg.net/c/540x540_70/img-master/img/11100001_p0_master1200.jpg' },
+        tags: { tags: [{ tag: 'オリジナル' }] },
+      },
+    });
   if (u.hostname === 'www.pixiv.net' && pages) {
     const id = pages[1]!;
     if (isUgoira(id)) return json({ error: false, body: [{ urls: { original: `https://i.pximg.net/img-original/img/${id}_ugoira0.jpg` } }] });
     const n = id === '11100001' ? 2 : 1;
     return json({
       error: false,
-      body: Array.from({ length: n }, (_, i) => ({ urls: { original: `https://i.pximg.net/img-original/img/${id}_p${i}.png` } })),
+      body: Array.from({ length: n }, (_, i) => ({
+        urls: {
+          original: `https://i.pximg.net/img-original/img/${id}_p${i}.png`,
+          small: `https://i.pximg.net/c/540x540_70/img-master/img/${id}_p${i}_master1200.jpg`,
+        },
+        width: 1200,
+        height: 1600,
+      })),
     });
   }
   const meta = /^\/ajax\/illust\/(\d+)\/ugoira_meta$/.exec(u.pathname);
@@ -251,6 +278,13 @@ describe('附带的 Pixiv 浏览', () => {
     const before = await ds.registry.query<PluginsState>('plugins.state', {});
     expect(before.plugins.some((p) => p.id === ID)).toBe(false);
     await enable();
+    // 接管 Pixiv 作品页的链接、看图器上「在 Pixiv 打开」（docs/plugins.md 12.7；按钮的 id 带上插件的 id）
+    const info = (await ds.registry.query<PluginsState>('plugins.state', {})).plugins.find((p) => p.id === ID)!;
+    expect(info.problems).toEqual([]);
+    expect(info.contributes['link@1']).toEqual([
+      expect.objectContaining({ urls: ['https://www.pixiv.net/artworks/*', 'https://www.pixiv.net/*/artworks/*'], page: 'browse', site: 'pixiv' }),
+    ]);
+    expect(info.contributes['lightbox.toolbar@1']).toEqual([{ id: `${ID}/open`, label: '在 Pixiv 打开', icon: 'external-link', sources: ['pixiv'], open: 'source' }]);
     const r = await call<{
       items: { id: string; title: string; pages: number; type: string; thumb: string; downloaded: boolean }[];
       next: number;
@@ -324,7 +358,7 @@ describe('附带的 Pixiv 浏览', () => {
     await expectUgoira('33300003');
     // 导入记成插件；临时文件删掉了
     expect(ds.ctx.db.prepare("SELECT DISTINCT actor FROM command_log WHERE command = 'library.import'").pluck().all()).toEqual([
-      'plugin:pixiv-browser@0.5.0',
+      'plugin:pixiv-browser@0.6.0',
     ]);
     expect(readdirSync(ds.plugins.dataDir(ID))).not.toContain('dl');
     // 页面上标「已下载」
@@ -360,6 +394,13 @@ describe('附带的 Pixiv 浏览', () => {
     for (const f of readdirSync(other)) utimesSync(path.join(other, f), before, before);
     await scan();
     const s = await call<{ downloaded: string[]; works: Record<string, unknown> }>('pixiv-browser.status', { ids: ['11100001', '22200002', '33300003'] });
+    // 电脑上从图片的来源点进来：这个作品的每一页、图库里有几张
+    const work = await call('pixiv-browser.work', { id: '11100001' });
+    expect(work).toMatchObject({ id: '11100001', title: '两张的', user: '画师甲', pages: 2, type: 'illust', have: 1, downloaded: false, tags: ['オリジナル'] });
+    expect(work.pageThumbs.map((p: { thumb: string }) => p.thumb)).toEqual([
+      'https://i.pximg.net/c/540x540_70/img-master/img/11100001_p0_master1200.jpg',
+      'https://i.pximg.net/c/540x540_70/img-master/img/11100001_p1_master1200.jpg',
+    ]);
     expect(s.downloaded).toEqual(['33300003']);
     expect(s.works).toEqual({ '11100001': { have: 1, pages: 2 }, '33300003': { have: 1, pages: 1 } });
     expect(
@@ -380,6 +421,7 @@ describe('附带的 Pixiv 浏览', () => {
       downloaded: ['11100001'],
       works: { '11100001': { have: 2, pages: 2 } },
     });
+    expect(await call('pixiv-browser.work', { id: '11100001' })).toMatchObject({ have: 2, downloaded: true });
   });
 
   it('只给作品 id、不知道是不是动图：从第一页认出来，存成 HTML 动图，不把第一帧当静态图下', async () => {

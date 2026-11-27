@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { slotEntries } from './Slot';
-import { ALL_SLOT_ENTRIES, SLOTS, type SlotId } from './slots';
+import { ALL_SLOT_ENTRIES, shortcutOf, SLOTS, type SlotId } from './slots';
 
 const WEB = path.resolve(import.meta.dirname, '..');
 const sources = (dir = WEB): string[] =>
@@ -25,6 +25,21 @@ describe('界面上的条目（blocks/slots.ts，docs/plugins.md 9.2，E3）', (
   it('每一处都有页面按登记来画（<Slot id="…"> 或 slotEntries）', () => {
     const used = (id: string) => files.some(({ text }) => text.includes(`id="${id}"`) || text.includes(`slotEntries('${id}'`));
     expect((Object.keys(SLOTS) as SlotId[]).filter((id) => !used(id))).toEqual([]);
+  });
+
+  it('看图器的快捷键登记在条目上（按钮的提示、按键一处定），页面里不再另写这些按键', () => {
+    const lb = ALL_SLOT_ENTRIES.filter((x) => x.id.startsWith('lightbox.') && x.key);
+    const keys = lb.map((x) => x.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(lb.map((x) => x.id)).toEqual(expect.arrayContaining(['lightbox.favorite', 'lightbox.exclude', 'lightbox.original', 'lightbox.kind', 'lightbox.info']));
+    const text = files.find(({ f }) => f.replaceAll('\\', '/').endsWith('components/media/Lightbox.tsx'))!.text;
+    for (const x of lb) expect([x.id, text.includes(`useHotkey('${x.key}'`)]).toEqual([x.id, false]);
+    expect([shortcutOf('lightbox.slideshow'), shortcutOf('lightbox.close'), shortcutOf('lightbox.favorite'), shortcutOf('lightbox.reveal')]).toEqual([
+      'Space',
+      'Esc',
+      'F',
+      undefined,
+    ]);
   });
 
   it('页头的操作都走登记：<PageHeader>、<DetailHeader> 的 actions 只能是 <Slot>', () => {

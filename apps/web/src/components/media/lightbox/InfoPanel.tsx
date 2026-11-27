@@ -26,6 +26,7 @@ import { TRASH_HINT, useCharacter, useSettings } from '@/lib/queries';
 import { CharacterAvatar } from '@/features/gallery/CharacterPicker';
 import { PoseInfoRowLazy } from '@/features/pose/lazy';
 import { Slot, slotEntries, type SlotRenderers } from '@/blocks/Slot';
+import { shortcutOf } from '@/blocks/slots';
 import { useDisabledEntries } from '@/lib/plugins';
 
 const RATINGS = Object.keys(RATING_LABEL) as Rating[];
@@ -153,7 +154,7 @@ function ActionTiles({ base, actions }: { base: ImageItem | undefined; actions: 
           icon={<Heart />}
           label={actions.favorite ? '已收藏' : '收藏'}
           tooltip={actions.favorite ? '取消收藏' : '收藏'}
-          shortcut="F"
+          shortcut={shortcutOf('lightbox.favorite')}
           active={actions.favorite}
           disabled={!base}
           onClick={actions.toggleFavorite}
@@ -166,7 +167,7 @@ function ActionTiles({ base, actions }: { base: ImageItem | undefined; actions: 
           icon={<Sparkles />}
           label={actions.original ? '已归原创' : '归为原创'}
           tooltip={actions.original ? '移出原创' : '归为原创：画师自己的原创角色，不再出现在未识别'}
-          shortcut="O"
+          shortcut={shortcutOf('lightbox.original')}
           active={actions.original}
           disabled={!base || (base.kind !== 'illustration' && base.kind !== 'comic')}
           onClick={actions.toggleOriginal}
@@ -183,7 +184,7 @@ function ActionTiles({ base, actions }: { base: ImageItem | undefined; actions: 
           icon={<Ban />}
           label="排除"
           tooltip="排除：不再出现在图库和统计里，文件不会被删除"
-          shortcut="E"
+          shortcut={shortcutOf('lightbox.exclude')}
           pending={actions.busy.exclude}
           disabled={!base || !!actions.leaving}
           onClick={actions.exclude}

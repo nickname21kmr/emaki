@@ -7,6 +7,7 @@ import {
   OVERRIDES,
   type FolderRequest,
   type Grant,
+  type ImageSource,
   type OverrideKey,
   type PluginManifest,
   type PluginPermissions,
@@ -23,6 +24,8 @@ export interface GrantLine {
   /** 要你选位置的文件夹 */
   folder?: FolderRequest;
 }
+
+const SOURCE_LABEL: Record<ImageSource['site'], string> = { pixiv: 'Pixiv', twitter: 'X / Twitter', danbooru: 'Danbooru', fanbox: 'FANBOX', other: '其他网站' };
 
 /** 这些范围会动用户已有的东西，标出来 */
 const DANGER_SCOPES: readonly Scope[] = ['organize-files', 'rules', 'settings'];
@@ -44,6 +47,22 @@ export function contributionLines(m: PluginManifest): GrantLine[] {
       key: `site:${site.id}`,
       text: `在 App 里打开 ${site.title} 时，往网站上加它的按钮`,
       detail: `只在 ${site.matches.join('、')} 上；网站原来的样子不动，按钮经 Emaki 调它自己的命令`,
+    });
+  for (const b of m.contributes['lightbox.toolbar@1'] ?? [])
+    if (b.label)
+      lines.push({
+        key: `lightbox:${b.id}`,
+        text: `在看图器上加「${b.label}」`,
+        detail: [
+          b.sources?.length ? `只在来源是 ${b.sources.map((x) => SOURCE_LABEL[x]).join('、')} 的图上` : '每张图上都有',
+          b.open === 'source' ? '点了打开这张图的来源' : '点了把这张图的文件名和来源交给它',
+        ].join('；'),
+      });
+  for (const l of m.contributes['link@1'] ?? [])
+    lines.push({
+      key: `link:${l.id}`,
+      text: `由它打开${l.title}的链接`,
+      detail: `${l.urls.join('、')}：点了在它的${[l.site && '网站（App 里）', l.page && '页面'].filter(Boolean).join('或')}里打开；按住 Ctrl 点照旧去浏览器`,
     });
   if (m.server)
     lines.push({

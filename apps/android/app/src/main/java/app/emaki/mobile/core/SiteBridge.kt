@@ -28,6 +28,16 @@ data class Site(
             h == m || h.endsWith(".$m")
         }
     }
+
+    /**
+     * 打开时先去哪：网页要打开到网站上的某个地址（插件接管的链接 link@1，比如图片来源的 Pixiv 作品页，docs/plugins.md 12.7），
+     * 是这个网站的 https 地址就去那里，别的（不是 https、不是这个网站的、写错的）都去起始页
+     */
+    fun startUrl(requested: String?): String {
+        if (requested.isNullOrBlank()) return url
+        val uri = runCatching { java.net.URI(requested) }.getOrNull() ?: return url
+        return if (uri.scheme.equals("https", ignoreCase = true) && uri.rawUserInfo == null && matches(uri.host)) requested else url
+    }
 }
 
 object SiteBridge {

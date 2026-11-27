@@ -109,7 +109,7 @@ describe('清单检查', () => {
     expect(problems({ version: '1.0' })).toEqual([expect.stringMatching(/1\.2\.3/)]);
     expect(problems({ engines: { emaki: '>=0.3' } })).toEqual(['需要 Emaki >=0.3，现在是 0.1.17']);
     expect(problems({ engines: { emaki: 'whatever' } })).toEqual([expect.stringMatching(/看懂的版本范围/)]);
-    expect(problems({ contributes: { 'lightbox.toolbar@1': [] } })).toEqual(['用到了「lightbox.toolbar@1」，这个版本的 Emaki 还不支持']);
+    expect(problems({ contributes: { 'block@1': [] } })).toEqual(['用到了「block@1」，这个版本的 Emaki 还不支持']);
     expect(problems({ contributes: {} })).toEqual([expect.stringMatching(/什么都没有贡献/)]);
     expect(problems({ permissions: { scopes: ['read', 'devices', 'nope'] } })).toEqual([
       '要的权限「管理手机等设备」只给人和设备，插件拿不到',
@@ -146,6 +146,46 @@ describe('清单检查', () => {
     expect(problems({ contributes: { 'page@1': [{ id: 'main', view: 'index.html', site: 'nope' }] } })).toEqual([
       expect.stringMatching(/对应的网站「nope」在 site@1 里没有/),
     ]);
+    // 看图器的按钮（12.7）：调自己的命令或者打开来源，只写一样；命令要有
+    const button = (b: object, extra: object = {}) => ({
+      server: 'server/index.js',
+      contributes: {
+        'lightbox.toolbar@1': [{ id: 'go', label: '走', ...b }],
+        'command@1': [{ name: 'example.random-browse.go', summary: '走', scope: 'read' }],
+        ...extra,
+      },
+    });
+    expect(problems(button({ command: 'example.random-browse.go' }))).toEqual([]);
+    expect(problems(button({ open: 'source', sources: ['pixiv'], icon: 'external-link' }))).toEqual([]);
+    expect(problems(button({ command: 'example.random-browse.nope' }))).toEqual([expect.stringMatching(/调的命令「example\.random-browse\.nope」在 command@1 里没有/)]);
+    expect(problems(button({}))).toEqual([expect.stringMatching(/command 和 open 要写一个/)]);
+    expect(problems(button({ command: 'example.random-browse.go', open: 'source' }))).toEqual([expect.stringMatching(/command 和 open 要写一个/)]);
+    expect(problems(button({ open: 'source', sources: ['weibo'] }))).toEqual([expect.stringMatching(/^lightbox\.toolbar@1 的 0\.sources/)]);
+    expect(problems(button({ open: 'source', label: '一二三四五六七八九十一二三' }))).toEqual([expect.stringMatching(/^lightbox\.toolbar@1 的 0\.label/)]);
+    // 接管的链接（12.7）：网站要在 network 里，在哪里打开要有，网站的也要在它的 matches 里
+    const link = (l: object, extra: object = {}) => ({
+      ...site(),
+      contributes: {
+        ...site().contributes,
+        'page@1': [{ id: 'browse', view: 'index.html' }],
+        'link@1': [{ id: 'artwork', title: 'Pixiv 作品', urls: ['https://www.pixiv.net/artworks/*'], page: 'browse', site: 'pixiv', ...l }],
+        ...extra,
+      },
+    });
+    expect(problems(link({}))).toEqual([]);
+    expect(problems(link({ site: undefined }))).toEqual([]);
+    expect(problems(link({ page: undefined, site: undefined }))).toEqual([expect.stringMatching(/page 和 site 至少写一个/)]);
+    expect(problems(link({ page: 'nope' }))).toEqual([expect.stringMatching(/page@1 里没有这一页/)]);
+    expect(problems(link({ site: 'nope' }))).toEqual([expect.stringMatching(/site@1 里没有它/)]);
+    expect(problems(link({ urls: ['https://evil.example/*'] }))).toEqual([expect.stringMatching(/evil\.example 不在 permissions\.network 里/)]);
+    expect(problems(link({ urls: ['https://pixiv.net/*'] }, { 'site@1': site({}, {}).contributes['site@1'] }))).toEqual([
+      expect.stringMatching(/pixiv\.net 不在 permissions\.network 里/),
+    ]);
+    expect(problems({ ...link({ urls: ['https://i.pximg.net/*'] }), permissions: { network: ['www.pixiv.net', 'i.pximg.net'] } })).toEqual([
+      expect.stringMatching(/i\.pximg\.net 不在网站「Pixiv」的 matches 里/),
+    ]);
+    for (const u of ['http://www.pixiv.net/*', 'www.pixiv.net/*', 'https://www.pixiv.net/a?b=1'])
+      expect([u, problems(link({ urls: [u] }))]).toEqual([u, [expect.stringMatching(/^link@1 的 0\.urls/)]]);
     expect(problems({ server: 'server/index.js', contributes: { 'job.kind@1': [{ kind: 'dl', label: '下载' }] } })).toEqual([
       expect.stringMatching(/"background": true/),
     ]);
@@ -248,9 +288,9 @@ describe('从 zip 装：授权单、装上、撤销、卸载', () => {
   });
 
   it('装不上的：授权单上写明原因，install 拒绝', async () => {
-    const pkg = inspectZip({ ...sample(), contributes: { 'lightbox.toolbar@1': [] } });
-    expect(pkg.problems).toEqual(['用到了「lightbox.toolbar@1」，这个版本的 Emaki 还不支持']);
-    await expect(install(pkg)).rejects.toThrow(/lightbox\.toolbar/);
+    const pkg = inspectZip({ ...sample(), contributes: { 'block@1': [] } });
+    expect(pkg.problems).toEqual(['用到了「block@1」，这个版本的 Emaki 还不支持']);
+    await expect(install(pkg)).rejects.toThrow(/block@1/);
     expect(() => ds.plugins.inspectZip('x.zip', makeZip({ 'readme.txt': 'hi' }))).toThrow(/没有 emaki-plugin\.json/);
     expect(() => ds.plugins.inspectZip('x.zip', makeZip({ 'emaki-plugin.json': '{oops' }))).toThrow(/不是合法的 JSON/);
     // 清单在唯一的一个文件夹里（直接压缩文件夹）也认

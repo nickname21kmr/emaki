@@ -8,6 +8,7 @@
  */
 import type { ImageSort } from './api.ts';
 import type { Scope } from './commands.ts';
+import type { ImageSource } from './domain.ts';
 
 /** 插件从哪来：内置（原来的页面）、我的（自己或 AI 做的）、装的（E2 起） */
 export type PluginSource = 'builtin' | 'mine' | 'installed';
@@ -38,6 +39,7 @@ export const NAV_ICONS = [
   'compass',
   'download',
   'heart',
+  'external-link',
 ] as const;
 export type NavIcon = (typeof NAV_ICONS)[number];
 
@@ -128,6 +130,59 @@ export interface SlotEntryContribution {
   id: string;
 }
 
+/** 图片的来源网站（ImageSource 的 site） */
+export const SOURCE_SITES = ['pixiv', 'twitter', 'danbooru', 'fanbox', 'other'] as const satisfies readonly ImageSource['site'][];
+
+/**
+ * lightbox.toolbar@1：看图器顶栏的按钮。内置插件只写 id（blocks/slots.ts 里登记的条目）；装的插件写按钮本身（docs/plugins.md 12.7），
+ * 排在内置的按钮后面、「信息」前面。点了做两种事之一：
+ * - command：调这个插件自己的命令，输入是 `{ image: { id, fileName, source } }`，返回的 message 显示出来；
+ * - open: 'source'：打开这张图的来源（原作链接），有插件接管这种链接（link@1）就在插件里打开
+ */
+export interface LightboxButtonContribution extends SlotEntryContribution {
+  label?: string;
+  icon?: NavIcon;
+  /** 只在这些来源的图上显示（不写就是每张图都有） */
+  sources?: ImageSource['site'][];
+  command?: string;
+  open?: 'source';
+}
+
+/**
+ * link@1：插件接管的链接（docs/plugins.md 12.7）。Emaki 里点到这种链接（看图器、未识别里图片的来源），在插件里打开：
+ * 安卓 App 里打开插件的网站（site，就在这个地址），别的地方打开插件的页面（page，视图从 context 的 link 拿到地址）；
+ * 两样都不能用的地方照常在浏览器里打开。按住 Ctrl / ⌘ 点、中键、右键菜单照旧去浏览器。几个插件都接管同一个链接时点了让你选
+ */
+export interface LinkContribution {
+  id: string;
+  title: string;
+  /** 哪些链接，比如 https://www.pixiv.net/artworks/*：* 是路径里的一段，问号以后的不看；域名要在 permissions.network 里 */
+  urls: string[];
+  page?: string;
+  site?: string;
+}
+
+/** 链接对不对得上 link@1 的写法（只比到路径，问号、# 以后的不看；* 是一段，末尾的 / 可有可无） */
+export function linkMatches(pattern: string, url: string): boolean {
+  // shared 不带 DOM 的类型（没有 URL）：按 协议://主机/路径 拆
+  const m = /^(https?):\/\/([^/?#@\s]+)([^?#\s]*)/i.exec(url);
+  if (!m) return false;
+  const target = `${m[1]!.toLowerCase()}://${m[2]!.toLowerCase()}${m[3]!}`.replace(/\/+$/, '');
+  const re = pattern
+    .replace(/\/+$/, '')
+    .split('*')
+    .map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('[^/]+');
+  return new RegExp(`^${re}$`, 'i').test(target);
+}
+
+/** 接管这个链接的插件（启用着的，按插件的顺序） */
+export function linkHandlers(plugins: readonly PluginInfo[], url: string): { plugin: PluginInfo; link: LinkContribution }[] {
+  return plugins
+    .filter((p) => p.enabled)
+    .flatMap((plugin) => (plugin.contributes['link@1'] ?? []).filter((l) => l.urls.some((x) => linkMatches(x, url))).map((link) => ({ plugin, link })));
+}
+
 /**
  * command@1：插件自己的命令（服务端逻辑实现，E5，docs/plugins.md 第 6 节）。名字带插件前缀（<插件 id>.<名字>），
  * 进命令注册表，和内置命令一样能被视图、AI 助手和 HTTP 调用；调用的人要有 scope
@@ -160,7 +215,7 @@ export interface Contributes {
   'block@1'?: BlockContribution[];
   'page.action@1'?: SlotEntryContribution[];
   'menu.item@1'?: SlotEntryContribution[];
-  'lightbox.toolbar@1'?: SlotEntryContribution[];
+  'lightbox.toolbar@1'?: LightboxButtonContribution[];
   'lightbox.panel@1'?: SlotEntryContribution[];
   /** override@1：设置注册表里登记过的值（OVERRIDES） */
   'override@1'?: Partial<Record<OverrideKey, unknown>>;
@@ -168,6 +223,7 @@ export interface Contributes {
   'job.kind@1'?: JobKindContribution[];
   'setting@1'?: SettingContribution[];
   'site@1'?: SiteContribution[];
+  'link@1'?: LinkContribution[];
 }
 
 export interface PluginManifest {
@@ -189,8 +245,21 @@ export interface PluginManifest {
 /** 条目类的贡献点（E3）：它们的条目停用时一起不画 */
 export const SLOT_POINT_KEYS = ['page.action@1', 'menu.item@1', 'lightbox.toolbar@1', 'lightbox.panel@1'] as const;
 
-/** 装的插件现在能贡献的：不跑代码的那几种、视图页面（E4）、服务端逻辑的命令、任务、设置（E5）。区块、看图器按钮这些以后开放 */
-export const INSTALLABLE_POINTS = ['nav.item@1', 'override@1', 'page@1', 'command@1', 'job.kind@1', 'setting@1', 'site@1'] as const;
+/**
+ * 装的插件现在能贡献的：不跑代码的那几种、视图页面（E4）、服务端逻辑的命令、任务、设置、网站（E5）、看图器顶栏的按钮、接管的链接（12.7）。
+ * 区块、菜单项、页头的操作这些以后开放
+ */
+export const INSTALLABLE_POINTS = [
+  'nav.item@1',
+  'override@1',
+  'page@1',
+  'command@1',
+  'job.kind@1',
+  'setting@1',
+  'site@1',
+  'lightbox.toolbar@1',
+  'link@1',
+] as const;
 
 // ---------------------------------------------------------------- 授权（docs/plugins.md 第 4 节）
 
@@ -514,7 +583,7 @@ export interface PluginCallResult {
  */
 export const EMAKI_VIEW_API_VERSION = 1;
 export const EMAKI_VIEW_METHODS = {
-  /** 这个视图是谁、图片地址的前缀（{ pluginId, pageId, mediaBase }） */
+  /** 这个视图是谁、图片地址的前缀、从哪个接管的链接打开的（{ pluginId, pageId, mediaBase, link }） */
   context: 'emaki/context',
   /** 跳到 Emaki 里的一个地址（{ to: '/gallery?favorite=1' }） */
   navigate: 'emaki/navigate',

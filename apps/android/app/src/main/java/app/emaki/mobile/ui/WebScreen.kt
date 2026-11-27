@@ -69,9 +69,12 @@ fun interface AlbumSyncRequest {
     fun request(mode: String)
 }
 
-/** 网页上打开插件对应的外部网站（window.EmakiApp.openSite(plugin, site)，docs/plugins.md 第 6 节 site@1）：Activity 打开站内浏览（SiteActivity） */
+/**
+ * 网页上打开插件对应的外部网站（window.EmakiApp.openSite(plugin, site)，docs/plugins.md 第 6 节 site@1）：Activity 打开站内浏览（SiteActivity）。
+ * url：打开到网站上的这个地址（openSiteUrl，插件接管的链接 link@1，12.7）；null 是起始页
+ */
 fun interface SiteOpener {
-    fun open(address: HostPort, pluginId: String, siteId: String)
+    fun open(address: HostPort, pluginId: String, siteId: String, url: String?)
 }
 
 /**
@@ -85,7 +88,8 @@ fun interface SiteOpener {
  *   `paper(color)` 是 App 自己注入的脚本用的，把网页的纸色报上来，状态栏、导航栏跟着换颜色；
  *   `pickImages()`：网页上「传到电脑」里的「选图片」，打开系统的选图界面，选完在后台传给电脑（docs/mobile.md 5.4）；
  *   `syncAlbums(mode)`：网页上的「同步相册」，盘点（inventory）或者现在同步一次（sync），在后台做（5.5）；
- *   `openSite(plugin, site)`：在 App 里打开插件对应的外部网站本身（比如 Pixiv），加上插件的按钮（SiteActivity）。
+ *   `openSite(plugin, site)`：在 App 里打开插件对应的外部网站本身（比如 Pixiv），加上插件的按钮（SiteActivity）；
+ *   `openSiteUrl(plugin, site, url)`：同上，打开到网站上的这个地址（插件接管的链接，比如图片来源的作品页，0.6.0）。
  */
 @Composable
 fun WebScreen(
@@ -297,7 +301,13 @@ private fun createWebView(
             @JavascriptInterface
             fun openSite(pluginId: String?, siteId: String?) {
                 if (pluginId.isNullOrBlank() || siteId.isNullOrBlank()) return
-                main.post { siteOpener.open(address, pluginId, siteId) }
+                main.post { siteOpener.open(address, pluginId, siteId, null) }
+            }
+
+            @JavascriptInterface
+            fun openSiteUrl(pluginId: String?, siteId: String?, url: String?) {
+                if (pluginId.isNullOrBlank() || siteId.isNullOrBlank()) return
+                main.post { siteOpener.open(address, pluginId, siteId, url?.take(2000)) }
             }
 
             @JavascriptInterface

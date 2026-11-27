@@ -166,8 +166,8 @@ class MainActivity : ComponentActivity() {
     }
 
     /** 网页上打开插件对应的外部网站（Pixiv 这类）：站内浏览（SiteActivity） */
-    private val siteOpener = SiteOpener { address, pluginId, siteId ->
-        startActivity(SiteActivity.intent(this, address, pluginId, siteId))
+    private val siteOpener = SiteOpener { address, pluginId, siteId, url ->
+        startActivity(SiteActivity.intent(this, address, pluginId, siteId, url))
     }
 
     private fun openAppSettings() {

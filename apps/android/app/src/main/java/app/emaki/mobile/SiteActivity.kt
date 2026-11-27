@@ -74,7 +74,8 @@ import java.util.UUID
  *   然后用系统的消息通道把一个端口交给这个网站的主页面（postWebMessage 指定来源，消息带一次性口令），页面里的广告框拿不到；
  * - 页面经端口发来的调用：只认这个插件自己的命令，用设备凭证转给电脑（POST /api/plugins/<插件>/call），结果原样回给页面；
  * - 网站里点到的 http(s) 链接都在这里打开（登录页、作品页），别的（pixiv:// 这类拉起别的 App 的）不管；
- * - 返回键先在网站里后退，退到头回到 Emaki；顶上「关闭」直接回去。
+ * - 返回键先在网站里后退，退到头回到 Emaki；顶上「关闭」直接回去；
+ * - 从图片来源的链接打开的（插件接管的链接 link@1，docs/plugins.md 12.7）：直接打开到那个地址（这个网站的才行，Site.startUrl）。
  */
 class SiteActivity : ComponentActivity() {
     private var site by mutableStateOf<Site?>(null)
@@ -228,7 +229,7 @@ class SiteActivity : ComponentActivity() {
                 pageTitle = title?.removeSuffix(" - pixiv")?.removeSuffix(" [pixiv]")?.trim().orEmpty()
             }
         }
-        w.loadUrl(s.url)
+        w.loadUrl(s.startUrl(intent.getStringExtra(EXTRA_URL)))
         return w
     }
 
@@ -287,12 +288,15 @@ class SiteActivity : ComponentActivity() {
         private const val EXTRA_SITE = "site"
         private const val EXTRA_HOST = "host"
         private const val EXTRA_PORT = "port"
+        private const val EXTRA_URL = "url"
 
-        fun intent(context: Context, address: HostPort, pluginId: String, siteId: String): Intent =
+        /** url：打开到网站上的这个地址（不是这个网站的就去起始页，Site.startUrl）；null 是起始页 */
+        fun intent(context: Context, address: HostPort, pluginId: String, siteId: String, url: String? = null): Intent =
             Intent(context, SiteActivity::class.java)
                 .putExtra(EXTRA_PLUGIN, pluginId)
                 .putExtra(EXTRA_SITE, siteId)
                 .putExtra(EXTRA_HOST, address.host)
                 .putExtra(EXTRA_PORT, address.port)
+                .putExtra(EXTRA_URL, url)
     }
 }

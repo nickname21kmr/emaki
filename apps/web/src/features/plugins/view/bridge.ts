@@ -29,6 +29,8 @@ export interface ViewHost {
   openImages(ids: string[], index: number): void;
   /** 一次调用改了图库（可撤销的进撤销栈） */
   onMutation(result: { undoToken: string; message: string }): void;
+  /** 从插件接管的链接打开的（link@1，docs/plugins.md 12.7）：那个链接；视图在 emaki/context 里拿到 */
+  link?: string | null;
 }
 
 export interface ConnectedView {
@@ -91,7 +93,12 @@ export function connectView(iframe: HTMLIFrameElement, view: PluginView, host: V
   };
   bridge.onloggingmessage = () => {};
 
-  bridge.setRequestHandler(M.context, { params: any, result: any }, () => ({ pluginId, pageId: view.pageId, mediaBase: view.mediaBase }));
+  bridge.setRequestHandler(M.context, { params: any, result: any }, () => ({
+    pluginId,
+    pageId: view.pageId,
+    mediaBase: view.mediaBase,
+    link: host.link ?? null,
+  }));
   bridge.setRequestHandler(M.navigate, { params: any, result: any }, (p: Params) => {
     if (!internal(p.to)) throw new Error('只能跳到 Emaki 里的地址（以 / 开头）');
     host.navigate(p.to);

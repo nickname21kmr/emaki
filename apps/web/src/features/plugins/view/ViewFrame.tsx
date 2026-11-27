@@ -20,7 +20,7 @@ const HANDSHAKE_MS = 15_000;
  * （可能借此把数据带出去，docs/plugins.md 第 5 节「自己跳走」）——马上撤掉、记一次错。没连上、跳走了都显示一张错误卡，
  * 卡上能重新载入、停用这个插件；出错多次服务端自动停用。
  */
-export function ViewFrame({ view, label }: { view: PluginView; label: string }) {
+export function ViewFrame({ view, label, link = null }: { view: PluginView; label: string; link?: string | null }) {
   const box = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const [state, setState] = useState<'loading' | 'ready' | { error: string }>('loading');
@@ -84,6 +84,7 @@ export function ViewFrame({ view, label }: { view: PluginView; label: string }) 
           openImages: (ids, index) => useLightbox.getState().show(ids, index, `plugin:${view.pluginId}`),
           onMutation: (r) =>
             useUndoStore.getState().push({ token: r.undoToken, label: `${label}：${r.message}`, by: `plugin:${view.pluginId}` }),
+          link,
         });
         void conn.ready.then(() => {
           clearTimeout(timer);
@@ -101,7 +102,8 @@ export function ViewFrame({ view, label }: { view: PluginView; label: string }) 
       iframe?.remove();
       void conn?.close();
     };
-  }, [view, label, attempt]);
+    // 换了链接（看图器里点了另一张图的来源）：重新载入，视图按新的链接画
+  }, [view, label, attempt, link]);
 
   const error = typeof state === 'object' ? state.error : null;
   return (

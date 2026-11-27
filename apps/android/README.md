@@ -30,6 +30,8 @@
 有 `EmakiApp.syncAlbums`（0.3.0 起）时点开是一个面板：「选图片上传」+「同步相册」（`features/access/AlbumSync.tsx`），老版本直接打开选图界面。
 插件对应的外部网站（docs/plugins.md 第 6 节 `site@1`，0.5.0 起）：网页在 App 里打开这种插件页面时调 `EmakiApp.openSite(插件, 网站)`，
 App 打开 `SiteActivity`（站内浏览：网站本身加上插件的脚本，`core/SiteBridge.kt` 是和安卓无关的部分，有单元测试）。
+插件接管的链接（docs/plugins.md 12.7，0.6.0 起）：图片来源这类链接由插件打开时调 `EmakiApp.openSiteUrl(插件, 网站, 地址)`，站内浏览直接打开到那个地址
+（不是这个网站的 https 地址就去起始页，`Site.startUrl`）。
 
 ## 构建
 

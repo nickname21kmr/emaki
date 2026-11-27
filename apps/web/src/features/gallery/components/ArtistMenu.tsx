@@ -1,6 +1,7 @@
 import type { Artist, UpdateArtistLinksBody } from '@emaki/shared';
 import { Ellipsis, GitMerge, RotateCcw, Split } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { Slot } from '@/blocks/Slot';
 import { Button, Chip, Dialog, DialogFooter, IconButton, Menu, MenuItem } from '@/components/ui';
 import { api } from '@/lib/api';
 import { useMutate } from '@/lib/queries';
@@ -32,19 +33,29 @@ export function ArtistMenu({ artist, onMoved }: { artist: Artist; onMoved: (tag:
           </IconButton>
         }
       >
-        {artist.tags.some((t) => t !== artist.tag) && (
-          <MenuItem icon={<Split />} onSelect={() => setDialog('split')}>
-            拆开…
-          </MenuItem>
-        )}
-        <MenuItem icon={<GitMerge />} onSelect={() => setDialog('merge')}>
-          合并到…
-        </MenuItem>
-        {artist.manual && (
-          <MenuItem icon={<RotateCcw />} onSelect={() => links.mutate({ tags: artist.tags, mode: 'auto' })}>
-            恢复自动合并
-          </MenuItem>
-        )}
+        {/* 按登记的顺序（blocks/slots.ts 的 menu.artist） */}
+        <Slot
+          id="menu.artist"
+          render={{
+            'artist.split': () =>
+              artist.tags.some((t) => t !== artist.tag) && (
+                <MenuItem icon={<Split />} onSelect={() => setDialog('split')}>
+                  拆开…
+                </MenuItem>
+              ),
+            'artist.merge': () => (
+              <MenuItem icon={<GitMerge />} onSelect={() => setDialog('merge')}>
+                合并到…
+              </MenuItem>
+            ),
+            'artist.restoreAuto': () =>
+              artist.manual && (
+                <MenuItem icon={<RotateCcw />} onSelect={() => links.mutate({ tags: artist.tags, mode: 'auto' })}>
+                  恢复自动合并
+                </MenuItem>
+              ),
+          }}
+        />
       </Menu>
       <SplitDialog open={dialog === 'split'} onOpenChange={(o) => setDialog(o ? 'split' : null)} artist={artist} busy={links.isPending} onSplit={(tags) => links.mutate({ tags, mode: 'split' })} />
       <Dialog

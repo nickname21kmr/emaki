@@ -43,6 +43,11 @@ interface EmakiAppBridge {
    * 返回键、关闭回到 Emaki。0.5.0 起才有
    */
   openSite?(pluginId: string, siteId: string): void;
+  /**
+   * 同上，打开到网站上的这个地址（插件接管的链接 link@1，docs/plugins.md 12.7：比如图片来源的 Pixiv 作品页）。
+   * 地址不在网站的域名里时打开起始页。0.6.0 起才有
+   */
+  openSiteUrl?(pluginId: string, siteId: string, url: string): void;
 }
 
 export const appBridge = (): EmakiAppBridge | undefined => (globalThis as { EmakiApp?: EmakiAppBridge }).EmakiApp;
