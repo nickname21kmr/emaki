@@ -63,6 +63,7 @@ import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
 import { ROOT_ACTIVE } from '../../readmodel/terms.ts';
 import { declinedOf, withDeclined } from './authorize.ts';
+import { PRINT_SCHEME } from '../../core/points.ts';
 import type { PluginPackages, Staged } from '../../services/plugins/packages.ts';
 import { normalizeSubdir } from '../library/move.ts';
 import { checkManifest, checkPackageFiles, MANIFEST_FILE, readManifest } from './manifest.ts';
@@ -576,7 +577,23 @@ export class Plugins {
   pointsChanged(id: string): string[] {
     const p = this.require(id);
     const prints = this.prints(id);
-    return (p.manifest.contributes['patch@1'] ?? []).map((x) => x.point).filter((n) => this.ctx.points.has(n) && prints[n] !== this.ctx.points.fingerprint(n));
+    return (p.manifest.contributes['patch@1'] ?? []).map((x) => x.point).filter((n) => this.ctx.points.has(n) && printChanged(prints[n], this.ctx.points.fingerprint(n)));
+  }
+
+  /**
+   * 记下的指纹里旧算法算的（前缀不是现在的 PRINT_SCHEME）：按现在的算法重记。指纹的算法换了不等于点变了，
+   * 加载时（services/plugins/internal.ts 对过 pointsChanged 以后）悄悄换掉，不进撤销栈、不推变化
+   */
+  upgradePrints(id: string): void {
+    const prints = this.prints(id);
+    const stale = Object.keys(prints).filter((n) => !prints[n]!.startsWith(PRINT_SCHEME) && this.ctx.points.has(n));
+    if (!stale.length) return;
+    const next = { ...prints, ...Object.fromEntries(stale.map((n) => [n, this.ctx.points.fingerprint(n)!])) };
+    this.ctx.apply(() =>
+      this.db
+        .prepare('INSERT INTO plugin_point_state (point, key, value) VALUES (?, ?, ?) ON CONFLICT(point, key) DO UPDATE SET value = excluded.value')
+        .run(PATCH_STATE, id, JSON.stringify(next)),
+    );
   }
 
   /**
@@ -1063,9 +1080,9 @@ export class Plugins {
       ...(x.why && { why: x.why }),
       status: !this.ctx.points.has(x.point)
         ? 'missing'
-        : owned.has(x.point) || (webOn && isWebPoint(x.point) && prints[x.point] === this.ctx.points.fingerprint(x.point))
+        : owned.has(x.point) || (webOn && isWebPoint(x.point) && x.point in prints && !printChanged(prints[x.point], this.ctx.points.fingerprint(x.point)))
           ? 'active'
-          : x.point in prints && prints[x.point] !== this.ctx.points.fingerprint(x.point)
+          : x.point in prints && printChanged(prints[x.point], this.ctx.points.fingerprint(x.point))
             ? 'changed'
             : 'off',
     }));
@@ -1139,6 +1156,15 @@ function checkValues(raw: Record<string, string>): Partial<Record<OverrideKey, s
       throw new BadRequestError(`「${OVERRIDES[k as OverrideKey].label}」不能是「${v}」；能用的：${OVERRIDES[k as OverrideKey].options.map((o) => o.value).join('、')}`);
   }
   return raw as Partial<Record<OverrideKey, string>>;
+}
+
+/**
+ * 记下的指纹和现在的不一样（点变了）。没记过算变了；旧算法算的（前缀不是现在的）不能比，不算变（加载时重记，upgradePrints）
+ */
+function printChanged(saved: string | undefined, now: string | null): boolean {
+  if (saved === undefined) return true;
+  if (!saved.startsWith(PRINT_SCHEME)) return false;
+  return saved !== now;
 }
 
 /** 清单读不出来的插件：给一个只有 id 的空壳，插件页上照样能看到、能删 */

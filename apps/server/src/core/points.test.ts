@@ -79,7 +79,7 @@ describe('内部点', () => {
     const points = new Points();
     points.define('term:x', { kind: 'term', label: 'x', contract: ['signature: (a, b)', 'version: 1'] }, add);
     const a = points.fingerprint('term:x');
-    expect(a).toMatch(/^[0-9a-f]{16}$/);
+    expect(a).toMatch(/^c1:[0-9a-f]{16}$/);
     // 实现换了、说法换了：约定一样，指纹一样
     points.define('term:x', { kind: 'term', label: '换了说法', contract: ['signature: (a, b)', 'version: 1'] }, (x: number, y: number) => x * y);
     expect(points.fingerprint('term:x')).toBe(a);

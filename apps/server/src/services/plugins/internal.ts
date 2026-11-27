@@ -124,6 +124,8 @@ export class InternalPlugins {
         plugins.autoDisableChanged(id, changed);
         continue;
       }
+      // 指纹的算法换过（旧前缀）：点没变，按现在的算法重记
+      plugins.upgradePrints(id);
       try {
         await this.load(spec);
         if (spec.entry) touched.push(spec);

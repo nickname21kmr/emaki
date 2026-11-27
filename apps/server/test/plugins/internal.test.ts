@@ -207,6 +207,26 @@ describe('改内部的插件', () => {
     expect((await info()).enabled).toBe(true);
   });
 
+  it('指纹的算法换了不算点变了：旧算法记下的指纹不停用，加载时按现在的算法重记', async () => {
+    await startLoader();
+    await install(EXAMPLE);
+    await until(() => loader!.isLoaded(ID), '加载');
+    loader!.close();
+    // 模拟旧算法记下的指纹（没有前缀、和现在的对不上）：12.11 换算法那次就把装好的插件误停了
+    const legacy = JSON.stringify({ [COUNT_UNIT_POINT]: '0123456789abcdef', 'fn:count.unit': 'fedcba9876543210' });
+    ds.ctx.db.prepare("UPDATE plugin_point_state SET value = ? WHERE point = 'patch' AND key = ?").run(legacy, ID);
+    expect(ds.plugins.pointsChanged(ID)).toEqual([]);
+    await startLoader();
+    expect(loader!.isLoaded(ID)).toBe(true);
+    expect((await info()).enabled).toBe(true);
+    const saved = JSON.parse(ds.ctx.db.prepare("SELECT value FROM plugin_point_state WHERE point = 'patch' AND key = ?").pluck().get(ID) as string);
+    expect(saved).toEqual({ [COUNT_UNIT_POINT]: ds.ctx.points.fingerprint(COUNT_UNIT_POINT), 'fn:count.unit': ds.ctx.points.fingerprint('fn:count.unit') });
+    // 重记以后，约定真的变了照样停
+    loader!.close();
+    ds.ctx.points.define(COUNT_UNIT_POINT, { kind: 'term', label: '排名的张数怎么数', contract: ['signature: (a, b)', 'version: 1'] }, COUNT_UNIT);
+    expect(ds.plugins.pointsChanged(ID)).toEqual([COUNT_UNIT_POINT]);
+  });
+
   it('清单里没列的点改不了；activate 出错记在插件头上，补丁一个都不留', async () => {
     await startLoader();
     const folder = writePlugin(
@@ -317,7 +337,7 @@ describe('内部点的登记', () => {
     expect(list.filter((p) => !pointContracts()[p.name]).map((p) => p.name)).toEqual([]);
     expect(list.filter((p) => p.kind === 'query' || p.kind === 'command')).toHaveLength(ds.registry.list().length);
     // 每个点都算得出指纹（命令的输入格式要能转成 JSON Schema）
-    for (const p of list) expect([p.name, ds.ctx.points.fingerprint(p.name)]).toEqual([p.name, expect.stringMatching(/^[0-9a-f]{16}$/)]);
+    for (const p of list) expect([p.name, ds.ctx.points.fingerprint(p.name)]).toEqual([p.name, expect.stringMatching(/^c1:[0-9a-f]{16}$/)]);
   });
 
   it('后台任务的补丁在跑的时候套上', async () => {

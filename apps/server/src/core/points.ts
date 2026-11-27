@@ -45,6 +45,12 @@ interface Point extends PointSpec {
   print: string | null;
 }
 
+/**
+ * 指纹的算法版本，写在指纹前面（c1：只按约定算，12.11）。以后再换算法就换前缀：记下的指纹前缀不一样，说明是旧算法算的，
+ * 不能拿来比——不当成「点变了」，加载时按新算法悄悄重记（domain/plugins/ 的 pointsChanged、upgradePrints）
+ */
+export const PRINT_SCHEME = 'c1:';
+
 export class Points extends PatchStack {
   private readonly points = new Map<string, Point>();
 
@@ -68,7 +74,7 @@ export class Points extends PatchStack {
     const p = this.points.get(name);
     if (!p) return null;
     const contract = p.contract ?? pointContracts()[name];
-    p.print ??= createHash('sha256')
+    p.print ??= PRINT_SCHEME + createHash('sha256')
       .update(contract ? `${name}\n${contract.join('\n')}` : `${p.kind}\n${p.version ?? 0}\n${p.signature?.() ?? ''}\n${String(p.base)}`)
       .digest('hex')
       .slice(0, 16);
