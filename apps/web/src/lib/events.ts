@@ -137,8 +137,9 @@ export const REFRESH: Record<DomainChange, readonly string[]> = {
   // 以前跟着刷新整组 IMAGE_VIEWS：提取姿势时每 3 秒重拉一遍图库已加载的每一页、角色、作品、未识别，后端一直被占着，看图和筛选都慢
   'pose.changed': ['pose', POSE_LISTS],
   'library.opened': [...WITH_FILES, 'exclusions', 'tags', 'custom-character-matches'],
-  // 插件（docs/plugins.md）：侧栏、停用的页面、覆盖的值；默认排序变了，没给排序的图片列表也要重拉
-  'plugins.changed': ['plugins', 'images'],
+  // 插件（docs/plugins.md）：侧栏、停用的页面、覆盖的值；默认排序变了，没给排序的图片列表也要重拉。
+  // 改内部的插件加上、撤掉补丁也推这一条（第 7 节）：「一个作品算一张」这类改的是角色、作品、画师的张数，这几样也重拉
+  'plugins.changed': ['plugins', 'images', 'characters', 'character', 'works', 'work', 'artists', 'summary', 'stats'],
 };
 
 /** 命令本身没声明变化（画师的合并关系、标记看过、启动任务……）时按命令刷新；不在这里的就什么也不刷 */
@@ -574,8 +575,8 @@ export function handleServerEvent(client: QueryClient, invalidate: ReturnType<ty
       break;
     case 'plugin-notice':
       noteEvent(event.id);
-      // 插件出错太多次，自动停用了（docs/plugins.md 第 8 节）：说一声，点「去看看」到插件详情
-      toast.warning(`「${event.name}」出错太多次，已经自动停用`, {
+      // 插件出错太多次、改内部的插件改的地方变了，自动停用了（docs/plugins.md 第 7、8 节）：说一声，点「去看看」到插件详情
+      toast.warning(event.kind === 'points-changed' ? `「${event.name}」改的地方变了，已经自动停用` : `「${event.name}」出错太多次，已经自动停用`, {
         description: event.message,
         duration: 12_000,
         action: { label: '去看看', onClick: () => goTo(`/plugins/${encodeURIComponent(event.plugin)}`) },

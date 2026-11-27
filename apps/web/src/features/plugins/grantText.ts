@@ -9,6 +9,7 @@ import {
   type Grant,
   type ImageSource,
   type OverrideKey,
+  type PatchInfo,
   type PluginManifest,
   type PluginPermissions,
   type Scope,
@@ -28,8 +29,8 @@ export interface GrantLine {
 const SOURCE_LABEL: Record<ImageSource['site'], string> = { pixiv: 'Pixiv', twitter: 'X / Twitter', danbooru: 'Danbooru', fanbox: 'FANBOX', other: '其他网站' };
 
 
-/** 贡献的东西：自己画的页面、侧栏加一项、改一个默认值 */
-export function contributionLines(m: PluginManifest): GrantLine[] {
+/** 贡献的东西：自己画的页面、侧栏加一项、改一个默认值、改内部的哪几处（patches：服务端给的点的人话名字） */
+export function contributionLines(m: PluginManifest, patches?: readonly PatchInfo[]): GrantLine[] {
   const lines: GrantLine[] = [];
   for (const p of m.contributes['page@1'] ?? [])
     if (p.view)
@@ -68,6 +69,11 @@ export function contributionLines(m: PluginManifest): GrantLine[] {
       text: '在这台电脑上运行它自己的程序',
       detail: '单独一个进程：只能读写它自己的文件夹，经 Emaki 做下面允许的事；崩了不影响 Emaki',
     });
+  // 改内部（第 3 层）：改的每一处一行，朱色
+  for (const x of m.contributes['patch@1'] ?? []) {
+    const label = patches?.find((y) => y.point === x.point)?.label ?? x.point;
+    lines.push({ key: `patch:${x.point}`, text: `改 Emaki 内部的「${label}」`, detail: x.why ? `${x.why}（${x.point}）` : x.point, danger: true });
+  }
   for (const [k, v] of Object.entries(m.contributes['override@1'] ?? {})) {
     const def = OVERRIDES[k as OverrideKey];
     const opt = def?.options.find((o) => o.value === v);
@@ -91,7 +97,13 @@ export function permissionLines(p: PluginPermissions): GrantLine[] {
   if (p.network?.length)
     lines.push({ key: 'network', text: `连接 ${p.network.join('、')}`, detail: '插件声明的；Emaki 不拦截插件服务端的联网，照它说的写在这里' });
   if (p.background) lines.push({ key: 'background', text: '在后台运行', detail: '任务列表里能看到、能取消' });
-  if (p.unsafe) lines.push({ key: 'unsafe', text: '改 Emaki 的内部', detail: '可以做 Emaki 能做的任何事，只能用于这个版本的 Emaki', danger: true });
+  if (p.unsafe)
+    lines.push({
+      key: 'unsafe',
+      text: '在 Emaki 自己的进程里运行它的代码',
+      detail: '不隔离，可以做 Emaki 能做的任何事。Emaki 更新后它改的地方变了，它会自动停用，等你确认',
+      danger: true,
+    });
   return lines;
 }
 
@@ -103,6 +115,8 @@ export function riskLine(p: PluginPermissions): string | null {
 
 /** 它不会：没要的几件要紧事 */
 export function wontLine(p: PluginPermissions): string | null {
+  // 改内部的插件什么都能做：不说「它不会」
+  if (p.unsafe) return null;
   const scopes = p.scopes ?? [];
   const items: string[] = [];
   if (!scopes.length) items.push('读或改你的图库');

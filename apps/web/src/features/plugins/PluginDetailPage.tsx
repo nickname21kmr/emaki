@@ -25,6 +25,14 @@ import { Slot } from '@/blocks/Slot';
  */
 const SOURCE_PHRASE = { builtin: '内置的插件', mine: '你自己建的插件', installed: '装上的插件' } as const;
 
+/** 改内部的插件改的点现在怎么样 */
+const PATCH_STATUS: Record<NonNullable<PluginInfo['patches']>[number]['status'], string> = {
+  active: '生效中',
+  off: '没在改',
+  changed: 'Emaki 改过这里',
+  missing: '这个版本没有',
+};
+
 export function PluginDetailPage() {
   const { id = '' } = useParams();
   const { state, ready } = usePlugins();
@@ -112,6 +120,12 @@ export function PluginDetailPage() {
               ) : (
                 <p>{p.disabledReason}</p>
               )}
+              {/* 改内部的插件改的点变了（Emaki 更新以后）：确认还能用就按现在的样子重新启用（docs/plugins.md 第 7 节） */}
+              {can && !p.enabled && !p.problems.length && p.patches?.some((x) => x.status === 'changed') && (
+                <Button className="mt-2" variant="secondary" size="sm" loading={enable.isPending} onClick={() => enable.mutate({ id: p.id, enabled: true })}>
+                  仍然启用
+                </Button>
+              )}
             </div>
           </div>
         )}
@@ -127,7 +141,9 @@ export function PluginDetailPage() {
             <p className="mt-0.5 text-fg-muted">
               {p.required
                 ? '必需的插件不能停用。'
-                : p.kinds.includes('feature')
+                : p.kinds.includes('internal')
+                  ? '停用以后它对 Emaki 内部的改动马上撤掉，回到原来的样子。'
+                  : p.kinds.includes('feature')
                   ? '停用以后它的页面、入口和在电脑上运行的程序一起停下；已经放进图库的图留着。'
                   : p.kinds.includes('page')
                     ? '停用以后这些页面和通往它们的入口都收起来；图库里的数据、后台的识别照常。'
@@ -233,7 +249,8 @@ function GrantSection({ plugin: p }: { plugin: PluginInfo }) {
                 : l.folder && !f
                   ? { ...l, folder: undefined, text: `${l.text}（没给）` }
                   : l;
-            if (!can) return <GrantRow key={l.key} line={line} />;
+            // 「改内部」不单独关：不让它改内部就是停用它（上面的开关）
+            if (!can || l.key === 'unsafe') return <GrantRow key={l.key} line={line} />;
             const enabled = on(l.key);
             return (
               <GrantRow
@@ -450,6 +467,23 @@ function Contributions({ plugin: p, can }: { plugin: PluginInfo; can: boolean })
               <li key={j.kind} className="flex flex-wrap items-baseline gap-x-2">
                 <span>后台任务「{j.label}」</span>
                 <span className="text-[12px] text-fg-subtle">在任务列表里看进度、取消</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {!!p.patches?.length && (
+        <section>
+          <SectionTitle numbered={false} hint="在 Emaki 自己的进程里改登记过名字的地方；Emaki 更新后这些地方变了，它会自动停用，等你确认">
+            改内部
+          </SectionTitle>
+          <ul className="flex flex-col gap-1.5 text-[13px]">
+            {p.patches.map((x) => (
+              <li key={x.point} className="flex flex-wrap items-baseline gap-x-2">
+                <span>{x.label}</span>
+                <span className="font-mono text-[11.5px] text-fg-subtle">{x.point}</span>
+                <Badge tone={x.status === 'active' ? 'ok' : x.status === 'off' ? 'neutral' : 'warn'}>{PATCH_STATUS[x.status]}</Badge>
+                {x.why && <span className="basis-full text-[12px] text-fg-muted">{x.why}</span>}
               </li>
             ))}
           </ul>

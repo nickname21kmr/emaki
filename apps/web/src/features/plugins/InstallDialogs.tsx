@@ -236,7 +236,7 @@ export function useGrant(pkg: PluginPackage, onInstalled?: (id: string) => void,
     },
   });
   const shown = update ? pkg.added : (m.permissions ?? {});
-  const lines = [...(update ? [] : contributionLines(m)), ...permissionLines(shown)];
+  const lines = [...(update ? [] : contributionLines(m, pkg.patches)), ...permissionLines(shown)];
   // 更新时只在新要的权限和风险有关时再说一遍
   const risk = !update || pkg.added.network?.length || pkg.added.scopes?.includes('read') ? riskLine(m.permissions ?? {}) : null;
   const wont = update ? null : wontLine(m.permissions ?? {});

@@ -17,7 +17,7 @@
  * 执行函数只调用领域模块和读模型（引擎 SqliteDataSource 是装配它们的地方）。
  */
 import { SCOPES, type CommandEvent, type CommandInfo, type DomainChange, type ID, type Scope, type UndoKind } from '@emaki/shared';
-import type { z } from 'zod';
+import { z } from 'zod';
 import type { SqliteDataSource } from '../datasource/sqlite/SqliteDataSource.ts';
 import type { UndoRecorder } from '../datasource/sqlite/undo.ts';
 import { BadRequestError, ConflictError, HttpError } from '../http/errors.ts';
@@ -131,8 +131,24 @@ export class Registry {
     for (const d of defs) {
       if (this.defs.has(d.name)) throw new Error(`命令 / 查询 ${d.name} 定义了两次`);
       this.defs.set(d.name, d);
+      // 内置的命令和查询是内部点（command:<名字>、query:<名字>，docs/plugins.md 第 7 节）：指纹看执行函数和输入的格式
+      engine.ctx.points?.define(
+        `${d.kind}:${d.name}`,
+        {
+          kind: d.kind,
+          label: `${d.kind === 'query' ? '查询' : '命令'}「${d.summary}」`,
+          signature: () =>
+            JSON.stringify([d.scope, d.kind === 'command' && d.undoable, z.toJSONSchema(d.input, { io: 'input', unrepresentable: 'any' })]),
+        },
+        d.kind === 'query' ? d.run : (d.tx ?? d.run)!,
+      );
     }
     this.audit = new Audit(engine.ctx);
+  }
+
+  /** 加上第 3 层插件的补丁以后的执行函数（没有补丁就是原来的；插件自己的命令不是内部点，名字对不上，照原样） */
+  private patched<F extends (...a: any[]) => any>(def: Def, fn: F): F {
+    return this.engine.ctx.points ? this.engine.ctx.points.wrap(`${def.kind}:${def.name}`, fn) : fn;
   }
 
   list(): Def[] {
@@ -196,7 +212,7 @@ export class Registry {
     const def = this.require(name, 'query');
     const input = parse(def.input, raw);
     const actor = opts.actor ?? currentActor();
-    return (await runCall({ actor }, () => def.run(this.engine, input))) as T;
+    return (await runCall({ actor }, () => this.patched(def, def.run).call(def, this.engine, input))) as T;
   }
 
   /** 执行一个写命令 */
@@ -286,12 +302,12 @@ export class Registry {
     try {
       result = await runCall(running, async () => {
         const first = steps[0]!;
-        if (steps.length === 1 && first.def.run) return first.def.run(e, first.input);
+        if (steps.length === 1 && first.def.run) return this.patched(first.def, first.def.run).call(first.def, e, first.input);
         // 同步命令：命令层开事务和撤销记录；几个命令共用一份（一个令牌）
         return e.ctx.mutate((u) => {
           let out: { message: string } = { message: '' };
           for (const s of steps) {
-            const r = s.def.tx!(e, s.input, u);
+            const r = this.patched(s.def, s.def.tx!).call(s.def, e, s.input, u);
             out = r.message ? r : { ...r, message: out.message };
           }
           return out;

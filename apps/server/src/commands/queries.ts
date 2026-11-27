@@ -40,7 +40,7 @@ import type { FileResponse, ImageFileRow } from '../infra/ports.ts';
 import { checkNetwork } from '../net/check.ts';
 import { readSettingsView } from '../readmodel/settings.ts';
 import { summarize } from '../readmodel/summary.ts';
-import { VISIBLE } from '../readmodel/terms.ts';
+import { COUNT_UNIT, COUNT_UNIT_POINT, VISIBLE } from '../readmodel/terms.ts';
 import { describeAnimation } from '../services/classify/rules.ts';
 import { sha256Buffer } from '../services/fs/hash.ts';
 import { toAbs } from '../services/fs/paths.ts';
@@ -303,7 +303,7 @@ export const queries = [
     input: EmptyInput,
     scope: 'read',
     http: [{ method: 'GET', path: '/api/artists' }],
-    run: (e) => listArtists(e.ctx.db),
+    run: (e) => listArtists(e.ctx.db, e.ctx.points.wrap(COUNT_UNIT_POINT, COUNT_UNIT)('i')),
   }),
   defineQuery({
     name: 'search.all',

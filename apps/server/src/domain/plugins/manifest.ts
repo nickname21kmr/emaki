@@ -24,6 +24,7 @@ import {
   hostAllowed,
   type OverrideKey,
   type PageContribution,
+  type PatchContribution,
   type PluginManifest,
   type PluginPermissions,
   type Scope,
@@ -35,6 +36,7 @@ import {
   InstalledLinkSchema,
   InstalledNavItemSchema,
   InstalledPageSchema,
+  InstalledPatchSchema,
   InstalledSettingSchema,
   InstalledSiteSchema,
   PluginManifestSchema,
@@ -92,12 +94,19 @@ export function checkManifest(raw: unknown, emakiVersion: string, opts: { ai?: b
   }
   const folderIds = (perms.folders ?? []).map((f) => f.id);
   if (new Set(folderIds).size !== folderIds.length) problems.push('permissions.folders 里有重复的 id');
-  if (perms.unsafe) problems.push('它要改 Emaki 的内部（第 3 层），这个版本的 Emaki 还不支持');
   let server: string | undefined;
   if (m.server !== undefined) {
     const r = ServerEntrySchema.safeParse(m.server);
     if (r.success) server = r.data;
     else problems.push(`server：${r.error.issues[0]!.message}`);
+  }
+  // 改内部的入口（E6）：在 Emaki 的进程里 import，只能是 ES 模块
+  let internal: string | undefined;
+  if (m.internal !== undefined) {
+    const r = ServerEntrySchema.safeParse(m.internal);
+    if (!r.success) problems.push(`internal：${r.error.issues[0]!.message}`);
+    else if (r.data.endsWith('.cjs')) problems.push('internal：改内部的入口要是 ES 模块（.mjs 或 .js），不能是 .cjs');
+    else internal = r.data;
   }
   const permissions: PluginPermissions = {
     ...(scopes.length && { scopes }),
@@ -213,6 +222,15 @@ export function checkManifest(raw: unknown, emakiVersion: string, opts: { ai?: b
       }
       if (new Set(r.data.map((x) => x.id)).size !== r.data.length) problems.push('lightbox.toolbar@1 里有重复的 id');
       contributes['lightbox.toolbar@1'] = r.data as LightboxButtonContribution[];
+    } else if (point === 'patch@1') {
+      const r = InstalledPatchSchema.array().min(1).max(20).safeParse(value);
+      if (!r.success) {
+        const i = r.error.issues[0]!;
+        problems.push(`patch@1 的 ${i.path.join('.')}：${i.message}`);
+        continue;
+      }
+      if (new Set(r.data.map((x) => x.point)).size !== r.data.length) problems.push('patch@1 里有重复的点');
+      contributes['patch@1'] = r.data.map((x) => ({ point: x.point, ...(x.why && { why: x.why }) })) as PatchContribution[];
     } else if (point === 'link@1') {
       const r = InstalledLinkSchema.array().min(1).max(10).safeParse(value);
       if (!r.success) {
@@ -227,6 +245,14 @@ export function checkManifest(raw: unknown, emakiVersion: string, opts: { ai?: b
   // 命令、任务由服务端逻辑实现；后台任务要授权「在后台运行」
   if (!server && (contributes['command@1']?.length || contributes['job.kind@1']?.length)) problems.push('有命令或后台任务，但清单里没有 server（服务端逻辑的入口）');
   if (contributes['job.kind@1']?.length && !perms.background) problems.push('有后台任务，要在 permissions 里写 "background": true');
+  // 改内部（第 3 层）：patch@1、internal、permissions.unsafe 三样一起有（点在不在这个版本的 Emaki 里，插件模块再查）
+  if (contributes['patch@1']?.length) {
+    if (!internal && m.internal === undefined) problems.push('有 patch@1，但清单里没有 internal（改内部的代码的入口）');
+    if (!perms.unsafe) problems.push('有 patch@1，要在 permissions 里写 "unsafe": true（授权单上会写明它改内部）');
+  } else {
+    if (m.internal !== undefined) problems.push('有 internal，但 patch@1 里没有列要改的点');
+    if (perms.unsafe) problems.push('要改内部（permissions 里写了 "unsafe": true），但 patch@1 里没有列要改的点');
+  }
   // 页面对应的网站要有
   for (const pg of contributes['page@1'] ?? [])
     if (pg.site !== undefined && !contributes['site@1']?.some((x) => x.id === pg.site)) problems.push(`页面「${pg.title ?? pg.id}」对应的网站「${pg.site}」在 site@1 里没有`);
@@ -261,6 +287,7 @@ export function checkManifest(raw: unknown, emakiVersion: string, opts: { ai?: b
     ...(Object.keys(permissions).length && { permissions }),
     contributes,
     ...(server && { server }),
+    ...(internal && { internal }),
   };
   return { manifest, problems };
 }
@@ -287,6 +314,7 @@ export function readManifest(dir: string, emakiVersion: string, opts: { ai?: boo
 export function checkPackageFiles(dir: string, m: PluginManifest): string[] {
   const problems: string[] = [];
   if (m.server && fileSize(path.join(dir, ...m.server.split('/'))) === null) problems.push(`服务端逻辑的入口 ${m.server} 不在包里`);
+  if (m.internal && fileSize(path.join(dir, ...m.internal.split('/'))) === null) problems.push(`改内部的入口 ${m.internal} 不在包里`);
   for (const p of m.contributes['page@1'] ?? []) {
     if (!p.view) continue;
     const size = fileSize(path.join(dir, ...p.view.split('/')));

@@ -61,4 +61,21 @@ describe('授权单上的话（宿主按清单生成）', () => {
     const g = { scopes: ['read' as const], folders: [{ id: 'dl', rootId: 1, dir: 'x' }], network: [], background: false, unsafe: false };
     expect(permissionLines(grantAsPermissions(g, { folders: [{ id: 'dl', purpose: '放图' }] })).map((l) => l.detail)).toEqual(['列表、详情、计数', '放图']);
   });
+
+  it('改内部的插件：改的每一处一行、朱色；不说「它不会」', () => {
+    const m = {
+      id: 'example.count-by-work',
+      name: '一个作品算一张',
+      version: '1.0.0',
+      permissions: { unsafe: true },
+      contributes: { 'patch@1': [{ point: 'term:count.unit', why: '组图算一张' }] },
+      internal: 'server/patch.mjs',
+    };
+    const patches = [{ point: 'term:count.unit', label: '排名的张数怎么数', status: 'off' as const }];
+    expect(contributionLines(m, patches)).toEqual([
+      { key: 'patch:term:count.unit', text: '改 Emaki 内部的「排名的张数怎么数」', detail: '组图算一张（term:count.unit）', danger: true },
+    ]);
+    expect(permissionLines(m.permissions).map((l) => [l.text, !!l.danger])).toEqual([['在 Emaki 自己的进程里运行它的代码', true]]);
+    expect(wontLine(m.permissions)).toBeNull();
+  });
 });

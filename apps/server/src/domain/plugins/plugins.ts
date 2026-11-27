@@ -11,6 +11,10 @@
  *
  * 装插件分两步（docs/plugins.md 4.2）：先把包准备好（inspect*：解开、读清单、检查，算出这次要新给的权限），
  * 网页据此出一张授权单；你确认以后 install 才写库。更新也一样，权限没多就不用再出授权单。
+ *
+ * 改内部的插件（第 3 层，patch@1，docs/plugins.md 第 7 节）：装上、启用时记下它改的每个内部点的指纹（core/points.ts，
+ * 存在 plugin_point_state 的 point = 'patch'、key = 插件 id）。Emaki 更新以后指纹对不上，加载的地方（services/plugins/internal.ts）
+ * 不加载它、在这里自动停用（pointsChanged、autoDisable）；你再启用（「仍然启用」）就按现在的样子重新记。
  */
 import {
   AI_VIEW_SCOPES,
@@ -44,11 +48,14 @@ import {
   type PluginsState,
   type NavIcon,
   type NavItemContribution as NavItemContributionInput,
+  type PatchContribution,
+  type PatchInfo,
   type Scope,
 } from '@emaki/shared';
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { Db } from '../../db/connection.ts';
+import type { Actor } from '../../propagation/actor.ts';
 import { iso, parseId } from '../../datasource/sqlite/sql.ts';
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
@@ -63,6 +70,13 @@ import { PluginStorage } from './storage.ts';
 /** 自动停用的原因（插件详情上、通知里同一句） */
 const recentReason = (recent: number, message: string) =>
   `${AUTO_DISABLE.windowMs / 60_000} 分钟内出错 ${recent} 次，自动停用了。最近一次：${message.slice(0, 200)}`;
+
+/** 改内部的插件改的点变了：自动停用的原因（插件详情上、通知里同一句） */
+const pointsReason = (labels: string[]) =>
+  `Emaki 更新以后，它改的${labels.map((l) => `「${l}」`).join('、')}变了，自动停用了。改内部的插件要按新的样子确认还能用；确认没问题可以「仍然启用」`;
+
+/** plugin_point_state 里记改内部的插件的指纹：point = 'patch'，key = 插件 id，value = { 点: 指纹 } */
+const PATCH_STATE = 'patch';
 
 /** 自动停用：这么久之内出错这么多次 */
 export const AUTO_DISABLE = { errors: 5, windowMs: 10 * 60_000 };
@@ -143,12 +157,15 @@ export class Plugins {
   /** 全部插件和生效的结果（计算在 @emaki/shared 的 resolvePlugins，网页没取到时也用它）。safe：这一次按安全模式算（网页地址带 ?safe） */
   state(opts: { safe?: boolean } = {}): PluginsState {
     const safe = this.safeMode || !!opts.safe;
-    return resolvePlugins({
+    const resolved = resolvePlugins({
       plugins: this.records(safe),
       nav: safe ? { sections: {}, visible: {} } : this.navLayout(),
       overrideChoices: safe ? {} : this.overrideChoices(),
       safeMode: safe,
     });
+    // 「谁改了哪里」：现在加了补丁的内部点（按加上的顺序，后面的在外层）
+    const patched = this.ctx.points.patched().map((x) => ({ point: x.name, label: x.label, plugins: x.owners }));
+    return patched.length ? { ...resolved, patched } : resolved;
   }
 
   /** 某个值现在生效的是什么（服务端自己用，比如图片列表没给排序时按它排；安全模式下是内置默认） */
@@ -162,8 +179,14 @@ export class Plugins {
     const p = this.require(id);
     if (!enabled && p.required) throw new BadRequestError(`「${pluginLabel(this.info(p))}」是必需的，不能停用`);
     if (enabled && p.problems.length) throw new BadRequestError(`「${pluginLabel(this.info(p))}」不能启用：${p.problems[0]}`);
+    const patches = p.installed ? (p.manifest.contributes['patch@1'] ?? []) : [];
     return this.ctx.mutate((u) => {
       u.set('plugin_state', 'id = ?', [id]);
+      // 改内部的插件：启用（包括改的点变了以后的「仍然启用」）就是认了现在的样子，按现在的指纹重新记
+      if (enabled && patches.length) {
+        u.set('plugin_point_state', 'point = ? AND key = ?', [PATCH_STATE, id]);
+        this.writePrints(id, patches);
+      }
       const now = iso(this.ctx.clock());
       // 你重新启用了，自动停用的原因就不用再显示
       this.db
@@ -211,12 +234,14 @@ export class Plugins {
       u.set('plugin_grants', 'plugin_id = ?', [id]);
       u.set('plugin_storage', 'plugin_id = ?', [id]);
       u.set('plugin_settings', 'plugin_id = ?', [id]);
+      u.set('plugin_point_state', 'point = ? AND key = ?', [PATCH_STATE, id]);
       this.db.prepare('DELETE FROM user_plugins WHERE id = ?').run(id);
       this.db.prepare('DELETE FROM installed_plugins WHERE id = ?').run(id);
       this.db.prepare('DELETE FROM plugin_state WHERE id = ?').run(id);
       this.db.prepare('DELETE FROM plugin_grants WHERE plugin_id = ?').run(id);
       this.db.prepare('DELETE FROM plugin_storage WHERE plugin_id = ?').run(id);
       this.db.prepare('DELETE FROM plugin_settings WHERE plugin_id = ?').run(id);
+      this.db.prepare('DELETE FROM plugin_point_state WHERE point = ? AND key = ?').run(PATCH_STATE, id);
       this.db.prepare('DELETE FROM plugin_errors WHERE plugin_id = ?').run(id);
       this.changed();
       return { message: `已${p.source === 'installed' ? '卸载' : '删除'}「${pluginLabel(this.info(p))}」` };
@@ -293,7 +318,11 @@ export class Plugins {
       u.set('plugin_grants', 'plugin_id = ?', [id]);
       u.set('plugin_state', 'id = ?', [id]);
       if (opts.showInNav !== undefined) u.set('plugin_point_state', "point = 'nav'");
+      u.set('plugin_point_state', 'point = ? AND key = ?', [PATCH_STATE, id]);
       const now = iso(this.ctx.clock());
+      // 改内部的插件：授权单上确认了（装上、更新），按现在的样子记下它改的点的指纹
+      if (manifest.contributes['patch@1']?.length) this.writePrints(id, manifest.contributes['patch@1']);
+      else this.db.prepare('DELETE FROM plugin_point_state WHERE point = ? AND key = ?').run(PATCH_STATE, id);
       this.db
         .prepare(
           `INSERT INTO installed_plugins (id, manifest, source_kind, source, source_ref, package_dir, installed_at, updated_at)
@@ -459,6 +488,63 @@ export class Plugins {
           ]
         : [],
     );
+  }
+
+  /**
+   * 要加载改内部的代码的插件（E6，docs/plugins.md 第 7 节）：装的、启用着、清单写了 internal 和 patch@1、授权了「改内部」、没有问题的。
+   * 加载的地方（services/plugins/internal.ts）先看 pointsChanged，对不上就 autoDisable、不加载
+   */
+  internalPlugins(): { id: string; version: string; name: string; dir: string; entry: string; points: string[] }[] {
+    if (this.safeMode) return [];
+    const enabled = new Set(this.state().plugins.filter((p) => p.enabled).map((p) => p.id));
+    return this.load(false).flatMap((p) =>
+      p.installed && p.manifest.internal && p.manifest.contributes['patch@1']?.length && p.grant?.unsafe && enabled.has(p.manifest.id) && !p.problems.length
+        ? [
+            {
+              id: p.manifest.id,
+              version: p.manifest.version,
+              name: pluginLabel(this.info(p)),
+              dir: this.packages.resolve(p.installed.package_dir),
+              entry: p.manifest.internal,
+              points: p.manifest.contributes['patch@1'].map((x) => x.point),
+            },
+          ]
+        : [],
+    );
+  }
+
+  /** 改内部的插件改的点里，装上、启用以后变了的（指纹对不上，没记过也算） */
+  pointsChanged(id: string): string[] {
+    const p = this.require(id);
+    const prints = this.prints(id);
+    return (p.manifest.contributes['patch@1'] ?? []).map((x) => x.point).filter((n) => this.ctx.points.has(n) && prints[n] !== this.ctx.points.fingerprint(n));
+  }
+
+  /**
+   * 改内部的插件改的点变了：自动停用，写明是哪几个点，网页上弹一条通知。不是你做的，不进撤销栈。
+   * 你再启用（「仍然启用」）就按现在的样子重新记指纹（setEnabled）
+   */
+  autoDisableChanged(id: string, points: string[]): void {
+    const p = this.require(id);
+    const reason = pointsReason(points.map((n) => this.ctx.points.label(n)));
+    this.ctx.apply(() => {
+      this.db
+        .prepare(
+          `INSERT INTO plugin_state (id, enabled, disabled_reason, updated_at) VALUES (?, 0, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET enabled = 0, disabled_reason = excluded.disabled_reason, updated_at = excluded.updated_at`,
+        )
+        .run(id, reason, iso(this.ctx.clock()));
+      this.changed();
+      this.ctx.bus.publish({ type: 'plugin-notice', plugin: id, name: pluginLabel(this.info(p)), kind: 'points-changed', message: reason });
+    });
+  }
+
+  /**
+   * 改内部的插件加上、撤掉了补丁（services/plugins/internal.ts 加载完、撤完以后）：声明 plugins.changed，
+   * 派生的缓存（角色、作品的张数这些）强刷新，网页重新取。actor 是那个插件（插件的操作算交互，强刷新）
+   */
+  patchesChanged(actor: Actor): void {
+    this.ctx.apply(() => this.changed(), { actor });
   }
 
   /** 改插件的设置（setting@1）：只能填清单里登记的；凭证只写不读。插件自己的配置，不进撤销栈 */
@@ -754,6 +840,7 @@ export class Plugins {
       if (!existsSync(path.join(dir, MANIFEST_FILE)))
         problems.push(r.source_kind === 'folder' ? `文件夹不见了（${r.package_dir}）` : '插件的文件不见了，重新安装');
       else if (checked.manifest) problems.push(...checkPackageFiles(dir, checked.manifest));
+      if (checked.manifest) problems.push(...this.patchProblems(checked.manifest));
       const m = checked.manifest ?? broken(r.id);
       // 导航项的 id 带上插件的 id，和内置的、别的插件的不撞；指向自己页面的填上地址
       const navs = m.contributes['nav.item@1']?.map((n) => ({ ...n, id: `${r.id}/${n.id}`, ...(n.page !== undefined && { to: pluginPagePath(r.id, n.page) }) }));
@@ -805,6 +892,7 @@ export class Plugins {
             ...(p.manifest.contributes['setting@1']?.length && {
               settings: this.settings.values(p.manifest.id, p.manifest.contributes['setting@1']),
             }),
+            ...(p.manifest.contributes['patch@1']?.length && { patches: this.patchInfo(p.manifest.id, p.manifest.contributes['patch@1']) }),
           }),
         },
       }),
@@ -837,6 +925,7 @@ export class Plugins {
     const { manifest, problems } = readManifest(s.root, this.emakiVersion, { ai: s.kind === 'ai' });
     if (manifest && this.load(false).some((p) => p.manifest.id === manifest.id && !p.installed))
       problems.push(`已经有一个 id 是「${manifest.id}」的插件了`);
+    if (manifest) problems.push(...this.patchProblems(manifest));
     return { manifest, problems };
   }
 
@@ -864,6 +953,7 @@ export class Plugins {
       current: existing && grant ? { version: (safeParse(existing.manifest) as PluginManifest | null)?.version ?? '?', grant } : null,
       added: missingPermissions(manifest.permissions, grant && withDeclined(grant, declined)),
       folderDefaults,
+      ...(manifest.contributes['patch@1']?.length && { patches: this.patchInfo(manifest.id, manifest.contributes['patch@1']) }),
     };
   }
 
@@ -894,6 +984,47 @@ export class Plugins {
     if (!root) throw new NotFoundError('图库文件夹');
     if (root.content_mode !== 'auto') throw new BadRequestError('「按漫画导入」的图库文件夹不能给插件放文件：放进去的图会被当成漫画页');
     return { rootId: root.id, dir: normalizeSubdir(dir) };
+  }
+
+  /** 改内部的插件要改的点里，这个版本的 Emaki 没有的 */
+  private patchProblems(m: PluginManifest): string[] {
+    return (m.contributes['patch@1'] ?? []).filter((x) => !this.ctx.points.has(x.point)).map((x) => `它要改的「${x.point}」这个版本的 Emaki 里没有`);
+  }
+
+  /** 改内部的插件改的每个点现在怎么样（PatchInfo） */
+  private patchInfo(id: string, patches: readonly PatchContribution[]): PatchInfo[] {
+    const prints = this.prints(id);
+    const owned = new Set(this.ctx.points.patched().filter((x) => x.owners.includes(id)).map((x) => x.name));
+    return patches.map((x) => ({
+      point: x.point,
+      label: this.ctx.points.label(x.point),
+      ...(x.why && { why: x.why }),
+      status: !this.ctx.points.has(x.point)
+        ? 'missing'
+        : owned.has(x.point)
+          ? 'active'
+          : x.point in prints && prints[x.point] !== this.ctx.points.fingerprint(x.point)
+            ? 'changed'
+            : 'off',
+    }));
+  }
+
+  /** 记下的指纹（{ 点: 指纹 }） */
+  private prints(id: string): Record<string, string> {
+    const row = this.db.prepare('SELECT value FROM plugin_point_state WHERE point = ? AND key = ?').pluck().get(PATCH_STATE, id) as string | undefined;
+    const v = row ? safeParse(row) : null;
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, string>) : {};
+  }
+
+  /** 按现在的样子记下改的点的指纹（在调用方的 mutate 里，调用方先 u.set） */
+  private writePrints(id: string, patches: readonly PatchContribution[]): void {
+    const prints = Object.fromEntries(patches.flatMap((x) => {
+      const f = this.ctx.points.fingerprint(x.point);
+      return f ? [[x.point, f]] : [];
+    }));
+    this.db
+      .prepare('INSERT INTO plugin_point_state (point, key, value) VALUES (?, ?, ?) ON CONFLICT(point, key) DO UPDATE SET value = excluded.value')
+      .run(PATCH_STATE, id, JSON.stringify(prints));
   }
 
   private overrideChoices(): Record<string, string> {

@@ -7,6 +7,7 @@
 | [sort-by-modified](sort-by-modified/) | 只有配置：图片的默认排序改成按修改时间（`override@1`）。图库、别册、角色和作品页，还有手机和 AI 助手拿到的图片列表都跟着变；页面上的排序照旧能换。不要任何权限 |
 | [works-chart](works-chart/) | 自己画的一页（`page@1` 视图）：统计、各作品张数，点一行进作品页，排序存在插件存储里。要「读图库」。写视图看它（`index.html`） |
 | [random-browse](random-browse/) | 只有配置：侧栏加一个「随便看看」，点进去是按随机排的图库（`nav.item@1`）。不要任何权限 |
+| [count-by-work](count-by-work/) | 改内部（第 3 层）：按张数排的地方，同一个 Pixiv 投稿的组图只算一张（角色、作品、画师按「收了几个作品」排）。改的是 `term:count.unit`，要「改内部」 |
 
 两个可以一起装，各管各的。停用或卸载「按修改时间排」，默认排序回到「最近添加」。
 几个插件改同一个值时，插件页上会让你选用哪个。
@@ -31,7 +32,7 @@
 - `site@1`：给一个外部网站用的脚本（`{ "id", "title", "url", "matches", "script" }`），在安卓 App 里打开那个网站本身时加载，往网站上加按钮；脚本经 `window.__emakiSite.call(命令, 输入)` 调这个插件自己的命令。`page@1` 写 `"site"` 指向它，在 App 里打开这一页就是打开网站。例子见 Pixiv 浏览的 `site/pixiv.js`；
 - 服务端逻辑（清单写 `"server": "server/index.mjs"`）和它的 `command@1`（命令）、`job.kind@1`（后台任务）、`setting@1`（设置、登录凭证），见下面「写服务端逻辑」。
 
-改内部（`permissions.unsafe`）要等以后的版本，清单里用到的话会写明「这个版本的 Emaki 还不支持」，装不上。
+- 改内部（第 3 层，`patch@1`），见下面「改内部」。
 
 Emaki 自己附带一个完整的例子：[plugins/pixiv-browser](../../plugins/pixiv-browser/)（Pixiv 浏览，默认没装，在「插件」页的「附带的」里启用）。
 
@@ -94,3 +95,30 @@ export async function activate(emaki) {
 
 视图里调自己的命令直接写命令名：`await view.call('my-plugin.search', { word })`。视图不能连外站，外站的图由服务端取到自己的文件夹，
 视图用 `view.file('thumbs/a.jpg')` 得到能显示的地址。
+
+## 改内部
+
+要改 Emaki 自己怎么做（比如张数怎么数），写一个在 Emaki 自己的进程里加载的模块。它不隔离，能做 Emaki 能做的任何事，所以只能改登记过名字的「内部点」，
+清单里要一一列出来，授权单上会用朱色写明：
+
+```json
+{
+  "permissions": { "unsafe": true },
+  "contributes": { "patch@1": [{ "point": "term:count.unit", "why": "同一个投稿的组图算一张" }] },
+  "internal": "server/patch.mjs"
+}
+```
+
+```js
+// server/patch.mjs
+export function activate(internal) {
+  // around：自己决定怎么调原来的（next）；before 换参数、after 换结果
+  internal.patch('term:count.unit', { around: (next, alias = 'i') => `CASE WHEN … THEN … ELSE ${next(alias)} END` });
+}
+```
+
+- 内部点的名字：`command:<命令>`、`query:<查询>`（`GET /api/commands` 里的名字）、`reaction:<反应>`、`job:<任务种类>`、`term:<口径>`；`internal.points()` 列出全部。
+- 几个插件改同一个点，按启用的先后叠起来，后加的在外层；「插件」页的「谁改了哪里」能看到。停用插件，它的补丁马上撤掉。
+- Emaki 更新以后它改的点变了（实现或者输入的格式不一样了），这个插件会自动停用并通知你；确认还能用，在插件详情里点「仍然启用」。没变的照常用。
+- `internal.engine` 是整个引擎，没登记的东西也拿得到，但 Emaki 改了不会告诉你。
+- 例子见 [count-by-work](count-by-work/)。

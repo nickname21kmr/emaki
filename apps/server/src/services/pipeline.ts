@@ -3,7 +3,7 @@
  *   scan → thumbnail → tag（模型就绪时）→ dedupe；tag 之后按需 danbooru-sync，设置里打开了再补 pixiv-tags。
  * 各阶段由对应任务注入（register）；没有注入的阶段 runner 抛 NotImplementedError，任务显示 failed 并提示缺哪一项。
  */
-import { JOB_KINDS, type JobKind, type PausableJobKind } from '@emaki/shared';
+import { JOB_KINDS, JOB_LABEL, type JobKind, type PausableJobKind } from '@emaki/shared';
 import type { JobContext, JobQueue, JobRunner } from '../core/jobs.ts';
 import { NotImplementedError } from '../http/errors.ts';
 import type { ThumbnailService } from './image/ThumbnailService.ts';
@@ -191,6 +191,8 @@ export class Pipeline {
   registerKind(kind: JobKind, run: JobRunner): void {
     if (this.kinds.has(kind)) throw new Error(`任务种类 ${kind} 已经登记过了`);
     this.kinds.set(kind, run);
+    // 内置任务的执行体是内部点 job:<种类>（docs/plugins.md 第 7 节）：补丁在队列里套（core/jobs.ts），指纹按这里登记的执行体算
+    this.d.jobs().points?.define(`job:${kind}`, { kind: 'job', label: `后台任务「${JOB_LABEL[kind]}」` }, run);
   }
 
   /** 登记过的任务种类 */

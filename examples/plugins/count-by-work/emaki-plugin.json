@@ -1,0 +1,14 @@
+{
+  "id": "example.count-by-work",
+  "name": "一个作品算一张",
+  "version": "1.0.0",
+  "description": "按张数排的地方，同一个 Pixiv 投稿的几张图（组图）只算一张：角色、作品、画师按「收了几个作品」排",
+  "author": "Emaki 样例",
+  "permissions": { "unsafe": true },
+  "contributes": {
+    "patch@1": [
+      { "point": "term:count.unit", "why": "同一个投稿的组图算一张；本子、画集照旧一页算一张" }
+    ]
+  },
+  "internal": "server/patch.mjs"
+}

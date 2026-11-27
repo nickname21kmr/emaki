@@ -6,6 +6,7 @@ import type { Artist, ID, ImageArtist, Rating } from '@emaki/shared';
 import type { Db } from '../../db/connection.ts';
 import { artistGroups, type ArtistMeta } from '../../services/danbooru/artistNames.ts';
 import { toId } from './sql.ts';
+import { COUNT_UNIT } from '../../readmodel/terms.ts';
 
 function loadMeta(db: Db): Map<string, ArtistMeta> {
   const rows = db.prepare('SELECT name, display, names, twitter, alias_of FROM danbooru_artists WHERE not_found = 0').all() as {
@@ -83,18 +84,19 @@ export function tagNames(db: Db, tags: string[]): string[] {
   return tags.map((t) => meta.get(t)?.display ?? pretty(t));
 }
 
-export function listArtists(db: Db): Artist[] {
+/** unit：一张图的计数键的 SQL（内部点 term:count.unit，readmodel/terms.ts 的 COUNT_UNIT）；键相同的算一张 */
+export function listArtists(db: Db, unit = COUNT_UNIT('i')): Artist[] {
   const meta = loadMeta(db);
   const links = loadLinks(db);
   const groups = artistGroups(db.prepare('SELECT DISTINCT artist FROM image_artists').pluck().all() as string[], meta, links);
   const rows = db
     .prepare(
-      `SELECT ia.artist, ia.score, i.id, i.dominant_color, i.rating, i.width, i.height
+      `SELECT ia.artist, ia.score, i.id, ${unit} AS unit, i.dominant_color, i.rating, i.width, i.height
        FROM image_artists ia JOIN v_illust_images i ON i.id = ia.image_id`,
     )
-    .all() as { artist: string; score: number; id: number; dominant_color: string | null; rating: Rating; width: number; height: number }[];
+    .all() as { artist: string; score: number; id: number; unit: number; dominant_color: string | null; rating: Rating; width: number; height: number }[];
 
-  const byGroup = new Map<string, { ids: Set<number>; tags: Set<string>; best: (typeof rows)[number] | null }>();
+  const byGroup = new Map<string, { units: Set<number>; tags: Set<string>; best: (typeof rows)[number] | null }>();
   // 封面：全年龄优先，再按分数
   const better = (a: (typeof rows)[number], b: (typeof rows)[number] | null): boolean => {
     if (!b) return true;
@@ -105,8 +107,8 @@ export function listArtists(db: Db): Artist[] {
   for (const r of rows) {
     const g = groups.get(r.artist) ?? r.artist;
     let e = byGroup.get(g);
-    if (!e) byGroup.set(g, (e = { ids: new Set(), tags: new Set(), best: null }));
-    e.ids.add(r.id);
+    if (!e) byGroup.set(g, (e = { units: new Set(), tags: new Set(), best: null }));
+    e.units.add(r.unit);
     e.tags.add(r.artist);
     if (better(r, e.best)) e.best = r;
   }
@@ -129,7 +131,7 @@ export function listArtists(db: Db): Artist[] {
       tags: [...e.tags],
       aliases: [...aliases].slice(0, 30),
       twitter: m?.twitter ?? null,
-      imageCount: e.ids.size,
+      imageCount: e.units.size,
       cover: b ? { id: toId(b.id) as ID, dominantColor: b.dominant_color ?? '#888888', rating: b.rating, width: b.width, height: b.height } : null,
       manual: links.has(tag) || [...e.tags].some((t) => links.has(t)),
     });

@@ -5,6 +5,7 @@ import { config } from './config.ts';
 import { EventBus } from './core/events.ts';
 import type { Settings } from '@emaki/shared';
 import type { SqliteDataSource } from './datasource/sqlite/SqliteDataSource.ts';
+import { InternalPlugins } from './services/plugins/internal.ts';
 import { PluginRuntime } from './services/plugins/runtime/host.ts';
 import { KeepAwake } from './services/system/keepAwake.ts';
 
@@ -29,6 +30,8 @@ const lan = new LanEntry(ds, bus, { log: (m) => app.log.info(m) });
 app.addHook('onClose', () => lan.close());
 // 插件的服务端逻辑的子进程（listen 以后才起）
 const plugins = new PluginRuntime(ds, { log: (m) => app.log.info(m) });
+// 改内部的插件（docs/plugins.md 第 7 节）：在这个进程里加载，给登记过名字的内部点打补丁
+const internals = new InternalPlugins(ds, { log: (m) => app.log.info(m) });
 // 后台任务运行时不让电脑休眠（设置 → 识别里可关）；演示数据不需要
 const awake =
   config.dataSource === 'sqlite'
@@ -40,6 +43,8 @@ try {
   app.log.info(`Emaki 后端已启动：http://${config.host}:${config.port}（数据源：${config.dataSource}）`);
   // 打不开（端口被占用等）不影响本机入口，原因记在「手机访问」的状态里
   await lan.start();
+  // 改内部的插件先加载（补丁加上以后派生的数强刷新、网页重新取）；它改的点变了就不加载、自动停用。安全模式下不加载
+  void internals.start();
   // 插件的服务端逻辑（docs/plugins.md 第 6 节）：每个插件一个子进程，插件变了自己起停；安全模式下不起
   plugins.start();
   // 优雅退出：关掉 HTTP 再关数据库（WAL 落盘）
@@ -51,6 +56,7 @@ try {
       awake?.close();
       await app.close();
       await plugins.close();
+      internals.close();
       await ds.close();
       process.exit(0);
     });

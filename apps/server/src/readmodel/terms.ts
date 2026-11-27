@@ -178,6 +178,21 @@ export const WORK_HAS_ILLUSTRATION = `(EXISTS (SELECT 1 FROM image_copyrights x 
                JOIN v_illust_images i ON i.id = ic.image_id WHERE cw.work_id = w.id)
     OR (w.danbooru_tag = 'original' AND EXISTS (SELECT 1 FROM v_illust_images i WHERE i.original_at IS NOT NULL)))`;
 
+// ------------------------------------------------------------------ 排名用的「一张」
+
+/**
+ * 排名、排序用的张数按什么数（内部点 term:count.unit，第 3 层插件能改，docs/plugins.md 第 7 节）：返回一张图的「计数键」的 SQL，
+ * 键相同的算一张。内置是每张图各算一张（图片 id）；比如「一个作品算一张」的插件把同一个 Pixiv 投稿的组图算成一张。
+ * 用它的：角色的张数、最近 30 天、+N（Derived 的角色统计），作品的张数（Derived 的作品统计），画师的张数（listArtists）——
+ * 角色、作品、画师列表按张数排、首页「收得最多」「你最常看的」都是这几个数。图库的总数、近 7 天的柱状图不用它。
+ * a 是 images（或视图）的别名。用法：COUNT(DISTINCT 计数键)，计数键 = ctx.points.wrap(COUNT_UNIT_POINT, COUNT_UNIT)('i')
+ */
+export const COUNT_UNIT = (a = 'i'): string => `${a}.id`;
+export const COUNT_UNIT_POINT = 'term:count.unit';
+
+/** 口径里登记成内部点的（引擎开的时候登记，core/points.ts）。改了它们的用法（拼进 SQL 的方式）就把 version 加一 */
+export const TERM_POINTS = [{ name: COUNT_UNIT_POINT, label: '排名的张数怎么数', version: 1, base: COUNT_UNIT }] as const;
+
 // ------------------------------------------------------------------ 其他展示口径
 
 /** 「没认出」的画面主题：存的 theme 加上查询时判定的漫画、不像插画、敏感（与 services/classify/theme.ts 的 resolveTheme 一致） */

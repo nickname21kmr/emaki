@@ -2,6 +2,7 @@ import { performance } from 'node:perf_hooks';
 /**
  * 派生缓存：每个角色 / 作品的张数、封面等聚合结果缓存在内存，数据变化时失效重建。
  * 口径见 TASKS.md「全局约定 → 数据口径」：张数、+N、最近在收只数插画（v_illust_images，D3），其余类型记在 otherCount。
+ * 「一张」按 readmodel/terms.ts 的 COUNT_UNIT（内部点 term:count.unit，第 3 层插件能改）。
  */
 import { searchKey, type CharacterSource, type FocusPoint, type Rating } from '@emaki/shared';
 import { hashString, hslToHex } from '../../util/color.ts';
@@ -9,7 +10,7 @@ import { FOCUS_TAGS, inferCoverFocus } from '../../services/covers/focus.ts';
 import { COVER_TAG_WEIGHTS, coverQuality, isUnfitCover } from '../../services/covers/quality.ts';
 import type { SqliteContext } from './context.ts';
 import { DAY, iso, RECENT_DAYS } from './sql.ts';
-import { ART_KINDS_SQL, ILLUSTRATION } from '../../readmodel/terms.ts';
+import { ART_KINDS_SQL, COUNT_UNIT, COUNT_UNIT_POINT, ILLUSTRATION } from '../../readmodel/terms.ts';
 
 export interface CharacterRec {
   id: number;
@@ -103,6 +104,10 @@ export class Derived {
   private build(now: number): DerivedData {
     const db = this.ctx.db;
     const cutoff = iso(now - RECENT_DAYS * DAY);
+    // 张数按「排名的张数怎么数」（内部点 term:count.unit）：内置是一张图算一张（COUNT(DISTINCT i.id)，和 COUNT(*) 一样多），
+    // 「一个作品算一张」这类插件把同一个投稿的组图算成一张。只用在角色、作品的张数、最近 30 天、+N 上
+    const unit = this.ctx.points.wrap(COUNT_UNIT_POINT, COUNT_UNIT)('i');
+    const count = (when: string) => (when === '1' ? `COUNT(DISTINCT ${unit})` : `COUNT(DISTINCT CASE WHEN ${when} THEN ${unit} END)`);
 
     // A 基础行
     const charRows = db
@@ -141,9 +146,9 @@ export class Derived {
       (
         db
           .prepare(
-            `SELECT ic.character_id AS id, COUNT(*) AS image_count, MAX(i.added_at) AS last_added_at,
-                    SUM(i.added_at >= @cutoff) AS recent_count,
-                    SUM(i.added_at > COALESCE(c.last_seen_at, @cutoff)) AS new_count
+            `SELECT ic.character_id AS id, ${count('1')} AS image_count, MAX(i.added_at) AS last_added_at,
+                    ${count('i.added_at >= @cutoff')} AS recent_count,
+                    ${count('i.added_at > COALESCE(c.last_seen_at, @cutoff)')} AS new_count
              FROM image_characters ic
              JOIN v_illust_images i ON i.id = ic.image_id
              JOIN characters c ON c.id = ic.character_id
@@ -247,11 +252,11 @@ export class Derived {
       (
         db
           .prepare(
-            `SELECT w.work_id AS id, COUNT(*) AS image_count, SUM(i.added_at >= ?) AS recent_count
+            `SELECT w.work_id AS id, ${count('1')} AS image_count, ${count('i.added_at >= @cutoff')} AS recent_count
              FROM v_image_works w JOIN v_illust_images i ON i.id = w.image_id
              GROUP BY w.work_id`,
           )
-          .all(cutoff) as { id: number; image_count: number; recent_count: number | null }[]
+          .all({ cutoff }) as { id: number; image_count: number; recent_count: number | null }[]
       ).map((r) => [r.id, r]),
     );
 

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { Points } from './points.ts';
 import { JOB_KINDS, JOB_LABEL as JOB_LABELS, jobTitle, type Job, type JobKind } from '@emaki/shared';
 import type { EventBus } from './events.ts';
 import { jobActor, runAs } from '../propagation/actor.ts';
@@ -51,6 +52,8 @@ export class JobQueue {
   private readonly runners = new Map<string, JobRunner>();
   private readonly controllers = new Map<string, AbortController>();
   private readonly running: Record<Lane, boolean> = { io: false, gpu: false, plugin: false };
+  /** 内部点（引擎的上下文建好以后接上，datasource/sqlite/context.ts）；单元测试里没有 */
+  points: Points | null = null;
 
   constructor(
     private readonly bus: EventBus,
@@ -61,6 +64,10 @@ export class JobQueue {
      */
     private readonly onFinished?: (kind: JobKind) => void,
   ) {}
+
+  usePoints(points: Points): void {
+    this.points = points;
+  }
 
   list(): Job[] {
     // 最新的在前，只返回最近 20 条
@@ -86,7 +93,9 @@ export class JobQueue {
       finishedAt: null,
     };
     this.jobs.push(job);
-    this.runners.set(job.id, this.resolveRunner(kind));
+    // 执行体是内部点 job:<种类>（第 3 层插件能改）：跑的时候再套补丁，排队期间补丁变了也按跑的时候的
+    const runner = this.resolveRunner(kind);
+    this.runners.set(job.id, (ctx) => (this.points ? this.points.wrap(`job:${kind}`, runner) : runner)(ctx));
     this.trim();
     this.publish(job);
     void this.pump();

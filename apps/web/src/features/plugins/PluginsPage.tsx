@@ -29,7 +29,7 @@ import { UpdateCheck, useCheckUpdate } from './UpdateCheck';
 import { Slot } from '@/blocks/Slot';
 
 export const SOURCE_LABEL: Record<PluginSource, string> = { builtin: '内置', mine: '我的', installed: '装的' };
-export const KIND_LABEL: Record<PluginKind, string> = { page: '页面', override: '覆盖', feature: '功能' };
+export const KIND_LABEL: Record<PluginKind, string> = { page: '页面', override: '覆盖', feature: '功能', internal: '改内部' };
 const SECTION_LABEL: Record<NavSection, string> = { main: '主要', triage: '整理', footer: '底部' };
 
 type View = 'all' | 'pages';
@@ -173,6 +173,7 @@ function AllView({ can }: { can: boolean }) {
             { value: 'page', label: '页面' },
             { value: 'override', label: '覆盖' },
             { value: 'feature', label: '功能' },
+            ...(state.plugins.some((p) => p.kinds.includes('internal')) ? [{ value: 'internal' as const, label: '改内部' }] : []),
           ]}
         />
         <Segmented
@@ -201,6 +202,35 @@ function AllView({ can }: { can: boolean }) {
           </ul>
         </section>
       ))}
+      {!!state.patched?.length && (
+        <section>
+          {/* 谁改了哪里（docs/plugins.md 第 7 节）：出了问题能直接定位到是哪个插件 */}
+          <SectionTitle numbered={false} hint="改内部的插件现在改着的地方；几个插件改同一处时按启用的先后叠起来">
+            谁改了哪里
+          </SectionTitle>
+          <ul className="divide-y divide-line rounded-lg bg-raised text-[13px] ring-1 ring-line">
+            {state.patched.map((x) => (
+              <li key={x.point} className="flex flex-wrap items-baseline gap-x-2 px-4 py-2.5">
+                <span className="font-medium">{x.label}</span>
+                <span className="font-mono text-[11.5px] text-fg-subtle">{x.point}</span>
+                <span className="ml-auto text-fg-muted">
+                  {[...new Set(x.plugins)].map((id, i) => {
+                    const owner = state.plugins.find((p) => p.id === id);
+                    return (
+                      <span key={id}>
+                        {i > 0 && '、'}
+                        <Link to={`/plugins/${encodeURIComponent(id)}`} className="text-fg hover:underline">
+                          {owner ? pluginLabel(owner) : id}
+                        </Link>
+                      </span>
+                    );
+                  })}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {bundled.length > 0 && (
         <section>
           <SectionTitle numbered={false} hint="随 Emaki 一起发，默认没装；启用时和别的插件一样先看授权单">

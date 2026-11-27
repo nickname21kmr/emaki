@@ -209,6 +209,17 @@ export interface SettingContribution {
   hint?: string;
 }
 
+/**
+ * patch@1：改内部（第 3 层，docs/plugins.md 第 7 节，E6）。清单里列出要改的内部点，代码在 internal 入口里用 internal.patch 改，
+ * 没列的点改不了；授权单、「插件」页按这里说「它改了哪里」
+ */
+export interface PatchContribution {
+  /** 内部点的名字：command:<命令>、query:<查询>、reaction:<反应>、job:<任务种类>、term:<口径>，比如 term:count.unit */
+  point: string;
+  /** 为什么改、改成什么样（插件页上显示） */
+  why?: string;
+}
+
 export interface Contributes {
   'page@1'?: PageContribution[];
   'nav.item@1'?: NavItemContribution[];
@@ -224,6 +235,7 @@ export interface Contributes {
   'setting@1'?: SettingContribution[];
   'site@1'?: SiteContribution[];
   'link@1'?: LinkContribution[];
+  'patch@1'?: PatchContribution[];
 }
 
 export interface PluginManifest {
@@ -240,6 +252,8 @@ export interface PluginManifest {
   contributes: Contributes;
   /** 服务端逻辑的入口（包里的 .js / .mjs / .cjs，E5）：每个插件一个 Node 子进程 */
   server?: string;
+  /** 改内部的入口（包里的 .js / .mjs，E6）：在 Emaki 自己的进程里加载，用 internal.patch 改 patch@1 里列的点 */
+  internal?: string;
 }
 
 /** 条目类的贡献点（E3）：它们的条目停用时一起不画 */
@@ -259,6 +273,7 @@ export const INSTALLABLE_POINTS = [
   'site@1',
   'lightbox.toolbar@1',
   'link@1',
+  'patch@1',
 ] as const;
 
 // ---------------------------------------------------------------- 授权（docs/plugins.md 第 4 节）
@@ -468,8 +483,8 @@ export const BUILTIN_PLUGINS: readonly BuiltinPlugin[] = [
 // ---------------------------------------------------------------- GET /api/plugins
 
 /** 插件页上显示的类型（从贡献推出来，不另存） */
-/** 用户看到的类型（从贡献推出来，9.0）：页面、覆盖、功能（有服务端逻辑） */
-export type PluginKind = 'page' | 'override' | 'feature';
+/** 用户看到的类型（从贡献推出来，9.0）：页面、覆盖、功能（有服务端逻辑）、改内部（第 3 层） */
+export type PluginKind = 'page' | 'override' | 'feature' | 'internal';
 
 /** 装的插件从哪来；ai 是 AI 助手做的页面（docs/plugins.md 5.1，算「我的」） */
 export type PackageKind = 'file' | 'folder' | 'git' | 'ai';
@@ -518,6 +533,27 @@ export interface PluginInfo {
   disabledReason?: string | null;
   /** 清单里 setting@1 登记的设置现在的值（凭证只说填没填，值不给网页） */
   settings?: PluginSettingValue[];
+  /** 改内部的插件（patch@1）：改的每个点现在怎么样 */
+  patches?: PatchInfo[];
+}
+
+/**
+ * 改内部的插件改的一个点现在怎么样：active 补丁加上了；off 没加（插件停用了、还在加载）；
+ * changed 装上、启用以后 Emaki 改了这个点（更新了），插件自动停用，等你「仍然启用」；missing 这个版本的 Emaki 里没有这个点
+ */
+export interface PatchInfo {
+  point: string;
+  /** 点的人话名字（「排名的张数怎么数」） */
+  label: string;
+  why?: string;
+  status: 'active' | 'off' | 'changed' | 'missing';
+}
+
+/** 加了补丁的一个内部点：谁改了它（按加上的顺序，后面的在外层） */
+export interface PatchedPoint {
+  point: string;
+  label: string;
+  plugins: string[];
 }
 
 /** 插件的一项设置现在的值：普通的给值；凭证（secret）value 一律是 null，只看 filled */
@@ -553,6 +589,8 @@ export interface PluginPackage {
   added: PluginPermissions;
   /** 每个要的文件夹默认放在哪（装过的沿用原来选的） */
   folderDefaults: Record<string, { rootId: number; dir: string } | null>;
+  /** 改内部的插件：要改的点（授权单上列出来） */
+  patches?: PatchInfo[];
 }
 
 /** 打开一个视图页面要的东西（plugins.view，GET /api/plugins/:id/pages/:page） */
@@ -626,6 +664,8 @@ export interface PluginsState {
   overrides: Record<OverrideKey, OverrideState>;
   /** 附带的插件里还没装的（服务端填；安全模式下没有） */
   bundled?: BundledPlugin[];
+  /** 「谁改了哪里」：加了补丁的内部点（服务端填，docs/plugins.md 第 7 节） */
+  patched?: PatchedPoint[];
 }
 
 /** 插件显示的名字：改过就用改的 */
@@ -653,7 +693,7 @@ export interface PluginRecord {
   /** 不能启用的原因：有的话按停用算 */
   problems?: string[];
   /** 原样带到 PluginInfo 上的（装的插件的来源、授权、出错记录） */
-  extra?: Pick<PluginInfo, 'installed' | 'permissions' | 'grant' | 'errors' | 'disabledReason' | 'settings'>;
+  extra?: Pick<PluginInfo, 'installed' | 'permissions' | 'grant' | 'errors' | 'disabledReason' | 'settings' | 'patches'>;
 }
 
 export function kindsOf(c: Contributes): PluginKind[] {
@@ -661,6 +701,7 @@ export function kindsOf(c: Contributes): PluginKind[] {
   if (c['page@1']?.length || c['nav.item@1']?.length) kinds.push('page');
   if (c['override@1'] && Object.keys(c['override@1']).length) kinds.push('override');
   if (c['command@1']?.length || c['job.kind@1']?.length) kinds.push('feature');
+  if (c['patch@1']?.length) kinds.push('internal');
   return kinds;
 }
 
