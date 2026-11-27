@@ -4,11 +4,14 @@
  * 「仍然启用」以后照常；清单里没列的点改不了；这个版本没有的点装不上；activate 出错、补丁出错记在插件头上。
  */
 import type { PluginInfo, PluginsState, ServerEvent } from '@emaki/shared';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EventBus } from '../../src/core/events.ts';
+import { WEB_POINTS } from '@emaki/shared';
+import { checkManifest } from '../../src/domain/plugins/manifest.ts';
 import { COUNT_UNIT, COUNT_UNIT_POINT } from '../../src/readmodel/terms.ts';
+import { defineWebPoints, WEB_SRC_DIR } from '../../src/services/plugins/webPoints.ts';
 import { InternalPlugins } from '../../src/services/plugins/internal.ts';
 import { SqliteDataSource } from '../helpers/client.ts';
 import { makeTmpDir } from '../helpers/tmp.ts';
@@ -123,7 +126,10 @@ describe('改内部的插件', () => {
     const pkg = await install(EXAMPLE);
     // 授权单：要改内部、改的是哪个点
     expect(pkg.manifest.permissions).toEqual({ unsafe: true });
-    expect(pkg.patches).toEqual([{ point: COUNT_UNIT_POINT, label: '排名的张数怎么数', why: expect.any(String), status: 'off' }]);
+    expect(pkg.patches).toEqual([
+      { point: COUNT_UNIT_POINT, label: '排名的张数怎么数', why: expect.any(String), status: 'off' },
+      { point: 'fn:count.unit', label: '排名的张数后面写的字', why: expect.any(String), status: 'off' },
+    ]);
     await until(() => loader!.isLoaded(ID), '加载');
     await until(async () => (await counts()).character === 3, '张数按投稿数');
     expect(await counts()).toEqual(BY_WORK);
@@ -131,17 +137,34 @@ describe('改内部的插件', () => {
     const p = await info();
     expect(p.kinds).toEqual(['internal']);
     expect(p.grant?.unsafe).toBe(true);
-    expect(p.patches).toEqual([expect.objectContaining({ point: COUNT_UNIT_POINT, status: 'active' })]);
-    // 「谁改了哪里」
-    expect((await q<PluginsState>('plugins.state')).patched).toEqual([{ point: COUNT_UNIT_POINT, label: '排名的张数怎么数', plugins: [ID] }]);
+    expect(p.patches).toEqual([
+      expect.objectContaining({ point: COUNT_UNIT_POINT, status: 'active' }),
+      expect.objectContaining({ point: 'fn:count.unit', status: 'active' }),
+    ]);
+    // 「谁改了哪里」：服务端的和网页的
+    const st = await q<PluginsState>('plugins.state');
+    expect(st.patched).toEqual([
+      { point: COUNT_UNIT_POINT, label: '排名的张数怎么数', plugins: [ID] },
+      { point: 'fn:count.unit', label: '排名的张数后面写的字', plugins: [ID] },
+    ]);
+    // 网页要加载的模块：地址带版本和修改时间，只能改清单里列的网页的点
+    expect(st.webPatches).toEqual([
+      { plugin: ID, version: '1.1.0', url: expect.stringMatching(/^\/api\/plugin-web\/count-by-work\/1\.1\.0-\d+\/web\/patch\.js$/), points: ['fn:count.unit'] },
+    ]);
+    expect(ds.plugins.webFile(ID, 'web/patch.js')).toBe(path.join(EXAMPLE, 'web', 'patch.js'));
+    // 只给包里的 .js、.mjs，不能跳出去
+    expect(ds.plugins.webFile(ID, 'emaki-plugin.json')).toBeNull();
+    expect(ds.plugins.webFile(ID, '../pixiv-browser/site/pixiv.js')).toBeNull();
     // 补丁加上以后推了 plugins.changed（网页重新取张数）
     expect(events.some((e) => e.type === 'changed' && e.changes.includes('plugins.changed'))).toBe(true);
 
     const off = await exec<{ undoToken: string }>('plugins.setEnabled', { id: ID, enabled: false });
     await until(() => !loader!.isLoaded(ID), '撤掉');
     expect(await counts()).toEqual(BUILTIN);
-    expect((await info()).patches).toEqual([expect.objectContaining({ status: 'off' })]);
+    expect((await info()).patches).toEqual([expect.objectContaining({ status: 'off' }), expect.objectContaining({ status: 'off' })]);
     expect((await q<PluginsState>('plugins.state')).patched).toBeUndefined();
+    expect((await q<PluginsState>('plugins.state')).webPatches).toBeUndefined();
+    expect(ds.plugins.webFile(ID, 'web/patch.js')).toBeNull();
 
     // 撤销「停用」：又加上
     await exec('history.undo', { token: off.undoToken });
@@ -164,7 +187,7 @@ describe('改内部的插件', () => {
     expect(await counts()).toEqual(BUILTIN);
     const p = await info();
     expect(p.disabledReason).toMatch(/它改的「排名的张数怎么数」变了.*仍然启用/);
-    expect(p.patches).toEqual([expect.objectContaining({ status: 'changed' })]);
+    expect(p.patches).toEqual([expect.objectContaining({ status: 'changed' }), expect.objectContaining({ status: 'off' })]);
     expect(events).toContainEqual(expect.objectContaining({ type: 'plugin-notice', plugin: ID, kind: 'points-changed', message: p.disabledReason }));
     expect(ds.plugins.pointsChanged(ID)).toEqual([COUNT_UNIT_POINT]);
 
@@ -174,7 +197,7 @@ describe('改内部的插件', () => {
     await until(async () => (await counts()).character === 3, '张数按投稿数');
     expect(ds.plugins.pointsChanged(ID)).toEqual([]);
     expect((await info()).disabledReason).toBeNull();
-    expect((await info()).patches).toEqual([expect.objectContaining({ status: 'active' })]);
+    expect((await info()).patches).toEqual([expect.objectContaining({ status: 'active' }), expect.objectContaining({ status: 'active' })]);
 
     // 没变的点重启以后照常加载（不会每次部署都停）
     loader!.close();
@@ -224,6 +247,61 @@ describe('改内部的插件', () => {
     expect((await info('test.top')).errors![0]).toMatchObject({ source: '改内部', message: 'query:characters.top：不要 13' });
   });
 
+  it('只改网页的插件：服务端只对指纹；网页的点变了（源文件改了）也自动停用，网页不再加载它', async () => {
+    await startLoader();
+    const folder = path.join(dir, 'test.web');
+    mkdirSync(path.join(folder, 'web'), { recursive: true });
+    writeFileSync(
+      path.join(folder, 'emaki-plugin.json'),
+      JSON.stringify({
+        id: 'test.web',
+        name: '改看图器',
+        version: '1.0.0',
+        permissions: { unsafe: true },
+        contributes: { 'patch@1': [{ point: 'component:lightbox.Stage' }] },
+        web: 'web/patch.js',
+      }),
+    );
+    writeFileSync(path.join(folder, 'web', 'patch.js'), 'export function activate(internal) {}');
+    await install(folder);
+    await until(() => loader!.isLoaded('test.web'), '对过指纹');
+    expect((await q<PluginsState>('plugins.state')).webPatches).toEqual([expect.objectContaining({ plugin: 'test.web', points: ['component:lightbox.Stage'] })]);
+    expect(ds.ctx.points.patched()).toEqual([]);
+    loader!.close();
+
+    // 网页的点按源文件算指纹：源文件改了就算变了
+    const src = path.join(dir, 'web-src');
+    mkdirSync(path.join(src, 'components/media/lightbox'), { recursive: true });
+    for (const p of WEB_POINTS) {
+      mkdirSync(path.dirname(path.join(src, p.file)), { recursive: true });
+      writeFileSync(path.join(src, p.file), readFileSync(path.join(WEB_SRC_DIR, p.file), 'utf8'));
+    }
+    defineWebPoints(ds.ctx.points, src);
+    expect(ds.plugins.pointsChanged('test.web')).toEqual([]);
+    writeFileSync(path.join(src, 'components/media/lightbox/Stage.tsx'), '// 改过了\n', { flag: 'a' });
+    defineWebPoints(ds.ctx.points, src);
+    expect(ds.plugins.pointsChanged('test.web')).toEqual(['component:lightbox.Stage']);
+    // 加载之前就不给网页了
+    expect((await q<PluginsState>('plugins.state')).webPatches).toBeUndefined();
+    await startLoader();
+    await until(async () => !(await info('test.web')).enabled, '自动停用');
+    expect((await info('test.web')).disabledReason).toMatch(/「看图器的大图」变了/);
+    // 服务端不能给网页的点加补丁
+    expect(() => ds.ctx.points.patch('component:lightbox.Stage', 'x', { after: (r) => r })).toThrow(/网页上/);
+  });
+
+  it('清单：改服务端的点要 internal，改网页的点要 web，入口要有点可改', async () => {
+    const check = (m: object) =>
+      checkManifest({ id: 'test.m', name: 'm', version: '1.0.0', permissions: { unsafe: true }, contributes: {}, ...m }, '0.1.17').problems;
+    expect(check({ contributes: { 'patch@1': [{ point: 'fn:count.unit' }] } })).toEqual([expect.stringMatching(/fn:count\.unit.*没有 web/)]);
+    expect(check({ contributes: { 'patch@1': [{ point: 'term:count.unit' }] } })).toEqual([expect.stringMatching(/term:count\.unit.*没有 internal/)]);
+    expect(check({ contributes: { 'patch@1': [{ point: 'term:count.unit' }] }, internal: 'a.mjs', web: 'b.js' })).toEqual([
+      expect.stringMatching(/有 web，但 patch@1 里没有列要改的网页的点/),
+    ]);
+    expect(check({ contributes: { 'patch@1': [{ point: 'fn:count.unit' }] }, web: 'b.cjs' })).toEqual([expect.stringMatching(/web：改网页的入口要是 ES 模块/)]);
+    expect(check({ contributes: { 'patch@1': [{ point: 'nope:x' }] }, web: 'b.js' })[0]).toMatch(/内部点的名字/);
+  });
+
   it('这个版本的 Emaki 没有的点：装不上；清单要 internal、unsafe、patch@1 三样一起', async () => {
     const folder = writePlugin('test.nope', ['term:nope'], 'export function activate() {}');
     const pkg = await ds.plugins.inspect({ kind: 'folder', path: folder });
@@ -233,12 +311,15 @@ describe('改内部的插件', () => {
 });
 
 describe('内部点的登记', () => {
-  it('内置的命令、查询、反应、后台任务、口径都登记了，插件的命令不算', () => {
+  it('内置的命令、查询、反应、后台任务、口径、网页的点都登记了，插件的命令不算', () => {
     const list = ds.ctx.points.list();
     const kinds = new Set(list.map((p) => p.kind));
-    expect([...kinds].sort()).toEqual(['command', 'job', 'query', 'reaction', 'term']);
+    expect([...kinds].sort()).toEqual(['command', 'component', 'fn', 'job', 'query', 'reaction', 'term']);
     const names = new Set(list.map((p) => p.name));
-    for (const n of ['query:characters.top', 'command:plugins.setEnabled', 'reaction:invalidateCaches', 'job:scan', COUNT_UNIT_POINT]) expect(names).toContain(n);
+    for (const n of ['query:characters.top', 'command:plugins.setEnabled', 'reaction:invalidateCaches', 'job:scan', COUNT_UNIT_POINT, ...WEB_POINTS.map((p) => p.name)])
+      expect(names).toContain(n);
+    // 网页的点的源文件都在（指纹按它算）
+    for (const p of WEB_POINTS) expect([p.name, readFileSync(path.join(WEB_SRC_DIR, p.file), 'utf8').includes(`'${p.name}'`)]).toEqual([p.name, true]);
     expect(list.filter((p) => p.kind === 'query' || p.kind === 'command')).toHaveLength(ds.registry.list().length);
     // 每个点都算得出指纹（命令的输入格式要能转成 JSON Schema）
     for (const p of list) expect([p.name, ds.ctx.points.fingerprint(p.name)]).toEqual([p.name, expect.stringMatching(/^[0-9a-f]{16}$/)]);

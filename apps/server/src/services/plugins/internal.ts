@@ -2,7 +2,8 @@
  * 改内部的插件（第 3 层，docs/plugins.md 第 7 节，E6）：在 Emaki 自己的进程里加载插件清单里的 internal 入口，
  * 让它给登记过名字的内部点（core/points.ts）打补丁。
  *
- * - 起停：按插件模块算出的 internalPlugins()（装的、启用着、写了 internal 和 patch@1、授权了「改内部」、没有问题的）加载；
+ * - 起停：按插件模块算出的 internalPlugins()（装的、启用着、有 patch@1、授权了「改内部」、没有问题的）加载；
+ *   只改网页的插件（没有 internal）这里只对指纹，代码由网页加载（apps/web/src/features/plugins/internal/）；
  *   插件变了（plugins.changed：启用、停用、更新、卸载、撤销）重新对一遍。停用、卸载就撤掉它的全部补丁。安全模式下一个都不加载。
  * - 先对指纹：装上、启用时记下了它改的每个点的指纹；现在对不上（Emaki 更新以后那个点变了）就不加载，自动停用并通知，
  *   你在插件详情里「仍然启用」以后按现在的样子重新记（domain/plugins/plugins.ts）。
@@ -111,7 +112,8 @@ export class InternalPlugins {
       if (w && keyOf(w) === l.key) continue;
       this.engine.ctx.points.removeOwner(id);
       this.loaded.delete(id);
-      touched.push(l.spec);
+      // 只改网页的：服务端的补丁没变（网页按 plugins.changed 自己换）
+      if (l.spec.entry) touched.push(l.spec);
     }
     for (const [id, spec] of wanted) {
       if (this.loaded.has(id)) continue;
@@ -124,7 +126,7 @@ export class InternalPlugins {
       }
       try {
         await this.load(spec);
-        touched.push(spec);
+        if (spec.entry) touched.push(spec);
       } catch (e) {
         this.engine.ctx.points.removeOwner(id);
         this.log(`「${spec.name}」改内部的代码加载不了：${message(e)}`);
@@ -139,6 +141,11 @@ export class InternalPlugins {
 
   private async load(spec: Spec): Promise<void> {
     const key = keyOf(spec);
+    // 只改网页的：这里只对指纹，代码由网页加载（PluginsState.webPatches）
+    if (!spec.entry) {
+      this.loaded.set(spec.id, { spec, key });
+      return;
+    }
     const file = path.join(spec.dir, ...spec.entry.split('/'));
     const mod = (await import(`${pathToFileURL(file).href}?v=${encodeURIComponent(key)}`)) as {
       activate?: (api: InternalApi) => unknown;
@@ -171,7 +178,7 @@ export class InternalPlugins {
 function keyOf(s: Spec): string {
   let mtime = 0;
   try {
-    mtime = statSync(path.join(s.dir, ...s.entry.split('/'))).mtimeMs;
+    if (s.entry) mtime = statSync(path.join(s.dir, ...s.entry.split('/'))).mtimeMs;
   } catch {
     // 文件不见了：加载时报错
   }

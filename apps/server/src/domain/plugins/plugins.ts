@@ -51,8 +51,10 @@ import {
   type PatchContribution,
   type PatchInfo,
   type Scope,
+  type WebPatchModule,
+  isWebPoint,
 } from '@emaki/shared';
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Db } from '../../db/connection.ts';
 import type { Actor } from '../../propagation/actor.ts';
@@ -163,9 +165,17 @@ export class Plugins {
       overrideChoices: safe ? {} : this.overrideChoices(),
       safeMode: safe,
     });
-    // 「谁改了哪里」：现在加了补丁的内部点（按加上的顺序，后面的在外层）
+    if (safe) return resolved;
+    // 网页要加载的改网页的模块；「谁改了哪里」：服务端现在加了补丁的点（按加上的顺序，后面的在外层），加上网页的
+    const webPatches = this.webPatches(resolved.plugins);
     const patched = this.ctx.points.patched().map((x) => ({ point: x.name, label: x.label, plugins: x.owners }));
-    return patched.length ? { ...resolved, patched } : resolved;
+    for (const w of webPatches)
+      for (const point of w.points) {
+        const hit = patched.find((x) => x.point === point);
+        if (hit) hit.plugins.push(w.plugin);
+        else patched.push({ point, label: this.ctx.points.label(point), plugins: [w.plugin] });
+      }
+    return { ...resolved, ...(patched.length && { patched }), ...(webPatches.length && { webPatches }) };
   }
 
   /** 某个值现在生效的是什么（服务端自己用，比如图片列表没给排序时按它排；安全模式下是内置默认） */
@@ -491,26 +501,75 @@ export class Plugins {
   }
 
   /**
-   * 要加载改内部的代码的插件（E6，docs/plugins.md 第 7 节）：装的、启用着、清单写了 internal 和 patch@1、授权了「改内部」、没有问题的。
-   * 加载的地方（services/plugins/internal.ts）先看 pointsChanged，对不上就 autoDisable、不加载
+   * 改内部的插件（E6，docs/plugins.md 第 7 节）：装的、启用着、有 patch@1、授权了「改内部」、没有问题的。
+   * 加载的地方（services/plugins/internal.ts）先看 pointsChanged，对不上就 autoDisable、不加载；entry 是服务端的入口（internal，
+   * 只改网页的没有），points 是它能改的服务端的点。网页的点由网页加载（webPatches）
    */
-  internalPlugins(): { id: string; version: string; name: string; dir: string; entry: string; points: string[] }[] {
+  internalPlugins(): { id: string; version: string; name: string; dir: string; entry: string | null; points: string[] }[] {
     if (this.safeMode) return [];
     const enabled = new Set(this.state().plugins.filter((p) => p.enabled).map((p) => p.id));
     return this.load(false).flatMap((p) =>
-      p.installed && p.manifest.internal && p.manifest.contributes['patch@1']?.length && p.grant?.unsafe && enabled.has(p.manifest.id) && !p.problems.length
+      p.installed && p.manifest.contributes['patch@1']?.length && p.grant?.unsafe && enabled.has(p.manifest.id) && !p.problems.length
         ? [
             {
               id: p.manifest.id,
               version: p.manifest.version,
               name: pluginLabel(this.info(p)),
               dir: this.packages.resolve(p.installed.package_dir),
-              entry: p.manifest.internal,
-              points: p.manifest.contributes['patch@1'].map((x) => x.point),
+              entry: p.manifest.internal ?? null,
+              points: p.manifest.contributes['patch@1'].map((x) => x.point).filter((n) => !isWebPoint(n)),
             },
           ]
         : [],
     );
+  }
+
+  /**
+   * 网页要加载的改网页的模块（PluginsState.webPatches）：启用着、有 web 入口、授权了「改内部」、没有问题、它改的点没变的。
+   * 地址里带版本和入口文件的修改时间：按文件夹装的改了代码「重新读取」以后网页换新的
+   */
+  private webPatches(infos: readonly PluginInfo[]): WebPatchModule[] {
+    const enabled = new Set(infos.filter((p) => p.enabled).map((p) => p.id));
+    return this.load(false).flatMap((p) => {
+      const m = p.manifest;
+      if (!p.installed || !m.web || !p.grant?.unsafe || !enabled.has(m.id) || p.problems.length) return [];
+      if (this.pointsChanged(m.id).length) return [];
+      const dir = this.packages.resolve(p.installed.package_dir);
+      let mtime = 0;
+      try {
+        mtime = Math.round(statSync(path.join(dir, ...m.web.split('/'))).mtimeMs);
+      } catch {
+        return [];
+      }
+      const key = encodeURIComponent(`${m.version}-${mtime}`);
+      return [
+        {
+          plugin: m.id,
+          version: m.version,
+          url: `/api/plugin-web/${encodeURIComponent(m.id)}/${key}/${m.web.split('/').map(encodeURIComponent).join('/')}`,
+          points: (m.contributes['patch@1'] ?? []).map((x) => x.point).filter(isWebPoint),
+        },
+      ];
+    });
+  }
+
+  /**
+   * 改网页的模块的文件（GET /api/plugin-web/:id/:key/*）：插件要在网页要加载的里面（启用着、点没变……），
+   * 只给它包里的 .js、.mjs（入口 import 的同包文件也行），按真实路径查，不能经链接跳出去。没有 → null
+   */
+  webFile(id: string, rel: string): string | null {
+    if (this.safeMode || !/\.m?js$/.test(rel)) return null;
+    const info = this.state();
+    if (!info.webPatches?.some((w) => w.plugin === id)) return null;
+    const row = this.installedRow(id);
+    if (!row) return null;
+    try {
+      const dir = realpathSync(this.packages.resolve(row.package_dir));
+      const file = realpathSync(path.resolve(dir, ...rel.split('/')));
+      return file.startsWith(dir + path.sep) && statSync(file).isFile() ? file : null;
+    } catch {
+      return null;
+    }
   }
 
   /** 改内部的插件改的点里，装上、启用以后变了的（指纹对不上，没记过也算） */
@@ -892,7 +951,9 @@ export class Plugins {
             ...(p.manifest.contributes['setting@1']?.length && {
               settings: this.settings.values(p.manifest.id, p.manifest.contributes['setting@1']),
             }),
-            ...(p.manifest.contributes['patch@1']?.length && { patches: this.patchInfo(p.manifest.id, p.manifest.contributes['patch@1']) }),
+            ...(p.manifest.contributes['patch@1']?.length && {
+              patches: this.patchInfo(p.manifest.id, p.manifest.contributes['patch@1'], !p.problems.length && !!p.grant?.unsafe && (p.row ? p.row.enabled === 1 : true)),
+            }),
           }),
         },
       }),
@@ -992,7 +1053,8 @@ export class Plugins {
   }
 
   /** 改内部的插件改的每个点现在怎么样（PatchInfo） */
-  private patchInfo(id: string, patches: readonly PatchContribution[]): PatchInfo[] {
+  /** webOn：插件启用着、没有问题（网页的点那时由网页加载，加载、出错的情况在网页上，出错会记在插件头上）*/
+  private patchInfo(id: string, patches: readonly PatchContribution[], webOn = false): PatchInfo[] {
     const prints = this.prints(id);
     const owned = new Set(this.ctx.points.patched().filter((x) => x.owners.includes(id)).map((x) => x.name));
     return patches.map((x) => ({
@@ -1001,7 +1063,7 @@ export class Plugins {
       ...(x.why && { why: x.why }),
       status: !this.ctx.points.has(x.point)
         ? 'missing'
-        : owned.has(x.point)
+        : owned.has(x.point) || (webOn && isWebPoint(x.point) && prints[x.point] === this.ctx.points.fingerprint(x.point))
           ? 'active'
           : x.point in prints && prints[x.point] !== this.ctx.points.fingerprint(x.point)
             ? 'changed'

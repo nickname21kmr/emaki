@@ -117,7 +117,20 @@ export function activate(internal) {
 ```
 
 - 内部点的名字：`command:<命令>`、`query:<查询>`（`GET /api/commands` 里的名字）、`reaction:<反应>`、`job:<任务种类>`、`term:<口径>`；`internal.points()` 列出全部。
+- 改网页：清单写 `"web": "web/patch.js"`，改的是 `component:<组件>`（看图器的大图 `component:lightbox.Stage`、信息栏 `component:lightbox.InfoPanel`、角色卡 `component:character.Cover`）
+  和 `fn:<函数>`（排名的张数后面写的字 `fn:count.unit`）。模块不能 `import 'react'`，用 `internal.React`、`internal.h`：
+
+  ```js
+  // web/patch.js：看图器的大图左下角加一个角标
+  export function activate({ patch, h, React }) {
+    patch('component:lightbox.Stage', {
+      around: (Next, props) => h(React.Fragment, null, h(Next, props), h('div', { style: { position: 'fixed', left: 16, bottom: 16 } }, `第 ${props.index + 1} 张`)),
+    });
+  }
+  ```
+
+  画的时候出错，这一处退回原来的样子，错记在插件头上。
 - 几个插件改同一个点，按启用的先后叠起来，后加的在外层；「插件」页的「谁改了哪里」能看到。停用插件，它的补丁马上撤掉。
 - Emaki 更新以后它改的点变了（实现或者输入的格式不一样了），这个插件会自动停用并通知你；确认还能用，在插件详情里点「仍然启用」。没变的照常用。
 - `internal.engine` 是整个引擎，没登记的东西也拿得到，但 Emaki 改了不会告诉你。
-- 例子见 Emaki 附带的 [plugins/count-by-work](../../plugins/count-by-work/)「一个作品算一张」：按张数排的地方，同一个 Pixiv 投稿的组图只算一张（默认没装，在「插件」页的「附带的」里启用）。
+- 例子见 Emaki 附带的 [plugins/count-by-work](../../plugins/count-by-work/)「一个作品算一张」：按张数排的地方，同一个 Pixiv 投稿的组图只算一件，张数后面写「件」（服务端、网页各改一处；默认没装，在「插件」页的「附带的」里启用）。

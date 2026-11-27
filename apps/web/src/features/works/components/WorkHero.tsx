@@ -7,6 +7,7 @@ import { Badge, Skeleton } from '@/components/ui';
 import { formatCount } from '@/lib/format';
 import { CopyTag } from '@/features/characters/detail/HeroControls';
 import { EASE_OUT } from '@/lib/motion';
+import { useCountUnit } from '@/lib/countUnit';
 
 const EASE = EASE_OUT;
 
@@ -22,6 +23,7 @@ const rise = (i: number) => ({
  * 主题色和 --c-sheet 混合，暗色模式下自然变成深色染纸。
  */
 export function WorkHero({ work, heroRef }: { work: Work; heroRef?: Ref<HTMLElement> }) {
+  const unit = useCountUnit();
   const mix = (pct: number) => `color-mix(in oklab, ${work.color} ${pct}%, var(--c-sheet))`;
   const paper: CSSProperties = {
     background: `linear-gradient(115deg, ${mix(24)} 0%, ${mix(10)} 52%, ${mix(18)} 100%)`,
@@ -86,7 +88,7 @@ export function WorkHero({ work, heroRef }: { work: Work; heroRef?: Ref<HTMLElem
 
         <motion.dl {...rise(3)} className="flex items-end gap-9 narrow:flex-wrap narrow:gap-x-6 narrow:gap-y-3">
           <Stat value={work.characterCount} label="位角色" />
-          <Stat value={work.imageCount} label={work.otherCount > 0 ? `张插画 · 另有 ${formatCount(work.otherCount)} 张漫画等` : '张插画'} />
+          <Stat value={work.imageCount} label={work.otherCount > 0 ? `${unit}插画 · 另有 ${formatCount(work.otherCount)} 张漫画等` : `${unit}插画`} />
           <Stat value={work.recentImageCount} label="最近 30 天" fresh={work.recentImageCount > 0} />
         </motion.dl>
       </div>

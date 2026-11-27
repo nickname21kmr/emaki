@@ -15,6 +15,7 @@ import { useTouchZoom } from '@/lib/pager/useTouchZoom';
 import { clampPan, zoomAround, type Zoom, type ZoomApi, type ZoomBounds } from '@/lib/pager/zoom';
 import type { LightboxRect } from '@/lib/stores';
 import { stagePadding, useViewport } from '@/lib/viewport';
+import { patchable } from '@/lib/points';
 
 export type StageMeta = Pick<ImageItem, 'width' | 'height' | 'rating' | 'dominantColor' | 'fileName'> & Partial<Pick<ImageItem,'modifiedAt'>>;
 
@@ -49,7 +50,10 @@ function fitBox(meta: StageMeta | undefined, availW: number, availH: number) {
  * 上滑展开信息（窄屏的底部面板）、从格子里拿起和放回、放映时交叉淡化（这时不摆前后张）、鼠标滚轮缩放和拖动平移。
  * 图片四周的留白按窗口和输入方式定（lib/viewport.ts 的 stagePadding：电脑上左右给箭头留 84、上下 68，触屏窄屏铺满宽度）。
  */
-export function Stage({
+/** 看图器的大图是内部点 component:lightbox.Stage（第 3 层插件能改，lib/points.tsx） */
+export const Stage = patchable('component:lightbox.Stage', StageView);
+
+function StageView({
   index,
   count,
   slide,

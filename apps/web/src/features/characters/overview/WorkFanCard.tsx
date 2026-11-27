@@ -4,6 +4,7 @@ import { CoverFan } from '@/components/media/CoverFan';
 import { Seal, Skeleton } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
+import { useCountUnit } from '@/lib/countUnit';
 
 /** 扇形盒子：列宽的 96%，上限 400px（第二轮反馈：76% 偏小、作品之间空太多）（CoverFan 几何全是百分比，跟着缩放） */
 const FAN_BOX = 'mx-auto w-[96%] max-w-[400px]';
@@ -14,6 +15,7 @@ const FAN_BOX = 'mx-auto w-[96%] max-w-[400px]';
  * 点击切到这部作品（Ctrl / 中键照常在新标签打开）。
  */
 export function WorkFanCard({ work, index, onPick }: { work: Work; index: number; onPick: (id: ID) => void }) {
+  const unit = useCountUnit();
   return (
     <Link
       to={{ search: `?work=${work.id}` }}
@@ -22,7 +24,7 @@ export function WorkFanCard({ work, index, onPick }: { work: Work; index: number
         e.preventDefault();
         onPick(work.id);
       }}
-      aria-label={`${work.name}：${work.characterCount} 位角色，${work.imageCount} 张`}
+      aria-label={`${work.name}：${work.characterCount} 位角色，${work.imageCount} ${unit}`}
       className="group/fan block animate-rise rounded-[18px] outline-none focus-visible:ring-2 focus-visible:ring-shu focus-visible:ring-offset-4 focus-visible:ring-offset-sheet"
       style={{ animationDelay: `${Math.min(index, 11) * 30}ms` }}
     >
@@ -40,7 +42,7 @@ export function WorkFanCard({ work, index, onPick }: { work: Work; index: number
       )}
       <span aria-hidden className="mx-auto mt-[7px] block h-px w-4 bg-rule" />
       <div className="mt-1.5 text-center text-[12px] text-fg-muted tabular">
-        {formatCount(work.characterCount)} 位 · {formatCount(work.imageCount)} 张
+        {formatCount(work.characterCount)} 位 · {formatCount(work.imageCount)} {unit}
         {work.recentImageCount > 0 && (
           <>
             {' · '}

@@ -7,6 +7,7 @@ import { cn } from '@/lib/cn';
 import { formatCompact } from '@/lib/format';
 import { workAvatar } from './works';
 import { searchRank } from '@emaki/shared';
+import { useCountUnit } from '@/lib/countUnit';
 
 /**
  * 可搜索的作品列表（cmdk）。「全部作品」弹出框和新建角色里的作品选择器共用。
@@ -25,6 +26,7 @@ export function WorkCommandList({
   placeholder?: string;
   footer?: ReactNode;
 }) {
+  const unit = useCountUnit();
   return (
     <Command loop filter={filterWorks} className="flex flex-col">
       <div className="flex h-11 items-center gap-2.5 border-b border-line px-3.5">
@@ -53,7 +55,7 @@ export function WorkCommandList({
               <ChipAvatar image={workAvatar(w)} color={w.color} label={w.name} />
               <span className={cn('min-w-0 flex-1 truncate', selected && 'font-semibold')}>{w.name}</span>
               <span className="shrink-0 text-[11px] text-fg-subtle tabular">
-                {w.characterCount} 位 · {formatCompact(w.imageCount)} 张
+                {w.characterCount} 位 · {formatCompact(w.imageCount)} {unit}
               </span>
               <span className="flex w-4 shrink-0 justify-end">
                 {selected && <Check className="size-3.5 text-shu" />}

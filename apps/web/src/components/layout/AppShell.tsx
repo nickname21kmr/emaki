@@ -11,6 +11,7 @@ import { Sidebar } from './Sidebar';
 import { TabBar } from './TabBar';
 import { AssistantLauncher, AssistantSpacer } from '@/features/assistant/AssistantLauncher';
 import { AccessPrompts } from '@/features/access/AccessPrompts';
+import { useWebPatches } from '@/features/plugins/internal/webPatches';
 import { useCapabilities } from '@/lib/capabilities';
 import { useCanVisit } from '@/pages';
 
@@ -21,6 +22,8 @@ import { useCanVisit } from '@/pages';
  */
 export function AppShell() {
   useServerEvents();
+  // 改网页的插件（docs/plugins.md 第 7 节）：按插件的状态加载、撤掉
+  useWebPatches();
   useGlobalHotkeys();
   const scrollRef = useRef<HTMLDivElement>(null);
   const { pathname, key } = useLocation();

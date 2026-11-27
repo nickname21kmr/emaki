@@ -29,6 +29,7 @@ import {
   type Rating,
 } from './domain.ts';
 import { NAV_ICONS, NAV_SECTIONS, SOURCE_SITES } from './plugins.ts';
+import { POINT_NAME_RE } from './patches.ts';
 import { POSEWEAR_POSE_ID } from './pose.ts';
 
 /** shared 不带 DOM / node 的类型：这里只用到 URL 的这几个字段（运行时是全局的 URL） */
@@ -715,6 +716,8 @@ export const PluginManifestSchema = z.object({
   server: z.string().max(200).optional(),
   /** 改内部的入口（E6）；检查同 server */
   internal: z.string().max(200).optional(),
+  /** 改网页的入口（E6）；检查同 server */
+  web: z.string().max(200).optional(),
 });
 
 /** nav.item@1（装的插件）：只能指向 Emaki 里的地址（可以带筛选参数），图标从 NAV_ICONS 里选 */
@@ -792,7 +795,7 @@ export const InstalledLightboxButtonSchema = z
 /** link@1（装的插件，12.7）：接管的链接，在插件的网站（App 里）或页面里打开 */
 /** patch@1（E6）：要改的内部点，名字是 <种类>:<名字>（服务端再查这个版本的 Emaki 有没有这个点） */
 export const InstalledPatchSchema = z.object({
-  point: z.string().regex(/^(command|query|reaction|job|term):\S{1,120}$/, '要写内部点的名字，比如 term:count.unit、command:images.list'),
+  point: z.string().regex(POINT_NAME_RE, '要写内部点的名字，比如 term:count.unit、command:images.list、component:lightbox.Stage'),
   why: z.string().trim().max(200).optional(),
 });
 

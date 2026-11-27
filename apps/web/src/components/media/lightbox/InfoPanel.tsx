@@ -28,6 +28,7 @@ import { PoseInfoRowLazy } from '@/features/pose/lazy';
 import { Slot, slotEntries, type SlotRenderers } from '@/blocks/Slot';
 import { shortcutOf } from '@/blocks/slots';
 import { useDisabledEntries } from '@/lib/plugins';
+import { patchable } from '@/lib/points';
 
 const RATINGS = Object.keys(RATING_LABEL) as Rating[];
 
@@ -37,7 +38,10 @@ const RATINGS = Object.keys(RATING_LABEL) as Rating[];
  * variant="sheet"（窄屏的底部面板，A1，InfoSheet.tsx）：操作那一排排在最前面（平时只露出它），展开后才是头部和其余信息；
  * 外面的纸和滚动由 InfoSheet 管。
  */
-export function InfoPanel({
+/** 看图器的信息栏是内部点 component:lightbox.InfoPanel（第 3 层插件能改，lib/points.tsx） */
+export const InfoPanel = patchable('component:lightbox.InfoPanel', InfoPanelView);
+
+function InfoPanelView({
   base,
   detail,
   error,

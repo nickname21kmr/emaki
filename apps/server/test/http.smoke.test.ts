@@ -1204,6 +1204,17 @@ describe('插件（注册表：plugins.*，docs/plugins.md 第 9 节）', () => 
     expect(await get('cache/none.png')).toBe(404);
     expect((await app.inject({ method: 'GET', url: '/api/plugin-media/nope/file/a.png' })).statusCode).toBe(404);
   });
+  route('GET /api/plugin-web/:id/:key/*', async () => {
+    // 附带的「一个作品算一张」有改网页的入口：装上以后网页拿得到它，停用了就没有
+    const pkg = await ds.plugins.inspect({ kind: 'folder', path: path.resolve(import.meta.dirname, '../../../plugins/count-by-work') });
+    expect((await call('POST', '/api/plugins/install', { token: pkg.token })).status).toBe(200);
+    const url = (await call('GET', '/api/plugins')).json.webPatches[0].url as string;
+    const res = await app.inject({ method: 'GET', url });
+    expect([res.statusCode, res.headers['content-type'], res.body]).toEqual([200, 'text/javascript; charset=utf-8', expect.stringContaining('fn:count.unit')]);
+    expect((await app.inject({ method: 'GET', url: url.replace('web/patch.js', 'emaki-plugin.json') })).statusCode).toBe(404);
+    await call('POST', '/api/plugins/count-by-work/enabled', { enabled: false });
+    expect((await app.inject({ method: 'GET', url })).statusCode).toBe(404);
+  });
   route('GET /api/plugins/sites', async () => {
     // 演示环境里没有带网站脚本的插件
     expect(await call('GET', '/api/plugins/sites')).toMatchObject({ status: 200, json: [] });

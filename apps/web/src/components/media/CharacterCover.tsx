@@ -2,15 +2,20 @@ import type { Character, ThumbWidth } from '@emaki/shared';
 import { Link } from 'react-router';
 import { Badge } from '@/components/ui';
 import { cn } from '@/lib/cn';
+import { useCountUnit } from '@/lib/countUnit';
+import { patchable } from '@/lib/points';
 import { shouldBlur } from '@/lib/blur';
 import { formatCount } from '@/lib/format';
 import { useBlurPrefs } from '@/lib/stores';
 import { useCoverMorph } from '@/lib/viewTransition';
 import { Thumb } from './Thumb';
 
-/** 张数：只出现在漫画、截图等里的角色（插画 0 张，书架末尾点「显示」才列出）写成「漫画等 N 张」，不写「0 张」 */
-export function countLabel(c: Pick<Character, 'imageCount' | 'otherCount'>) {
-  return c.imageCount === 0 && c.otherCount > 0 ? `漫画等 ${formatCount(c.otherCount)} 张` : `${formatCount(c.imageCount)} 张`;
+/**
+ * 张数：只出现在漫画、截图等里的角色（插画 0 张，书架末尾点「显示」才列出）写成「漫画等 N 张」，不写「0 张」。
+ * unit 是排名的张数后面写的字（lib/countUnit.ts，插件能改）；漫画等的张数不按它数，照旧写「张」
+ */
+export function countLabel(c: Pick<Character, 'imageCount' | 'otherCount'>, unit: string) {
+  return c.imageCount === 0 && c.otherCount > 0 ? `漫画等 ${formatCount(c.otherCount)} 张` : `${formatCount(c.imageCount)} ${unit}`;
 }
 
 /**
@@ -20,7 +25,10 @@ export function countLabel(c: Pick<Character, 'imageCount' | 'otherCount'>) {
  * showNew：右上角「+N」（ink 胶囊 + ok 小点）；Top 类排行不显示。
  * 不显示排名数字（用户 2026-09-27 定）。
  */
-export function CharacterCover({
+/** 角色卡是内部点 component:character.Cover（第 3 层插件能改，lib/points.tsx） */
+export const CharacterCover = patchable('component:character.Cover', CharacterCoverView);
+
+function CharacterCoverView({
   character,
   workName,
   size = 'md',
@@ -40,6 +48,7 @@ export function CharacterCover({
   className?: string;
   onClick?: () => void;
 }) {
+  const unit = useCountUnit();
   // 封面只按分级模糊，不传 kind（T27 保证自动封面不会选到照片）
   const blurred = shouldBlur({ rating: character.coverRating }, useBlurPrefs());
   // 封面长成扉页（SEL-14）：plate 挂在图版上，overlay 挂在图片层上
@@ -96,7 +105,7 @@ export function CharacterCover({
           <div className="truncate text-[14px] font-semibold tracking-tight">{character.name}</div>
           <div className="mt-0.5 truncate text-[12px] text-fg-muted tabular">
             {workName ? `${workName} · ` : ''}
-            {countLabel(character)}
+            {countLabel(character, unit)}
           </div>
         </div>
       </Link>
@@ -122,7 +131,7 @@ export function CharacterCover({
         <div className={cn('truncate font-semibold tracking-tight drop-shadow-sm', nameSize)}>{character.name}</div>
         <div className={cn('mt-0.5 truncate text-white/70 tabular', size === 'xl' ? 'text-[13px]' : 'text-[11.5px]')}>
           {workName ? `${workName} · ` : ''}
-          {countLabel(character)}
+          {countLabel(character, unit)}
         </div>
       </div>
     </Link>

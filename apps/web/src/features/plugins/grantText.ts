@@ -100,8 +100,8 @@ export function permissionLines(p: PluginPermissions): GrantLine[] {
   if (p.unsafe)
     lines.push({
       key: 'unsafe',
-      text: '在 Emaki 自己的进程里运行它的代码',
-      detail: '不隔离，可以做 Emaki 能做的任何事。Emaki 更新后它改的地方变了，它会自动停用，等你确认',
+      text: '改 Emaki 的内部',
+      detail: '它的代码在 Emaki 里面运行（电脑上的 Emaki 或网页里），不隔离，可以做 Emaki 能做的任何事。Emaki 更新后它改的地方变了，它会自动停用，等你确认',
       danger: true,
     });
   return lines;

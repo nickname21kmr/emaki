@@ -252,8 +252,32 @@ export interface PluginManifest {
   contributes: Contributes;
   /** 服务端逻辑的入口（包里的 .js / .mjs / .cjs，E5）：每个插件一个 Node 子进程 */
   server?: string;
-  /** 改内部的入口（包里的 .js / .mjs，E6）：在 Emaki 自己的进程里加载，用 internal.patch 改 patch@1 里列的点 */
+  /** 改内部的入口（包里的 .js / .mjs，E6）：在 Emaki 自己的进程里加载，用 internal.patch 改 patch@1 里列的服务端的点 */
   internal?: string;
+  /** 改网页的入口（包里的 .js / .mjs，E6）：在 Emaki 的网页里加载，用 internal.patch 改 patch@1 里列的网页的点（component:、fn:） */
+  web?: string;
+}
+
+/**
+ * 网页上登记过名字的内部点（docs/plugins.md 第 7 节，E6）：第 3 层插件的 web 入口只能改这些。
+ * 网页里用 patchable（组件）、patchableFn（函数）登记，名字和这里一一对上（apps/web/src/lib/points.test.ts 扫源码查）；
+ * file 是它在 apps/web/src 下的源文件：服务端按这个文件的内容算指纹（文件改了就算这个点变了），version 是手动的版本号
+ */
+export const WEB_POINTS = [
+  { name: 'fn:count.unit', label: '排名的张数后面写的字', file: 'lib/countUnit.ts', version: 1 },
+  { name: 'component:character.Cover', label: '角色卡', file: 'components/media/CharacterCover.tsx', version: 1 },
+  { name: 'component:lightbox.Stage', label: '看图器的大图', file: 'components/media/lightbox/Stage.tsx', version: 1 },
+  { name: 'component:lightbox.InfoPanel', label: '看图器的信息栏', file: 'components/media/lightbox/InfoPanel.tsx', version: 1 },
+] as const satisfies readonly { name: `${'component' | 'fn'}:${string}`; label: string; file: string; version: number }[];
+
+/** 网页要加载的一个改网页的模块（PluginsState.webPatches）：插件启用着、授权了改内部、它改的点没变 */
+export interface WebPatchModule {
+  plugin: string;
+  version: string;
+  /** 模块的地址（/api/plugin-web/<插件>/<版本和修改时间>/<入口>） */
+  url: string;
+  /** 它能改的点（清单 patch@1 里网页的那些） */
+  points: string[];
 }
 
 /** 条目类的贡献点（E3）：它们的条目停用时一起不画 */
@@ -666,6 +690,8 @@ export interface PluginsState {
   bundled?: BundledPlugin[];
   /** 「谁改了哪里」：加了补丁的内部点（服务端填，docs/plugins.md 第 7 节） */
   patched?: PatchedPoint[];
+  /** 网页要加载的改网页的模块（服务端填；安全模式下没有） */
+  webPatches?: WebPatchModule[];
 }
 
 /** 插件显示的名字：改过就用改的 */

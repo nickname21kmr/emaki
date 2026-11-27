@@ -11,6 +11,9 @@
  * - GET  /api/plugin-media/:token/file/<路径>：插件自己文件夹里的图片（E5，插件的服务端下载的缩略图这类）；
  * - GET  /api/plugin-media/:token/thumb|original/:imageId：视图里的图片。匿名来源的请求不带 Cookie，凭地址里的令牌
  *   （services/plugins/media.ts）；局域网入口上它不要设备凭证（access/lan.ts 的 PUBLIC_ROUTES）。
+ * - GET  /api/plugin-web/:id/:key/<路径>：改网页的插件的模块（E6，docs/plugins.md 第 7 节），网页 import 它。只给网页要加载的插件
+ *   （启用着、授权了改内部、它改的点没变，PluginsState.webPatches）包里的 .js、.mjs；key 是版本和修改时间（只为了换地址、不缓存旧的）。
+ *   局域网入口上也不要设备凭证：import 带不了 App 的请求头，内容只是这个插件的代码。
  *
  * 这几个不走注册表：调用是转发到注册表里的命令和查询，本身不是一个命令；图片是文件。权限检查在这里做，和注册表同一个口径。
  */
@@ -150,6 +153,14 @@ export function pluginViewRoutes(app: FastifyInstance, engine: SqliteDataSource)
     const body = parse(ErrorInput, req.body);
     requireOuter('read');
     return engine.plugins.recordError(id, body.source, body.message);
+  });
+
+  app.get('/api/plugin-web/:id/:key/*', async (req, reply) => {
+    const { id } = parse(z.object({ id: z.string().min(1).max(80), key: z.string().max(100) }), req.params);
+    const rel = String((req.params as { '*': string })['*'] ?? '');
+    const file = engine.plugins.webFile(id, rel);
+    if (!file) throw new NotFoundError(`插件「${id}」改网页的代码`);
+    return sendFile(req, reply, { kind: 'path', filePath: file, contentType: 'text/javascript; charset=utf-8' }, 'no-cache');
   });
 
   app.get('/api/plugin-media/:token/:size/:imageId', async (req, reply) => {

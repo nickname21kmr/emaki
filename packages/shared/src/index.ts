@@ -11,3 +11,4 @@ export * from './pose.ts';
 export * from './access.ts';
 export * from './plugins.ts';
 export * from './semver.ts';
+export * from './patches.ts';

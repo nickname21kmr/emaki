@@ -187,6 +187,8 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - 底部面板的「往下拖收起 / 往上拉展开」也只有一份：`lib/useSheetDrag.ts`（`ui/Sheet` 和看图器窄屏的 `lightbox/InfoSheet` 都用它；过了 slop 才接管，拖动区里的按钮照常能点）。
 - 列表的拖动排序也只有一份：`lib/useDragSort.ts`（插件页的「页面顺序」用；鼠标、触屏都行，按住把手拖，别的行实时让位，能拖到别的列表，靠近上下边自动滚，Esc 放回去）。
   落点的判定是纯函数（`sortTarget`、`moveTo`，`useDragSort.test.ts` 测，还扫源码：`data-sort-item` 只和它一起用）；键盘和读屏用每一行的「上移 / 下移」。
+- 第 3 层插件能改的组件和函数（docs/plugins.md 第 7 节）：`lib/points.tsx` 的 `patchable('component:…', 组件)`、`patchableFn('fn:…', 函数)`，名字登记在 `@emaki/shared` 的 `WEB_POINTS`
+  （和源码对不上 `lib/points.test.tsx` 会失败；源文件改了，改它的插件会自动停用等确认）。排名的张数后面的字用 `useCountUnit()`（`lib/countUnit.ts`），不直接写「张」。
 
 **规矩**：翻页、缩放、点按、长按、拖面板、拖动排序这类交互只能有一个实现。新的地方要「左右翻一张」「捏合放大」就用 `lib/pager`，要不一样的手感就改 `lib/pager`（所有播放器一起变），
 不在页面里另写一套。这也是以后插件的前提（core-architecture.md 第 10.2 节）：同一个行为只在一处，改它只要改一处。

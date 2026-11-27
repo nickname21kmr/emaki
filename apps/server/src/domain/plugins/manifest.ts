@@ -22,6 +22,7 @@ import {
   type SettingContribution,
   type SiteContribution,
   hostAllowed,
+  isWebPoint,
   type OverrideKey,
   type PageContribution,
   type PatchContribution,
@@ -100,14 +101,18 @@ export function checkManifest(raw: unknown, emakiVersion: string, opts: { ai?: b
     if (r.success) server = r.data;
     else problems.push(`server：${r.error.issues[0]!.message}`);
   }
-  // 改内部的入口（E6）：在 Emaki 的进程里 import，只能是 ES 模块
-  let internal: string | undefined;
-  if (m.internal !== undefined) {
-    const r = ServerEntrySchema.safeParse(m.internal);
-    if (!r.success) problems.push(`internal：${r.error.issues[0]!.message}`);
-    else if (r.data.endsWith('.cjs')) problems.push('internal：改内部的入口要是 ES 模块（.mjs 或 .js），不能是 .cjs');
-    else internal = r.data;
-  }
+  // 改内部、改网页的入口（E6）：在 Emaki 的进程里、网页里 import，只能是 ES 模块
+  const moduleEntry = (key: 'internal' | 'web', what: string): string | undefined => {
+    const v = m[key];
+    if (v === undefined) return undefined;
+    const r = ServerEntrySchema.safeParse(v);
+    if (!r.success) problems.push(`${key}：${r.error.issues[0]!.message}`);
+    else if (r.data.endsWith('.cjs')) problems.push(`${key}：${what}的入口要是 ES 模块（.mjs 或 .js），不能是 .cjs`);
+    else return r.data;
+    return undefined;
+  };
+  const internal = moduleEntry('internal', '改内部');
+  const web = moduleEntry('web', '改网页');
   const permissions: PluginPermissions = {
     ...(scopes.length && { scopes }),
     ...(perms.folders?.length && { folders: perms.folders }),
@@ -245,14 +250,18 @@ export function checkManifest(raw: unknown, emakiVersion: string, opts: { ai?: b
   // 命令、任务由服务端逻辑实现；后台任务要授权「在后台运行」
   if (!server && (contributes['command@1']?.length || contributes['job.kind@1']?.length)) problems.push('有命令或后台任务，但清单里没有 server（服务端逻辑的入口）');
   if (contributes['job.kind@1']?.length && !perms.background) problems.push('有后台任务，要在 permissions 里写 "background": true');
-  // 改内部（第 3 层）：patch@1、internal、permissions.unsafe 三样一起有（点在不在这个版本的 Emaki 里，插件模块再查）
-  if (contributes['patch@1']?.length) {
-    if (!internal && m.internal === undefined) problems.push('有 patch@1，但清单里没有 internal（改内部的代码的入口）');
+  // 改内部（第 3 层）：patch@1 和 permissions.unsafe 一起有；改服务端的点要有 internal，改网页的点（component:、fn:）要有 web
+  // （点在不在这个版本的 Emaki 里，插件模块再查）
+  const patches = contributes['patch@1'] ?? [];
+  const webPoints = patches.filter((x) => isWebPoint(x.point));
+  const serverPoints = patches.filter((x) => !isWebPoint(x.point));
+  if (patches.length) {
     if (!perms.unsafe) problems.push('有 patch@1，要在 permissions 里写 "unsafe": true（授权单上会写明它改内部）');
-  } else {
-    if (m.internal !== undefined) problems.push('有 internal，但 patch@1 里没有列要改的点');
-    if (perms.unsafe) problems.push('要改内部（permissions 里写了 "unsafe": true），但 patch@1 里没有列要改的点');
-  }
+  } else if (perms.unsafe) problems.push('要改内部（permissions 里写了 "unsafe": true），但 patch@1 里没有列要改的点');
+  if (serverPoints.length && m.internal === undefined) problems.push(`要改 ${serverPoints[0]!.point}，但清单里没有 internal（改内部的代码的入口）`);
+  if (webPoints.length && m.web === undefined) problems.push(`要改网页的 ${webPoints[0]!.point}，但清单里没有 web（改网页的代码的入口）`);
+  if (m.internal !== undefined && !serverPoints.length) problems.push('有 internal，但 patch@1 里没有列要改的服务端的点');
+  if (m.web !== undefined && !webPoints.length) problems.push('有 web，但 patch@1 里没有列要改的网页的点（component:、fn:）');
   // 页面对应的网站要有
   for (const pg of contributes['page@1'] ?? [])
     if (pg.site !== undefined && !contributes['site@1']?.some((x) => x.id === pg.site)) problems.push(`页面「${pg.title ?? pg.id}」对应的网站「${pg.site}」在 site@1 里没有`);
@@ -288,6 +297,7 @@ export function checkManifest(raw: unknown, emakiVersion: string, opts: { ai?: b
     contributes,
     ...(server && { server }),
     ...(internal && { internal }),
+    ...(web && { web }),
   };
   return { manifest, problems };
 }
@@ -315,6 +325,7 @@ export function checkPackageFiles(dir: string, m: PluginManifest): string[] {
   const problems: string[] = [];
   if (m.server && fileSize(path.join(dir, ...m.server.split('/'))) === null) problems.push(`服务端逻辑的入口 ${m.server} 不在包里`);
   if (m.internal && fileSize(path.join(dir, ...m.internal.split('/'))) === null) problems.push(`改内部的入口 ${m.internal} 不在包里`);
+  if (m.web && fileSize(path.join(dir, ...m.web.split('/'))) === null) problems.push(`改网页的入口 ${m.web} 不在包里`);
   for (const p of m.contributes['page@1'] ?? []) {
     if (!p.view) continue;
     const size = fileSize(path.join(dir, ...p.view.split('/')));

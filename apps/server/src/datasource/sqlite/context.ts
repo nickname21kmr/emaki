@@ -8,6 +8,7 @@ import type { Actor } from '../../propagation/actor.ts';
 import type { Change } from '../../propagation/changes.ts';
 import { Propagation } from '../../propagation/registry.ts';
 import { TERM_POINTS } from '../../readmodel/terms.ts';
+import { defineWebPoints } from '../../services/plugins/webPoints.ts';
 import { UndoRecorder } from './undo.ts';
 
 /**
@@ -64,6 +65,8 @@ export function createContext(init: {
   let active: UndoRecorder | null = null;
   const points = new Points();
   for (const t of TERM_POINTS) points.define(t.name, { kind: 'term', label: t.label, version: t.version }, t.base);
+  // 网页的点（补丁在网页上加）：只为了查有没有、算指纹
+  defineWebPoints(points);
   // 后台任务的执行体也是内部点（job:<种类>）：队列在这之前就建好了，这里接上（单元测试里的假队列没有这个方法）
   init.jobs.usePoints?.(points);
   const ctx: SqliteContext & { onInvalidate(listener: InvalidateListener): void } = {

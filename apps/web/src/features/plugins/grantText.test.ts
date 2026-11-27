@@ -75,7 +75,7 @@ describe('授权单上的话（宿主按清单生成）', () => {
     expect(contributionLines(m, patches)).toEqual([
       { key: 'patch:term:count.unit', text: '改 Emaki 内部的「排名的张数怎么数」', detail: '组图算一张（term:count.unit）', danger: true },
     ]);
-    expect(permissionLines(m.permissions).map((l) => [l.text, !!l.danger])).toEqual([['在 Emaki 自己的进程里运行它的代码', true]]);
+    expect(permissionLines(m.permissions).map((l) => [l.text, !!l.danger])).toEqual([['改 Emaki 的内部', true]]);
     expect(wontLine(m.permissions)).toBeNull();
   });
 });

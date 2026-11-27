@@ -12,6 +12,7 @@ import { qk, useSearch, useTopCharacters, useWorks } from '@/lib/queries';
 import { NewCharacterDialog } from '@/features/characters/overview/NewCharacterDialog';
 import { freshRecents, useRecentCharacters } from './recentCharacters';
 import { useDebounced } from './useDebounced';
+import { useCountUnit } from '@/lib/countUnit';
 
 /**
  * 角色选择器（带搜索的弹出框）。图库多选「归到角色…」、看图器「添加角色」都用它，
@@ -279,6 +280,7 @@ export function CharacterPickerPanel({
 }
 
 function PickerItem({ row, assigned, onSelect }: { row: PickerRow; assigned: boolean; onSelect: () => void }) {
+  const unit = useCountUnit();
   const c = 'character' in row ? row.character : null;
   const name = 'character' in row ? row.character.name : row.name;
   const matchedName = 'matchedName' in row ? row.matchedName : undefined;
@@ -297,7 +299,7 @@ function PickerItem({ row, assigned, onSelect }: { row: PickerRow; assigned: boo
         <div className="truncate text-[13.5px] leading-tight font-medium">{name}{matchedName && `（${matchedName}）`}</div>
         <div className="mt-0.5 truncate text-[11.5px] text-fg-subtle tabular">
           {row.workName ?? (c?.source === 'custom' ? '自建角色' : '未归属作品')}
-          {'character' in row ? row.showCount && ` · ${formatCount(row.character.imageCount)} 张` : ' · 新角色'}
+          {'character' in row ? row.showCount && ` · ${formatCount(row.character.imageCount)} ${unit}` : ' · 新角色'}
         </div>
       </div>
       {assigned ? (

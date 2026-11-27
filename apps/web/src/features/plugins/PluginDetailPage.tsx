@@ -474,7 +474,7 @@ function Contributions({ plugin: p, can }: { plugin: PluginInfo; can: boolean })
       )}
       {!!p.patches?.length && (
         <section>
-          <SectionTitle numbered={false} hint="在 Emaki 自己的进程里改登记过名字的地方；Emaki 更新后这些地方变了，它会自动停用，等你确认">
+          <SectionTitle numbered={false} hint="改 Emaki 里登记过名字的地方（电脑上的 Emaki 和网页）；Emaki 更新后这些地方变了，它会自动停用，等你确认">
             改内部
           </SectionTitle>
           <ul className="flex flex-col gap-1.5 text-[13px]">
