@@ -53,11 +53,16 @@ import { iso, parseId } from '../../datasource/sqlite/sql.ts';
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import { BadRequestError, ConflictError, NotFoundError } from '../../http/errors.ts';
 import { ROOT_ACTIVE } from '../../readmodel/terms.ts';
+import { declinedOf, withDeclined } from './authorize.ts';
 import type { PluginPackages, Staged } from '../../services/plugins/packages.ts';
 import { normalizeSubdir } from '../library/move.ts';
 import { checkManifest, checkPackageFiles, MANIFEST_FILE, readManifest } from './manifest.ts';
 import { PluginSettings } from './settings.ts';
 import { PluginStorage } from './storage.ts';
+
+/** 自动停用的原因（插件详情上、通知里同一句） */
+const recentReason = (recent: number, message: string) =>
+  `${AUTO_DISABLE.windowMs / 60_000} 分钟内出错 ${recent} 次，自动停用了。最近一次：${message.slice(0, 200)}`;
 
 /** 自动停用：这么久之内出错这么多次 */
 export const AUTO_DISABLE = { errors: 5, windowMs: 10 * 60_000 };
@@ -262,20 +267,25 @@ export class Plugins {
     const id = manifest.id;
     const existing = this.installedRow(id);
     const oldGrant = existing ? this.grantOf(id) : null;
+    // 更新：你在插件详情里关掉的（上一版要了、授权里没有的）照旧关着，不因为更新又给上
+    const declined = existing && oldGrant ? declinedOf((safeParse(existing.manifest) as PluginManifest | null)?.permissions, oldGrant) : {};
+    const want = manifest.permissions ?? {};
     const grant: Grant = {
-      scopes: [...(manifest.permissions?.scopes ?? [])],
-      folders: (manifest.permissions?.folders ?? []).map((f): FolderGrant => {
-        const chosen = folders[f.id];
-        if (chosen) return { id: f.id, ...this.checkFolder(chosen.rootId, chosen.dir) };
-        const old = oldGrant?.folders.find((x) => x.id === f.id);
-        if (old) return old;
-        const def = this.defaultFolder(f.suggest, manifest.name);
-        if (!def) throw new BadRequestError('还没有能放文件的图库文件夹（要「自动识别」的），先在设置里加一个');
-        return { id: f.id, ...def };
-      }),
-      network: [...(manifest.permissions?.network ?? [])],
-      background: !!manifest.permissions?.background,
-      unsafe: !!manifest.permissions?.unsafe,
+      scopes: (want.scopes ?? []).filter((s) => !declined.scopes?.includes(s)),
+      folders: (want.folders ?? [])
+        .filter((f) => !declined.folders?.some((x) => x.id === f.id))
+        .map((f): FolderGrant => {
+          const chosen = folders[f.id];
+          if (chosen) return { id: f.id, ...this.checkFolder(chosen.rootId, chosen.dir) };
+          const old = oldGrant?.folders.find((x) => x.id === f.id);
+          if (old) return old;
+          const def = this.defaultFolder(f.suggest, manifest.name);
+          if (!def) throw new BadRequestError('还没有能放文件的图库文件夹（要「自动识别」的），先在设置里加一个');
+          return { id: f.id, ...def };
+        }),
+      network: (want.network ?? []).filter((h) => !declined.network?.includes(h)),
+      background: !!want.background && !declined.background,
+      unsafe: !!want.unsafe,
     };
     const dir = this.packages.commit(staged, id, manifest.version);
     const result = this.ctx.mutate((u) => {
@@ -561,7 +571,7 @@ export class Plugins {
       const enabled = p.row ? p.row.enabled === 1 : true;
       const autoDisabled = recent >= AUTO_DISABLE.errors && enabled && !p.required && p.source !== 'builtin';
       if (autoDisabled) {
-        const reason = `${AUTO_DISABLE.windowMs / 60_000} 分钟内出错 ${recent} 次，自动停用了。最近一次：${message.slice(0, 200)}`;
+        const reason = recentReason(recent, message);
         this.db
           .prepare(
             `INSERT INTO plugin_state (id, enabled, disabled_reason, updated_at) VALUES (?, 0, ?, ?)
@@ -570,7 +580,58 @@ export class Plugins {
           .run(id, reason, iso(now));
       }
       this.changed();
+      // 自动停用了：网页上弹一条通知（docs/plugins.md 第 8 节「发一条通知」），不只是在插件页上标出来
+      if (autoDisabled) this.ctx.bus.publish({ type: 'plugin-notice', plugin: id, name: pluginLabel({ name: p.manifest.name, displayName: p.row?.display_name ?? null }), kind: 'auto-disabled', message: recentReason(recent, message) });
       return { autoDisabled };
+    });
+  }
+
+  /**
+   * 改装的插件的授权（docs/plugins.md 4.2，插件详情里的「授权」）：清单里要的权限，一项项给或者不给，文件夹可以换位置。
+   * 只能在清单要了的里面选（不能多给）；能撤销。插件的服务端每个请求都按现在的授权查，改了马上生效。
+   * 关掉的以后更新时照旧关着（install、toPackage 的 declined）
+   */
+  setGrant(
+    id: string,
+    next: { scopes: string[]; network: string[]; background: boolean; folders: Record<string, { rootId: ID; dir: string } | null> },
+  ) {
+    const p = this.require(id);
+    if (!p.installed) throw new BadRequestError('只有装的插件有授权');
+    const want = p.manifest.permissions ?? {};
+    const old = this.grantOf(id) ?? EMPTY_GRANT;
+    const extra = [
+      ...next.scopes.filter((s) => !want.scopes?.includes(s as Scope)),
+      ...next.network.filter((h) => !want.network?.includes(h)),
+      ...Object.keys(next.folders).filter((f) => !want.folders?.some((x) => x.id === f)),
+      ...(next.background && !want.background ? ['在后台运行'] : []),
+    ];
+    if (extra.length) throw new BadRequestError(`清单里没有要这些：${extra.join('、')}`);
+    const grant: Grant = {
+      scopes: (want.scopes ?? []).filter((s) => next.scopes.includes(s)),
+      network: (want.network ?? []).filter((h) => next.network.includes(h)),
+      background: !!want.background && next.background,
+      unsafe: old.unsafe,
+      folders: (want.folders ?? []).flatMap((f): FolderGrant[] => {
+        // 没写的照旧；null 是不给
+        const v = f.id in next.folders ? next.folders[f.id] : old.folders.find((x) => x.id === f.id);
+        if (!v) return [];
+        return [{ id: f.id, ...this.checkFolder(String(v.rootId), v.dir) }];
+      }),
+    };
+    const name = pluginLabel({ name: p.manifest.name, displayName: p.row?.display_name ?? null });
+    return this.ctx.mutate((u) => {
+      u.set('plugin_grants', 'plugin_id = ?', [id]);
+      this.db
+        .prepare(
+          `INSERT INTO plugin_grants (plugin_id, grant_json, granted_at) VALUES (?, ?, ?)
+           ON CONFLICT(plugin_id) DO UPDATE SET grant_json = excluded.grant_json`,
+        )
+        .run(id, JSON.stringify(grant), iso(this.ctx.clock()));
+      this.changed();
+      const off = declinedOf(want, grant);
+      // 联网在授权单上是一行（几个域名一起），也算一项
+      const n = (off.scopes?.length ?? 0) + (off.network?.length ? 1 : 0) + (off.folders?.length ?? 0) + (off.background ? 1 : 0);
+      return { message: n ? `已改「${name}」的授权：关掉了 ${n} 项` : `已改「${name}」的授权：清单要的都给了` };
     });
   }
 
@@ -787,6 +848,8 @@ export class Plugins {
     }
     const existing = this.installedRow(manifest.id);
     const grant = existing ? (this.grantOf(manifest.id) ?? EMPTY_GRANT) : null;
+    // 你在插件详情里关掉的不算「这次新要的」（更新以后也照旧关着，见 install）
+    const declined = existing && grant ? declinedOf((safeParse(existing.manifest) as PluginManifest | null)?.permissions, grant) : {};
     const folderDefaults = Object.fromEntries(
       (manifest.permissions?.folders ?? []).map((f) => {
         const old = grant?.folders.find((x) => x.id === f.id);
@@ -799,7 +862,7 @@ export class Plugins {
       manifest,
       problems,
       current: existing && grant ? { version: (safeParse(existing.manifest) as PluginManifest | null)?.version ?? '?', grant } : null,
-      added: missingPermissions(manifest.permissions, grant),
+      added: missingPermissions(manifest.permissions, grant && withDeclined(grant, declined)),
       folderDefaults,
     };
   }

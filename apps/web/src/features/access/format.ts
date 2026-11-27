@@ -17,6 +17,9 @@ export function scopeText(scope: Scope): { head: string; detail: string | null }
   return m ? { head: m[1]!, detail: (m[2] ?? m[3])! } : { head: text, detail: null };
 }
 
+/** 这些范围会动你已有的东西（文件、规则、设置）：授权单上朱色标出（设备、插件一样） */
+export const DANGER_SCOPES: readonly Scope[] = ['organize-files', 'rules', 'settings'];
+
 /** 批准时可以另外勾的（默认不给） */
 export const EXTRA_SCOPES: readonly Scope[] = DEVICE_GRANTABLE_SCOPES.filter((s) => !DEVICE_DEFAULT_SCOPES.includes(s));
 

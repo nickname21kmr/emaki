@@ -168,15 +168,55 @@ const FALLBACK: PluginInfo = {
   problems: [],
 };
 
-/** 授权：装的时候在授权单上确认过的，用同一套说法；文件夹写出实际位置 */
+/**
+ * 授权：装的时候在授权单上确认过的，用同一套说法；文件夹写出实际位置。
+ * 能装插件的（install-plugins）可以一项项关掉、再打开，文件夹可以换位置（plugins.setGrant，能撤销）：
+ * 只能在清单要了的里面选；关掉的以后更新时照旧关着。插件用到关掉的那项时会说「没有授权…」
+ */
 function GrantSection({ plugin: p }: { plugin: PluginInfo }) {
-  const roots: LibraryRoot[] = useSettings().data?.libraryRoots ?? [];
-  const granted = grantAsPermissions(p.grant!, p.permissions);
-  const lines = permissionLines(granted);
-  const risk = riskLine(granted);
+  const can = useCan('install-plugins');
+  const allRoots: LibraryRoot[] = useSettings().data?.libraryRoots ?? [];
+  const roots = allRoots.filter((r) => r.enabled && r.mode === 'auto');
+  const grant = p.grant!;
+  const want = p.permissions ?? {};
+  // 列清单要的全部（关掉的也列，开关是关的）；没开放改的（只能看）时只列给了的，和以前一样
+  const lines = permissionLines(can ? want : grantAsPermissions(grant, p.permissions)).filter((l) => l.key !== 'unsafe' || grant.unsafe);
+  const risk = riskLine(grantAsPermissions(grant, p.permissions));
+  const [moving, setMoving] = useState<{ id: string; rootId: string; dir: string } | null>(null);
+  const save = useMutate((next: Parameters<typeof api.setPluginGrant>[1]) => api.setPluginGrant(p.id, next), {
+    onSuccess: () => setMoving(null),
+  });
+  const base = () => ({
+    scopes: [...grant.scopes] as string[],
+    network: [...grant.network],
+    background: grant.background,
+    folders: {} as Record<string, { rootId: string; dir: string } | null>,
+  });
+  const on = (key: string): boolean => {
+    if (key.startsWith('scope:')) return grant.scopes.includes(key.slice(6) as never);
+    if (key.startsWith('folder:')) return grant.folders.some((f) => f.id === key.slice(7));
+    if (key === 'network') return grant.network.length > 0;
+    if (key === 'background') return grant.background;
+    return true;
+  };
+  const toggle = (key: string, value: boolean) => {
+    const next = base();
+    if (key.startsWith('scope:')) {
+      const s = key.slice(6);
+      next.scopes = value ? [...next.scopes, s] : next.scopes.filter((x) => x !== s);
+    } else if (key === 'network') next.network = value ? [...(want.network ?? [])] : [];
+    else if (key === 'background') next.background = value;
+    else if (key.startsWith('folder:')) {
+      const id = key.slice(7);
+      const req = want.folders?.find((f) => f.id === id);
+      // 再打开：放在第一个自动识别的图库文件夹下、插件建议的路径（之后可以换）
+      next.folders[id] = value ? { rootId: roots[0]?.id ?? '', dir: req?.suggest ?? `插件/${p.name}` } : null;
+    }
+    save.mutate(next);
+  };
   return (
     <section>
-      <SectionTitle numbered={false} hint="装的时候在授权单上确认的">
+      <SectionTitle numbered={false} hint={can ? '装的时候在授权单上确认的；可以一项项关掉，关掉的更新时也照旧关着' : '装的时候在授权单上确认的'}>
         授权
       </SectionTitle>
       {lines.length === 0 ? (
@@ -184,12 +224,50 @@ function GrantSection({ plugin: p }: { plugin: PluginInfo }) {
       ) : (
         <ul className="flex flex-col gap-2.5 text-[13px] leading-relaxed">
           {lines.map((l) => {
-            const f = l.folder && p.grant!.folders.find((x) => x.id === l.folder!.id);
-            const root = f && roots.find((r) => r.id === String(f.rootId));
+            const f = l.folder && grant.folders.find((x) => x.id === l.folder!.id);
+            const root = f && allRoots.find((r) => r.id === String(f.rootId));
+            const editing = !!f && moving?.id === f.id;
+            const line =
+              f && !editing
+                ? { ...l, folder: undefined, text: `把文件放进 ${root ? displayPath(root.path, f.dir) : f.dir}` }
+                : l.folder && !f
+                  ? { ...l, folder: undefined, text: `${l.text}（没给）` }
+                  : l;
+            if (!can) return <GrantRow key={l.key} line={line} />;
+            const enabled = on(l.key);
             return (
               <GrantRow
                 key={l.key}
-                line={f ? { ...l, folder: undefined, text: `把文件放进 ${root ? displayPath(root.path, f.dir) : f.dir}` } : l}
+                line={line}
+                {...(editing && { roots, value: { rootId: moving.rootId, dir: moving.dir }, onChange: (v) => setMoving({ id: f.id, ...v }) })}
+                extra={{
+                  checked: enabled,
+                  disabled: save.isPending || (l.key.startsWith('folder:') && !enabled && !roots.length),
+                  onCheckedChange: (v) => toggle(l.key, v),
+                  label: `${enabled ? '关掉' : '打开'}：${l.text}`,
+                  actions: f ? (
+                    editing ? (
+                      <>
+                        <Button size="sm" variant="ghost" onClick={() => setMoving(null)}>
+                          取消
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          loading={save.isPending}
+                          disabled={!moving.rootId}
+                          onClick={() => save.mutate({ ...base(), folders: { [f.id]: { rootId: moving.rootId, dir: moving.dir } } })}
+                        >
+                          保存
+                        </Button>
+                      </>
+                    ) : (
+                      <Button size="sm" variant="ghost" onClick={() => setMoving({ id: f.id, rootId: String(f.rootId), dir: f.dir })}>
+                        换位置…
+                      </Button>
+                    )
+                  ) : undefined,
+                }}
               />
             );
           })}

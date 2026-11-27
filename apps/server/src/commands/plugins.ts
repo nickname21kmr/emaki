@@ -17,6 +17,7 @@ import {
   SetNavInput,
   SetOverrideValuesInput,
   SetPluginEnabledInput,
+  SetPluginGrantInput,
   SetPluginSettingsInput,
 } from '@emaki/shared/schemas';
 import { config } from '../config.ts';
@@ -68,6 +69,17 @@ export const pluginCommands = [
     idempotent: false,
     http: [{ method: 'POST', path: '/api/plugins/:id/settings' }],
     run: (e, { id, values }) => e.plugins.setSettings(id, values),
+  }),
+  defineCommand({
+    name: 'plugins.setGrant',
+    summary: '改装的插件的授权：清单要的权限里给哪些（不能多给），文件夹可以换位置、可以不给；关掉的以后更新时照旧关着。能撤销',
+    input: SetPluginGrantInput,
+    // 授权和装插件同一个权限（AI 助手、设备默认都没有）
+    scope: 'install-plugins',
+    undoable: true,
+    idempotent: true,
+    http: [{ method: 'POST', path: '/api/plugins/:id/grant' }],
+    tx: (e, { id, ...next }) => e.plugins.setGrant(id, next),
   }),
   defineCommand({
     name: 'plugins.setEnabled',

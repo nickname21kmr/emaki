@@ -11,6 +11,7 @@ import { cn } from '@/lib/cn';
 import { useMutate, useSettings } from '@/lib/queries';
 import { contributionLines, permissionLines, riskLine, sourceText, wontLine, type GrantLine } from './grantText';
 import { toast } from 'sonner';
+import { GrantItemRow, type GrantItem } from '@/features/access/GrantList';
 
 type Source = 'file' | 'folder' | 'git';
 
@@ -316,19 +317,25 @@ export function GrantRow({
   roots,
   value,
   onChange,
+  extra,
 }: {
   line: GrantLine;
   roots?: LibraryRoot[];
   value?: { rootId: string; dir: string };
   onChange?: (v: { rootId: string; dir: string }) => void;
+  /** 插件详情里：开关、「换位置…」（GrantItem 的这几样） */
+  extra?: Pick<GrantItem, 'checked' | 'onCheckedChange' | 'disabled' | 'label' | 'actions'>;
 }) {
   const root = roots?.find((r) => r.id === value?.rootId);
   return (
-    <li className="flex gap-2.5">
-      <span aria-hidden className={cn('mt-[9px] size-1 shrink-0 rounded-full', l.danger ? 'bg-danger' : 'bg-fg-subtle')} />
-      <div className="min-w-0 flex-1">
-        <span className={cn(l.danger && 'text-danger')}>{l.text}</span>
-        {l.folder && value && onChange && roots && (
+    <GrantItemRow
+      item={{
+        key: l.key,
+        text: l.text,
+        detail: l.detail,
+        danger: l.danger,
+        ...extra,
+        children: l.folder && value && onChange && roots && (
           <div className="mt-1.5 flex flex-col gap-1.5">
             {roots.length > 1 ? (
               <select
@@ -355,9 +362,8 @@ export function GrantRow({
             />
             {root && <span className="truncate font-mono text-[12px] text-fg-muted">{displayPath(root.path, value.dir.replace(/\\/g, '/'))}</span>}
           </div>
-        )}
-        {l.detail && <span className="block text-[12px] text-fg-subtle">{l.detail}</span>}
-      </div>
-    </li>
+        ),
+      }}
+    />
   );
 }

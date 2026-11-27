@@ -16,7 +16,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { api, type CommandMeta } from './api';
 import { refreshMe } from './capabilities';
 import { streamBroken, streamOpened } from './connection';
-import { qk } from './queries';
+import { goTo, qk } from './queries';
 import { useUndoStore } from './stores';
 
 /** 正在跑的后台任务（SSE 推送），给侧边栏 / 首页的进度条用。 */
@@ -424,6 +424,15 @@ export function handleServerEvent(client: QueryClient, invalidate: ReturnType<ty
     case 'job-item':
       // 只做「在干活」的反馈，不让任何 query 失效
       useLiveJobs.getState().pushItem(event);
+      break;
+    case 'plugin-notice':
+      noteEvent(event.id);
+      // 插件出错太多次，自动停用了（docs/plugins.md 第 8 节）：说一声，点「去看看」到插件详情
+      toast.warning(`「${event.name}」出错太多次，已经自动停用`, {
+        description: event.message,
+        duration: 12_000,
+        action: { label: '去看看', onClick: () => goTo(`/plugins/${encodeURIComponent(event.plugin)}`) },
+      });
       break;
     case 'auto-change':
       noteEvent(event.id);

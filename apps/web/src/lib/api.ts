@@ -329,6 +329,11 @@ export const api = {
   /** 插件的设置（setting@1）：凭证只写不读；空字符串是清掉 */
   setPluginSettings: (id: string, values: Record<string, string | null>) =>
     post<MutationResult>(`/plugins/${encodeURIComponent(id)}/settings`, { values }),
+  /** 改装的插件的授权：清单要的里面给哪些（文件夹 null 是不给，不写是照旧） */
+  setPluginGrant: (
+    id: string,
+    grant: { scopes: string[]; network: string[]; background: boolean; folders: Record<string, { rootId: string; dir: string } | null> },
+  ) => post<MutationResult>(`/plugins/${encodeURIComponent(id)}/grant`, grant),
   renamePlugin: (id: string, name: string | null) => post<MutationResult>(`/plugins/${encodeURIComponent(id)}/name`, { name }),
   removePlugin: (id: string) => del<MutationResult>(`/plugins/${encodeURIComponent(id)}`),
   createOverride: (body: { name: string; values: Record<string, string>; enabled?: boolean }) =>

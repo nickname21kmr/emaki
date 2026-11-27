@@ -560,6 +560,12 @@ export function afterUndone(e: UndoEntry | undefined, path = herePath()): 'here'
   return 'elsewhere';
 }
 
+/** 去 Emaki 里的一个地址（toast 里的「去看看」这类，在组件外面用） */
+export function goTo(href: string) {
+  if (navigateTo) navigateTo(href);
+  else window.location.assign(href);
+}
+
 /** 「去看看」：回到做这一步的页面，到了以后照样指给用户看 */
 export function goToUndone(e: UndoEntry) {
   if (!e.path) return;

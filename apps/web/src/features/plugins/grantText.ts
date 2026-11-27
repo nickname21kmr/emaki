@@ -13,7 +13,7 @@ import {
   type PluginPermissions,
   type Scope,
 } from '@emaki/shared';
-import { scopeText } from '@/features/access/format';
+import { DANGER_SCOPES, scopeText } from '@/features/access/format';
 
 export interface GrantLine {
   key: string;
@@ -27,8 +27,6 @@ export interface GrantLine {
 
 const SOURCE_LABEL: Record<ImageSource['site'], string> = { pixiv: 'Pixiv', twitter: 'X / Twitter', danbooru: 'Danbooru', fanbox: 'FANBOX', other: '其他网站' };
 
-/** 这些范围会动用户已有的东西，标出来 */
-const DANGER_SCOPES: readonly Scope[] = ['organize-files', 'rules', 'settings'];
 
 /** 贡献的东西：自己画的页面、侧栏加一项、改一个默认值 */
 export function contributionLines(m: PluginManifest): GrantLine[] {
@@ -61,7 +59,7 @@ export function contributionLines(m: PluginManifest): GrantLine[] {
   for (const l of m.contributes['link@1'] ?? [])
     lines.push({
       key: `link:${l.id}`,
-      text: `由它打开${l.title}的链接`,
+      text: `由它打开「${l.title}」的链接`,
       detail: `${l.urls.join('、')}：点了在它的${[l.site && '网站（App 里）', l.page && '页面'].filter(Boolean).join('或')}里打开；按住 Ctrl 点照旧去浏览器`,
     });
   if (m.server)

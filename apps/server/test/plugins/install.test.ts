@@ -324,6 +324,42 @@ describe('更新', () => {
     // 权限没多：added 是空的（网页直接更新，不再出授权单）
     expect(inspectZip(withPerms(v1, { version: '0.3.0' })).added).toEqual({});
   });
+
+  it('插件详情里改授权：一项项关掉、再打开，文件夹换位置；只能在清单要的里面选；能撤销；关掉的更新时照旧关着', async () => {
+    const root = ds.ctx.db
+      .prepare("INSERT INTO library_roots (path, enabled, content_mode) VALUES ('/lib', 1, 'auto') RETURNING id")
+      .pluck()
+      .get() as number;
+    const v1 = { scopes: ['read', 'import'], folders: [{ id: 'dl', purpose: '放下载的图' }], network: ['example.com'], background: true };
+    const { id } = await install(inspectZip(withPerms(v1)), { dl: { rootId: String(root), dir: '下载' } });
+    const set = (g: object) => run('plugins.setGrant', { id, scopes: ['read', 'import'], network: ['example.com'], background: true, ...g });
+
+    // 关掉「导入」、联网、后台，文件夹不给
+    const r = await set({ scopes: ['read'], network: [], background: false, folders: { dl: null } });
+    expect(r.message).toBe('已改「权限样例」的授权：关掉了 4 项');
+    expect((await plugin(id))!.grant).toEqual({ scopes: ['read'], network: [], background: false, unsafe: false, folders: [] });
+    await undo(r.undoToken!);
+    expect((await plugin(id))!.grant).toMatchObject({ scopes: ['read', 'import'], network: ['example.com'], background: true, folders: [{ dir: '下载' }] });
+
+    // 文件夹换位置；不写的照旧
+    await set({ folders: { dl: { rootId: String(root), dir: '别处' } } });
+    expect((await plugin(id))!.grant!.folders).toEqual([{ id: 'dl', rootId: root, dir: '别处' }]);
+    await set({});
+    expect((await plugin(id))!.grant!.folders).toEqual([{ id: 'dl', rootId: root, dir: '别处' }]);
+    // 不能多给
+    await expect(set({ scopes: ['read', 'import', 'settings'] })).rejects.toThrow(/清单里没有要这些：settings/);
+    await expect(set({ network: ['evil.example'] })).rejects.toThrow(/evil\.example/);
+    await expect(set({ folders: { other: { rootId: String(root), dir: 'x' } } })).rejects.toThrow(/other/);
+
+    // 关掉「导入」再更新：新版多要了 jobs，授权单上只列 jobs（关掉的不算新要的），更新以后「导入」照旧关着
+    await set({ scopes: ['read'] });
+    const pkg = inspectZip(withPerms({ ...v1, scopes: ['read', 'import', 'jobs'] }, { version: '0.2.0' }));
+    expect(pkg.added).toEqual({ scopes: ['jobs'] });
+    await install(pkg);
+    expect((await plugin(id))!.grant!.scopes).toEqual(['read', 'jobs']);
+    // 没多要什么的更新：直接更新（added 空），关掉的也照旧
+    expect(inspectZip(withPerms({ ...v1, scopes: ['read', 'import', 'jobs'] }, { version: '0.3.0' })).added).toEqual({});
+  });
 });
 
 describe('从文件夹装（开发用）、从 git 装', () => {
@@ -412,7 +448,13 @@ describe('不兼容、出错、存储、清理', () => {
     for (let i = 0; i < 4; i++) expect(ds.plugins.recordError(id, 'view', `坏了 ${i}`)).toEqual({ autoDisabled: false });
     now += 11 * 60_000;
     for (let i = 0; i < 4; i++) expect(ds.plugins.recordError(id, 'view', `又坏了 ${i}`).autoDisabled).toBe(false);
+    const notices: unknown[] = [];
+    ds.ctx.bus.subscribe((e) => e.type === 'plugin-notice' && notices.push(e));
     expect(ds.plugins.recordError(id, 'view', '第五次').autoDisabled).toBe(true);
+    // 自动停用了：推一条通知（网页上弹出来，点「去看看」到插件详情）
+    expect(notices).toEqual([
+      expect.objectContaining({ type: 'plugin-notice', plugin: id, name: '随便看看', kind: 'auto-disabled', message: expect.stringMatching(/自动停用了。最近一次：第五次/) }),
+    ]);
     const p = (await plugin(id))!;
     expect(p.enabled).toBe(false);
     expect(p.disabledReason).toMatch(/10 分钟内出错 5 次，自动停用了。最近一次：第五次/);

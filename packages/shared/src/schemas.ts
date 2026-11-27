@@ -655,6 +655,14 @@ export const SetPluginSettingsInput = z.object({
   id: PluginId,
   values: z.record(z.string().max(40), z.string().max(4000).nullable()),
 });
+/** 改装的插件的授权（插件详情的「授权」）：清单要的里面给哪些；文件夹 null 是不给，不写是照旧 */
+export const SetPluginGrantInput = z.object({
+  id: PluginId,
+  scopes: z.array(z.string().max(40)).max(40),
+  network: z.array(z.string().max(200)).max(30),
+  background: z.boolean(),
+  folders: z.record(z.string().max(40), z.object({ rootId: Id, dir: z.string().trim().max(300) }).nullable()).default({}),
+});
 export const CreateOverridePluginInput = z.object({
   name: PluginName,
   values: OverrideValues.describe('要覆盖的值，例如 {"images.defaultSort":"modifiedAt"}；能用的键和值见 GET /api/plugins 的 overrides'),

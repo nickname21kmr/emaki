@@ -17,9 +17,10 @@ import { fork, type ChildProcess } from 'node:child_process';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { open, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { hostAllowed, type CommandContribution, type Grant, type ImportImagesResult, type ServerEvent } from '@emaki/shared';
+import { type CommandContribution, type Grant, type ImportImagesResult, type ServerEvent } from '@emaki/shared';
 import { z } from 'zod';
 import type { CommandDef, Engine } from '../../../commands/registry.ts';
+import { authorize, grantedFolder, requireGrant } from '../../../domain/plugins/authorize.ts';
 import type { JobContext } from '../../../core/jobs.ts';
 import { ConflictError, HttpError } from '../../../http/errors.ts';
 import { httpFetch, type HttpInit } from '../../../net/http.ts';
@@ -492,8 +493,9 @@ export class PluginRuntime {
       case 'sub': {
         const type = String(m.type);
         const grant = this.engine.plugins.serverGrant(p.spec.id)?.grant;
+        const denied = grant ? authorize(grant, { background: true }) : '插件停用了';
         if (type !== 'changed' && type !== 'job') this.log(p.spec.id, `不能订阅「${type}」（只有 changed、job）`);
-        else if (!grant?.background) this.log(p.spec.id, `订阅「${type}」要授权在后台运行（permissions.background）`);
+        else if (denied) this.log(p.spec.id, `订阅「${type}」：${denied}`);
         else p.subs.add(type);
         break;
       }
@@ -583,7 +585,7 @@ export class PluginRuntime {
         }
       }
       case 'jobs.start': {
-        if (!grant.background) throw new Error('没有授权在后台运行（清单 permissions.background）');
+        requireGrant(grant, { background: true });
         const kind = String(a.kind);
         const decl = p.spec.manifest.contributes['job.kind@1']?.find((j) => j.kind === kind);
         if (!decl) throw new Error(`清单里没有登记任务「${kind}」（job.kind@1）`);
@@ -611,8 +613,8 @@ export class PluginRuntime {
       throw new Error('登录窗口的地址不对');
     }
     if (!/^https?:$/.test(url.protocol) || !/^https?:$/.test(cookieUrl.protocol)) throw new Error('登录窗口只能开 http、https 的地址');
-    if (!hostAllowed(cookieUrl.hostname.toLowerCase(), grant.network))
-      throw new Error(`没有授权连接 ${cookieUrl.hostname}，读不了它的登录（在清单的 permissions.network 里声明）`);
+    const denied = authorize(grant, { network: cookieUrl.hostname });
+    if (denied) throw new Error(`${denied}，读不了它的登录`);
     if (typeof a.cookie !== 'string' || !a.cookie) throw new Error('要写读哪个 Cookie（cookie）');
     if (p.logins.size) throw new Error('登录窗口已经开着了');
     let pattern: RegExp | undefined;
@@ -661,11 +663,7 @@ export class PluginRuntime {
     scoped: <T>(fn: () => T) => T,
     a: Record<string, unknown>,
   ): Promise<{ items: ImportImagesResult['items']; message: string }> {
-    const folder = typeof a.folder === 'string' ? grant.folders.find((f) => f.id === a.folder) : grant.folders[0];
-    if (!folder)
-      throw new Error(
-        typeof a.folder === 'string' ? `授权里没有文件夹「${a.folder}」` : '授权里没有给放图的文件夹（清单 permissions.folders）',
-      );
+    const folder = grantedFolder(grant, typeof a.folder === 'string' ? a.folder : undefined);
     const files = Array.isArray(a.files) ? (a.files as unknown[]) : [];
     if (!files.length || files.length > 1000) throw new Error('files 要有 1 到 1000 个');
     const list = files.map((f) => {
@@ -717,8 +715,7 @@ export class PluginRuntime {
     let res: Response;
     for (let hop = 0; ; hop++) {
       if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('只能连 http、https 的地址');
-      if (!hostAllowed(url.hostname.toLowerCase(), grant.network))
-        throw new Error(`没有授权连接 ${url.hostname}（在清单的 permissions.network 里声明，授权单上确认）`);
+      requireGrant(grant, { network: url.hostname });
       res = await doFetch(url.href, { method, headers, ...(body !== undefined && { body }), signal, redirect: 'manual' });
       const location = res.headers.get('location');
       if (![301, 302, 303, 307, 308].includes(res.status) || !location) break;
