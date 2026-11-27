@@ -58,7 +58,7 @@ async function imageFor(url: string): Promise<Buffer> {
   return b;
 }
 
-const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 /** 动图的两帧（同样大小、颜色不同）和每帧停多久 */
 const UGOIRA_DELAYS = [50, 80];
@@ -175,10 +175,17 @@ const fakePixiv: RuntimeOptions['fetch'] = async (url, init) => {
         tags: { tags: [{ tag: 'オリジナル' }] },
       },
     });
+  // 88800008 是 R-18：没登录时作品照样给（原图地址是空的），每一页回 404
+  if (u.hostname === 'www.pixiv.net' && illust && illust[1] === '88800008')
+    return json({
+      error: false,
+      body: { title: '限制级', userName: '画师乙', userId: '7', illustType: 0, pageCount: 3, xRestrict: 1, aiType: 2, width: 1000, height: 1400, urls: { small: null, original: null } },
+    });
+  if (u.hostname === 'www.pixiv.net' && pages?.[1] === '88800008' && !init.headers?.cookie) return json({ error: true, message: '', body: [] }, 404);
   if (u.hostname === 'www.pixiv.net' && pages) {
     const id = pages[1]!;
     if (isUgoira(id)) return json({ error: false, body: [{ urls: { original: `https://i.pximg.net/img-original/img/${id}_ugoira0.jpg` } }] });
-    const n = id === '11100001' ? 2 : 1;
+    const n = id === '11100001' ? 2 : id === '88800008' ? 3 : 1;
     return json({
       error: false,
       body: Array.from({ length: n }, (_, i) => ({
@@ -364,7 +371,7 @@ describe('附带的 Pixiv 浏览', () => {
     await expectUgoira('33300003');
     // 导入记成插件；临时文件删掉了
     expect(ds.ctx.db.prepare("SELECT DISTINCT actor FROM command_log WHERE command = 'library.import'").pluck().all()).toEqual([
-      'plugin:pixiv-browser@0.6.1',
+      'plugin:pixiv-browser@0.6.2',
     ]);
     expect(readdirSync(ds.plugins.dataDir(ID))).not.toContain('dl');
     // 页面上标「已下载」
@@ -502,6 +509,23 @@ describe('附带的 Pixiv 浏览', () => {
     expect(job2.status).toBe('failed');
     expect(job2.message).toMatch(/HTTP 403/);
     expect(requests.filter((x) => x.url === solo)).toHaveLength(1);
+  });
+
+  it('R-18 作品没登录：作品页照样给标题、页数（说要先登录，没有每一页），下载说要先登录；登录以后每一页都有', async () => {
+    await enable();
+    const work = await call('pixiv-browser.work', { id: '88800008' });
+    expect(work).toMatchObject({ id: '88800008', title: '限制级', pages: 3, r18: true, needLogin: true, pageThumbs: [] });
+    const r = await call<{ jobId: string }>('pixiv-browser.download', { ids: ['88800008'] });
+    const job = await until(() => ['done', 'failed'].includes(ds.ctx.jobs.get(r.jobId)!.status) && ds.ctx.jobs.get(r.jobId)!, '下载结束');
+    expect(job.status).toBe('failed');
+    expect(job.message).toMatch(/R-18 的作品要先登录 Pixiv/);
+
+    await call('pixiv-browser.login');
+    logins[0]!.finish('12345_abcdef');
+    await until(async () => (await call<{ session: boolean }>('pixiv-browser.status')).session, '登录好');
+    const after = await call('pixiv-browser.work', { id: '88800008' });
+    expect(after).toMatchObject({ needLogin: false });
+    expect(after.pageThumbs).toHaveLength(3);
   });
 
   it('取消下载：任务停下，算取消', async () => {

@@ -114,6 +114,9 @@ export async function activate(emaki) {
     if (r.status === 401 || r.status === 403)
       throw new Error(cookie ? 'Pixiv 拒绝了请求：登录可能过期了，重新登录 Pixiv' : 'Pixiv 拒绝了请求：这个要先登录 Pixiv');
     if (r.status === 429) throw new Error('Pixiv 说请求太频繁了，过一会儿再试');
+    // 没登录时 R-18 作品的每一页、原图地址 Pixiv 回 404（作品本身的标题、页数照样给）
+    if (r.status === 404)
+      throw new Error(cookie ? 'Pixiv 上找不到（作品可能删了或者不公开了）' : 'Pixiv 上找不到：R-18 的作品要先登录 Pixiv 才能看每一页');
     if (!r.ok) throw new Error(`Pixiv 返回 HTTP ${r.status}`);
     const json = r.body;
     if (json && json.error) throw new Error(json.message || 'Pixiv 返回了错误');
@@ -163,12 +166,14 @@ export async function activate(emaki) {
   });
 
   // 一个作品（电脑上从图片的来源点进来：Emaki 的「Pixiv」页显示这个作品的每一页、图库里有几张、补齐）
+  // R-18 的作品没登录时：标题、页数、图库里有几张照样给，每一页的缩略图没有（needLogin，页面上说要先登录）
   emaki.commands.handle('work', async ({ id }) => {
     const w = await api(`/ajax/illust/${id}?lang=zh`);
     const type = typeOf(Number(w.illustType));
     const count = type === 'ugoira' ? 1 : Number(w.pageCount) || 1;
-    let pages = [{ thumb: w.urls?.small ?? w.urls?.thumb ?? null, width: w.width, height: w.height }];
-    if (count > 1) {
+    const needLogin = Number(w.xRestrict) > 0 && !(await session());
+    let pages = needLogin ? [] : [{ thumb: w.urls?.small ?? w.urls?.thumb ?? null, width: w.width, height: w.height }];
+    if (count > 1 && !needLogin) {
       const ps = await api(`/ajax/illust/${id}/pages?lang=zh`);
       if (Array.isArray(ps) && ps.length) pages = ps.map((p) => ({ thumb: p.urls?.small ?? p.urls?.thumb_mini ?? null, width: p.width, height: p.height }));
     }
@@ -187,7 +192,7 @@ export async function activate(emaki) {
         height: w.height,
       },
     ]);
-    return { ...item, date: w.createDate ?? null, tags: (w.tags?.tags ?? []).map((t) => t.tag).slice(0, 20), pageThumbs: pages };
+    return { ...item, date: w.createDate ?? null, tags: (w.tags?.tags ?? []).map((t) => t.tag).slice(0, 20), pageThumbs: pages, needLogin };
   });
 
   // ---------------------------------------------------------------- 登录

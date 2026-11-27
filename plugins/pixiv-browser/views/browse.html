@@ -103,7 +103,8 @@
         background: var(--color-background-danger, #fee);
         color: var(--color-text-danger, #c00);
       }
-      .note a {
+      .note a,
+      a[data-login] {
         color: inherit;
         cursor: pointer;
         text-decoration: underline;
@@ -610,7 +611,8 @@
         const w = work;
         const missing = w.pages - (w.have ?? 0);
         const stateText = !w.have ? '' : w.downloaded ? (w.pages > 1 ? `已经下全了（${w.pages} 张）` : '已下载') : `已下载 ${w.have}/${w.pages} 张`;
-        const action = !w.have ? '下载这个作品' : w.downloaded ? '' : `补齐剩下的 ${missing} 张`;
+        // R-18 没登录：下载要每一页的原图地址，Pixiv 不给，按钮先不出，下面说要先登录
+        const action = w.needLogin ? '' : !w.have ? '下载这个作品' : w.downloaded ? '' : `补齐剩下的 ${missing} 张`;
         const kind = w.type === 'ugoira' ? '动图' : `${w.pages} 张`;
         $('work').innerHTML = `
           <div class="work-head">
@@ -624,6 +626,7 @@
               <button id="wopen">在 Pixiv 网站打开 ↗</button>
             </div>
           </div>
+          ${w.needLogin ? `<p class="muted">这是 R-18 作品：要看每一页${w.downloaded ? '' : '、下载或补齐'}，先${LOGIN}</p>` : ''}
           <div class="grid">${w.pageThumbs
             .map(
               (p, i) => `<div class="card page"><div class="pic"><img alt="" data-thumb="${esc(p.thumb ?? '')}" /></div>
@@ -631,6 +634,7 @@
             )
             .join('')}</div>`;
         showThumbs();
+        $('work').querySelector('[data-login]')?.addEventListener('click', () => startLogin());
         $('wopen').onclick = () => view.app.openLink({ url: `https://www.pixiv.net/artworks/${w.id}` });
         if ($('wdl'))
           $('wdl').onclick = async () => {
