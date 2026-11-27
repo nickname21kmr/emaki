@@ -1,5 +1,5 @@
 /**
- * 改内部的插件（docs/plugins.md 第 7 节，E6）：样例「一个作品算一张」（examples/plugins/count-by-work）真的装上、在这个进程里加载。
+ * 改内部的插件（docs/plugins.md 第 7 节，E6）：附带的「一个作品算一张」（plugins/count-by-work）真的装上、在这个进程里加载。
  * 补丁生效（角色、作品、画师的张数按投稿数）、停用撤掉；Emaki 改了它改的点（指纹变了）就不加载、自动停用、发通知，
  * 「仍然启用」以后照常；清单里没列的点改不了；这个版本没有的点装不上；activate 出错、补丁出错记在插件头上。
  */
@@ -13,8 +13,8 @@ import { InternalPlugins } from '../../src/services/plugins/internal.ts';
 import { SqliteDataSource } from '../helpers/client.ts';
 import { makeTmpDir } from '../helpers/tmp.ts';
 
-const EXAMPLE = path.resolve(import.meta.dirname, '../../../../examples/plugins/count-by-work');
-const ID = 'example.count-by-work';
+const EXAMPLE = path.resolve(import.meta.dirname, '../../../../plugins/count-by-work');
+const ID = 'count-by-work';
 
 let ds: SqliteDataSource;
 let bus: EventBus;
@@ -117,6 +117,8 @@ describe('改内部的插件', () => {
   it('「一个作品算一张」：组图只算一张，停用就回到一张图算一张', async () => {
     await startLoader();
     expect(await counts()).toEqual(BUILTIN);
+    // 附带的：在「插件」页「附带的」里，启用就是按文件夹装
+    expect(ds.plugins.bundled(path.dirname(EXAMPLE)).map((b) => b.id)).toContain(ID);
 
     const pkg = await install(EXAMPLE);
     // 授权单：要改内部、改的是哪个点

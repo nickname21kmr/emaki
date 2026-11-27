@@ -64,7 +64,7 @@ describe('授权单上的话（宿主按清单生成）', () => {
 
   it('改内部的插件：改的每一处一行、朱色；不说「它不会」', () => {
     const m = {
-      id: 'example.count-by-work',
+      id: 'count-by-work',
       name: '一个作品算一张',
       version: '1.0.0',
       permissions: { unsafe: true },
