@@ -1214,6 +1214,15 @@ describe('插件（注册表：plugins.*，docs/plugins.md 第 9 节）', () => 
     expect(await call('POST', '/api/plugins/example.view/settings', { values: { a: 'b' } })).toMatchObject({ status: 400 });
     expect((await call('POST', '/api/plugins/nope/settings', { values: {} })).status).toBe(404);
   });
+  route('POST /api/plugins/:id/grant', async () => {
+    await installView();
+    const none = { scopes: [], network: [], background: false, folders: {} };
+    expect(await call('POST', '/api/plugins/example.view/grant', none)).toMatchObject({ status: 200, json: { ok: true } });
+    expect((await call('GET', '/api/plugins')).json.plugins.find((p: { id: string }) => p.id === 'example.view').grant.scopes).toEqual([]);
+    // 不能多给清单没要的；内置的没有授权
+    expect((await call('POST', '/api/plugins/example.view/grant', { ...none, scopes: ['settings'] })).status).toBe(400);
+    expect((await call('POST', '/api/plugins/core.annex/grant', none)).status).toBe(400);
+  });
   route('POST /api/plugins/ai-views', async () => {
     const r = await call('POST', '/api/plugins/ai-views', { name: 'smoke', title: '冒烟页', html: '<p>ai</p>' });
     expect(r).toMatchObject({ status: 200, json: { status: 'needs_confirmation', id: 'ai.smoke', name: '冒烟页', version: '1.0.0' } });
