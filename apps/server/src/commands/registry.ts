@@ -46,6 +46,11 @@ interface Base<I> {
   readonly http?: readonly HttpBinding[];
   /** MCP 工具：补充给助手的说明；destructive 标出会删改用户东西的（MCP 的 destructiveHint） */
   readonly mcp?: { readonly description?: string; readonly destructive?: boolean };
+  /**
+   * 约定的版本（docs/plugins.md 第 7 节）：返回的格式、做的事变了但输入没变时加一。它是内部点 command:/query: 的约定的一部分，
+   * 变了改这个命令的插件会自动停用（core/pointContracts.ts）
+   */
+  readonly contractVersion?: number;
 }
 
 export interface QueryDef<I = any, O = any> extends Base<I> {
@@ -137,6 +142,7 @@ export class Registry {
         {
           kind: d.kind,
           label: `${d.kind === 'query' ? '查询' : '命令'}「${d.summary}」`,
+          version: d.contractVersion,
           signature: () =>
             JSON.stringify([d.scope, d.kind === 'command' && d.undoable, z.toJSONSchema(d.input, { io: 'input', unrepresentable: 'any' })]),
         },

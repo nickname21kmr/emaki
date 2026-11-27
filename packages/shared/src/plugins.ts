@@ -261,7 +261,8 @@ export interface PluginManifest {
 /**
  * 网页上登记过名字的内部点（docs/plugins.md 第 7 节，E6）：第 3 层插件的 web 入口只能改这些。
  * 网页里用 patchable（组件）、patchableFn（函数）登记，名字和这里一一对上（apps/web/src/lib/points.test.ts 扫源码查）；
- * file 是它在 apps/web/src 下的源文件：服务端按这个文件的内容算指纹（文件改了就算这个点变了），version 是手动的版本号
+ * file 是它在 apps/web/src 下的源文件；指纹按约定算（组件的 props、函数的签名，从这个文件里取，apps/server/src/core/pointContracts.ts），
+ * version 是手动的版本号（行为变了、约定看不出来时加一）
  */
 export const WEB_POINTS = [
   { name: 'fn:count.unit', label: '排名的张数后面写的字', file: 'lib/countUnit.ts', version: 1 },

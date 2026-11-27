@@ -8,12 +8,13 @@
  *   补丁在网页上加（apps/web/src/lib/points.tsx），这里不能给它们加。
  * - 用：调用的地方经 wrap(名字, 原来的函数) 拿到「加上补丁以后」的函数；没有补丁时就是原来那个函数（只查一次表）。
  * - 补丁怎么叠、撤、出错算谁的：@emaki/shared 的 PatchStack（网页同一份）。
- * - 指纹：点的「样子」——登记的那一层的实现（函数的源码；网页的点是它所在的源文件）、输入的格式（命令的 schema、反应订阅的变化……）
- *   和手动的版本号，取 sha256 的前 16 位。插件装上、启用时记下它改的点的指纹；Emaki 更新以后指纹变了，就不加载它、自动停用（domain/plugins/）。
- *   看的只是登记的那一层：更深处（比如命令调用的领域方法）改了看不出来。
+ * - 指纹：只按点的约定（core/pointContracts.ts：命令的输入格式、组件的 props、函数的签名、版本号……，记在 pointContracts.json）算，
+ *   取 sha256 的前 16 位：只改了实现、约定没变，改它的插件照常用。插件装上、启用时记下它改的点的指纹；约定变了就不加载它、自动停用
+ *   （domain/plugins/）。约定里没有的点（新加了还没更新那份文件，测试会拦）退回按实现算。
  */
 import { isWebPoint, PatchStack, POINT_NAME_RE, type PointKind } from '@emaki/shared';
 import { createHash } from 'node:crypto';
+import { pointContracts } from './pointContracts.ts';
 
 export { POINT_NAME_RE, type PatchSpec, type PointKind } from '@emaki/shared';
 
@@ -23,7 +24,9 @@ export interface PointSpec {
   kind: PointKind;
   /** 一句人话：「插件」页上、通知里说它改的是什么 */
   label: string;
-  /** 输入的格式这类函数源码之外的「样子」（懒算：命令的 JSON Schema 要现转；网页的点是源文件） */
+  /** 约定（测试里模拟约定变了用；平时从 pointContracts.json 取） */
+  contract?: readonly string[];
+  /** 约定里没有这个点时，指纹按它和实现算（懒算） */
   signature?: () => string;
   /** 行为变了、源码却没变时手动加一（口径这种被别处拼进 SQL 的） */
   version?: number;
@@ -64,8 +67,9 @@ export class Points extends PatchStack {
   fingerprint(name: string): string | null {
     const p = this.points.get(name);
     if (!p) return null;
+    const contract = p.contract ?? pointContracts()[name];
     p.print ??= createHash('sha256')
-      .update(`${p.kind}\n${p.version ?? 0}\n${p.signature?.() ?? ''}\n${String(p.base)}`)
+      .update(contract ? `${name}\n${contract.join('\n')}` : `${p.kind}\n${p.version ?? 0}\n${p.signature?.() ?? ''}\n${String(p.base)}`)
       .digest('hex')
       .slice(0, 16);
     return p.print;

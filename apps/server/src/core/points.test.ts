@@ -75,19 +75,22 @@ describe('内部点', () => {
     expect(errs).toEqual(['b']);
   });
 
-  it('指纹：实现、格式、版本变了才变', () => {
+  it('指纹：只按约定算（实现变了不算）；约定里没有的点按实现、格式、版本算', () => {
     const points = new Points();
-    points.define('term:x', { kind: 'term', label: 'x' }, add);
+    points.define('term:x', { kind: 'term', label: 'x', contract: ['signature: (a, b)', 'version: 1'] }, add);
     const a = points.fingerprint('term:x');
     expect(a).toMatch(/^[0-9a-f]{16}$/);
-    points.define('term:x', { kind: 'term', label: '换了说法' }, add);
+    // 实现换了、说法换了：约定一样，指纹一样
+    points.define('term:x', { kind: 'term', label: '换了说法', contract: ['signature: (a, b)', 'version: 1'] }, (x: number, y: number) => x * y);
     expect(points.fingerprint('term:x')).toBe(a);
-    points.define('term:x', { kind: 'term', label: 'x', version: 2 }, add);
+    points.define('term:x', { kind: 'term', label: 'x', contract: ['signature: (a, b)', 'version: 2'] }, add);
     expect(points.fingerprint('term:x')).not.toBe(a);
-    points.define('term:x', { kind: 'term', label: 'x', signature: () => '{"a":1}' }, add);
-    expect(points.fingerprint('term:x')).not.toBe(a);
-    points.define('term:x', { kind: 'term', label: 'x' }, (a: number, b: number) => a - b);
-    expect(points.fingerprint('term:x')).not.toBe(a);
+
+    // 约定里没有：按实现算
+    points.define('term:y', { kind: 'term', label: 'y' }, add);
+    const b = points.fingerprint('term:y');
+    points.define('term:y', { kind: 'term', label: 'y' }, (x: number, y: number) => x - y);
+    expect(points.fingerprint('term:y')).not.toBe(b);
     expect(points.fingerprint('term:nope')).toBeNull();
   });
 
