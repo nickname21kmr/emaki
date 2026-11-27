@@ -23,6 +23,8 @@ const MAX_HTML = 128 * 1024 * 1024;
 const MAX_FRAMES = 1000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** 一个原图文件最多取几次（fetchFile） */
+const FETCH_TRIES = 3;
 
 export async function activate(emaki) {
   const files = emaki.files;
@@ -301,10 +303,35 @@ export async function activate(emaki) {
     return u;
   }
 
+  /**
+   * 下一个原图文件（存进自己的文件夹）。连接中途断了（terminated、连接被重置、超时）、Pixiv 回 5xx / 429 时这一个再试，
+   * 最多 3 次（隔 1 秒、2 秒）：以前一张断了整个作品算失败、已经下好的页删掉，再下要从第一张开始。403、404、没授权的不再试。
+   */
+  async function fetchFile(url, saveAs, { signal, retrying } = {}) {
+    for (let attempt = 1; ; attempt++) {
+      if (signal?.aborted) throw new Error('取消了');
+      let r;
+      let err;
+      try {
+        r = await emaki.fetch(url, { saveAs, headers: { referer: REFERER, 'user-agent': UA } });
+      } catch (e) {
+        err = e;
+      }
+      const again = err ? !/授权/.test(err.message ?? '') : r.status >= 500 || r.status === 429;
+      if (!again || attempt >= FETCH_TRIES) {
+        if (err) throw err;
+        return r;
+      }
+      emaki.log(`${url} 第 ${attempt} 次没取到（${err ? err.message : `HTTP ${r.status}`}），再试`);
+      retrying?.(attempt + 1);
+      await sleep(attempt * 1000);
+    }
+  }
+
   /** 下载动图的 zip，拆开，存成 HTML 动图（帧原样放进去）：返回给 library.import 的文件 */
   async function saveUgoira(id, title, ugoira, progress) {
     progress(`动图，${ugoira.frames.length} 帧`);
-    const r = await emaki.fetch(ugoira.zip, { saveAs: `dl/${id}_ugoira.zip`, headers: { referer: REFERER, 'user-agent': UA } });
+    const r = await fetchFile(ugoira.zip, `dl/${id}_ugoira.zip`, { retrying: (n) => progress(`动图，${ugoira.frames.length} 帧，第 ${n} 次`) });
     if (!r.ok) throw new Error(`动图的帧取不到（HTTP ${r.status}）`);
     const entries = readZip(readFileSync(r.path));
     const frames = ugoira.frames.map((f) => {
@@ -360,12 +387,13 @@ export async function activate(emaki) {
         const saved = ugoira ? [await saveUgoira(id, meta?.title ?? work.title ?? id, ugoira, (m) => job.setMessage(`下载 ${works + 1}/${ids.length}：${label}（${m}）`))] : [];
         for (let i = 0; i < pages.length; i++) {
           if (job.signal.aborted) throw new Error('取消了');
-          job.setMessage(`下载 ${works + 1}/${ids.length}：${label}${pages.length > 1 ? `（第 ${i + 1}/${pages.length} 张）` : ''}`);
+          const where = `下载 ${works + 1}/${ids.length}：${label}${pages.length > 1 ? `（第 ${i + 1}/${pages.length} 张）` : ''}`;
+          job.setMessage(where);
           const url = pages[i].urls?.original;
           if (!url) continue;
           const ext = path.extname(new URL(url).pathname) || '.jpg';
           const name = `${id}_p${i}${ext}`;
-          const r = await emaki.fetch(url, { saveAs: `dl/${name}`, headers: { referer: REFERER, 'user-agent': UA } });
+          const r = await fetchFile(url, `dl/${name}`, { signal: job.signal, retrying: (n) => job.setMessage(`${where}，断了，第 ${n} 次`) });
           if (!r.ok) throw new Error(`第 ${i + 1} 张取不到（HTTP ${r.status}）`);
           saved.push({ path: r.path, fileName: name });
           await sleep(200);

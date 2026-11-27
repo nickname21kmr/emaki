@@ -28,6 +28,8 @@ let lib: string;
 let rootId: number;
 let runtime: PluginRuntime;
 let requests: { url: string; headers: Record<string, string> }[];
+/** 这些地址前几次出问题（'drop' 连接中途断了，数字是回这个状态码），用一次少一次 */
+let flaky: Map<string, ('drop' | number)[]>;
 /** 假的登录窗口：测试里决定登录好还是关掉 */
 let logins: { o: LoginWindowOptions; finish(v: string): void; fail(m: string): void }[];
 const fakeLogin = async (o: LoginWindowOptions): Promise<LoginWindow> => {
@@ -106,6 +108,9 @@ const ugoiraInfo = (id: string) => ({
 
 const fakePixiv: RuntimeOptions['fetch'] = async (url, init) => {
   requests.push({ url, headers: init.headers ?? {} });
+  const trouble = flaky.get(url)?.shift();
+  if (trouble === 'drop') throw new TypeError('terminated');
+  if (trouble) return new Response('', { status: trouble });
   const u = new URL(url);
   if (u.hostname === 'www.pixiv.net' && u.pathname === '/ranking.php')
     return json({
@@ -220,6 +225,7 @@ beforeEach(async () => {
     .pluck()
     .get(lib, 'auto') as number;
   requests = [];
+  flaky = new Map();
   logins = [];
   runtime = new PluginRuntime(ds, { fetch: fakePixiv, log: () => {}, loginWindow: fakeLogin });
   runtime.start();
@@ -358,7 +364,7 @@ describe('附带的 Pixiv 浏览', () => {
     await expectUgoira('33300003');
     // 导入记成插件；临时文件删掉了
     expect(ds.ctx.db.prepare("SELECT DISTINCT actor FROM command_log WHERE command = 'library.import'").pluck().all()).toEqual([
-      'plugin:pixiv-browser@0.6.0',
+      'plugin:pixiv-browser@0.6.1',
     ]);
     expect(readdirSync(ds.plugins.dataDir(ID))).not.toContain('dl');
     // 页面上标「已下载」
@@ -475,6 +481,27 @@ describe('附带的 Pixiv 浏览', () => {
     // 停用了就不发
     await call('plugins.setEnabled', { id: ID, enabled: false });
     expect(await ds.registry.query('plugins.sites', {})).toEqual([]);
+  });
+
+  it('一张断了只重试这一张（最多 3 次）：连接中途断了、5xx 再试，作品照样下全；403 不再试', async () => {
+    await enable();
+    await call('pixiv-browser.ranking', { mode: 'daily' });
+    const p1 = 'https://i.pximg.net/img-original/img/11100001_p1.png';
+    const solo = 'https://i.pximg.net/img-original/img/22200002_p0.png';
+    flaky.set(p1, ['drop', 503]);
+    const r = await call<{ jobId: string }>('pixiv-browser.download', { ids: ['11100001'] });
+    const job = await until(() => ['done', 'failed'].includes(ds.ctx.jobs.get(r.jobId)!.status) && ds.ctx.jobs.get(r.jobId)!, '下载完');
+    expect(job).toMatchObject({ status: 'done', message: '下载完了 1 个作品，新加 2 张' });
+    expect(requests.filter((x) => x.url === p1)).toHaveLength(3);
+    // 第一张没有重下
+    expect(requests.filter((x) => x.url.endsWith('11100001_p0.png'))).toHaveLength(1);
+    // 403：不再试，算失败
+    flaky.set(solo, [403]);
+    const bad = await call<{ jobId: string }>('pixiv-browser.download', { ids: ['22200002'] });
+    const job2 = await until(() => ['done', 'failed'].includes(ds.ctx.jobs.get(bad.jobId)!.status) && ds.ctx.jobs.get(bad.jobId)!, '失败');
+    expect(job2.status).toBe('failed');
+    expect(job2.message).toMatch(/HTTP 403/);
+    expect(requests.filter((x) => x.url === solo)).toHaveLength(1);
   });
 
   it('取消下载：任务停下，算取消', async () => {
