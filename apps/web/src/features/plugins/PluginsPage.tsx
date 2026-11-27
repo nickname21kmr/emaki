@@ -11,8 +11,8 @@ import {
   type PluginSource,
 } from '@emaki/shared';
 import { useMutation } from '@tanstack/react-query';
-import { ArrowDown, ArrowUp, Download, Ellipsis, PencilLine, Plus, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { ArrowDown, ArrowUp, Download, Ellipsis, GripVertical, PencilLine, Plus, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { PageBody, PageHeader } from '@/components/layout/PageHeader';
 import { Badge, Button, IconButton, Menu, MenuItem, SearchInput, SectionTitle, Segmented, Switch, Tooltip } from '@/components/ui';
@@ -21,6 +21,7 @@ import { useCan } from '@/lib/capabilities';
 import { cn } from '@/lib/cn';
 import { usePlugins } from '@/lib/plugins';
 import { useMutate } from '@/lib/queries';
+import { useDragSort } from '@/lib/useDragSort';
 import { toast } from 'sonner';
 import { ConfirmPackage, GrantSheet, InstallDialog } from './InstallDialogs';
 import { NewOverrideDialog, RemoveDialog, RenameDialog } from './PluginDialogs';
@@ -156,7 +157,13 @@ function AllView({ can }: { can: boolean }) {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center gap-2">
-        <SearchInput value={q} onChange={(e) => setQ(e.target.value)} onClear={() => setQ('')} placeholder="搜插件" className="w-56 compact:w-full" />
+        <SearchInput
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onClear={() => setQ('')}
+          placeholder="搜插件"
+          className="w-56 compact:w-full"
+        />
         <Segmented
           size="sm"
           value={kind}
@@ -256,7 +263,9 @@ function PluginRow({ plugin: p, can }: { plugin: PluginInfo; can: boolean }) {
     <li className="flex items-center gap-3 px-4 py-3">
       <Link to={`/plugins/${encodeURIComponent(p.id)}`} className="group min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-          <span className={cn('text-[14px] font-semibold tracking-tight group-hover:underline', !p.enabled && 'text-fg-muted')}>{label}</span>
+          <span className={cn('text-[14px] font-semibold tracking-tight group-hover:underline', !p.enabled && 'text-fg-muted')}>
+            {label}
+          </span>
           {p.displayName && <span className="text-[12px] text-fg-subtle">原名「{p.name}」</span>}
           {p.kinds.map((k) => (
             <Badge key={k}>{KIND_LABEL[k]}</Badge>
@@ -266,7 +275,9 @@ function PluginRow({ plugin: p, can }: { plugin: PluginInfo; can: boolean }) {
           {p.problems.length > 0 ? <Badge tone="warn">不能启用</Badge> : troubled(p) && <Badge tone="warn">出错</Badge>}
           {p.installed && <span className="font-mono text-[11.5px] text-fg-subtle">{p.version}</span>}
         </div>
-        <p className="mt-0.5 truncate text-[12.5px] text-fg-muted">{p.problems[0] ?? p.disabledReason ?? p.description ?? overrideSummary(p)}</p>
+        <p className="mt-0.5 truncate text-[12.5px] text-fg-muted">
+          {p.problems[0] ?? p.disabledReason ?? p.description ?? overrideSummary(p)}
+        </p>
       </Link>
       {p.required ? (
         <Tooltip content="必需的插件不能停用">
@@ -285,7 +296,11 @@ function PluginRow({ plugin: p, can }: { plugin: PluginInfo; can: boolean }) {
       {can && (
         <Menu
           width={180}
-          trigger={<IconButton label="更多" size="sm"><Ellipsis /></IconButton>}
+          trigger={
+            <IconButton label="更多" size="sm">
+              <Ellipsis />
+            </IconButton>
+          }
         >
           {/* 按登记的顺序（blocks/slots.ts 的 menu.pluginRow） */}
           <Slot
@@ -337,8 +352,22 @@ export function overrideSummary(p: PluginInfo): string {
 function PagesView({ can }: { can: boolean }) {
   const { state } = usePlugins();
   const save = useMutate((body: Parameters<typeof api.setNav>[0]) => api.setNav(body));
-  const sections = state.nav;
-  const ids = (s: Record<NavSection, NavEntry[]>) => Object.fromEntries(NAV_SECTIONS.map((k) => [k, s[k].map((n) => n.id)])) as Record<NavSection, string[]>;
+  const ids = (s: Record<NavSection, NavEntry[]>) =>
+    Object.fromEntries(NAV_SECTIONS.map((k) => [k, s[k].map((n) => n.id)])) as Record<NavSection, string[]>;
+  // 刚挪过、接口还没回来时按挪过的顺序画（拖完那一行不跳回去）；新的 state.nav 到了就不用它
+  const [draft, setDraft] = useState<{ base: Record<NavSection, NavEntry[]>; order: Record<NavSection, string[]> } | null>(null);
+  const sections = useMemo(() => {
+    if (!draft || draft.base !== state.nav) return state.nav;
+    const byId = new Map(NAV_SECTIONS.flatMap((k) => state.nav[k]).map((n) => [n.id, n]));
+    return Object.fromEntries(NAV_SECTIONS.map((k) => [k, draft.order[k].flatMap((id) => byId.get(id) ?? [])])) as Record<
+      NavSection,
+      NavEntry[]
+    >;
+  }, [draft, state.nav]);
+  const commit = (order: Record<NavSection, string[]>) => {
+    setDraft({ base: state.nav, order });
+    save.mutate({ sections: order }, { onError: () => setDraft(null) });
+  };
 
   /** 上移 / 下移一格；到了这一段的头尾就挪到相邻那一段 */
   const move = (section: NavSection, index: number, dir: -1 | 1) => {
@@ -351,33 +380,44 @@ function PagesView({ can }: { can: boolean }) {
     else if (dir < 0 && si > 0) next[NAV_SECTIONS[si - 1]!].push(id!);
     else if (dir > 0 && si < NAV_SECTIONS.length - 1) next[NAV_SECTIONS[si + 1]!].unshift(id!);
     else return;
-    save.mutate({ sections: next });
+    commit(next);
   };
+
+  // 按住把手拖（鼠标、触屏），能拖到别的一段；拖着的时候按 sort.order 画（别的行让位）
+  const box = useRef<HTMLDivElement>(null);
+  const lists = useMemo(() => ids(sections), [sections]);
+  const sort = useDragSort<NavSection>({ container: box, lists, disabled: !can || save.isPending, onDrop: commit });
+  const byId = new Map(NAV_SECTIONS.flatMap((k) => sections[k]).map((n) => [n.id, n]));
+  const shown = (k: NavSection) => sort.order[k].flatMap((id) => byId.get(id) ?? []);
 
   return (
     <div className="flex flex-col gap-6">
       <p className="text-[13px] leading-relaxed text-fg-muted">
-        侧栏按这里的顺序排，手机竖屏的底部标签栏放前四个（「原创」这种捷径不算），其余进「更多」。停用的页面不在这里，到「全部」里启用。
+        侧栏按这里的顺序排，手机竖屏的底部标签栏放前四个（「原创」这种捷径不算），其余进「更多」。按住左边的把手拖，或者用箭头一格格挪。停用的页面不在这里，到「全部」里启用。
       </p>
-      {NAV_SECTIONS.map((section, si) => (
-        <section key={section}>
-          <SectionTitle numbered={false}>{SECTION_LABEL[section]}</SectionTitle>
-          <ul className="divide-y divide-line rounded-lg bg-raised ring-1 ring-line">
-            {sections[section].length === 0 && <li className="px-4 py-3 text-[13px] text-fg-subtle">这一段没有页面</li>}
-            {sections[section].map((n, i) => (
-              <PageRow
-                key={n.id}
-                entry={n}
-                can={can && !save.isPending}
-                first={si === 0 && i === 0}
-                last={si === NAV_SECTIONS.length - 1 && i === sections[section].length - 1}
-                onMove={(dir) => move(section, i, dir)}
-                onVisible={(v) => save.mutate({ visible: { [n.id]: v } })}
-              />
-            ))}
-          </ul>
-        </section>
-      ))}
+      <div ref={box} className="relative flex flex-col gap-6">
+        {NAV_SECTIONS.map((section, si) => (
+          <section key={section}>
+            <SectionTitle numbered={false}>{SECTION_LABEL[section]}</SectionTitle>
+            <ul data-sort-group={section} className="divide-y divide-line rounded-lg bg-raised ring-1 ring-line">
+              {shown(section).length === 0 && <li className="px-4 py-3 text-[13px] text-fg-subtle">这一段没有页面</li>}
+              {shown(section).map((n, i, list) => (
+                <PageRow
+                  key={n.id}
+                  entry={n}
+                  can={can && !save.isPending}
+                  first={si === 0 && i === 0}
+                  last={si === NAV_SECTIONS.length - 1 && i === list.length - 1}
+                  dragging={sort.dragging === n.id}
+                  handle={sort.handle(n.id)}
+                  onMove={(dir) => move(section, i, dir)}
+                  onVisible={(v) => save.mutate({ visible: { [n.id]: v } })}
+                />
+              ))}
+            </ul>
+          </section>
+        ))}
+      </div>
     </div>
   );
 }
@@ -387,6 +427,8 @@ function PageRow({
   can,
   first,
   last,
+  dragging,
+  handle,
   onMove,
   onVisible,
 }: {
@@ -394,6 +436,8 @@ function PageRow({
   can: boolean;
   first: boolean;
   last: boolean;
+  dragging: boolean;
+  handle: ReturnType<ReturnType<typeof useDragSort>['handle']>;
   onMove: (dir: -1 | 1) => void;
   onVisible: (v: boolean) => void;
 }) {
@@ -402,8 +446,24 @@ function PageRow({
   const [renaming, setRenaming] = useState(false);
   const pinned = n.id === 'settings';
   return (
-    <li className="flex items-center gap-3 px-4 py-2.5">
-      <div className="flex shrink-0 gap-0.5">
+    <li
+      data-sort-item={n.id}
+      className={cn(
+        'flex items-center gap-3 bg-raised px-4 py-2.5 first:rounded-t-lg last:rounded-b-lg',
+        dragging && 'relative z-10 rounded-lg shadow-lift ring-1 ring-line',
+      )}
+    >
+      <span
+        {...handle}
+        title={can ? '按住拖动，调整顺序' : undefined}
+        className={cn(
+          'touch-hit -ml-1.5 flex h-8 w-5 shrink-0 items-center justify-center rounded text-fg-subtle',
+          can ? 'hover:text-fg-muted' : 'opacity-40',
+        )}
+      >
+        <GripVertical className="size-4" />
+      </span>
+      <div className="-ml-1 flex shrink-0 gap-0.5">
         <IconButton label="上移" size="sm" disabled={!can || first} onClick={() => onMove(-1)}>
           <ArrowUp />
         </IconButton>
@@ -413,14 +473,24 @@ function PageRow({
       </div>
       <div className="min-w-0 flex-1">
         <span className={cn('text-[14px] font-medium', !n.visible && 'text-fg-muted')}>{n.label}</span>
-        {plugin?.displayName && <span className="ml-2 text-[12px] text-fg-subtle">原名「{n.label === plugin.displayName ? plugin.name : n.label}」</span>}
+        {plugin?.displayName && (
+          <span className="ml-2 text-[12px] text-fg-subtle">原名「{n.label === plugin.displayName ? plugin.name : n.label}」</span>
+        )}
       </div>
       {can && plugin && (
         <Button variant="ghost" size="sm" onClick={() => setRenaming(true)}>
           改名
         </Button>
       )}
-      <Tooltip content={pinned ? '「设置」要一直留在侧栏里：插件页的入口在设置里' : n.visible ? '从侧栏拿掉（页面还在，链接和命令面板照样能去）' : '放进侧栏'}>
+      <Tooltip
+        content={
+          pinned
+            ? '「设置」要一直留在侧栏里：插件页的入口在设置里'
+            : n.visible
+              ? '从侧栏拿掉（页面还在，链接和命令面板照样能去）'
+              : '放进侧栏'
+        }
+      >
         <span>
           <Switch checked={n.visible} disabled={!can || pinned} onCheckedChange={onVisible} label={`「${n.label}」在侧栏显示`} />
         </span>
