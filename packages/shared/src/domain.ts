@@ -540,6 +540,9 @@ export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 export interface Job {
   id: ID;
   kind: JobKind;
+  /** 插件的任务（kind 是 plugin）：插件登记的任务名，和是哪个插件（docs/plugins.md 第 6 节）。界面上用 jobTitle(job) */
+  title?: string;
+  plugin?: string;
   status: JobStatus;
   /** 已处理数量 */
   progress: number;

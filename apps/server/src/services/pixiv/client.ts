@@ -35,7 +35,7 @@ export class PixivClient {
       let response: HttpResponse;
       let text: string;
       try {
-        response = await this.fetchImpl(`https://www.pixiv.net/ajax/illust/${id}`, {
+        response = await this.fetchImpl(`https://www.pixiv.net/ajax/illust/${id}?lang=en`, {
           headers: { Referer: 'https://www.pixiv.net/', 'User-Agent': `Emaki/${config.appVersion} (+${config.appRepoUrl})`, Accept: 'application/json' },
           signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
         });

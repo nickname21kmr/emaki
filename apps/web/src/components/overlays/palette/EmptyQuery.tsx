@@ -5,6 +5,7 @@ import { CommandGroups } from './CommandGroups';
 import { CharacterAvatar, CountMeta, GroupHeading, PaletteItem, PaletteSkeleton } from './items';
 import { useRecentCharacters, type RecentCharacter } from './recent';
 import type { SearchActions } from './SearchResults';
+import { useCountUnit } from '@/lib/countUnit';
 
 /**
  * 输入为空时：最近访问的角色（没有就退回「常看的角色」）+ 常用命令。
@@ -28,6 +29,7 @@ export function EmptyQuery({ commands, actions }: { commands: PaletteCommand[]; 
 }
 
 function RecentRow({ item, onSelect }: { item: RecentCharacter; onSelect: () => void }) {
+  const unit = useCountUnit();
   return (
     <PaletteItem
       value={`char:${item.id}`}
@@ -35,13 +37,14 @@ function RecentRow({ item, onSelect }: { item: RecentCharacter; onSelect: () => 
       leading={<CharacterAvatar name={item.name} coverImageId={item.coverImageId} coverFocus={item.coverFocus} coverRating={item.coverRating} />}
       title={item.name}
       subtitle={item.workName ?? undefined}
-      trailing={<CountMeta count={item.imageCount} />}
+      trailing={<CountMeta count={item.imageCount} unit={unit} />}
     />
   );
 }
 
 /** 第一次用、还没有访问记录时，给几个收藏最多的角色当起点 */
 function TopFallback({ actions }: { actions: SearchActions }) {
+  const unit = useCountUnit();
   const top = useTopCharacters({ limit: 5 });
   const works = useWorks();
 
@@ -64,7 +67,7 @@ function TopFallback({ actions }: { actions: SearchActions }) {
             leading={<CharacterAvatar name={c.name} coverImageId={c.coverImageId} coverFocus={c.coverFocus} coverRating={c.coverRating} />}
             title={c.name}
             subtitle={wn ?? undefined}
-            trailing={<CountMeta count={c.imageCount} newCount={c.newCount} />}
+            trailing={<CountMeta count={c.imageCount} newCount={c.newCount} unit={unit} />}
           />
         );
       })}

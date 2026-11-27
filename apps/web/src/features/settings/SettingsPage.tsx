@@ -16,6 +16,7 @@ import { SettingsToc } from './components/SettingsToc';
 import { TaggerSection } from './components/TaggerSection';
 import { useSectionNav } from './hooks';
 import { isSectionId, useSettingsSections, type SectionId } from './sections';
+import { PluginsSection } from './components/PluginsSection';
 import { AssistantSettingsSection } from '@/features/assistant/AssistantSettingsSection';
 import { PoseSettingsSectionLazy } from '@/features/pose/lazy';
 import { PhoneAccessSection } from '@/features/access/PhoneAccessSection';
@@ -67,7 +68,7 @@ export function SettingsPage() {
 
   return (
     <>
-      <PageHeader title="设置" subtitle={subtitle} />
+      <PageHeader title="设置" nav="settings" subtitle={subtitle} />
       <PageBody className="pt-4">
         {settings.isPending ? (
           <SettingsSkeleton />
@@ -110,6 +111,8 @@ function renderSection(id: SectionId, settings: Settings, stats: GetStatsRespons
       return <AssistantSettingsSection />;
     case 'pose':
       return <PoseSettingsSectionLazy />;
+    case 'plugins':
+      return <PluginsSection />;
     case 'about':
       return <AboutSection stats={stats} />;
   }

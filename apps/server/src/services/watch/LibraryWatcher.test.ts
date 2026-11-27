@@ -81,7 +81,8 @@ describe('防抖', () => {
     // 直接调私有的事件处理，模拟 50 个文件
     const onEvent = (w as unknown as { onEvent: (r: typeof root, f: string) => void }).onEvent.bind(w);
     for (let i = 0; i < 50; i++) {
-      onEvent(root, `drop\\f${i}.png`);
+      // fs.watch 给的是本机的分隔符（Windows 上是 drop\f0.png）
+      onEvent(root, path.join('drop', `f${i}.png`));
       await vi.advanceTimersByTimeAsync(100);
     }
     await vi.advanceTimersByTimeAsync(2000);

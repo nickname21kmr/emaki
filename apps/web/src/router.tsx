@@ -13,6 +13,9 @@ import { ExcludedPage } from '@/features/excluded/ExcludedPage';
 import { GalleryPage } from '@/features/gallery/GalleryPage';
 import { DevUiPage } from '@/features/dev/DevUiPage';
 import { HomePage } from '@/features/home/HomePage';
+import { PluginDetailPage } from '@/features/plugins/PluginDetailPage';
+import { PluginsPage } from '@/features/plugins/PluginsPage';
+import { PluginViewPage } from '@/features/plugins/view/PluginViewPage';
 import { WelcomePage } from '@/features/onboarding/WelcomePage';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { UnrecognizedPage } from '@/features/unrecognized/UnrecognizedPage';
@@ -51,6 +54,9 @@ export const routes: RouteObject[] = [
       page('annex', <AnnexPage />),
       page('excluded', <ExcludedPage />),
       page('settings', <SettingsPage />),
+      page('plugins', <PluginsPage />),
+      page('plugin', <PluginDetailPage />),
+      page('pluginView', <PluginViewPage />),
       // 开发用：共用件并排展示（生产构建不注册）
       ...(import.meta.env.DEV ? [page('devUi', <DevUiPage />)] : []),
       page('fallback', <HomePage />),

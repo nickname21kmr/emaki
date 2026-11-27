@@ -81,6 +81,8 @@ export const qk = {
   albumSync: (deviceId?: string) => ['uploads', 'albums', deviceId ?? 'self'] as const,
   /** 谁在调用（GET /api/me）：网页按它隐藏用不了的入口（lib/capabilities.ts） */
   me: ['me'] as const,
+  /** 插件和生效的结果（GET /api/plugins，lib/plugins.ts）；safe 是安全模式 */
+  plugins: (safe: boolean) => ['plugins', safe] as const,
 };
 
 // ------------------------------------------------------------------ 读取
@@ -556,6 +558,12 @@ export function afterUndone(e: UndoEntry | undefined, path = herePath()): 'here'
     return 'here';
   }
   return 'elsewhere';
+}
+
+/** 去 Emaki 里的一个地址（toast 里的「去看看」这类，在组件外面用） */
+export function goTo(href: string) {
+  if (navigateTo) navigateTo(href);
+  else window.location.assign(href);
 }
 
 /** 「去看看」：回到做这一步的页面，到了以后照样指给用户看 */

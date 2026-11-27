@@ -44,12 +44,19 @@ export const config = {
    * 优先级：命令行 --demo / --mock > 环境变量（demo，旧写法 mock）> 默认 sqlite。
    */
   dataSource: (demo ? 'demo' : 'sqlite') as DataSourceKind,
+  /**
+   * 安全模式（docs/plugins.md 第 8 节）：只用内置插件、全部按原样，我的和装的插件不加载，覆盖不生效。
+   * 命令行 --safe 或环境变量 EMAKI_SAFE=1；网页上地址加 ?safe 是同一件事的网页这一半
+   */
+  safeMode: process.argv.includes('--safe') || process.env.EMAKI_SAFE === '1',
   /** 数据库、缩略图缓存、模型文件、AI 助手的设置都放这里；已被 .gitignore 忽略 */
   dataDir,
   /** 图库数据库所在的目录：演示模式是 <dataDir>/demo（每次启动清空重建），否则就是 dataDir */
   libraryDir: demo ? path.join(dataDir, 'demo') : dataDir,
   /** 生产模式下由后端直接托管前端构建产物 */
   webDist: path.join(repoRoot, 'apps/web/dist'),
+  /** 随 Emaki 一起发的插件（docs/plugins.md 第 6 节）：默认没装，在「插件」页「附带的」里启用 */
+  bundledPluginsDir: path.join(repoRoot, 'plugins'),
   /** 随仓库分发的数据文件（离线对照表、词库） */
   assetsDir: path.join(repoRoot, 'apps/server/assets'),
   /** 用户自己放的 PoseWear 线稿（按姿势找图的封面）：免安装包的根目录、开发时仓库根目录下的 pose-covers/ */

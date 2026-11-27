@@ -1,11 +1,14 @@
 import type { EventBus } from '../../core/events.ts';
 import type { JobQueue } from '../../core/jobs.ts';
+import { Points } from '../../core/points.ts';
 import type { MutationResult } from '@emaki/shared';
 import { done, type UndoStack } from '../../core/undo.ts';
 import type { Db, Statement } from '../../db/connection.ts';
 import type { Actor } from '../../propagation/actor.ts';
 import type { Change } from '../../propagation/changes.ts';
 import { Propagation } from '../../propagation/registry.ts';
+import { TERM_POINTS } from '../../readmodel/terms.ts';
+import { defineWebPoints } from '../../services/plugins/webPoints.ts';
 import { UndoRecorder } from './undo.ts';
 
 /**
@@ -24,6 +27,8 @@ export interface SqliteContext {
   readonly jobs: JobQueue;
   /** 变化集和反应注册表 */
   readonly propagation: Propagation;
+  /** 内部点（docs/plugins.md 第 7 节）：第 3 层插件的补丁打在这里登记过名字的点上 */
+  readonly points: Points;
   /**
    * 让派生缓存失效。只由变更传播的提交后反应调用（按 actor 决定强 / 弱），
    * 其他地方声明变化即可（test/architecture/sideEffects.test.ts 检查）
@@ -58,8 +63,22 @@ export function createContext(init: {
   const listeners: InvalidateListener[] = [];
   /** 正在进行的 mutate 的撤销记录（嵌套的 mutate 并进它） */
   let active: UndoRecorder | null = null;
+  const points = new Points();
+  for (const t of TERM_POINTS) {
+    const check = (patched: typeof t.base) => {
+      const sql = patched('i');
+      if (typeof sql !== 'string') throw new Error(`返回的不是 SQL（${typeof sql}）`);
+      init.db.prepare(t.probe(patched)).all();
+    };
+    points.define(t.name, { kind: 'term', label: t.label, version: t.version, check }, t.base);
+  }
+  // 网页的点（补丁在网页上加）：只为了查有没有、算指纹
+  defineWebPoints(points);
+  // 后台任务的执行体也是内部点（job:<种类>）：队列在这之前就建好了，这里接上（单元测试里的假队列没有这个方法）
+  init.jobs.usePoints?.(points);
   const ctx: SqliteContext & { onInvalidate(listener: InvalidateListener): void } = {
     ...init,
+    points,
     propagation: new Propagation(() => ctx),
     invalidate(scope: 'all' | 'stats' | 'entities' = 'all', opts: { soft?: boolean } = {}) {
       for (const l of listeners) l(scope, opts);

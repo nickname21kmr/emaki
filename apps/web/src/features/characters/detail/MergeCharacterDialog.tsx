@@ -12,6 +12,7 @@ import { formatCount } from '@/lib/format';
 import { useCharactersInfinite, useMutate, useSearch, useWorks } from '@/lib/queries';
 import { EASE_OUT } from '@/lib/motion';
 import { useRecentCharacters } from '@/features/gallery/recentCharacters';
+import { useCountUnit } from '@/lib/countUnit';
 
 interface Candidate {
   character: Character;
@@ -100,6 +101,7 @@ function MergeBody({ character, onDone }: { character: Character; onDone: () => 
 }
 
 function TargetPicker({ character, onPick }: { character: Character; onPick: (c: Candidate) => void }) {
+  const unit = useCountUnit();
   const [q, setQ] = useState('');
   const debounced = useDebounced(q.trim(), 160);
   const search = useSearch(debounced);
@@ -172,7 +174,7 @@ function TargetPicker({ character, onPick }: { character: Character; onPick: (c:
                     {c.character.source === 'custom' && ' · 自建'}
                   </div>
                 </div>
-                <span className="text-xs text-fg-muted tabular">{formatCount(c.character.imageCount)} 张</span>
+                <span className="text-xs text-fg-muted tabular">{formatCount(c.character.imageCount)} {unit}</span>
               </Command.Item>
             ))}
           </>

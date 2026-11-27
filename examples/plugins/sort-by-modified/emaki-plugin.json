@@ -1,0 +1,11 @@
+{
+  "id": "example.sort-by-modified",
+  "name": "按修改时间排",
+  "version": "0.1.0",
+  "description": "样例插件：图片的默认排序改成按修改时间——图库、别册、角色和作品页，还有手机和 AI 助手拿到的图片列表都跟着变；页面上的排序照旧能换。只有配置，不跑代码，不要任何权限。",
+  "author": "Emaki",
+  "engines": { "emaki": ">=0.1.17" },
+  "contributes": {
+    "override@1": { "images.defaultSort": "modifiedAt" }
+  }
+}

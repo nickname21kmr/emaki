@@ -20,7 +20,7 @@ import { compatRoutes } from './compat.ts';
 export const OPERATION_HEADER = 'idempotency-key';
 
 /** 文件查询：响应是图片本身，不是 JSON（缺省的缓存策略：缩略图按 id 永久缓存；原图一小时） */
-const FILE_QUERIES: Record<string, string> = {
+export const FILE_QUERIES: Record<string, string> = {
   'images.thumbnail': 'public, max-age=31536000, immutable',
   'images.original': 'private, max-age=3600',
   // 姿势类别的示意小人：随版本换（地址带 v）
@@ -66,7 +66,7 @@ function sendJson(reply: FastifyReply, result: unknown) {
 }
 
 /** 数据源可以给 etag（内容 sha）和自己的缓存策略；不带 etag 的（演示模式的占位图）走默认的 */
-function sendFile(req: FastifyRequest, reply: FastifyReply, file: FileResponse, defaultCache: string) {
+export function sendFile(req: FastifyRequest, reply: FastifyReply, file: FileResponse, defaultCache: string) {
   reply.header('Cache-Control', file.cacheControl ?? defaultCache);
   if (file.etag) {
     reply.header('ETag', file.etag);

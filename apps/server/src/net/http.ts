@@ -29,7 +29,16 @@ export class NetworkError extends Error {
   }
 }
 
-export async function httpFetch(url: string, init: { headers?: Record<string, string>; signal?: AbortSignal; redirect?: 'follow' | 'error' | 'manual' } = {}) {
+export interface HttpInit {
+  /** 不写是 GET（插件的 emaki.fetch 会用到 POST 这些，docs/plugins.md 第 6 节） */
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string | Uint8Array;
+  signal?: AbortSignal;
+  redirect?: 'follow' | 'error' | 'manual';
+}
+
+export async function httpFetch(url: string, init: HttpInit = {}) {
   const proxy = await resolveProxy();
   try {
     return await undiciFetch(url, { ...init, dispatcher: dispatcherFor(proxy.url) });

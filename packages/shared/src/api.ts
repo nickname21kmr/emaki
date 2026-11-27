@@ -877,7 +877,7 @@ export type LibraryChangedReason = 'mutation' | 'system' | JobKind;
 
 /**
  * GET /api/events —— Server-Sent Events（events.ts）
- * job、job-item 是进度，不补发；changed、command、auto-change 带 id，断线重连按 Last-Event-ID 补发，补不上推 resync。
+ * job、job-item 是进度，不补发；changed、command、auto-change、plugin-notice 带 id，断线重连按 Last-Event-ID 补发，补不上推 resync。
  * 前端按 changed 的变化类型只刷新相关的查询（lib/events.ts）。
  * access 只推给本机入口，me 只推给那台设备的局域网连接（access.ts），都不编号、不补发。
  */
@@ -887,10 +887,27 @@ export type ServerEvent =
   | ChangedEvent
   | CommandEvent
   | AutoChangeEvent
+  | PluginNoticeEvent
   | ResyncEvent
   | HelloEvent
   | AccessEvent
   | MeEvent;
+
+/**
+ * 插件的通知（docs/plugins.md 第 8 节）：「出错太多次，自动停用了」（auto-disabled）、「改内部的插件改的点变了，自动停用了」
+ * （points-changed，第 7 节）、「Emaki 连着几次启动就停，改内部的插件自动停用了」（crash-loop）。网页上弹一条，点「去看看」到插件详情。
+ * 带 id、断线重连补发（漏了就不知道插件停了）；后端重启前的补不上，原因在插件页、详情上照样写着
+ */
+export interface PluginNoticeEvent {
+  type: 'plugin-notice';
+  id: number;
+  plugin: string;
+  /** 插件显示的名字（你改过的名字） */
+  name: string;
+  kind: 'auto-disabled' | 'points-changed' | 'crash-loop';
+  /** 原因（插件详情上同一句） */
+  message: string;
+}
 
 /**
  * 识别胶卷（SEL-19）：tag 任务刚识别完的一张图。每批最多推一条、每秒最多 4 条；

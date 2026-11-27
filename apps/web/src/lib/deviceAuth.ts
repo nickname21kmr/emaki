@@ -38,6 +38,16 @@ interface EmakiAppBridge {
    * sync 现在同步一次（顺便按新的设置安排后台同步）。0.3.0 起才有
    */
   syncAlbums?(mode: 'inventory' | 'sync'): void;
+  /**
+   * 在 App 里打开插件对应的外部网站（site@1，docs/plugins.md 第 6 节）：比如 Pixiv 网站本身，加上插件的按钮。
+   * 返回键、关闭回到 Emaki。0.5.0 起才有
+   */
+  openSite?(pluginId: string, siteId: string): void;
+  /**
+   * 同上，打开到网站上的这个地址（插件接管的链接 link@1，docs/plugins.md 12.7：比如图片来源的 Pixiv 作品页）。
+   * 地址不在网站的域名里时打开起始页。0.6.0 起才有
+   */
+  openSiteUrl?(pluginId: string, siteId: string, url: string): void;
 }
 
 export const appBridge = (): EmakiAppBridge | undefined => (globalThis as { EmakiApp?: EmakiAppBridge }).EmakiApp;

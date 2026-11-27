@@ -73,6 +73,8 @@ interface DockState {
   /** 收起后焦点该落在胶囊上（Capsule 挂上时接走） */
   focusCapsule: boolean;
   setFocusCapsule: (v: boolean) => void;
+  /** 插件页面请你问的一句话（askAssistant）：当前会话的输入框接走（useConversation） */
+  incoming: string | null;
 }
 
 export const useAssistantDock = create<DockState>((set, get) => ({
@@ -123,10 +125,19 @@ export const useAssistantDock = create<DockState>((set, get) => ({
   wantsFocus: false,
   focusCapsule: false,
   setFocusCapsule: (focusCapsule) => set({ focusCapsule }),
+  incoming: null,
 }));
 
 /** 真正的附页（/dev/ui 里摆出来的静态附页标成 data-assistant-sheet="static"，不算） */
 export const LIVE_SHEET = '[data-assistant-sheet]:not([data-assistant-sheet="static"])';
+
+/**
+ * 插件页面请你问一句（ui/message，docs/plugins.md 12.8）：打开助手、把这句话接在输入框里（不替你发），光标放到最后
+ */
+export function askAssistant(text: string) {
+  useAssistantDock.setState({ incoming: text });
+  openAssistant();
+}
 
 /** 打开附页：记下原来的焦点，等输入框挂上后把焦点放进去。已经开着就只把焦点移进去 */
 export function openAssistant() {

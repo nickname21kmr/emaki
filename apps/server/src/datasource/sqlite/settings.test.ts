@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { BadRequestError } from '../../http/errors.ts';
 import { isInside, normalizeRootPath, rootPathKey, samePath } from './settings.ts';
 
+// 图库路径按 Windows 的盘符路径（D:/…，datasource/sqlite/settings.ts 的 normalizeRootPath）：Linux 上 path.isAbsolute 不认，这几个只在 Windows 上跑
+const WINDOWS = process.platform === 'win32';
+
 describe('normalizeRootPath', () => {
-  it.each([
+  it.runIf(WINDOWS).each([
     ['"D:\\Pictures\\插画"', 'D:/Pictures/插画'],
     ['D:', 'D:/'],
     ['D:\\', 'D:/'],

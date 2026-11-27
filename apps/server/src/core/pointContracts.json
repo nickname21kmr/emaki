@@ -1,0 +1,784 @@
+{
+  "command:access.configure": [
+    "scope: devices",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"enabled\":{\"type\":\"boolean\"},\"port\":{\"type\":\"integer\",\"minimum\":1024,\"maximum\":65535},\"name\":{\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":60},{\"type\":\"null\"}]}}}"
+  ],
+  "command:access.createTicket": [
+    "scope: devices",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "command:catalog.createCharacter": [
+    "scope: catalog",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100},\"workIds\":{\"default\":[],\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"aliases\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"danbooruTag\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"name\"]}"
+  ],
+  "command:catalog.linkArtists": [
+    "scope: catalog",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"tags\":{\"minItems\":1,\"maxItems\":50,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200}},\"mode\":{\"type\":\"string\",\"enum\":[\"split\",\"merge\",\"auto\"]},\"into\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200}},\"required\":[\"tags\",\"mode\"]}"
+  ],
+  "command:catalog.markSeen": [
+    "scope: ui",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "command:catalog.mergeCharacter": [
+    "scope: catalog",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1},\"targetId\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\",\"targetId\"]}"
+  ],
+  "command:catalog.updateCharacter": [
+    "scope: catalog",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"maxLength\":100},\"aliases\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"danbooruTag\":{\"type\":[\"string\",\"null\"]},\"workIds\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"coverImageId\":{\"type\":[\"string\",\"null\"]},\"coverFocus\":{\"anyOf\":[{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1},\"y\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1}},\"required\":[\"x\",\"y\"]},{\"type\":\"null\"}]},\"pinned\":{\"type\":\"boolean\"},\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "command:catalog.verifyCharacter": [
+    "scope: catalog",
+    "undoable: true",
+    "input: {\"oneOf\":[{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"const\":\"identity\"},\"tag\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200,\"pattern\":\"^[^\\\\s:]+$\"},\"characterTag\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200,\"pattern\":\"^[^\\\\s:]+$\"},\"relation\":{\"type\":\"string\",\"enum\":[\"form\",\"same-character\"]},\"aliases\":{\"default\":[],\"maxItems\":30,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"sources\":{\"minItems\":1,\"maxItems\":8,\"type\":\"array\",\"items\":{\"type\":\"string\",\"maxLength\":2000,\"format\":\"uri\"}},\"evidence\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000}},\"required\":[\"type\",\"tag\",\"characterTag\",\"relation\",\"sources\",\"evidence\"]},{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"const\":\"name\"},\"tag\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200,\"pattern\":\"^[^\\\\s:]+$\"},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100},\"aliases\":{\"default\":[],\"maxItems\":30,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"sources\":{\"minItems\":1,\"maxItems\":8,\"type\":\"array\",\"items\":{\"type\":\"string\",\"maxLength\":2000,\"format\":\"uri\"}},\"evidence\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000}},\"required\":[\"type\",\"tag\",\"name\",\"sources\",\"evidence\"]}]}"
+  ],
+  "command:collections.create": [
+    "scope: collections",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"fromImageId\":{\"type\":\"string\"},\"imageIds\":{\"minItems\":1,\"maxItems\":5000,\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"organizeFiles\":{\"type\":\"boolean\"},\"title\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"kind\":{\"default\":\"group\",\"type\":\"string\",\"enum\":[\"doujin\",\"artbook\",\"group\"]}}}"
+  ],
+  "command:collections.dissolve": [
+    "scope: collections",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "command:collections.link": [
+    "scope: collections",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"minItems\":1,\"maxItems\":500,\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"characterId\":{\"type\":\"string\"},\"tag\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"workId\":{\"type\":\"string\"}},\"required\":[\"ids\"]}"
+  ],
+  "command:collections.review": [
+    "scope: collections",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"minItems\":1,\"maxItems\":500,\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"ids\"]}"
+  ],
+  "command:collections.setKind": [
+    "scope: collections",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"minItems\":1,\"maxItems\":500,\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"value\":{\"type\":\"string\",\"enum\":[\"doujin\",\"artbook\",\"group\"]}},\"required\":[\"ids\",\"value\"]}"
+  ],
+  "command:collections.update": [
+    "scope: collections",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"organizeFiles\":{\"type\":\"boolean\"},\"addImageIds\":{\"minItems\":1,\"maxItems\":5000,\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"removeImageIds\":{\"minItems\":1,\"maxItems\":5000,\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"title\":{\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},{\"type\":\"null\"}]},\"kind\":{\"anyOf\":[{\"type\":\"string\",\"enum\":[\"doujin\",\"artbook\",\"group\"]},{\"type\":\"string\",\"const\":\"auto\"}]},\"coverImageId\":{\"type\":[\"string\",\"null\"]},\"pageOrder\":{\"type\":\"string\",\"enum\":[\"name\",\"mtime\"]},\"seriesKey\":{\"anyOf\":[{\"type\":\"string\",\"maxLength\":200},{\"type\":\"null\"}]},\"volumeNo\":{\"anyOf\":[{\"type\":\"number\",\"minimum\":0,\"maximum\":9999},{\"type\":\"null\"}]},\"reviewed\":{\"type\":\"boolean\"},\"manualCharacterIds\":{\"maxItems\":200,\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"manualWorkIds\":{\"maxItems\":200,\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "command:curation.link": [
+    "scope: curate",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"minItems\":1,\"maxItems\":5000,\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"characterId\":{\"type\":\"string\"},\"tags\":{\"minItems\":1,\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":500}},\"accept\":{\"type\":\"boolean\"}},\"required\":[\"ids\"]}"
+  ],
+  "command:curation.promote": [
+    "scope: rules",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"illustration\",\"comic\",\"screenshot\",\"text\",\"photo\",\"meme\"]}}}"
+  ],
+  "command:curation.replace": [
+    "scope: curate",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1},\"characterIds\":{\"maxItems\":200,\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"id\",\"characterIds\"]}"
+  ],
+  "command:curation.resetArtists": [
+    "scope: curate",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"minItems\":1,\"maxItems\":5000,\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"ids\"]}"
+  ],
+  "command:curation.setArtists": [
+    "scope: curate",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"minItems\":1,\"maxItems\":5000,\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"mode\":{\"type\":\"string\",\"enum\":[\"add\",\"remove\",\"set\"]},\"artists\":{\"maxItems\":10,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200}}},\"required\":[\"ids\",\"mode\",\"artists\"]}"
+  ],
+  "command:curation.setFavorite": [
+    "scope: curate",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"minItems\":1,\"maxItems\":5000,\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"value\":{\"type\":\"boolean\"}},\"required\":[\"ids\",\"value\"]}"
+  ],
+  "command:curation.setKind": [
+    "scope: curate",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"minItems\":1,\"maxItems\":5000,\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"value\":{\"type\":\"string\",\"enum\":[\"illustration\",\"comic\",\"screenshot\",\"text\",\"photo\",\"meme\",\"auto\"],\"description\":\"内容类型；是否动图不是类型（按帧数自动判断，图片的 animated 字段），不能改\"}},\"required\":[\"ids\",\"value\"]}"
+  ],
+  "command:curation.setOriginal": [
+    "scope: curate",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"minItems\":1,\"maxItems\":5000,\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"value\":{\"type\":\"boolean\"}},\"required\":[\"ids\",\"value\"]}"
+  ],
+  "command:curation.setRating": [
+    "scope: curate",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"minItems\":1,\"maxItems\":5000,\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"value\":{\"type\":\"string\",\"enum\":[\"general\",\"sensitive\",\"questionable\",\"explicit\"]}},\"required\":[\"ids\",\"value\"]}"
+  ],
+  "command:curation.setShelved": [
+    "scope: curate",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"minItems\":1,\"maxItems\":5000,\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"value\":{\"type\":\"boolean\"}},\"required\":[\"ids\",\"value\"]}"
+  ],
+  "command:curation.setSource": [
+    "scope: curate",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1},\"source\":{\"anyOf\":[{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":4000},\"artist\":{\"type\":\"string\",\"maxLength\":200}},\"required\":[\"url\"]},{\"type\":\"null\"},{\"type\":\"string\",\"const\":\"auto\"}]}},\"required\":[\"id\",\"source\"]}"
+  ],
+  "command:curation.unlink": [
+    "scope: curate",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"minItems\":1,\"maxItems\":5000,\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"characterId\":{\"type\":\"string\"}},\"required\":[\"ids\",\"characterId\"]}"
+  ],
+  "command:devices.approve": [
+    "scope: devices",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1},\"scopes\":{\"maxItems\":30,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"read\",\"curate\",\"catalog\",\"collections\",\"history\",\"ui\",\"upload\",\"plugins\",\"organize-files\",\"settings\",\"rules\",\"duplicates\",\"jobs\",\"import\",\"install-plugins\"]}},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":60}},\"required\":[\"id\"]}"
+  ],
+  "command:devices.reject": [
+    "scope: devices",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "command:devices.revoke": [
+    "scope: devices",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "command:devices.setUpload": [
+    "scope: devices",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1},\"rootId\":{\"anyOf\":[{\"type\":\"string\",\"minLength\":1},{\"type\":\"null\"}]},\"dir\":{\"default\":\"\",\"type\":\"string\",\"maxLength\":400}},\"required\":[\"id\",\"rootId\"]}"
+  ],
+  "command:devices.update": [
+    "scope: devices",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":60},\"scopes\":{\"maxItems\":30,\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"read\",\"curate\",\"catalog\",\"collections\",\"history\",\"ui\",\"upload\",\"plugins\",\"organize-files\",\"settings\",\"rules\",\"duplicates\",\"jobs\",\"import\",\"install-plugins\"]}}},\"required\":[\"id\"]}"
+  ],
+  "command:duplicates.ignore": [
+    "scope: duplicates",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "command:duplicates.resolve": [
+    "scope: organize-files",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1},\"keepIds\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"batch\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"required\":[\"id\",\"keepIds\"]}"
+  ],
+  "command:history.revertChange": [
+    "scope: history",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "command:history.undo": [
+    "scope: history",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"token\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"token\"]}"
+  ],
+  "command:jobs.cancel": [
+    "scope: jobs",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "command:jobs.start": [
+    "scope: jobs",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"scan\",\"thumbnail\",\"dedupe\",\"tag\",\"danbooru-sync\",\"artists\",\"pixiv-tags\"]},\"refreshPixiv\":{\"description\":\"仅 pixiv-tags：主动重新获取标签；默认复用投稿缓存\",\"type\":\"boolean\"}},\"required\":[\"kind\"]}"
+  ],
+  "command:library.addRoot": [
+    "scope: settings",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"minLength\":1},\"merge\":{\"type\":\"boolean\"},\"mode\":{\"type\":\"string\",\"enum\":[\"auto\",\"comic\"]},\"comicRating\":{\"type\":\"string\",\"enum\":[\"general\",\"sensitive\",\"questionable\",\"explicit\"]}},\"required\":[\"path\"]}"
+  ],
+  "command:library.import": [
+    "scope: import",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"rootId\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100},\"dir\":{\"default\":\"\",\"type\":\"string\",\"maxLength\":200},\"keepBoth\":{\"type\":\"boolean\"},\"files\":{\"minItems\":1,\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":4000},\"fileName\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200}},\"required\":[\"path\"]}}},\"required\":[\"rootId\",\"files\"]}"
+  ],
+  "command:library.move": [
+    "scope: organize-files",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"minItems\":1,\"maxItems\":50000,\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"characterId\":{\"type\":\"string\"},\"rootId\":{\"type\":\"string\",\"minLength\":1},\"dir\":{\"type\":\"string\",\"maxLength\":400}},\"required\":[\"rootId\",\"dir\"]}"
+  ],
+  "command:library.removeRoot": [
+    "scope: settings",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "command:library.replace": [
+    "scope: import",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1},\"path\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":4000}},\"required\":[\"id\",\"path\"]}"
+  ],
+  "command:library.reveal": [
+    "scope: desktop",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "command:library.trash": [
+    "scope: organize-files",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"minItems\":1,\"maxItems\":5000,\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"ids\"]}"
+  ],
+  "command:library.updateRoot": [
+    "scope: settings",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"enabled\":{\"type\":\"boolean\"},\"mode\":{\"type\":\"string\",\"enum\":[\"auto\",\"comic\"]},\"comicRating\":{\"type\":\"string\",\"enum\":[\"general\",\"sensitive\",\"questionable\",\"explicit\"]},\"comicFolder\":{\"type\":\"object\",\"properties\":{\"relDir\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":1000},\"comicRating\":{\"type\":\"string\",\"enum\":[\"general\",\"sensitive\",\"questionable\",\"explicit\"]}},\"required\":[\"relDir\"]},\"removeComicFolder\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":1000},\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "command:plugins.checkUpdate": [
+    "scope: install-plugins",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":80}},\"required\":[\"id\"]}"
+  ],
+  "command:plugins.chooseOverride": [
+    "scope: plugins",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"key\":{\"type\":\"string\",\"maxLength\":80},\"plugin\":{\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":80},{\"type\":\"null\"}],\"description\":\"冲突时用哪个插件的值；null = 按后启用的那个\"}},\"required\":[\"key\",\"plugin\"]}"
+  ],
+  "command:plugins.createOverride": [
+    "scope: plugins",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":40},\"values\":{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\",\"maxLength\":80},\"additionalProperties\":{\"type\":\"string\",\"maxLength\":80},\"description\":\"要覆盖的值，例如 {\\\"images.defaultSort\\\":\\\"modifiedAt\\\"}；能用的键和值见 GET /api/plugins 的 overrides\"},\"enabled\":{\"description\":\"默认 true：建好就启用\",\"type\":\"boolean\"}},\"required\":[\"name\",\"values\"]}"
+  ],
+  "command:plugins.disableInternal": [
+    "scope: plugins",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "command:plugins.inspect": [
+    "scope: install-plugins",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"source\":{\"oneOf\":[{\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"folder\"},\"path\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":500,\"description\":\"这台电脑上的文件夹（开发用：不复制，改了点「重新读取」）\"}},\"required\":[\"kind\",\"path\"]},{\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"git\"},\"url\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":500,\"description\":\"https://…、ssh://… 或 git@主机:路径\"},\"ref\":{\"description\":\"分支或标签；不写是默认分支\",\"type\":\"string\",\"maxLength\":100}},\"required\":[\"kind\",\"url\"]}]}},\"required\":[\"source\"]}"
+  ],
+  "command:plugins.install": [
+    "scope: install-plugins",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"token\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":80},\"folders\":{\"description\":\"授权单上为每个要的文件夹选好的位置\",\"type\":\"object\",\"propertyNames\":{\"type\":\"string\",\"maxLength\":40},\"additionalProperties\":{\"type\":\"object\",\"properties\":{\"rootId\":{\"type\":\"string\",\"minLength\":1},\"dir\":{\"type\":\"string\",\"maxLength\":300}},\"required\":[\"rootId\",\"dir\"]}},\"showInNav\":{\"description\":\"它的导航项放不放进侧栏（不给：放进去，和新启用的页面一样）\",\"type\":\"boolean\"}},\"required\":[\"token\"]}"
+  ],
+  "command:plugins.remove": [
+    "scope: plugins",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":80}},\"required\":[\"id\"]}"
+  ],
+  "command:plugins.rename": [
+    "scope: plugins",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":80},\"name\":{\"anyOf\":[{\"type\":\"string\",\"minLength\":1,\"maxLength\":40},{\"type\":\"null\"}],\"description\":\"null = 恢复原名\"}},\"required\":[\"id\",\"name\"]}"
+  ],
+  "command:plugins.saveView": [
+    "scope: plugins",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"pattern\":\"^[a-z0-9][a-z0-9-]{0,31}$\",\"description\":\"页面的英文短名（小写字母、数字、-），插件 id 是 ai.<name>；修改已有的页面用同一个 name\"},\"title\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":40,\"description\":\"显示的名字（侧栏、页头、插件页），比如「收藏统计」\"},\"description\":{\"description\":\"一句话说明这一页看什么\",\"type\":\"string\",\"maxLength\":300},\"html\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":1000000,\"description\":\"整页 HTML（MCP Apps 视图），写法见工具说明\"},\"scopes\":{\"default\":[\"read\"],\"description\":\"页面要调的工具需要的权限范围，默认只读 [\\\"read\\\"]；会改数据的页面才加 curate、collections 等，不能超过助手自己的范围\",\"maxItems\":10,\"type\":\"array\",\"items\":{\"type\":\"string\",\"maxLength\":40}},\"icon\":{\"default\":\"chart\",\"description\":\"侧栏图标\",\"type\":\"string\",\"enum\":[\"house\",\"images\",\"users\",\"sparkles\",\"library\",\"book-copy\",\"circle-help\",\"copy\",\"ban\",\"settings\",\"puzzle\",\"clock\",\"star\",\"bookmark\",\"folder\",\"chart\",\"compass\",\"download\",\"heart\",\"external-link\"]}},\"required\":[\"name\",\"title\",\"html\"]}"
+  ],
+  "command:plugins.setEnabled": [
+    "scope: plugins",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":80},\"enabled\":{\"type\":\"boolean\"}},\"required\":[\"id\",\"enabled\"]}"
+  ],
+  "command:plugins.setGrant": [
+    "scope: install-plugins",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":80},\"scopes\":{\"maxItems\":40,\"type\":\"array\",\"items\":{\"type\":\"string\",\"maxLength\":40}},\"network\":{\"maxItems\":30,\"type\":\"array\",\"items\":{\"type\":\"string\",\"maxLength\":200}},\"background\":{\"type\":\"boolean\"},\"folders\":{\"default\":{},\"type\":\"object\",\"propertyNames\":{\"type\":\"string\",\"maxLength\":40},\"additionalProperties\":{\"anyOf\":[{\"type\":\"object\",\"properties\":{\"rootId\":{\"type\":\"string\",\"minLength\":1},\"dir\":{\"type\":\"string\",\"maxLength\":300}},\"required\":[\"rootId\",\"dir\"]},{\"type\":\"null\"}]}}},\"required\":[\"id\",\"scopes\",\"network\",\"background\"]}"
+  ],
+  "command:plugins.setNav": [
+    "scope: plugins",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"sections\":{\"description\":\"侧栏三段各自的顺序（导航项 id）；没列到的项排在各自那一段的最后\",\"type\":\"object\",\"properties\":{\"main\":{\"maxItems\":100,\"type\":\"array\",\"items\":{\"type\":\"string\",\"maxLength\":80}},\"triage\":{\"maxItems\":100,\"type\":\"array\",\"items\":{\"type\":\"string\",\"maxLength\":80}},\"footer\":{\"maxItems\":100,\"type\":\"array\",\"items\":{\"type\":\"string\",\"maxLength\":80}}},\"required\":[\"main\",\"triage\",\"footer\"]},\"visible\":{\"description\":\"在不在侧栏显示，只改给出的项\",\"type\":\"object\",\"propertyNames\":{\"type\":\"string\",\"maxLength\":80},\"additionalProperties\":{\"type\":\"boolean\"}}}}"
+  ],
+  "command:plugins.setOverrideValues": [
+    "scope: plugins",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":80},\"values\":{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\",\"maxLength\":80},\"additionalProperties\":{\"type\":\"string\",\"maxLength\":80}}},\"required\":[\"id\",\"values\"]}"
+  ],
+  "command:plugins.setSettings": [
+    "scope: install-plugins",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":80},\"values\":{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\",\"maxLength\":40},\"additionalProperties\":{\"anyOf\":[{\"type\":\"string\",\"maxLength\":4000},{\"type\":\"null\"}]}}},\"required\":[\"id\",\"values\"]}"
+  ],
+  "command:pose.backfillTags": [
+    "scope: settings",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "command:pose.cancelDownload": [
+    "scope: settings",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "command:pose.copyModels": [
+    "scope: settings",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":1000}},\"required\":[\"path\"]}"
+  ],
+  "command:pose.downloadModels": [
+    "scope: settings",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"consent\":{\"type\":\"boolean\",\"const\":true}},\"required\":[\"consent\"]}"
+  ],
+  "command:pose.extract": [
+    "scope: settings",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "command:pose.importPoseWear": [
+    "scope: settings",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":1000,\"description\":\"PoseWear 文件夹（p/t、p/i 里的线稿，或者平铺的 full_single_P001_front.webp 这样的文件）\"},\"viewsPath\":{\"description\":\"不再需要（代表视角随包）；给了也不用\",\"type\":\"string\",\"minLength\":1,\"maxLength\":1000}},\"required\":[\"path\"]}"
+  ],
+  "command:pose.importPoseWearMatches": [
+    "scope: settings",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"assignmentsPath\":{\"description\":\"单人：posewear_final 的 assignments_multi_weighted.json（assignments_multi.json、旧的 assignments.json 也认）\",\"type\":\"string\",\"minLength\":1,\"maxLength\":1000},\"pairsPath\":{\"description\":\"双人：pose-pair tags_v1 的 assignments.json\",\"type\":\"string\",\"minLength\":1,\"maxLength\":1000}}}"
+  ],
+  "command:pose.importPrototype": [
+    "scope: settings",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"keypointsPath\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":1000,\"description\":\"原型的 keypoints_lib.npz\"},\"assignmentsPath\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":1000,\"description\":\"原型的 assignments.json\"}},\"required\":[\"keypointsPath\",\"assignmentsPath\"]}"
+  ],
+  "command:pose.importTagsLow": [
+    "scope: settings",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":1000,\"description\":\"原型的 pose_tags_lowthr.npz\"}},\"required\":[\"path\"]}"
+  ],
+  "command:pose.reextract": [
+    "scope: settings",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "command:pose.rematch": [
+    "scope: settings",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"all\":{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"string\",\"enum\":[\"0\",\"1\",\"true\",\"false\"]}]}}}"
+  ],
+  "command:settings.setSourceMode": [
+    "scope: settings",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"mode\":{\"type\":\"string\",\"enum\":[\"strict\",\"broad\"]}},\"required\":[\"mode\"]}"
+  ],
+  "command:settings.update": [
+    "scope: settings",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"tagger\":{\"type\":\"object\",\"properties\":{\"model\":{\"type\":\"string\"},\"device\":{\"type\":\"string\",\"enum\":[\"cpu\",\"dml\"]},\"generalThreshold\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1},\"characterThreshold\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1},\"autoAcceptThreshold\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1},\"autoAcceptBySource\":{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\",\"pattern\":\"^(tagger|pixiv|plugin:[\\\\w.-]+)$\"},\"additionalProperties\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1}},\"batchSize\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":64},\"legacyModel\":{\"type\":[\"string\",\"null\"]},\"legacyBefore\":{\"anyOf\":[{\"type\":\"string\",\"pattern\":\"^\\\\d{4}-\\\\d{2}-\\\\d{2}$\"},{\"type\":\"null\"}]},\"skipCameraPhotos\":{\"type\":\"boolean\"},\"retryOld\":{\"type\":\"boolean\"},\"keepAwake\":{\"type\":\"boolean\"},\"artists\":{\"type\":\"boolean\"},\"pixiv\":{\"type\":\"boolean\"},\"pixivFilenameMode\":{\"type\":\"string\",\"enum\":[\"strict\",\"broad\"]},\"comicInUnrecognized\":{\"type\":\"boolean\"}}},\"danbooru\":{\"type\":\"object\",\"properties\":{\"enabled\":{\"type\":\"boolean\"},\"username\":{\"type\":\"string\"}}},\"dedupe\":{\"type\":\"object\",\"properties\":{\"hammingThreshold\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":64}}},\"ui\":{\"type\":\"object\",\"properties\":{\"theme\":{\"type\":\"string\",\"enum\":[\"system\",\"light\",\"dark\"]}}},\"browse\":{\"type\":\"object\",\"properties\":{\"customThemes\":{\"maxItems\":30,\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":64},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":12},\"tags\":{\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"all\":{\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},\"none\":{\"maxItems\":20,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}}},\"required\":[\"id\",\"name\",\"tags\"]}}}},\"pose\":{\"type\":\"object\",\"properties\":{\"enabled\":{\"type\":\"boolean\"},\"showClasses\":{\"type\":\"boolean\"}}},\"danbooruApiKey\":{\"type\":\"string\"}}}"
+  ],
+  "command:system.pickFolder": [
+    "scope: desktop",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "command:unrecognized.retag": [
+    "scope: rules",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "command:upload.begin": [
+    "scope: upload",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"batchId\":{\"type\":\"string\",\"format\":\"uuid\",\"pattern\":\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"},\"sha256\":{\"type\":\"string\",\"pattern\":\"^[0-9a-f]{64}$\"},\"size\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":134217728},\"fileName\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"modifiedAt\":{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d:[0-5]\\\\d(?:\\\\.\\\\d+)?(?:Z|([+-](?:[01]\\\\d|2[0-3]):[0-5]\\\\d)))$\"},\"album\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":300},\"clientKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200}},\"required\":[\"batchId\",\"sha256\",\"size\",\"fileName\"]}"
+  ],
+  "command:upload.complete": [
+    "scope: upload",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "command:upload.reportAlbums": [
+    "scope: upload",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"albums\":{\"default\":[],\"maxItems\":2000,\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":300},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"count\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"bytes\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":9007199254740991},\"latestAt\":{\"type\":\"string\",\"format\":\"date-time\",\"pattern\":\"^(?:(?:\\\\d\\\\d[2468][048]|\\\\d\\\\d[13579][26]|\\\\d\\\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\\\d|30)|(?:02)-(?:0[1-9]|1\\\\d|2[0-8])))T(?:(?:[01]\\\\d|2[0-3]):[0-5]\\\\d:[0-5]\\\\d(?:\\\\.\\\\d+)?(?:Z|([+-](?:[01]\\\\d|2[0-3]):[0-5]\\\\d)))$\"},\"inventory\":{\"type\":\"object\",\"properties\":{\"total\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"have\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"inTarget\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"deleted\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"new\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"newBytes\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":9007199254740991},\"folder\":{\"anyOf\":[{\"type\":\"string\",\"maxLength\":400},{\"type\":\"null\"}]},\"folderCount\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000}},\"required\":[\"total\",\"have\",\"inTarget\",\"deleted\",\"new\",\"newBytes\",\"folder\",\"folderCount\"]},\"pending\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"rejected\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000}},\"required\":[\"path\",\"name\",\"count\",\"bytes\"]}},\"full\":{\"default\":false,\"type\":\"boolean\"},\"state\":{\"type\":\"object\",\"properties\":{\"running\":{\"anyOf\":[{\"type\":\"string\",\"enum\":[\"inventory\",\"sync\"]},{\"type\":\"null\"}]},\"done\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"total\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"error\":{\"anyOf\":[{\"type\":\"string\",\"maxLength\":500},{\"type\":\"null\"}]},\"summary\":{\"anyOf\":[{\"type\":\"string\",\"maxLength\":500},{\"type\":\"null\"}]}},\"required\":[\"running\"]}}}"
+  ],
+  "command:upload.setAlbums": [
+    "scope: upload",
+    "undoable: false",
+    "input: {\"type\":\"object\",\"properties\":{\"deviceId\":{\"type\":\"string\",\"minLength\":1},\"albums\":{\"default\":[],\"maxItems\":2000,\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":300},\"sync\":{\"type\":\"boolean\"},\"dir\":{\"anyOf\":[{\"type\":\"string\",\"maxLength\":400},{\"type\":\"null\"}]}},\"required\":[\"path\"]}},\"wifiOnly\":{\"type\":\"boolean\"},\"chargingOnly\":{\"type\":\"boolean\"}}}"
+  ],
+  "command:upload.undoBatch": [
+    "scope: devices",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "command:visibility.createRule": [
+    "scope: rules",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"image\",\"folder\",\"tag\",\"character\"]},\"target\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"kind\",\"target\"]}"
+  ],
+  "command:visibility.deleteRule": [
+    "scope: rules",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "command:visibility.excludeImages": [
+    "scope: curate",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"minItems\":1,\"maxItems\":5000,\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"ids\"]}"
+  ],
+  "command:visibility.restoreImages": [
+    "scope: curate",
+    "undoable: true",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"minItems\":1,\"maxItems\":5000,\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"ids\"]}"
+  ],
+  "component:character.Cover": [
+    "props: { character: Character; workName?: string | null; size?: 'sm' | 'md' | 'lg' | 'xl'; variant?: 'overlay' | 'plate'; showNew?: boolean; thumbWidth?: ThumbWidth; className?: string; onClick?: () => void; }",
+    "version: 1"
+  ],
+  "component:lightbox.InfoPanel": [
+    "props: { base: ImageItem | undefined; detail: ImageDetail | undefined; error: unknown; onRetry: () => void; actions: ImageActions; onNavigate: () => void; onTagClick: (tag: string) => void; variant?: 'side' | 'sheet'; expanded?: boolean; }",
+    "version: 1"
+  ],
+  "component:lightbox.Stage": [
+    "props: { index: number; count: number; slide: (i: number) => StageSlide | undefined; zoomApi: ZoomApi; direction: number; hasPrev: boolean; hasNext: boolean; loadingNext?: boolean; originRect?: LightboxRect | null; returnRect?: LightboxRect | null; onPrev: () => void; onNext: () => void; onBackdropClick: () => void; slideshow?: { crossfade: number; idle: boolean } | null; onTap?: () => void; onDismiss?: () => void; onDismissDrag?: (progress: number | null) => void; onSwipeUp?: () => void; }",
+    "version: 1"
+  ],
+  "fn:count.unit": [
+    "signature: (): string",
+    "version: 1"
+  ],
+  "job:artists": [
+    "run: (任务上下文) => 一句话 | 没有"
+  ],
+  "job:danbooru-sync": [
+    "run: (任务上下文) => 一句话 | 没有"
+  ],
+  "job:dedupe": [
+    "run: (任务上下文) => 一句话 | 没有"
+  ],
+  "job:pixiv-tags": [
+    "run: (任务上下文) => 一句话 | 没有"
+  ],
+  "job:plugin": [
+    "run: (任务上下文) => 一句话 | 没有"
+  ],
+  "job:pose": [
+    "run: (任务上下文) => 一句话 | 没有"
+  ],
+  "job:pose-match": [
+    "run: (任务上下文) => 一句话 | 没有"
+  ],
+  "job:pose-tags": [
+    "run: (任务上下文) => 一句话 | 没有"
+  ],
+  "job:scan": [
+    "run: (任务上下文) => 一句话 | 没有"
+  ],
+  "job:tag": [
+    "run: (任务上下文) => 一句话 | 没有"
+  ],
+  "job:thumbnail": [
+    "run: (任务上下文) => 一句话 | 没有"
+  ],
+  "query:access.status": [
+    "scope: devices",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "query:artists.list": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "query:audit.list": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500},\"actor\":{\"type\":\"string\",\"maxLength\":100},\"command\":{\"type\":\"string\",\"maxLength\":100},\"before\":{\"type\":\"integer\",\"minimum\":-9007199254740991,\"maximum\":9007199254740991}}}"
+  ],
+  "query:changes.list": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"group\":{\"type\":\"string\",\"enum\":[\"auto\",\"move\"]}},\"required\":[\"group\"]}"
+  ],
+  "query:characters.coverCandidates": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":48}},\"required\":[\"id\"]}"
+  ],
+  "query:characters.danbooruMatches": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "query:characters.get": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "query:characters.list": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"workId\":{\"type\":\"string\",\"minLength\":1},\"q\":{\"type\":\"string\"},\"sort\":{\"type\":\"string\",\"enum\":[\"imageCount\",\"recent\",\"name\",\"newCount\"]},\"source\":{\"type\":\"string\",\"enum\":[\"danbooru\",\"custom\"]},\"includeOther\":{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"string\",\"enum\":[\"0\",\"1\",\"true\",\"false\"]}]},\"cursor\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}}}"
+  ],
+  "query:characters.top": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":50},\"workId\":{\"type\":\"string\",\"minLength\":1}}}"
+  ],
+  "query:collections.counts": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"q\":{\"type\":\"string\"}}}"
+  ],
+  "query:collections.get": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "query:collections.list": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"kind\":{\"anyOf\":[{\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"doujin\",\"artbook\",\"group\"]}},{\"type\":\"string\"}]},\"membership\":{\"anyOf\":[{\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"folder\",\"selection\",\"post\"]}},{\"type\":\"string\"}]},\"characterId\":{\"type\":\"string\"},\"workId\":{\"type\":\"string\"},\"seriesKey\":{\"type\":\"string\"},\"pending\":{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"string\",\"enum\":[\"0\",\"1\",\"true\",\"false\"]}]},\"q\":{\"type\":\"string\"},\"sort\":{\"type\":\"string\",\"enum\":[\"title\",\"recent\"]},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000}}}"
+  ],
+  "query:commands.catalog": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "query:duplicates.list": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"resolved\":{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"string\",\"enum\":[\"0\",\"1\",\"true\",\"false\"]}]}}}"
+  ],
+  "query:exclusions.list": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "query:history.undoStatus": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"tokens\":{\"anyOf\":[{\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},{\"type\":\"string\"}]}},\"required\":[\"tokens\"]}"
+  ],
+  "query:images.get": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "query:images.list": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"characterId\":{\"type\":\"string\"},\"workId\":{\"type\":\"string\"},\"status\":{\"type\":\"string\",\"enum\":[\"recognized\",\"unrecognized\",\"excluded\"]},\"rating\":{\"anyOf\":[{\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"general\",\"sensitive\",\"questionable\",\"explicit\"]}},{\"type\":\"string\"}]},\"q\":{\"type\":\"string\"},\"orientation\":{\"type\":\"string\",\"enum\":[\"portrait\",\"landscape\",\"square\"]},\"theme\":{\"type\":\"string\",\"enum\":[\"legs\",\"chest\",\"swim\",\"kemono\",\"costume\",\"multi\"]},\"tags\":{\"anyOf\":[{\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},{\"type\":\"string\"}]},\"tagsAll\":{\"anyOf\":[{\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},{\"type\":\"string\"}]},\"tagsNone\":{\"anyOf\":[{\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":100}},{\"type\":\"string\"}]},\"favorite\":{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"string\",\"enum\":[\"0\",\"1\",\"true\",\"false\"]}]},\"original\":{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"string\",\"enum\":[\"0\",\"1\",\"true\",\"false\"]}]},\"kind\":{\"anyOf\":[{\"type\":\"string\",\"const\":\"all\"},{\"anyOf\":[{\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"illustration\",\"comic\",\"screenshot\",\"text\",\"photo\",\"meme\"]}},{\"type\":\"string\"}]}]},\"animated\":{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"string\",\"enum\":[\"0\",\"1\",\"true\",\"false\"]}]},\"rated\":{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"string\",\"enum\":[\"0\",\"1\",\"true\",\"false\"]}]},\"seed\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1073741823},\"sort\":{\"type\":\"string\",\"enum\":[\"addedAt\",\"modifiedAt\",\"fileName\",\"bytes\",\"random\",\"page\"]},\"collectionId\":{\"type\":\"string\",\"minLength\":1},\"collapseCollections\":{\"anyOf\":[{\"type\":\"string\",\"const\":\"auto\"},{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"string\",\"enum\":[\"0\",\"1\",\"true\",\"false\"]}]}]},\"includeWholeCollections\":{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"string\",\"enum\":[\"0\",\"1\",\"true\",\"false\"]}]},\"imageIds\":{\"anyOf\":[{\"type\":\"array\",\"items\":{\"type\":\"string\"}},{\"type\":\"string\"}]},\"similarTo\":{\"type\":\"string\"},\"artist\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":200},\"poseClass\":{\"type\":\"string\",\"pattern\":\"^[a-z]+_\\\\d{2}$\"},\"posewearPose\":{\"type\":\"string\",\"pattern\":\"^(full_single|full_sexy|upper80v2|pair)_P\\\\d{3}$\"},\"posewearReliable\":{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"string\",\"enum\":[\"0\",\"1\",\"true\",\"false\"]}]},\"order\":{\"type\":\"string\",\"enum\":[\"asc\",\"desc\"]},\"cursor\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}}}"
+  ],
+  "query:images.movePreview": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"anyOf\":[{\"type\":\"array\",\"items\":{\"type\":\"string\"}},{\"type\":\"string\"}]},\"characterId\":{\"type\":\"string\"},\"rootId\":{\"type\":\"string\",\"minLength\":1},\"dir\":{\"default\":\"\",\"type\":\"string\",\"maxLength\":400}},\"required\":[\"rootId\"]}"
+  ],
+  "query:images.original": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "query:images.pixivPosts": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"ids\":{\"maxItems\":500,\"type\":\"array\",\"items\":{\"type\":\"string\",\"pattern\":\"^\\\\d{1,12}$\"}}},\"required\":[\"ids\"]}"
+  ],
+  "query:images.thumbnail": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1},\"w\":{\"type\":\"integer\",\"minimum\":-9007199254740991,\"maximum\":9007199254740991}},\"required\":[\"id\"]}"
+  ],
+  "query:jobs.list": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "query:library.contentKinds": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "query:library.roots": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "query:library.stats": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "query:library.summary": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "query:plugins.package": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"token\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":80}},\"required\":[\"token\"]}"
+  ],
+  "query:plugins.sites": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "query:plugins.state": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"safe\":{\"description\":\"安全模式：只看内置插件按原样的结果\",\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"string\",\"enum\":[\"0\",\"1\",\"true\",\"false\"]}]}}}"
+  ],
+  "query:pose.classes": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "query:pose.figure": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"pattern\":\"^[a-z]+_\\\\d{2}$\"}},\"required\":[\"id\"]}"
+  ],
+  "query:pose.posewear": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"all\":{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"string\",\"enum\":[\"0\",\"1\",\"true\",\"false\"]}]}}}"
+  ],
+  "query:pose.posewearFile": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"size\":{\"type\":\"string\",\"enum\":[\"t\",\"i\"]},\"file\":{\"type\":\"string\",\"pattern\":\"^(full_single|full_sexy|upper80v2|pair)_P\\\\d{3}_(front|high|low|side|diag)\\\\.webp$\"}},\"required\":[\"size\",\"file\"]}"
+  ],
+  "query:pose.posewearLow": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"pose\":{\"type\":\"string\",\"pattern\":\"^(full_single|full_sexy|upper80v2|pair)_P\\\\d{3}$\"}},\"required\":[\"pose\"]}"
+  ],
+  "query:pose.posewearOf": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "query:pose.posewearSkeleton": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"pattern\":\"^(full_single|full_sexy|upper80v2|pair)_P\\\\d{3}$\"},\"view\":{\"type\":\"string\",\"enum\":[\"front\",\"high\",\"low\",\"side\",\"diag\"]}},\"required\":[\"id\"]}"
+  ],
+  "query:pose.similar": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1},\"cursor\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}},\"required\":[\"id\"]}"
+  ],
+  "query:pose.status": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "query:search.all": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"q\":{\"default\":\"\",\"type\":\"string\"},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":50},\"forAssignment\":{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"string\",\"enum\":[\"0\",\"1\",\"true\",\"false\"]}]}}}"
+  ],
+  "query:search.phrase": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"q\":{\"default\":\"\",\"type\":\"string\",\"maxLength\":100}}}"
+  ],
+  "query:search.tags": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"q\":{\"default\":\"\",\"type\":\"string\",\"maxLength\":100},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":50}}}"
+  ],
+  "query:settings.get": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "query:settings.promotable": [
+    "scope: settings",
+    "input: {\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"illustration\",\"comic\",\"screenshot\",\"text\",\"photo\",\"meme\"]}}}"
+  ],
+  "query:settings.sourceModePreview": [
+    "scope: settings",
+    "input: {\"type\":\"object\",\"properties\":{\"mode\":{\"type\":\"string\",\"enum\":[\"strict\",\"broad\"]}},\"required\":[\"mode\"]}"
+  ],
+  "query:settings.taggerModels": [
+    "scope: settings",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "query:system.networkCheck": [
+    "scope: settings",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "query:unrecognized.list": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"cursor\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200},\"area\":{\"type\":\"string\",\"enum\":[\"art\",\"annex\"]},\"bucket\":{\"type\":\"string\",\"enum\":[\"suggested\",\"unsure\",\"untagged\",\"shelved\"]},\"theme\":{\"type\":\"string\",\"enum\":[\"legs\",\"chest\",\"nsfw\",\"swim\",\"kemono\",\"costume\",\"multi\",\"other\",\"comic\",\"odd\"]},\"kind\":{\"type\":\"string\",\"enum\":[\"screenshot\",\"text\",\"photo\",\"meme\"]},\"artKind\":{\"type\":\"string\",\"enum\":[\"illustration\",\"comic\"]},\"collapseCollections\":{\"anyOf\":[{\"type\":\"string\",\"const\":\"auto\"},{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"string\",\"enum\":[\"0\",\"1\",\"true\",\"false\"]}]}]}}}"
+  ],
+  "query:unrecognized.summary": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"artKind\":{\"type\":\"string\",\"enum\":[\"illustration\",\"comic\"]}}}"
+  ],
+  "query:upload.albums": [
+    "scope: upload",
+    "input: {\"type\":\"object\",\"properties\":{\"deviceId\":{\"type\":\"string\",\"minLength\":1}}}"
+  ],
+  "query:upload.batches": [
+    "scope: devices",
+    "input: {\"type\":\"object\",\"properties\":{\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100}}}"
+  ],
+  "query:upload.check": [
+    "scope: upload",
+    "input: {\"type\":\"object\",\"properties\":{\"files\":{\"minItems\":1,\"maxItems\":500,\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"sha256\":{\"type\":\"string\",\"pattern\":\"^[0-9a-f]{64}$\"},\"size\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":134217728}},\"required\":[\"sha256\",\"size\"]}}},\"required\":[\"files\"]}"
+  ],
+  "query:upload.targets": [
+    "scope: devices",
+    "input: {\"type\":\"object\",\"properties\":{}}"
+  ],
+  "query:works.get": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"id\"]}"
+  ],
+  "query:works.list": [
+    "scope: read",
+    "input: {\"type\":\"object\",\"properties\":{\"sort\":{\"type\":\"string\",\"enum\":[\"imageCount\",\"recent\",\"name\"]}}}"
+  ],
+  "reaction:analyze": [
+    "phase: tx",
+    "on: image.added, image.fileChanged, image.moved, root.modeChanged",
+    "emits: image.kindChanged, image.animatedChanged, curation.charactersChanged"
+  ],
+  "reaction:dropStalePixivEvidence": [
+    "phase: tx",
+    "on: image.sourceChanged",
+    "emits: evidence.changed"
+  ],
+  "reaction:invalidateCaches": [
+    "phase: after",
+    "on: image.added, image.gone, image.returned, image.fileChanged, image.moved, image.trashed, image.restored, image.kindChanged, image.animatedChanged, image.sourceChanged, evidence.changed, curation.charactersChanged, curation.originalChanged, curation.autoOriginalChanged, curation.autoRequested, curation.shelvedChanged, curation.ratingChanged, curation.favoriteChanged, curation.artistsChanged, curation.vetoesChanged, visibility.rulesChanged, visibility.changed, pose.changed, root.visibilityChanged, root.modeChanged, catalog.characterChanged, catalog.merged, catalog.bindingChanged, collections.changed, duplicates.changed, settings.changed, plugins.changed, library.opened",
+    "always: true"
+  ],
+  "reaction:markDedupeDirty": [
+    "phase: queue",
+    "on: image.added, image.fileChanged, image.gone, image.returned, image.trashed, image.restored, image.animatedChanged, visibility.changed, root.visibilityChanged"
+  ],
+  "reaction:notifyRoots": [
+    "phase: after",
+    "on: root.visibilityChanged, root.modeChanged"
+  ],
+  "reaction:notifySettings": [
+    "phase: after",
+    "on: settings.changed"
+  ],
+  "reaction:queueAnalysis": [
+    "phase: queue",
+    "on: image.added, image.fileChanged"
+  ],
+  "reaction:queueArtists": [
+    "phase: queue",
+    "on: curation.artistsChanged"
+  ],
+  "reaction:queuePixivCheck": [
+    "phase: tx",
+    "on: image.sourceChanged, image.kindChanged, curation.shelvedChanged, curation.originalChanged, curation.autoOriginalChanged, curation.charactersChanged, visibility.changed, evidence.changed, root.modeChanged, collections.changed"
+  ],
+  "reaction:queueTagging": [
+    "phase: queue",
+    "on: visibility.changed, root.modeChanged, root.visibilityChanged, image.added, image.fileChanged, image.moved, image.returned"
+  ],
+  "reaction:recomputeCustomMatches": [
+    "phase: after",
+    "on: catalog.characterChanged, catalog.merged, catalog.bindingChanged"
+  ],
+  "reaction:reevaluateAuto": [
+    "phase: tx",
+    "on: evidence.changed, image.kindChanged, curation.shelvedChanged, curation.originalChanged, curation.vetoesChanged, curation.autoRequested, collections.changed, root.modeChanged, catalog.merged, catalog.bindingChanged",
+    "emits: curation.charactersChanged, curation.autoOriginalChanged"
+  ],
+  "reaction:reevaluateExclusions": [
+    "phase: tx",
+    "on: visibility.rulesChanged, curation.charactersChanged, evidence.changed, image.added, image.moved, library.opened",
+    "emits: visibility.changed"
+  ],
+  "reaction:refreshAllCollections": [
+    "phase: after",
+    "on: root.visibilityChanged, root.modeChanged, library.opened"
+  ],
+  "reaction:refreshFolderCollections": [
+    "phase: tx",
+    "on: image.added, image.gone, image.returned, image.fileChanged, image.moved, image.trashed, image.restored, image.kindChanged, image.animatedChanged, visibility.changed, evidence.changed"
+  ],
+  "reaction:refreshPostGroups": [
+    "phase: tx",
+    "on: image.sourceChanged"
+  ],
+  "reaction:rematchCachedPixiv": [
+    "phase: queue",
+    "on: image.sourceChanged"
+  ],
+  "reaction:renumberCollections": [
+    "phase: tx",
+    "on: collections.changed"
+  ],
+  "reaction:reparseSource": [
+    "phase: tx",
+    "on: image.moved",
+    "emits: image.sourceChanged"
+  ],
+  "reaction:rescanRoots": [
+    "phase: queue",
+    "on: root.visibilityChanged"
+  ],
+  "reaction:schedulePixiv": [
+    "phase: queue",
+    "on: image.sourceChanged, image.kindChanged, curation.shelvedChanged, curation.originalChanged, curation.charactersChanged, visibility.changed, root.modeChanged, collections.changed"
+  ],
+  "reaction:staleFileEvidence": [
+    "phase: tx",
+    "on: image.fileChanged"
+  ],
+  "term:count.unit": [
+    "signature: (a = 'i'): string",
+    "version: 1"
+  ]
+}

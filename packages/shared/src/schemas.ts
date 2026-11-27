@@ -28,6 +28,8 @@ import {
   type LibraryRootMode,
   type Rating,
 } from './domain.ts';
+import { NAV_ICONS, NAV_SECTIONS, SOURCE_SITES } from './plugins.ts';
+import { POINT_NAME_RE } from './patches.ts';
 import { POSEWEAR_POSE_ID } from './pose.ts';
 
 /** shared 不带 DOM / node 的类型：这里只用到 URL 的这几个字段（运行时是全局的 URL） */
@@ -537,6 +539,8 @@ export const ListImagesInput = z.object({
   limit: qNumber.min(1).max(200).optional(),
 });
 export const ThumbInput = z.object({ id: Id, w: qNumber.optional() });
+/** 这些 Pixiv 作品在图库里各有几张（插件标「已下载」「下了一部分」用，images.pixivPosts） */
+export const PixivPostsInput = z.object({ ids: z.array(z.string().regex(/^\d{1,12}$/)).max(500) });
 export const ListWorksInput = z.object({ sort: z.enum(['imageCount', 'recent', 'name']).optional() });
 const workFilter = z.string().min(1).optional();
 export const ListCharactersInput = z.object({
@@ -637,3 +641,211 @@ export const PoseWearOfInput = z.object({ id: Id });
 export const PoseWearLowInput = z.object({ pose: z.string().regex(POSEWEAR_POSE_ID) });
 export const PoseClassInput = z.object({ id: z.string().regex(POSE_CLASS_ID) });
 export const PoseSimilarInput = z.object({ id: Id, cursor: z.string().optional(), limit: qNumber.min(1).max(200).optional() });
+
+// ---------------------------------------------------------------- 插件（docs/plugins.md 第 9 节）
+const PluginId = z.string().min(1).max(80);
+const PluginName = z.string().trim().min(1).max(40);
+/** 覆盖的值：键是设置注册表里的（OVERRIDES），值在它的选项里；服务端再按 validOverride 逐项检查 */
+const OverrideValues = z.record(z.string().max(80), z.string().max(80));
+export const PluginsStateInput = z.object({ safe: qBool.optional().describe('安全模式：只看内置插件按原样的结果') });
+export const SetPluginEnabledInput = z.object({ id: PluginId, enabled: z.boolean() });
+export const RenamePluginInput = z.object({ id: PluginId, name: PluginName.nullable().describe('null = 恢复原名') });
+export const PluginIdInput = z.object({ id: PluginId });
+/** 插件的设置（setting@1，E5）：只能填清单里登记的；空字符串、null 是清掉 */
+export const SetPluginSettingsInput = z.object({
+  id: PluginId,
+  values: z.record(z.string().max(40), z.string().max(4000).nullable()),
+});
+/** 改装的插件的授权（插件详情的「授权」）：清单要的里面给哪些；文件夹 null 是不给，不写是照旧 */
+export const SetPluginGrantInput = z.object({
+  id: PluginId,
+  scopes: z.array(z.string().max(40)).max(40),
+  network: z.array(z.string().max(200)).max(30),
+  background: z.boolean(),
+  folders: z.record(z.string().max(40), z.object({ rootId: Id, dir: z.string().trim().max(300) }).nullable()).default({}),
+});
+export const CreateOverridePluginInput = z.object({
+  name: PluginName,
+  values: OverrideValues.describe('要覆盖的值，例如 {"images.defaultSort":"modifiedAt"}；能用的键和值见 GET /api/plugins 的 overrides'),
+  enabled: z.boolean().optional().describe('默认 true：建好就启用'),
+});
+export const SetOverrideValuesInput = z.object({ id: PluginId, values: OverrideValues });
+export const SetNavInput = z.object({
+  sections: z
+    .object({ main: z.array(z.string().max(80)).max(100), triage: z.array(z.string().max(80)).max(100), footer: z.array(z.string().max(80)).max(100) })
+    .optional()
+    .describe('侧栏三段各自的顺序（导航项 id）；没列到的项排在各自那一段的最后'),
+  visible: z.record(z.string().max(80), z.boolean()).optional().describe('在不在侧栏显示，只改给出的项'),
+});
+export const ChooseOverrideInput = z.object({
+  key: z.string().max(80),
+  plugin: PluginId.nullable().describe('冲突时用哪个插件的值；null = 按后启用的那个'),
+});
+
+/** 装的插件的 id：小写字母、数字、-，可以用 . 分段（example.random-browse）；core.、mine.、ai. 开头的留给 Emaki 自己 */
+export const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}(\.[a-z0-9][a-z0-9-]{0,39}){0,3}$/;
+const LOCAL_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const HOST = /^(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)+$|^localhost$/i;
+
+/**
+ * 插件清单 emaki-plugin.json 的结构（docs/plugins.md 第 8 节）。只查结构；版本范围、权限能不能给、贡献点认不认识这些
+ * 由服务端（domain/plugins/manifest.ts）逐项写成能看懂的话。
+ */
+export const PluginManifestSchema = z.object({
+  id: z.string().regex(PLUGIN_ID_RE, 'id 只能用小写字母、数字、- 和 .，比如 example.random-browse'),
+  name: z.string().trim().min(1).max(40),
+  version: z.string().max(40),
+  description: z.string().max(300).optional(),
+  author: z.string().max(80).optional(),
+  homepage: z.string().max(300).optional(),
+  engines: z.object({ emaki: z.string().max(100).optional() }).optional(),
+  permissions: z
+    .object({
+      scopes: z.array(z.string().max(40)).max(30).optional(),
+      folders: z
+        .array(z.object({ id: z.string().regex(LOCAL_ID), purpose: z.string().trim().min(1).max(80), suggest: z.string().max(200).optional() }))
+        .max(5)
+        .optional(),
+      network: z.array(z.string().regex(HOST, '要写域名，比如 www.pixiv.net')).max(30).optional(),
+      background: z.boolean().optional(),
+      unsafe: z.boolean().optional(),
+    })
+    .optional(),
+  contributes: z.record(z.string().max(60), z.unknown()).default({}),
+  /** 服务端代码的入口（E5）；具体的检查在服务端（ServerEntrySchema） */
+  server: z.string().max(200).optional(),
+  /** 改内部的入口（E6）；检查同 server */
+  internal: z.string().max(200).optional(),
+  /** 改网页的入口（E6）；检查同 server */
+  web: z.string().max(200).optional(),
+});
+
+/** nav.item@1（装的插件）：只能指向 Emaki 里的地址（可以带筛选参数），图标从 NAV_ICONS 里选 */
+export const InstalledNavItemSchema = z
+  .object({
+    id: z.string().regex(LOCAL_ID),
+    label: z.string().trim().min(1).max(12),
+    to: z
+      .string()
+      .max(300)
+      .refine((to) => /^\/(?![/\\])/.test(to) && !/[\s:]/.test(to.split(/[?#]/)[0]!), '只能是 Emaki 里的地址，以 / 开头，比如 /gallery?sort=random')
+      .optional(),
+    page: z.string().regex(LOCAL_ID).optional().describe('指向这个插件自己的页面（page@1 的 id），不写 to'),
+    icon: z.enum(NAV_ICONS).default('puzzle'),
+    section: z.enum(NAV_SECTIONS).default('main'),
+    hiddenByDefault: z.boolean().optional(),
+  })
+  .refine((n) => (n.to === undefined) !== (n.page === undefined), { message: 'to 和 page 要写一个，只写一个', path: ['to'] });
+
+/** 包里的相对路径：只用 / 分隔，不能往上跳、不能是绝对路径 */
+const PACKAGE_FILE = /^(?!.*(^|\/)\.\.?(\/|$))[\w.-]+(\/[\w.-]+)*$/;
+/** 服务端逻辑的入口（E5）：包里的 .js / .mjs / .cjs */
+export const ServerEntrySchema = z.string().max(200).regex(PACKAGE_FILE, '要写包里的文件，比如 server/index.js').regex(/\.[cm]?js$/, '入口要是 .js、.mjs 或 .cjs');
+/** command@1（E5）：名字带插件前缀，在服务端按清单里的插件 id 再查 */
+export const InstalledCommandSchema = z.object({
+  name: z.string().max(120).regex(/^[a-z0-9][a-z0-9.-]*\.[a-zA-Z][a-zA-Z0-9]{0,39}$/, '命令名写成 <插件 id>.<名字>，比如 pixiv-browser.download'),
+  summary: z.string().trim().min(1).max(200),
+  scope: z.string().max(40),
+  input: z.record(z.string(), z.unknown()).optional(),
+});
+/** job.kind@1（E5） */
+export const InstalledJobKindSchema = z.object({
+  kind: z.string().regex(LOCAL_ID),
+  label: z.string().trim().min(1).max(20),
+});
+/** setting@1（E5） */
+export const InstalledSettingSchema = z.object({
+  id: z.string().regex(LOCAL_ID),
+  label: z.string().trim().min(1).max(40),
+  type: z.enum(['string', 'secret']).default('string'),
+  hint: z.string().trim().max(200).optional(),
+});
+
+/** 视图文件：包里的相对路径，.html 结尾，不能往上跳 */
+const VIEW_FILE = /^(?!.*(^|\/)\.\.?(\/|$))[\w.-]+(\/[\w.-]+)*\.html?$/;
+/** 装的插件、AI 做的页面的 page@1：一个视图 */
+export const InstalledPageSchema = z.object({
+  id: z.string().regex(LOCAL_ID),
+  view: z.string().max(200).regex(VIEW_FILE, '视图要写包里的 HTML 文件，比如 views/stats.html'),
+  title: z.string().trim().min(1).max(40).optional(),
+  site: z.string().regex(LOCAL_ID).optional(),
+});
+/** site@1（E5）：插件给外部网站用的脚本 */
+export const InstalledSiteSchema = z.object({
+  id: z.string().regex(LOCAL_ID),
+  title: z.string().trim().min(1).max(40),
+  url: z.string().max(500).regex(/^https:\/\//, '起始页要是 https 地址'),
+  matches: z
+    .array(z.string().trim().toLowerCase().regex(/^(\*\.)?[a-z0-9.-]+$/, '写域名，比如 www.pixiv.net'))
+    .min(1)
+    .max(10),
+  script: z.string().max(200).regex(PACKAGE_FILE, '要写包里的文件，比如 site/pixiv.js').regex(/\.js$/, '脚本要是 .js'),
+});
+/** lightbox.toolbar@1（装的插件，docs/plugins.md 12.7）：看图器顶栏的一个按钮，调自己的命令或者打开图片的来源 */
+export const InstalledLightboxButtonSchema = z
+  .object({
+    id: z.string().regex(LOCAL_ID),
+    label: z.string().trim().min(1).max(12),
+    icon: z.enum(NAV_ICONS).default('puzzle'),
+    sources: z.array(z.enum(SOURCE_SITES)).min(1).max(SOURCE_SITES.length).optional(),
+    command: z.string().max(120).optional(),
+    open: z.literal('source').optional(),
+  })
+  .refine((b) => (b.command === undefined) !== (b.open === undefined), { message: 'command 和 open 要写一个，只写一个', path: ['command'] });
+/** link@1（装的插件，12.7）：接管的链接，在插件的网站（App 里）或页面里打开 */
+/** patch@1（E6）：要改的内部点，名字是 <种类>:<名字>（服务端再查这个版本的 Emaki 有没有这个点） */
+export const InstalledPatchSchema = z.object({
+  point: z.string().regex(POINT_NAME_RE, '要写内部点的名字，比如 term:count.unit、command:images.list、component:lightbox.Stage'),
+  why: z.string().trim().max(200).optional(),
+});
+
+export const InstalledLinkSchema = z
+  .object({
+    id: z.string().regex(LOCAL_ID),
+    title: z.string().trim().min(1).max(40),
+    urls: z
+      .array(z.string().trim().max(300).regex(/^https:\/\/[a-z0-9.-]+\/[^\s?#]*$/i, '写成 https://域名/路径，路径里的一段可以是 *，比如 https://www.pixiv.net/artworks/*'))
+      .min(1)
+      .max(10),
+    page: z.string().regex(LOCAL_ID).optional(),
+    site: z.string().regex(LOCAL_ID).optional(),
+  })
+  .refine((l) => l.page !== undefined || l.site !== undefined, { message: 'page 和 site 至少写一个（在哪里打开）', path: ['page'] });
+
+const PackageSource = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('folder'), path: z.string().trim().min(1).max(500).describe('这台电脑上的文件夹（开发用：不复制，改了点「重新读取」）') }),
+  z.object({
+    kind: z.literal('git'),
+    url: z.string().trim().min(1).max(500).describe('https://…、ssh://… 或 git@主机:路径'),
+    ref: z.string().trim().max(100).optional().describe('分支或标签；不写是默认分支'),
+  }),
+]);
+export const InspectPluginInput = z.object({ source: PackageSource });
+export const InstallPluginInput = z.object({
+  token: z.string().min(1).max(80),
+  folders: z
+    .record(z.string().max(40), z.object({ rootId: Id, dir: z.string().max(300) }))
+    .optional()
+    .describe('授权单上为每个要的文件夹选好的位置'),
+  showInNav: z.boolean().optional().describe('它的导航项放不放进侧栏（不给：放进去，和新启用的页面一样）'),
+});
+export const PluginPackageTokenInput = z.object({ token: z.string().min(1).max(80) });
+
+// ---------------------------------------------------------------- 视图（E4，docs/plugins.md 第 5 节）
+export const PluginViewInput = z.object({ id: PluginId, page: z.string().regex(LOCAL_ID) });
+/** AI 助手做的页面（docs/plugins.md 5.1）：一个视图，插件 id 是 ai.<name> */
+export const SaveAiViewInput = z.object({
+  name: z
+    .string()
+    .regex(LOCAL_ID, '只能用小写字母、数字和 -')
+    .describe('页面的英文短名（小写字母、数字、-），插件 id 是 ai.<name>；修改已有的页面用同一个 name'),
+  title: PluginName.describe('显示的名字（侧栏、页头、插件页），比如「收藏统计」'),
+  description: z.string().trim().max(300).optional().describe('一句话说明这一页看什么'),
+  html: z.string().min(1).max(1_000_000).describe('整页 HTML（MCP Apps 视图），写法见工具说明'),
+  scopes: z
+    .array(z.string().max(40))
+    .max(10)
+    .default(['read'])
+    .describe('页面要调的工具需要的权限范围，默认只读 ["read"]；会改数据的页面才加 curate、collections 等，不能超过助手自己的范围'),
+  icon: z.enum(NAV_ICONS).default('chart').describe('侧栏图标'),
+});

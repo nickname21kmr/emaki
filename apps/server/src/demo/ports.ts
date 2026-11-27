@@ -78,6 +78,8 @@ const FAKE_TOTALS: Record<JobKind, number> = {
   pose: 300,
   'pose-tags': 300,
   'pose-match': 300,
+  // 插件的任务由插件自己跑，演示模式不假装
+  plugin: 0,
 };
 
 /** 后台任务部件：每种任务都只走一遍进度条（约 5 秒），不扫描、不跑模型、不联网、不改数据 */

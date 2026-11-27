@@ -22,6 +22,7 @@ import { WorksShelf } from './overview/WorksShelf';
 import { useWorkIndex } from './overview/works';
 import { EASE_OUT } from '@/lib/motion';
 import { PageBlocks, type BlockRenderers } from '@/blocks/PageBlocks';
+import { Slot } from '@/blocks/Slot';
 
 const EASE = EASE_OUT;
 
@@ -105,13 +106,20 @@ export function CharactersPage() {
             hint={work === 'recent' ? '最近 30 天有新图 · 按收藏张数' : workObj ? `${workObj.name} · 按收藏张数` : '按收藏张数'}
             actions={
               workObj ? (
-                <Link
-                  to={`/works/${workObj.id}`}
-                  className="group/link inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-fg-muted transition-colors hover:bg-hover hover:text-fg"
-                >
-                  作品页
-                  <ArrowUpRight className="size-3.5 transition-transform duration-300 group-hover/link:translate-x-px group-hover/link:-translate-y-px" />
-                </Link>
+                <Slot
+                  id="page.characters.work"
+                  render={{
+                    'characters.workPage': () => (
+                      <Link
+                        to={`/works/${workObj.id}`}
+                        className="group/link inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+                      >
+                        作品页
+                        <ArrowUpRight className="size-3.5 transition-transform duration-300 group-hover/link:translate-x-px group-hover/link:-translate-y-px" />
+                      </Link>
+                    ),
+                  }}
+                />
               ) : undefined
             }
           />
@@ -148,7 +156,7 @@ export function CharactersPage() {
     <>
       <PageHeader
         sticky
-        title="角色"
+        title="角色" nav="characters"
         subtitle={
           stats ? (
             `${formatCount(stats.characterCount)} 位角色 · ${formatCount(stats.workCount)} 部作品`
@@ -157,13 +165,15 @@ export function CharactersPage() {
           )
         }
         actions={
-          <>
-            <CustomMatchPill
-              count={stats?.customMatchableCount ?? 0}
-              onViewCustom={() => params.setSource('custom')}
-            />
-            <NewCharacterButton onClick={() => openCreate(qTrimmed || undefined)} />
-          </>
+          <Slot
+            id="page.characters"
+            render={{
+              'characters.customMatch': () => (
+                <CustomMatchPill count={stats?.customMatchableCount ?? 0} onViewCustom={() => params.setSource('custom')} />
+              ),
+              'characters.new': () => <NewCharacterButton onClick={() => openCreate(qTrimmed || undefined)} />,
+            }}
+          />
         }
       >
         <SearchBar q={params.q} onCommit={params.setQ} view={view} onViewChange={setView} inputRef={searchRef} />

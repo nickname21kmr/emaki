@@ -1,4 +1,4 @@
-import { AUTO_COLLAPSE_MIN, type CollectionKind, type ImageItem, type ListImagesQuery, type Page } from '@emaki/shared';
+import { AUTO_COLLAPSE_MIN, BUILTIN_DEFAULT_SORT, type CollectionKind, type ImageItem, type ListImagesQuery, type Page } from '@emaki/shared';
 import type { Db } from '../../../db/connection.ts';
 import { loadImageItems } from '../hydrate.ts';
 import { decodeCursor, encodeCursor } from '../sql.ts';
@@ -60,7 +60,7 @@ export function collapsedImages(
   params: Record<string, unknown>,
   total: number,
 ): Page<ImageItem> {
-  const sort = q.sort === 'page' ? 'addedAt' : (q.sort ?? 'addedAt');
+  const sort = q.sort === 'page' ? 'addedAt' : (q.sort ?? BUILTIN_DEFAULT_SORT);
   if (sort === 'random' || wholeForTests) return collapsedImagesWhole(db, q, countWhere, params, total);
   const column = SORT_COLUMN[sort];
   const dir = q.order === 'asc' ? 'ASC' : 'DESC';
@@ -134,7 +134,7 @@ function collapsedImagesWhole(
   params: Record<string, unknown>,
   total: number,
 ): Page<ImageItem> {
-  const sort = q.sort === 'page' ? 'addedAt' : (q.sort ?? 'addedAt');
+  const sort = q.sort === 'page' ? 'addedAt' : (q.sort ?? BUILTIN_DEFAULT_SORT);
   const expr = {
     addedAt: 'i.added_at',
     modifiedAt: 'i.modified_at',

@@ -17,6 +17,7 @@ import {
   ListImagesInput,
   ListUnrecognizedInput,
   ListWorksInput,
+  PixivPostsInput,
   SearchInput,
   TagPhraseInput,
   TagSuggestionsInput,
@@ -31,6 +32,7 @@ import { config } from '../config.ts';
 import { describeKindReason, hydrateImages, IMAGE_COLS, type ImageRow } from '../datasource/sqlite/hydrate.ts';
 import { imageArtists, listArtists } from '../datasource/sqlite/artists.ts';
 import { listImages } from '../datasource/sqlite/queries/listImages.ts';
+import { pixivPosts } from '../datasource/sqlite/queries/pixivPosts.ts';
 import { MIME, parseId, toId } from '../datasource/sqlite/sql.ts';
 import { loadSuggestions } from '../datasource/sqlite/suggestions.ts';
 import { NotFoundError } from '../http/errors.ts';
@@ -38,7 +40,7 @@ import type { FileResponse, ImageFileRow } from '../infra/ports.ts';
 import { checkNetwork } from '../net/check.ts';
 import { readSettingsView } from '../readmodel/settings.ts';
 import { summarize } from '../readmodel/summary.ts';
-import { VISIBLE } from '../readmodel/terms.ts';
+import { COUNT_UNIT, COUNT_UNIT_POINT, VISIBLE } from '../readmodel/terms.ts';
 import { describeAnimation } from '../services/classify/rules.ts';
 import { sha256Buffer } from '../services/fs/hash.ts';
 import { toAbs } from '../services/fs/paths.ts';
@@ -301,7 +303,7 @@ export const queries = [
     input: EmptyInput,
     scope: 'read',
     http: [{ method: 'GET', path: '/api/artists' }],
-    run: (e) => listArtists(e.ctx.db),
+    run: (e) => listArtists(e.ctx.db, e.ctx.points.wrap(COUNT_UNIT_POINT, COUNT_UNIT)('i')),
   }),
   defineQuery({
     name: 'search.all',
@@ -367,8 +369,18 @@ export const queries = [
     run(e, q) {
       // 按姿势类别筛选（实验）：姿势检索关着时 403
       if (q.poseClass || q.posewearPose) requirePose(e);
-      return listImages(e.ctx.db, q, (key, compute) => e.results.get('count:' + key, compute) as number);
+      // 没给排序：按生效的默认排序（覆盖插件可以改，docs/plugins.md 9.5）；网页、手机、AI 助手拿到的是同一个。
+      // 按姿势筛选时没给排序是按典型度 / 匹配名次排（listImages 里），不填
+      const query = q.sort || q.poseClass || q.posewearPose ? q : { ...q, sort: e.plugins.overrideValue('images.defaultSort') };
+      return listImages(e.ctx.db, query, (key, compute) => e.results.get('count:' + key, compute) as number);
     },
+  }),
+  defineQuery({
+    name: 'images.pixivPosts',
+    summary: '这些 Pixiv 作品号在图库里各有几张（不算回收站里的、不在了的）、几张动图、一共几页（查过 Pixiv 才知道）：只列图库里有的',
+    input: PixivPostsInput,
+    scope: 'read',
+    run: (e, q) => ({ posts: pixivPosts(e.ctx.db, q.ids) }),
   }),
   defineQuery({
     name: 'images.get',

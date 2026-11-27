@@ -6,6 +6,7 @@ import type {
   Job,
   JobItemEvent,
   LibraryChangedReason,
+  PluginNoticeEvent,
   ServerEvent,
 } from '@emaki/shared';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
@@ -16,7 +17,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { api, type CommandMeta } from './api';
 import { refreshMe } from './capabilities';
 import { streamBroken, streamOpened } from './connection';
-import { qk } from './queries';
+import { goTo, qk } from './queries';
 import { useUndoStore } from './stores';
 
 /** 正在跑的后台任务（SSE 推送），给侧边栏 / 首页的进度条用。 */
@@ -137,6 +138,9 @@ export const REFRESH: Record<DomainChange, readonly string[]> = {
   // 以前跟着刷新整组 IMAGE_VIEWS：提取姿势时每 3 秒重拉一遍图库已加载的每一页、角色、作品、未识别，后端一直被占着，看图和筛选都慢
   'pose.changed': ['pose', POSE_LISTS],
   'library.opened': [...WITH_FILES, 'exclusions', 'tags', 'custom-character-matches'],
+  // 插件（docs/plugins.md）：侧栏、停用的页面、覆盖的值；默认排序变了，没给排序的图片列表也要重拉。
+  // 改内部的插件加上、撤掉补丁也推这一条（第 7 节）：「一个作品算一张」这类改的是角色、作品、画师的张数，这几样也重拉
+  'plugins.changed': ['plugins', 'images', 'characters', 'character', 'works', 'work', 'artists', 'summary', 'stats'],
 };
 
 /** 命令本身没声明变化（画师的合并关系、标记看过、启动任务……）时按命令刷新；不在这里的就什么也不刷 */
@@ -241,6 +245,13 @@ export function createInvalidator(client: QueryClient) {
 // ------------------------------------------------------------------ 事件 id：写操作等自己的那条事件（只刷新一遍）
 
 /** 这次连着的后端的启动 id、收到的最后一条可补发事件的 id */
+/** 插件自动停用的通知的标题（docs/plugins.md 第 7、8 节） */
+const NOTICE_TITLE: Record<PluginNoticeEvent['kind'], (name: string) => string> = {
+  'auto-disabled': (name) => `「${name}」出错太多次，已经自动停用`,
+  'points-changed': (name) => `「${name}」改的地方变了，已经自动停用`,
+  'crash-loop': (name) => `「${name}」可能让 Emaki 启动就停，已经自动停用`,
+};
+
 const position = { boot: null as string | null, last: 0 };
 /** 每条 changed 事件触发的那次刷新（写操作等它） */
 const refreshes = new Map<number, Promise<void>>();
@@ -371,6 +382,160 @@ export function openEventStream(
   };
 }
 
+export type StreamHandlers = Parameters<typeof openEventStream>[0];
+
+/** 几个标签页之间转发事件的频道上的消息 */
+type SharedMessage =
+  | { type: 'ask' }
+  | { type: 'state'; open: boolean; hello: string | null }
+  | { type: 'open' }
+  | { type: 'message'; data: string }
+  | { type: 'error' }
+  | { type: 'closed' };
+
+export interface SharedStreamDeps {
+  locks: Pick<LockManager, 'request'>;
+  channel: { postMessage: (m: SharedMessage) => void; onmessage: ((e: { data: SharedMessage }) => void) | null; close: () => void };
+  /** 这个标签页现在在不在前台 */
+  visible: () => boolean;
+  /** 回到前台时调 fn；返回取消 */
+  onVisible: (fn: () => void) => () => void;
+  make?: () => EventSource;
+}
+
+const SHARED_LOCK = 'emaki-events';
+
+function sharedDeps(): SharedStreamDeps | null {
+  if (typeof navigator === 'undefined' || !navigator.locks || typeof BroadcastChannel === 'undefined' || typeof document === 'undefined')
+    return null;
+  return {
+    locks: navigator.locks,
+    channel: new BroadcastChannel(SHARED_LOCK) as unknown as SharedStreamDeps['channel'],
+    visible: () => document.visibilityState === 'visible',
+    onVisible: (fn) => {
+      const h = () => document.visibilityState === 'visible' && fn();
+      document.addEventListener('visibilitychange', h);
+      return () => document.removeEventListener('visibilitychange', h);
+    },
+  };
+}
+
+/**
+ * 同一个浏览器里开着几个 Emaki 标签页时只连一条 /api/events。浏览器对同一个网站最多同时开 6 个连接（HTTP/1.1），
+ * 以前每个标签页各占一条长连接，开上几个，新页面的图片就一直排队、一直转圈。
+ * 用 Web Locks 选一个标签页去连（拿着锁的那个），它收到的事件经 BroadcastChannel 转给别的标签页，各自照常处理（刷新自己的查询）。
+ * 回到前台的标签页把锁抢过来自己连（在后台的标签页可能被浏览器冻住，前台的这个总能收到）；拿着锁的关掉了，排着队的下一个接上，
+ * 连上时带着自己收到的最后一条的 id，中间漏的服务端补发。后开的标签页问一声现在连没连上、拿到最近的 hello。
+ * 没有 Web Locks / BroadcastChannel 的环境各连各的。
+ */
+export function openSharedEventStream(on: StreamHandlers, deps: SharedStreamDeps | null = sharedDeps()): () => void {
+  if (!deps) return openEventStream(on);
+  const { locks, channel } = deps;
+  let disposed = false;
+  /** 正在连着（拿着锁）：调它关掉连接、放开锁 */
+  let leading: (() => void) | null = null;
+  /** 排队等锁的那次请求 */
+  let queued: AbortController | null = null;
+  /** 拿着锁时：连没连上、最近的 hello（转给后开的标签页） */
+  let state = { open: false, hello: null as string | null };
+  /** 跟着别人收时：还没连上过、或者断了（下次连上要跑 on.open） */
+  let broken = true;
+
+  const lead = (release: () => void) => {
+    const close = openEventStream(
+      {
+        open: () => {
+          state.open = true;
+          broken = false;
+          on.open();
+          channel.postMessage({ type: 'open' });
+        },
+        message: (data) => {
+          if (data.includes('"type":"hello"')) state.hello = data;
+          on.message(data);
+          channel.postMessage({ type: 'message', data });
+        },
+        error: () => {
+          state.open = false;
+          on.error?.();
+          channel.postMessage({ type: 'error' });
+        },
+        closed: () => {
+          on.closed?.();
+          channel.postMessage({ type: 'closed' });
+        },
+      },
+      deps.make,
+    );
+    leading = () => {
+      leading = null;
+      state = { open: false, hello: null };
+      close();
+      release();
+    };
+  };
+
+  const request = (steal: boolean) => {
+    queued?.abort();
+    const mine = steal ? null : new AbortController();
+    queued = mine;
+    locks
+      .request(SHARED_LOCK, steal ? { steal: true } : { signal: mine!.signal }, () => {
+        if (queued === mine) queued = null;
+        return new Promise<void>((release) => (disposed ? release() : lead(release)));
+      })
+      .catch(() => {
+        // 自己撤掉的排队（要抢锁、卸载了）不算；被别的标签页抢走了：关掉自己的连接，跟着它收，排队等下次
+        if (mine?.signal.aborted || disposed) return;
+        leading?.();
+        request(false);
+      });
+  };
+
+  channel.onmessage = ({ data: m }) => {
+    if (leading) {
+      if (m.type === 'ask') channel.postMessage({ type: 'state', ...state });
+      return;
+    }
+    if (m.type === 'state' || m.type === 'open') {
+      if (m.type === 'state' && !m.open) return;
+      if (broken) {
+        broken = false;
+        on.open();
+        if (m.type === 'state' && m.hello) on.message(m.hello);
+      }
+    } else if (m.type === 'message') on.message(m.data);
+    else if (m.type === 'error') {
+      broken = true;
+      on.error?.();
+    } else if (m.type === 'closed') on.closed?.();
+  };
+
+  const offVisible = deps.onVisible(() => {
+    if (!leading && !disposed) request(true);
+  });
+  if (deps.visible()) request(true);
+  else {
+    request(false);
+    channel.postMessage({ type: 'ask' });
+  }
+
+  return () => {
+    disposed = true;
+    offVisible();
+    queued?.abort();
+    leading?.();
+    channel.close();
+  };
+}
+
+/** 图库变了（changed 事件）时要知道的：插件的视图转给 iframe（emaki/changed，features/plugins/view/） */
+const libraryChangeListeners = new Set<(reason: string) => void>();
+export function onLibraryChanged(fn: (reason: string) => void): () => void {
+  libraryChangeListeners.add(fn);
+  return () => libraryChangeListeners.delete(fn);
+}
+
 /**
  * 一条 SSE 事件（useServerEvents 收到的，测试也直接调）：changed 按变化类型刷新并记下事件 id（写操作等它）；
  * command 是 AI 助手做的、可撤销的修改时放进撤销栈；resync 全部刷新；hello 记下这次连着的后端和位置；
@@ -406,6 +571,7 @@ export function handleServerEvent(client: QueryClient, invalidate: ReturnType<ty
       break;
     case 'changed':
       noteEvent(event.id, invalidate(event.reason, event.changes.length || event.command ? event.changes : null, event.command));
+      for (const fn of libraryChangeListeners) fn(event.reason);
       break;
     case 'command':
       noteEvent(event.id);
@@ -414,6 +580,15 @@ export function handleServerEvent(client: QueryClient, invalidate: ReturnType<ty
     case 'job-item':
       // 只做「在干活」的反馈，不让任何 query 失效
       useLiveJobs.getState().pushItem(event);
+      break;
+    case 'plugin-notice':
+      noteEvent(event.id);
+      // 插件出错太多次、改内部的插件改的地方变了、可能让 Emaki 启动就崩，自动停用了（docs/plugins.md 第 7、8 节）：说一声，点「去看看」到插件详情
+      toast.warning(NOTICE_TITLE[event.kind](event.name), {
+        description: event.message,
+        duration: 12_000,
+        action: { label: '去看看', onClick: () => goTo(`/plugins/${encodeURIComponent(event.plugin)}`) },
+      });
       break;
     case 'auto-change':
       noteEvent(event.id);
@@ -457,7 +632,8 @@ export function useServerEvents() {
         .catch(() => {});
     };
     const onMessage = (data: string) => handleServerEvent(client, invalidate, JSON.parse(data) as ServerEvent);
-    const close = openEventStream({
+    // 几个标签页共用一条连接（openSharedEventStream）
+    const close = openSharedEventStream({
       // 连上了：断过的话算重新连上（lib/connection.ts：提示收起、全部重新取、失败过的图片重新加载）
       open: () => {
         streamOpened();

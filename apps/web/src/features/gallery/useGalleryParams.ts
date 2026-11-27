@@ -1,4 +1,6 @@
 import {
+  BUILTIN_DEFAULT_SORT,
+  LIST_SORTS,
   BROWSE_THEMES,
   POSEWEAR_POSE_ID,
   CONTENT_KINDS,
@@ -12,6 +14,7 @@ import {
 import { useCallback, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 import { themeQuery } from '@/lib/customTheme';
+import { useOverride } from '@/lib/plugins';
 import { useCustomThemes } from '@/lib/queries';
 import { usePrefs } from '@/lib/stores';
 import { withParam } from '@/lib/urlPrefs';
@@ -30,7 +33,7 @@ export type SortOrder = 'asc' | 'desc';
 export const RATINGS: Rating[] = ['general', 'sensitive', 'questionable', 'explicit'];
 export const ORIENTATIONS: Orientation[] = ['portrait', 'landscape', 'square'];
 export type GallerySort = Exclude<ImageSort, 'page'>;
-export const SORTS: GallerySort[] = ['addedAt', 'modifiedAt', 'fileName', 'bytes', 'random'];
+export const SORTS: readonly GallerySort[] = LIST_SORTS;
 
 export interface GalleryFilters {
   q: string;
@@ -89,12 +92,17 @@ const kindParam = (kind: ContentKind[] | 'all') => (kind === 'all' ? 'all' : kin
 
 const POSE_CLASS_RE = /^[a-z]+_\d{1,3}$/;
 
-export function parseGalleryParams(params: URLSearchParams, kindFallback: ContentKind[] | 'all'): GalleryFilters {
+/** defaultSort：没写排序时按哪个（插件能覆盖的图片默认排序，lib/plugins.ts 的 useOverride；内置的是 BUILTIN_DEFAULT_SORT） */
+export function parseGalleryParams(
+  params: URLSearchParams,
+  kindFallback: ContentKind[] | 'all',
+  defaultSort: GallerySort = BUILTIN_DEFAULT_SORT,
+): GalleryFilters {
   const ratingSet = new Set((params.get('rating') ?? '').split(','));
   const orient = params.get('orient');
   const sortParam = params.get('sort');
   const sortGiven = SORTS.includes(sortParam as GallerySort);
-  const sort = sortGiven ? (sortParam as GallerySort) : 'addedAt';
+  const sort = sortGiven ? (sortParam as GallerySort) : defaultSort;
   const orderParam = params.get('order');
   const poseClass = POSE_CLASS_RE.test(params.get('poseClass') ?? '') ? params.get('poseClass')! : undefined;
   const pwPose = POSEWEAR_POSE_ID.test(params.get('pwPose') ?? '') ? params.get('pwPose')! : undefined;
@@ -125,9 +133,10 @@ export function applyGalleryPatch(
   patch: Partial<GalleryFilters>,
   kindPref: ContentKind[] | 'all',
   writeKind: boolean,
+  defaultSort: GallerySort = BUILTIN_DEFAULT_SORT,
 ): URLSearchParams {
   const next = new URLSearchParams(prev);
-  const cur = parseGalleryParams(prev, kindPref);
+  const cur = parseGalleryParams(prev, kindPref, defaultSort);
   const merged = { ...cur, ...patch };
   // 内置画面和自定义画面只能选一个
   if (patch.theme) merged.custom = undefined;
@@ -168,8 +177,8 @@ export function applyGalleryPatch(
     next.delete('order');
     return next;
   }
-  // 选着姿势时「最近添加」也要写出来，不然读回来又成了按典型度
-  set('sort', merged.sort === 'addedAt' && !merged.poseClass && !merged.pwPose ? undefined : merged.sort);
+  // 默认排序不写进 URL；选着姿势时也要写出来，不然读回来又成了按典型度
+  set('sort', merged.sort === defaultSort && !merged.poseClass && !merged.pwPose ? undefined : merged.sort);
   // 换排序时回到该排序的默认方向；方向等于默认值时不写进 URL
   const order = patch.sort && patch.order === undefined ? defaultOrder(merged.sort) : merged.order;
   set('order', order === defaultOrder(merged.sort) ? undefined : order);
@@ -194,15 +203,19 @@ export function useGalleryParams({ ownsKind = true }: { ownsKind?: boolean } = {
   const classesOn = usePoseClassesShown();
   // 只看可靠的（本机偏好，按姿势找图时才发）
   const poseReliable = usePrefs((s) => s.poseReliableOnly);
-  const filters = useMemo(() => gatePose(parseGalleryParams(params, kindPref), poseOn, classesOn), [params, kindPref, poseOn, classesOn]);
+  const defaultSort = useOverride('images.defaultSort');
+  const filters = useMemo(
+    () => gatePose(parseGalleryParams(params, kindPref, defaultSort), poseOn, classesOn),
+    [params, kindPref, defaultSort, poseOn, classesOn],
+  );
 
   const update = useCallback(
     (patch: Partial<GalleryFilters>) => {
       // 用户换了类型就记成新偏好
       if (patch.kind !== undefined) setKindPref(patch.kind);
-      setParams((prev) => applyGalleryPatch(prev, patch, kindPref, ownsKind || patch.kind !== undefined), { replace: true });
+      setParams((prev) => applyGalleryPatch(prev, patch, kindPref, ownsKind || patch.kind !== undefined, defaultSort), { replace: true });
     },
-    [setParams, kindPref, setKindPref, ownsKind],
+    [setParams, kindPref, setKindPref, ownsKind, defaultSort],
   );
 
   // URL 里还没写类型（从侧栏点进来）：把偏好补进去，不多一条历史

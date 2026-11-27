@@ -1,32 +1,35 @@
 import { Ellipsis } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useState } from 'react';
-import { matchPath, NavLink, useLocation } from 'react-router';
+import { Link, useLocation } from 'react-router';
 import { Badge, RollingNumber, Sheet } from '@/components/ui';
 import { useCapabilities } from '@/lib/capabilities';
 import { cn } from '@/lib/cn';
 import { useRunningJobs } from '@/lib/events';
 import { useHealth, useSummary } from '@/lib/queries';
-import { useCanVisit } from '@/pages';
-import { JobRing, moreAlert, sidebarCount, tabBarItems, type NavItem } from './Sidebar';
+import { useCanVisit, useShowsEntry } from '@/pages';
+import { usePlugins } from '@/lib/plugins';
+import { activeNav, JobRing, moreAlert, sidebarCount, tabBarItems, type NavItem } from './Sidebar';
 
 /**
  * 底部标签栏（A1）：宽度 compact（手机竖屏）时代替侧栏，其余宽度不显示（CSS 的 compact: 变体）。
- * 首页、图库、角色、合集常驻，「更多」打开底部面板放其余几页；项、计数、说明、能力过滤和侧栏同一套（tabBarItems）。
+ * 按侧栏的顺序前四页常驻（默认首页、图库、角色、合集），「更多」打开底部面板放其余几页；项、计数、说明、能力过滤和侧栏同一套（tabBarItems）。
  * 底下让出手势导航条（safe-area-inset-bottom）。
  */
 export function TabBar() {
   const { data: s } = useSummary();
   const { ready } = useCapabilities();
-  const canVisit = useCanVisit();
-  const { pathname } = useLocation();
+  const showsEntry = useShowsEntry();
+  const { pathname, search } = useLocation();
   const [open, setOpen] = useState(false);
-  const items = tabBarItems(s);
-  // 和侧栏一样等 GET /api/me 回来再画，没权限的不显示
-  const visible = (list: NavItem[]) => (ready ? list.filter((item) => canVisit(item.to)) : []);
-  const tabs = visible(items.tabs);
-  const more = visible(items.more);
-  const inMore = more.some((i) => matchPath({ path: i.to, end: false }, pathname));
+  const plugins = usePlugins();
+  // 和侧栏一样等 GET /api/me 和插件回来再画；没权限、停用的不显示（先过滤再分常驻和「更多」，前四个总是能去的）
+  const items = tabBarItems(s, plugins.state.nav, showsEntry);
+  const shown = ready && plugins.ready;
+  const tabs = shown ? items.tabs : [];
+  const more = shown ? items.more : [];
+  const current = activeNav([...tabs, ...more], pathname, search);
+  const inMore = more.some((i) => i.to === current);
 
   return (
     <nav
@@ -34,16 +37,16 @@ export function TabBar() {
       className="hidden shrink-0 items-stretch border-t border-line bg-canvas px-1 pb-[env(safe-area-inset-bottom)] compact:flex"
     >
       {tabs.map((item) => (
-        <NavLink key={item.to} to={item.to} end={item.to === '/'} className="flex min-w-0 flex-1">
-          {({ isActive }) => <TabFace item={item} active={isActive} />}
-        </NavLink>
+        <Link key={item.id ?? item.to} to={item.to} aria-current={item.to === current ? 'page' : undefined} className="flex min-w-0 flex-1">
+          <TabFace item={item} active={item.to === current} />
+        </Link>
       ))}
       {more.length > 0 && (
         <button type="button" onClick={() => setOpen(true)} aria-haspopup="dialog" className="flex min-w-0 flex-1">
           <TabFace item={{ to: '', label: '更多', icon: Ellipsis, dot: moreAlert(more) }} active={inMore || open} />
         </button>
       )}
-      <MoreSheet open={open} onOpenChange={setOpen} items={more} />
+      <MoreSheet open={open} onOpenChange={setOpen} items={more} current={current} />
     </nav>
   );
 }
@@ -69,7 +72,17 @@ function TabFace({ item, active }: { item: NavItem; active: boolean }) {
 }
 
 /** 「更多」：其余几页排成三列，计数照侧栏的规则写在名字下面；后台任务的进度环、演示数据的提示也放这里 */
-function MoreSheet({ open, onOpenChange, items }: { open: boolean; onOpenChange: (v: boolean) => void; items: NavItem[] }) {
+function MoreSheet({
+  open,
+  onOpenChange,
+  items,
+  current,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  items: NavItem[];
+  current: string | null;
+}) {
   const jobs = useRunningJobs();
   const demo = useHealth().data?.dataSource === 'demo';
   const canVisit = useCanVisit();
@@ -78,20 +91,19 @@ function MoreSheet({ open, onOpenChange, items }: { open: boolean; onOpenChange:
       <div className="grid grid-cols-3 gap-2">
         {items.map((item) => {
           const Icon = item.icon;
+          const isActive = item.to === current;
           return (
-            <NavLink
-              key={item.to}
+            <Link
+              key={item.id ?? item.to}
               to={item.to}
+              aria-current={isActive ? 'page' : undefined}
               onClick={() => onOpenChange(false)}
-              className={({ isActive }) =>
-                cn(
-                  'relative flex min-h-[84px] flex-col items-center justify-center gap-1.5 rounded-[14px] px-2 py-3 ring-1 transition-colors',
-                  isActive ? 'bg-sheet ring-line-strong' : 'bg-sunken/60 ring-transparent active:bg-hover',
-                )
-              }
+              className={cn(
+                'relative flex min-h-[84px] flex-col items-center justify-center gap-1.5 rounded-[14px] px-2 py-3 ring-1 transition-colors',
+                isActive ? 'bg-sheet ring-line-strong' : 'bg-sunken/60 ring-transparent active:bg-hover',
+              )}
             >
-              {({ isActive }) => (
-                <>
+              <>
                   <span className="relative">
                     <Icon className={cn('size-5', isActive ? 'text-shu' : 'text-fg-muted')} strokeWidth={isActive ? 2.2 : 1.8} />
                     {item.dot && <span className="absolute -top-0.5 -right-1 size-2 rounded-full bg-shu ring-2 ring-raised" />}
@@ -102,8 +114,7 @@ function MoreSheet({ open, onOpenChange, items }: { open: boolean; onOpenChange:
                   )}
                   {item.hint && <span className="sr-only">{item.hint}</span>}
                 </>
-              )}
-            </NavLink>
+            </Link>
           );
         })}
       </div>

@@ -1,3 +1,4 @@
+import { useCanVisit } from '@/pages';
 import {
   AUTO_COLLAPSE_MIN,
   collectionTitle,
@@ -81,26 +82,41 @@ export function CollapseGroupsMenu({ collapsed, className }: { collapsed?: boole
  */
 export function GroupBadge({ image, rated, blurContext }: { image: ImageItem; rated?: boolean; blurContext?: BlurContext }) {
   const prefs = useBlurPrefs();
+  const canVisit = useCanVisit();
   const g = image.collectionGroup;
   if (!g) return null;
   const blurred = shouldBlur({ rating: image.rating, kind: image.kind, rated }, prefs, blurContext);
   const partial = g.count < g.total;
   const title = collectionTitle(g);
+  const to = `/collections/${g.id}`;
+  const count = (
+    <>
+      <Layers className="size-3" aria-hidden />
+      {partial ? `${g.count}/${g.total}` : g.total}
+    </>
+  );
+  const look = cn(
+    'absolute top-1.5 z-10 flex h-5 items-center gap-1 rounded-full bg-black/40 pr-2 pl-1.5 text-[11px] font-semibold text-white/95 tabular',
+    blurred ? 'right-8' : 'right-1.5',
+  );
+  const tip = partial ? `《${title}》：这里有 ${g.count} 张，整组 ${g.total} 张` : `《${title}》 · ${g.total} 张`;
+  // 「合集」停用了（或这台设备去不了）：张数照样标，不链接到合集页（docs/plugins.md 9.4）
+  if (!canVisit(to))
+    return (
+      <span title={tip} className={look}>
+        {count}
+      </span>
+    );
   return (
     <Link
-      to={`/collections/${g.id}`}
+      to={to}
       state={partial ? { collectionMembers: g.memberIds } : undefined}
       onClick={(e) => e.stopPropagation()}
       aria-label={`组图《${title}》，${partial ? `这里有 ${g.count} 张，整组 ${g.total} 张` : `${g.total} 张`}，打开组图`}
-      title={partial ? `《${title}》：这里有 ${g.count} 张，整组 ${g.total} 张` : `《${title}》 · ${g.total} 张`}
-      className={cn(
-        'absolute top-1.5 z-10 flex h-5 items-center gap-1 rounded-full bg-black/40 pr-2 pl-1.5 text-[11px] font-semibold text-white/95 tabular',
-        'transition-colors duration-150 hover:bg-black/60',
-        blurred ? 'right-8' : 'right-1.5',
-      )}
+      title={tip}
+      className={cn(look, 'transition-colors duration-150 hover:bg-black/60')}
     >
-      <Layers className="size-3" aria-hidden />
-      {partial ? `${g.count}/${g.total}` : g.total}
+      {count}
     </Link>
   );
 }

@@ -17,7 +17,7 @@
  * 执行函数只调用领域模块和读模型（引擎 SqliteDataSource 是装配它们的地方）。
  */
 import { SCOPES, type CommandEvent, type CommandInfo, type DomainChange, type ID, type Scope, type UndoKind } from '@emaki/shared';
-import type { z } from 'zod';
+import { z } from 'zod';
 import type { SqliteDataSource } from '../datasource/sqlite/SqliteDataSource.ts';
 import type { UndoRecorder } from '../datasource/sqlite/undo.ts';
 import { BadRequestError, ConflictError, HttpError } from '../http/errors.ts';
@@ -46,6 +46,11 @@ interface Base<I> {
   readonly http?: readonly HttpBinding[];
   /** MCP 工具：补充给助手的说明；destructive 标出会删改用户东西的（MCP 的 destructiveHint） */
   readonly mcp?: { readonly description?: string; readonly destructive?: boolean };
+  /**
+   * 约定的版本（docs/plugins.md 第 7 节）：返回的格式、做的事变了但输入没变时加一。它是内部点 command:/query: 的约定的一部分，
+   * 变了改这个命令的插件会自动停用（core/pointContracts.ts）
+   */
+  readonly contractVersion?: number;
 }
 
 export interface QueryDef<I = any, O = any> extends Base<I> {
@@ -131,8 +136,25 @@ export class Registry {
     for (const d of defs) {
       if (this.defs.has(d.name)) throw new Error(`命令 / 查询 ${d.name} 定义了两次`);
       this.defs.set(d.name, d);
+      // 内置的命令和查询是内部点（command:<名字>、query:<名字>，docs/plugins.md 第 7 节）：指纹看执行函数和输入的格式
+      engine.ctx.points?.define(
+        `${d.kind}:${d.name}`,
+        {
+          kind: d.kind,
+          label: `${d.kind === 'query' ? '查询' : '命令'}「${d.summary}」`,
+          version: d.contractVersion,
+          signature: () =>
+            JSON.stringify([d.scope, d.kind === 'command' && d.undoable, z.toJSONSchema(d.input, { io: 'input', unrepresentable: 'any' })]),
+        },
+        d.kind === 'query' ? d.run : (d.tx ?? d.run)!,
+      );
     }
     this.audit = new Audit(engine.ctx);
+  }
+
+  /** 加上第 3 层插件的补丁以后的执行函数（没有补丁就是原来的；插件自己的命令不是内部点，名字对不上，照原样） */
+  private patched<F extends (...a: any[]) => any>(def: Def, fn: F): F {
+    return this.engine.ctx.points ? this.engine.ctx.points.wrap(`${def.kind}:${def.name}`, fn) : fn;
   }
 
   list(): Def[] {
@@ -146,6 +168,20 @@ export class Registry {
   }
   get(name: string): Def | undefined {
     return this.defs.get(name);
+  }
+
+  /**
+   * 运行时登记一个命令（插件的命令，docs/plugins.md 第 6 节：启用时登记、停用时撤掉）。和内置的撞名报错；
+   * 登记以后通用入口（POST /api/commands/:name）、插件视图和 AI 助手的工具（按名字现查）都能调到
+   */
+  define(def: Def): void {
+    if (this.defs.has(def.name)) throw new Error(`命令 / 查询 ${def.name} 已经有了`);
+    this.defs.set(def.name, def);
+  }
+
+  /** 撤掉 define 登记的命令（只认同一个定义：撤不掉内置的） */
+  undefine(def: Def): void {
+    if (this.defs.get(def.name) === def) this.defs.delete(def.name);
   }
 
   /** GET /api/commands：注册表的清单（下一阶段的插件、AI 生成的页面按它找能用的接口和权限范围） */
@@ -164,8 +200,9 @@ export class Registry {
   private require<K extends Def['kind']>(name: string, kind: K): Extract<Def, { kind: K }> {
     const def = this.defs.get(name);
     if (!def || def.kind !== kind) throw new HttpError(404, 'not_found', `没有这个${kind === 'command' ? '命令' : '查询'}：${name}`);
-    const grant = currentCall()?.grant;
-    if (grant && !grant.has(def.scope)) throw new HttpError(403, 'forbidden', `这台设备没有「${SCOPES[def.scope]}」的权限`);
+    const call = currentCall();
+    if (call?.grant && !call.grant.has(def.scope))
+      throw new HttpError(403, 'forbidden', `${call.actor.startsWith('plugin:') ? '这个插件' : '这台设备'}没有「${SCOPES[def.scope]}」的权限`);
     return def as Extract<Def, { kind: K }>;
   }
 
@@ -181,7 +218,7 @@ export class Registry {
     const def = this.require(name, 'query');
     const input = parse(def.input, raw);
     const actor = opts.actor ?? currentActor();
-    return (await runCall({ actor }, () => def.run(this.engine, input))) as T;
+    return (await runCall({ actor }, () => this.patched(def, def.run).call(def, this.engine, input))) as T;
   }
 
   /** 执行一个写命令 */
@@ -271,12 +308,12 @@ export class Registry {
     try {
       result = await runCall(running, async () => {
         const first = steps[0]!;
-        if (steps.length === 1 && first.def.run) return first.def.run(e, first.input);
+        if (steps.length === 1 && first.def.run) return this.patched(first.def, first.def.run).call(first.def, e, first.input);
         // 同步命令：命令层开事务和撤销记录；几个命令共用一份（一个令牌）
         return e.ctx.mutate((u) => {
           let out: { message: string } = { message: '' };
           for (const s of steps) {
-            const r = s.def.tx!(e, s.input, u);
+            const r = this.patched(s.def, s.def.tx!).call(s.def, e, s.input, u);
             out = r.message ? r : { ...r, message: out.message };
           }
           return out;

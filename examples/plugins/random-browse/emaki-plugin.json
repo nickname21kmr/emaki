@@ -1,0 +1,11 @@
+{
+  "id": "example.random-browse",
+  "name": "随便看看",
+  "version": "0.2.0",
+  "description": "样例插件：侧栏加一个「随便看看」，点进去是按随机排的图库。只有配置，不跑代码，不要任何权限。",
+  "author": "Emaki",
+  "engines": { "emaki": ">=0.1.17" },
+  "contributes": {
+    "nav.item@1": [{ "id": "random", "label": "随便看看", "to": "/gallery?sort=random", "icon": "compass", "section": "main" }]
+  }
+}

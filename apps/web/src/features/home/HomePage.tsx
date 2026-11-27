@@ -59,7 +59,7 @@ export function HomePage() {
     <>
       {!phase && <JobBanner />}
       <PageHeader
-        title="首页"
+        title="首页" nav="home"
         subtitle={s ? <Subtitle summary={s} phase={phase} /> : <span className="skeleton inline-block h-3 w-56 rounded-sm align-middle" />}
       />
       <PageBody className="pt-2">{body}</PageBody>

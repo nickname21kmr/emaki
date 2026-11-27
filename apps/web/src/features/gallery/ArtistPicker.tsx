@@ -9,6 +9,7 @@ import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import { api } from '@/lib/api';
 import { useArtists, useMutate } from '@/lib/queries';
+import { useCountUnit } from '@/lib/countUnit';
 
 /**
  * 画师选择器（带搜索的弹出框）：从认出过的画师里挑，名字、标签、别名、推特都能搜；
@@ -104,6 +105,7 @@ export function ArtistPickerPanel({
   /** false = 输入之前不默认选中第一位（合并画师：打开就按回车不会误合并） */
   autoHighlight?: boolean;
 }) {
+  const unit = useCountUnit();
   const { data, isPending } = useArtists();
   const [text, setText] = useState('');
   const q = searchKey(text);
@@ -175,7 +177,7 @@ export function ArtistPickerPanel({
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[13.5px] leading-tight font-medium">{a.name}</span>
                   <span className="mt-0.5 block truncate text-[11.5px] text-fg-subtle tabular">
-                    {formatCount(a.imageCount)} 张
+                    {formatCount(a.imageCount)} {unit}
                     {a.twitter ? ` · @${a.twitter}` : a.name !== a.tag.replace(/_/g, ' ') ? ` · ${a.tag}` : ''}
                   </span>
                 </span>

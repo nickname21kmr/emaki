@@ -21,6 +21,8 @@ export function ContextLine({ conv, onSwitchModel }: ContextLineProps) {
   const ids = context.imageIds;
   const n = ids.length;
   const parts = viewedId ? ['看图器', '当前这张'] : resultSelection ? [resultSelection.title, `已选 ${n} 张`] : [contextPageLabel(context.page), selectionLabel(n)];
+  // 插件页面报了「现在显示的是什么」（docs/plugins.md 12.8）：也会一起发
+  if (context.view && !viewedId && !resultSelection) parts.push('页面上显示的内容');
   const current = conv.models.data?.find(m => m.id === conv.model);
   const visionWarn = current?.vision === false && n > 0;
   const running = conv.session?.status === 'running' || conv.session?.status === 'waiting';

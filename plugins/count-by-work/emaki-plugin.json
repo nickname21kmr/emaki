@@ -1,0 +1,24 @@
+{
+  "id": "count-by-work",
+  "name": "一个作品算一张",
+  "version": "1.1.0",
+  "description": "按张数排的地方，同一个 Pixiv 投稿的几张图（组图）只算一件：角色、作品、画师按「收了几件」排，张数后面写「件」",
+  "author": "Emaki",
+  "permissions": {
+    "unsafe": true
+  },
+  "contributes": {
+    "patch@1": [
+      {
+        "point": "term:count.unit",
+        "why": "同一个投稿的组图算一件；本子、画集照旧一页算一件"
+      },
+      {
+        "point": "fn:count.unit",
+        "why": "数改成按投稿算以后，角色、作品、画师的张数后面写「件」，不写「张」"
+      }
+    ]
+  },
+  "internal": "server/patch.mjs",
+  "web": "web/patch.js"
+}

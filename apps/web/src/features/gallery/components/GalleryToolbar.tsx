@@ -1,5 +1,5 @@
 import { CollapseGroupsMenu } from '@/components/media/CollectionControls';
-import { BROWSE_THEMES, type CustomTheme, type ListImagesQuery } from '@emaki/shared';
+import { BROWSE_THEMES, type CustomTheme, type ListImagesQuery, SORT_LABELS } from '@emaki/shared';
 import { useQuery } from '@tanstack/react-query';
 import { THEME_META } from '@/features/unrecognized/themes';
 import {
@@ -52,13 +52,7 @@ import { CustomThemeDialog } from './CustomThemeDialog';
 import { GallerySearch } from './GallerySearch';
 
 /** 合集页序 'page' 不出现在图库的排序菜单里（RV-C-7） */
-export const SORT_LABEL: Record<GallerySort, string> = {
-  addedAt: '最近添加',
-  modifiedAt: '修改时间',
-  fileName: '文件名',
-  bytes: '体积',
-  random: '随机',
-};
+export const SORT_LABEL: Record<GallerySort, string> = SORT_LABELS;
 
 const SORT_ICON: Record<GallerySort, ReactNode> = {
   addedAt: <CalendarPlus />,

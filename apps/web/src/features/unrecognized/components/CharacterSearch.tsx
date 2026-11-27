@@ -8,6 +8,7 @@ import { formatCount } from '@/lib/format';
 import { useSearch } from '@/lib/queries';
 import { useDebounced } from '../hooks';
 import type { AssignTarget } from '../types';
+import { useCountUnit } from '@/lib/countUnit';
 
 /**
  * 「搜索其他角色」：按 / 聚焦，↑↓ 选择，回车归入。
@@ -30,6 +31,7 @@ export function CharacterSearch({
   createdCharacter?: Character | null;
   placeholder?: string;
 }) {
+  const unit = useCountUnit();
   const [q, setQ] = useState('');
   const [createName, setCreateName] = useState<string | null>(null);
   const createCharacter = onCreate ?? setCreateName;
@@ -176,7 +178,7 @@ export function CharacterSearch({
                 <span className="block truncate text-[13px] font-medium">{t.name}{t.matchedName && `（${t.matchedName}）`}</span>
                 <span className="block truncate text-[11.5px] text-fg-muted tabular">
                   {t.workName ?? '未知作品'}
-                  {t.imageCount !== undefined && ` · ${formatCount(t.imageCount)} 张`}
+                  {t.imageCount !== undefined && ` · ${formatCount(t.imageCount)} ${unit}`}
                   {t.candidateTag && ' · 新角色'}
                 </span>
               </span>

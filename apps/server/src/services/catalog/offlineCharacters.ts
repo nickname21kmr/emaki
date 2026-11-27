@@ -57,9 +57,15 @@ export class OfflineCharacterIndex {
     return row && { tag: row.tag, works: JSON.parse(row.works) as string[], names: JSON.parse(row.names) as string[] };
   }
 
+  /** null means the exact name is too common to establish a unique identity. */
+  exactCandidates(name: string): string[] | null {
+    const tags = this.exact.all(identityKey(name)) as string[];
+    return tags.length <= 50 ? tags : null;
+  }
+
   candidates(name: string, exact = true): string[] {
-    const tags = (exact ? this.exact.all(identityKey(name)) : this.loose.all(searchKey(name))) as string[];
-    // A heavily reused name carries no identity evidence by itself.
+    if (exact) return this.exactCandidates(name) ?? [];
+    const tags = this.loose.all(searchKey(name)) as string[];
     return tags.length <= 50 ? tags : [];
   }
 

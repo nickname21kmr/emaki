@@ -238,7 +238,7 @@ export class ChangeLog {
     const orig = this.db.prepare("SELECT 1 FROM images WHERE id = ? AND original_at = ? AND original_decision = 'auto'");
     const corrected = this.db.prepare(`SELECT 1 FROM images i JOIN pixiv_character_checks p ON p.image_id=i.id
       WHERE i.id=? AND i.original_at IS NULL AND i.source_site='pixiv' AND i.source_post_id=p.post_id
-        AND i.modified_at=p.modified_at AND p.checked_at=?
+        AND i.sha256=p.sha256 AND p.checked_at=?
         AND NOT EXISTS (SELECT 1 FROM image_characters c WHERE c.image_id=i.id AND c.decision='manual')`);
     return {
       links: p.links.filter(([img, ch, at]) => link.get(img, ch, at)),

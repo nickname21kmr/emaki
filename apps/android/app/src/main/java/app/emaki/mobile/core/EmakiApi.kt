@@ -91,6 +91,21 @@ class EmakiApi(
         }
     }
 
+    /**
+     * App 里的站内浏览（docs/plugins.md 第 6 节 site@1）：启用着的插件给外部网站用的脚本（原样的 JSON），
+     * 以及页面里的调用转给电脑（插件自己的命令，结果是 MCP 的 CallToolResult 原样的 JSON）
+     */
+    fun sites(token: String): SiteApi = object : SiteApi {
+        private fun auth(r: Request): Request = r.newBuilder().header("Authorization", "Bearer $token").build()
+
+        override suspend fun list(): String = call(auth(get("/api/plugins/sites")))
+
+        override suspend fun call(pluginId: String, body: String): String =
+            call(auth(post("/api/plugins/${encode(pluginId)}/call", body)), slow)
+
+        private val slow: OkHttpClient = client.newBuilder().readTimeout(90, TimeUnit.SECONDS).build()
+    }
+
     private fun get(path: String): Request =
         Request.Builder().url(address.url(path)).header("Accept", "application/json").get().build()
 
@@ -123,6 +138,12 @@ class EmakiApi(
                 .build()
         }
     }
+}
+
+/** 站内浏览要的两个请求（EmakiApi.sites） */
+interface SiteApi {
+    suspend fun list(): String
+    suspend fun call(pluginId: String, body: String): String
 }
 
 /** OkHttp 的 Call 变成可取消的挂起函数：协程取消时请求也取消（长轮询中途点「取消」） */

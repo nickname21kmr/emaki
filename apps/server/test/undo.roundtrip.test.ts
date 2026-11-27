@@ -25,6 +25,8 @@ interface Op {
   /** 在拍快照之前做的准备（例如先建一个合集再改它） */
   setup?: () => Promise<unknown>;
   run: () => Promise<MutationResult>;
+  /** 用到 Windows 的盘符路径（D:/…）：Linux 上 normalizeRootPath 不认，只在 Windows 上跑 */
+  windows?: true;
 }
 
 /** 建一个「角色」文件夹的画集（i1 所在文件夹），返回合集 id */
@@ -116,7 +118,7 @@ const OPS: Op[] = [
   { name: '标记不是重复', run: () => ds.ignoreDuplicate(id('duplicate', 'd1')) },
 
   // ---------------------------------------------------------------- 排除（T17）
-  { name: '新建排除：文件夹', run: () => ds.createExclusion({ kind: 'folder', target: 'D:/Pics/角色' }) },
+  { name: '新建排除：文件夹', run: () => ds.createExclusion({ kind: 'folder', target: 'D:/Pics/角色' }), windows: true },
   { name: '新建排除：标签', run: () => ds.createExclusion({ kind: 'tag', target: 'thighhighs' }) },
   { name: '新建排除：角色', run: () => ds.createExclusion({ kind: 'character', target: id('character', 'c2') }) },
   { name: '新建排除：单图', run: () => ds.createExclusion({ kind: 'image', target: id('image', 'i9') }) },
@@ -172,7 +174,7 @@ const OPS: Op[] = [
 ];
 
 describe('执行 → 撤销 → dumpCore 完全一致', () => {
-  it.each(OPS.map((op) => [op.name, op] as const))('%s', async (_name, op) => {
+  for (const op of OPS) it.runIf(!op.windows || process.platform === 'win32')(op.name, async () => {
     await op.setup?.();
     const before = dumpCore(ds.ctx.db);
     const r = await op.run();

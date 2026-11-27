@@ -97,7 +97,18 @@ export class Propagation {
     for (const r of rs) {
       if (this.reactions.some((x) => x.name === r.name)) throw new Error(`反应 ${r.name} 注册了两次`);
       this.reactions.push(r);
+      // 反应是内部点 reaction:<名字>（docs/plugins.md 第 7 节）：指纹看 run 和订阅了哪些变化、在哪个阶段
+      this.ctx.points?.define(
+        `reaction:${r.name}`,
+        { kind: 'reaction', label: `对变化的反应「${r.name}」`, signature: () => JSON.stringify([r.phase, r.on, r.emits ?? [], !!r.always]) },
+        r.run,
+      );
     }
+  }
+
+  /** 加上第 3 层插件的补丁以后的 run（没有补丁就是原来的） */
+  private runOf(r: Reaction): Reaction['run'] {
+    return this.ctx.points ? this.ctx.points.wrap(`reaction:${r.name}`, r.run) : r.run;
   }
 
   /** 已注册的反应（测试、文档用） */
@@ -208,7 +219,7 @@ export class Propagation {
         if (!mine.length) continue;
         ran = true;
         const t0 = performance.now();
-        r.run(this.input(frame, new ChangeSet(mine), r));
+        this.runOf(r).call(r, this.input(frame, new ChangeSet(mine), r));
         if (process.env.EMAKI_PROFILE_REACTIONS) console.log(`[反应] ${r.name} ${(performance.now() - t0).toFixed(1)} ms`);
       }
       if (!ran) return;
@@ -228,7 +239,7 @@ export class Propagation {
         if (!mine.size && !r.always) continue;
         try {
           const t0 = performance.now();
-          const out = r.run(this.input(frame, mine, r));
+          const out = this.runOf(r).call(r, this.input(frame, mine, r));
           if (process.env.EMAKI_PROFILE_REACTIONS) console.log(`[反应] ${r.name} ${(performance.now() - t0).toFixed(1)} ms`);
           if (out instanceof Promise) this.track(out, r.name);
         } catch (err) {

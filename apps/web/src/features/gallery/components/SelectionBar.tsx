@@ -1,4 +1,4 @@
-import { CONTENT_KINDS, type BulkImageAction, type ID, type ImageItem } from '@emaki/shared';
+import { CONTENT_KINDS, type BulkImageAction, type ContentKind, type ID, type ImageItem, type Rating } from '@emaki/shared';
 import { Ban, ChevronDown, CircleMinus, Ellipsis, FolderInput, Heart, Layers, Palette, Shapes, ShieldHalf, Trash2, UserRoundPlus, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useSonner } from 'sonner';
@@ -124,6 +124,35 @@ export function SelectionBar({
   const allLoadedSelected = images.length > 0 && images.every((img) => selectionIds(img).every((id) => ids.has(id)));
   const selectAll = () => setMany(images.flatMap(selectionIds));
 
+  /**
+   * 操作表（docs/plugins.md 12.4 的「还没走登记的」）：每个操作只在这里写一次——做什么、叫什么、图标、快捷键。
+   * 宽时胶囊里的按钮、窄时「更多」里的菜单项、快捷键都从这里取，不再各写一遍。
+   * opens：打开的是选择器、对话框（从「更多」里点的，等菜单关掉、不还焦点再打开，免得被焦点抢走关掉）
+   */
+  const ops = {
+    assign: { label: '归到角色…', icon: <UserRoundPlus />, run: () => setCharOpen(true), opens: true },
+    artist: { label: '画师…', icon: <Palette />, run: () => setArtistOpen(true), opens: true },
+    removeArtist: { label: '移出画师', icon: <CircleMinus />, run: () => artist && run({ type: 'artist', mode: 'remove', artists: artist.tags }) },
+    favorite: {
+      label: allFavorite ? '取消收藏' : '收藏',
+      icon: <Heart className={cn(allFavorite && 'fill-current')} />,
+      shortcut: 'F',
+      run: () => run({ type: 'favorite', value: !allFavorite }),
+    },
+    move: { label: '移动…', icon: <FolderInput />, run: () => setMoving(true) },
+    group: { label: '组图…', icon: <Layers />, shortcut: 'G', run: () => setGrouping(true), opens: true },
+    exclude: { label: '排除', icon: <Ban />, shortcut: 'E', run: () => run({ type: 'exclude' }) },
+    trash: { label: '回收站', icon: <Trash2 />, run: () => run({ type: 'trash' }), danger: true },
+  } satisfies Record<string, BarOp>;
+  const setRating = (value: Rating) => run({ type: 'rating', value });
+  const setKind = (value: ContentKind | 'auto') => run({ type: 'kind', value });
+  /** 「更多」里的一项 */
+  const menuItem = (op: BarOp) => (
+    <MenuItem icon={op.icon} shortcut={op.shortcut} danger={op.danger} onSelect={() => (op.opens ? void (afterMenu.current = op.run) : op.run())}>
+      {op.label}
+    </MenuItem>
+  );
+
   useHotkey(
     'esc',
     (e) => {
@@ -148,10 +177,10 @@ export function SelectionBar({
   );
   // 快捷键也按这台设备的能力（GALLERY_SELECTION_NEEDS）
   const keys = active && !pickerOpen;
-  useHotkey('e', (e) => !fromOverlay(e) && run({ type: 'exclude' }), { enabled: keys && !kindOpen && allow.exclude });
+  useHotkey('e', (e) => !fromOverlay(e) && ops.exclude.run(), { enabled: keys && !kindOpen && allow.exclude });
   useHotkey('c', (e) => !fromOverlay(e) && setKindOpen(true), { enabled: keys && allow.kind });
-  useHotkey('f', (e) => !fromOverlay(e) && run({ type: 'favorite', value: !allFavorite }), { enabled: keys && allow.favorite });
-  useHotkey('g', (e) => !fromOverlay(e) && setGrouping(true), { enabled: keys && !kindOpen && allow.group });
+  useHotkey('f', (e) => !fromOverlay(e) && ops.favorite.run(), { enabled: keys && allow.favorite });
+  useHotkey('g', (e) => !fromOverlay(e) && ops.group.run(), { enabled: keys && !kindOpen && allow.group });
 
   const pendingType = bulk.isPending ? bulk.variables?.action.type : undefined;
 
@@ -217,8 +246,8 @@ export function SelectionBar({
               onCandidate={(danbooruTag) => run({ type: 'assignTag', danbooruTag })}
             >
               {/* 露出的纸窄于 190 时也收进「更多」，sr-only 留着当锚点 */}
-              <BarButton icon={<UserRoundPlus />} pending={pendingType === 'assign' || pendingType === 'assignTag'} aria-haspopup="dialog" className="@max-[190px]/bar:sr-only">
-                归到角色…
+              <BarButton icon={ops.assign.icon} pending={pendingType === 'assign' || pendingType === 'assignTag'} aria-haspopup="dialog" className="@max-[190px]/bar:sr-only">
+                {ops.assign.label}
               </BarButton>
             </CharacterPicker>}
 
@@ -236,27 +265,27 @@ export function SelectionBar({
               ]}
             >
               {/* 很窄时收进「更多」；sr-only 留着当选择器的锚点 */}
-              <BarButton icon={<Palette />} pending={pendingType === 'artist' || pendingType === 'artist-auto'} aria-haspopup="dialog" className="@max-[400px]/bar:sr-only">
-                画师…
+              <BarButton icon={ops.artist.icon} pending={pendingType === 'artist' || pendingType === 'artist-auto'} aria-haspopup="dialog" className="@max-[400px]/bar:sr-only">
+                {ops.artist.label}
               </BarButton>
             </ArtistPicker>}
 
             {artist && allow.artist && (
               <Tooltip content={`这几张不是「${artist.name}」画的：去掉这位画师，以后识别也不再动它们`} side="top">
-                <BarButton icon={<CircleMinus />} onClick={() => run({ type: 'artist', mode: 'remove', artists: artist.tags })} className="@max-[400px]/bar:hidden">
-                  移出画师
+                <BarButton icon={ops.removeArtist.icon} onClick={ops.removeArtist.run} className="@max-[400px]/bar:hidden">
+                  {ops.removeArtist.label}
                 </BarButton>
               </Tooltip>
             )}
 
-            {allow.favorite && <Tooltip content={allFavorite ? '取消收藏' : '收藏'} shortcut="F" side="top">
+            {allow.favorite && <Tooltip content={ops.favorite.label} shortcut={ops.favorite.shortcut} side="top">
               <BarButton
-                icon={<Heart className={cn(allFavorite && 'fill-current')} />}
+                icon={ops.favorite.icon}
                 pending={pendingType === 'favorite'}
-                onClick={() => run({ type: 'favorite', value: !allFavorite })}
+                onClick={ops.favorite.run}
                 className="@max-[400px]/bar:hidden"
               >
-                {allFavorite ? '取消收藏' : '收藏'}
+                {ops.favorite.label}
               </BarButton>
             </Tooltip>}
 
@@ -271,7 +300,7 @@ export function SelectionBar({
             >
               <MenuLabel>把 {formatCount(count)} 张设为</MenuLabel>
               {RATINGS.map((r, i) => (
-                <MenuItem key={r} icon={<RatingPips level={i} />} onSelect={() => run({ type: 'rating', value: r })}>
+                <MenuItem key={r} icon={<RatingPips level={i} />} onSelect={() => setRating(r)}>
                   {RATING_LABEL[r]}
                 </MenuItem>
               ))}
@@ -281,7 +310,7 @@ export function SelectionBar({
               label={`把 ${formatCount(count)} 张归入`}
               open={kindOpen}
               onOpenChange={setKindOpen}
-              onSelect={(value) => run({ type: 'kind', value })}
+              onSelect={setKind}
               trigger={
                 // 窄时收进「更多」；用 sr-only 而不是 hidden，按 C 打开时菜单还能贴着胶囊弹出
                 <BarButton icon={<Shapes />} pending={pendingType === 'kind'} trailing={<ChevronDown />} className="@max-[600px]/bar:sr-only">
@@ -293,42 +322,42 @@ export function SelectionBar({
             {/* 露出的纸窄于 600（助手覆盖在纸上、半屏窗口）时，分级、归入和最后三个收进「更多」，不在胶囊里藏着滚 */}
             {allow.move && (
               <Tooltip content="移到图库里的某个文件夹，磁盘上的文件会真的移动" side="top">
-                <BarButton icon={<FolderInput />} onClick={() => setMoving(true)} className="@max-[600px]/bar:hidden">
-                  移动…
+                <BarButton icon={ops.move.icon} onClick={ops.move.run} className="@max-[600px]/bar:hidden">
+                  {ops.move.label}
                 </BarButton>
               </Tooltip>
             )}
 
             {allow.group && (
-              <Tooltip content="收进一个组图：只改整理信息，不移动文件" shortcut="G" side="top">
-                <BarButton icon={<Layers />} aria-haspopup="dialog" onClick={() => setGrouping(true)} className="@max-[600px]/bar:hidden">
-                  组图…
+              <Tooltip content="收进一个组图：只改整理信息，不移动文件" shortcut={ops.group.shortcut} side="top">
+                <BarButton icon={ops.group.icon} aria-haspopup="dialog" onClick={ops.group.run} className="@max-[600px]/bar:hidden">
+                  {ops.group.label}
                 </BarButton>
               </Tooltip>
             )}
             {(allow.exclude || allow.trash) && <span className="mx-1.5 h-5 w-px bg-fg-inverse/15 @max-[600px]/bar:hidden" />}
 
             {allow.exclude && (
-              <Tooltip content="排除：不再出现在图库和统计里，文件不会被删除" shortcut="E" side="top">
+              <Tooltip content="排除：不再出现在图库和统计里，文件不会被删除" shortcut={ops.exclude.shortcut} side="top">
                 <BarButton
-                  icon={<Ban />}
+                  icon={ops.exclude.icon}
                   pending={pendingType === 'exclude'}
-                  onClick={() => run({ type: 'exclude' })}
+                  onClick={ops.exclude.run}
                   className="@max-[600px]/bar:hidden"
                 >
-                  排除
+                  {ops.exclude.label}
                 </BarButton>
               </Tooltip>
             )}
 
             {allow.trash && <Tooltip content={TRASH_HINT} side="top">
               <BarButton
-                icon={<Trash2 />}
+                icon={ops.trash.icon}
                 pending={pendingType === 'trash'}
-                onClick={() => run({ type: 'trash' })}
+                onClick={ops.trash.run}
                 className="hover:bg-danger hover:text-white @max-[600px]/bar:hidden"
               >
-                回收站
+                {ops.trash.label}
               </BarButton>
             </Tooltip>}
 
@@ -356,37 +385,17 @@ export function SelectionBar({
               {narrow && (
                 <>
                   {!allLoadedSelected && <MenuItem shortcut={`${modKeyLabel} A`} onSelect={selectAll}>全选已加载的 {formatCount(images.flatMap(selectionIds).length)} 张</MenuItem>}
-                  {tiny && allow.assign && (
-                    <MenuItem icon={<UserRoundPlus />} onSelect={() => void (afterMenu.current = () => setCharOpen(true))}>
-                      归到角色…
-                    </MenuItem>
-                  )}
-                  {allow.artist && (
-                    <MenuItem icon={<Palette />} onSelect={() => void (afterMenu.current = () => setArtistOpen(true))}>
-                      画师…
-                    </MenuItem>
-                  )}
-                  {artist && allow.artist && (
-                    <MenuItem icon={<CircleMinus />} onSelect={() => run({ type: 'artist', mode: 'remove', artists: artist.tags })}>
-                      移出画师
-                    </MenuItem>
-                  )}
-                  {allow.favorite && (
-                    <MenuItem
-                      icon={<Heart className={cn(allFavorite && 'fill-current')} />}
-                      shortcut="F"
-                      onSelect={() => run({ type: 'favorite', value: !allFavorite })}
-                    >
-                      {allFavorite ? '取消收藏' : '收藏'}
-                    </MenuItem>
-                  )}
+                  {tiny && allow.assign && menuItem(ops.assign)}
+                  {allow.artist && menuItem(ops.artist)}
+                  {artist && allow.artist && menuItem(ops.removeArtist)}
+                  {allow.favorite && menuItem(ops.favorite)}
                   <MenuSeparator />
                 </>
               )}
               {allow.rating && <MenuSub icon={<ShieldHalf />} label="分级">
                 <MenuLabel>把 {formatCount(count)} 张设为</MenuLabel>
                 {RATINGS.map((r, i) => (
-                  <MenuItem key={r} icon={<RatingPips level={i} />} onSelect={() => run({ type: 'rating', value: r })}>
+                  <MenuItem key={r} icon={<RatingPips level={i} />} onSelect={() => setRating(r)}>
                     {RATING_LABEL[r]}
                   </MenuItem>
                 ))}
@@ -396,23 +405,19 @@ export function SelectionBar({
                 {CONTENT_KINDS.map((k) => {
                   const Icon = KIND_ICON[k];
                   return (
-                    <MenuItem key={k} icon={<Icon />} onSelect={() => run({ type: 'kind', value: k })}>
+                    <MenuItem key={k} icon={<Icon />} onSelect={() => setKind(k)}>
                       {KIND_LABEL[k]}
                     </MenuItem>
                   );
                 })}
                 <MenuSeparator />
-                <MenuItem onSelect={() => run({ type: 'kind', value: 'auto' })}>恢复自动判断</MenuItem>
+                <MenuItem onSelect={() => setKind('auto')}>恢复自动判断</MenuItem>
               </MenuSub>}
               <MenuSeparator />
-              {allow.move && <MenuItem icon={<FolderInput />} onSelect={() => setMoving(true)}>移动…</MenuItem>}
-              {allow.group && (
-                <MenuItem icon={<Layers />} shortcut="G" onSelect={() => void (afterMenu.current = () => setGrouping(true))}>
-                  组图…
-                </MenuItem>
-              )}
-              {allow.exclude && <MenuItem icon={<Ban />} shortcut="E" onSelect={() => run({ type: 'exclude' })}>排除</MenuItem>}
-              {allow.trash && <MenuItem icon={<Trash2 />} danger onSelect={() => run({ type: 'trash' })}>回收站</MenuItem>}
+              {allow.move && menuItem(ops.move)}
+              {allow.group && menuItem(ops.group)}
+              {allow.exclude && menuItem(ops.exclude)}
+              {allow.trash && menuItem(ops.trash)}
             </Menu>
             </>
             )}
@@ -440,6 +445,17 @@ export function RatingPips({ level, className }: { level: number; className?: st
       ))}
     </span>
   );
+}
+
+/** 操作表里的一个操作（见 SelectionBar 里的 ops） */
+interface BarOp {
+  label: string;
+  icon: ReactNode;
+  shortcut?: string;
+  run: () => void;
+  /** 打开选择器、对话框：从「更多」里点的，等菜单关掉再打开 */
+  opens?: boolean;
+  danger?: boolean;
 }
 
 interface BarButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {

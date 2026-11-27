@@ -50,6 +50,8 @@ export const RATING_LABEL: Record<Rating, string> = {
 
 /** 后台任务名（设置页的任务列表、首页横幅、命令面板、服务端的任务消息）：取自任务种类的注册表（jobs.ts） */
 export const JOB_LABEL = Object.fromEntries(JOB_KIND_LIST.map((k) => [k, JOB_KINDS[k].label])) as Record<JobKind, string>;
+/** 一个任务显示的名字：插件的任务用插件登记的名字，其余按种类 */
+export const jobTitle = (job: { kind: JobKind; title?: string }): string => job.title ?? JOB_LABEL[job.kind];
 
 /** 合集类型（T38）：名称、量词、书名印上的字、一句说明 */
 export const COLLECTION_KIND_META: Record<CollectionKind, { label: string; unit: string; glyph: string; hint: string }> = {

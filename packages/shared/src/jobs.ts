@@ -9,8 +9,11 @@
 export interface JobKindSpec {
   /** 显示名（设置页的任务列表、首页横幅、命令面板、服务端的任务消息） */
   label: string;
-  /** 执行通道：识别角色、画师主要吃显卡走 gpu；其余吃 CPU / 硬盘走 io。两条道同时跑，道内一次一个 */
-  lane: 'io' | 'gpu';
+  /**
+   * 执行通道：识别角色、画师主要吃显卡走 gpu；其余吃 CPU / 硬盘走 io；插件的任务（多是联网下载）单走 plugin，
+   * 不和扫描、缩略图互相堵。几条道同时跑，道内一次一个
+   */
+  lane: 'io' | 'gpu' | 'plugin';
   /** 道内的优先级：数字越小越先跑（新放进来的图要先扫描、出缩略图，别被一个多小时的识别堵住） */
   priority: number;
   /** 能不能取消（排队中、进行中都算） */
@@ -141,6 +144,19 @@ export const JOB_KINDS = {
     network: false,
     verb: '匹配中',
     glyph: '配',
+  },
+  // 插件的后台任务（docs/plugins.md 第 6 节，E5）：一种 kind 装下所有插件的任务，每个任务的名字是插件登记的（Job.title）；
+  // 执行体在插件的子进程里（服务端 services/plugins/runtime/），经 plugins 的命令启动，不在 jobs.start 里
+  plugin: {
+    label: '插件任务',
+    lane: 'plugin',
+    priority: 10,
+    cancellable: true,
+    startable: false,
+    pausable: false,
+    network: true,
+    verb: '进行中',
+    glyph: '插',
   },
 } as const satisfies Record<string, JobKindSpec>;
 

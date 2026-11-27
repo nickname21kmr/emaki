@@ -63,9 +63,9 @@ const RAW_WORK_NAMES_SQL = `
       WHERE d.category=3 AND d.not_found=0 AND j.type='text'
   `;
 type Row = { name: string; tag: string; category: number };
-type PixivMatch = { tags: string[]; automatic: boolean; original?: true };
+type PixivMatch = { tags: string[]; automatic: boolean; original?: true; needsEnglishTranslation?: true };
 
-export type PixivMatcher = ((artwork: PixivArtwork) => PixivMatch) & {
+export type PixivMatcher = ((artwork: PixivArtwork, checkMissingEnglish?: boolean) => PixivMatch) & {
   /** discovery 新写入的标签：只按这些标签补进索引，不全量重建（全量一次一两秒，卡住主线程） */
   refresh(tags: string[]): void;
 };
@@ -163,6 +163,25 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
   let scopedFullNames: Statement | undefined;
   let scopedWorkNames: Statement | undefined;
   const identities = (name: string) => new Set([...(fullNames.get(fullKey(name)) ?? [])].map(normalizeTag));
+  const wikiNames = db.prepare(`SELECT j.value FROM danbooru_tags d,
+    json_each(CASE WHEN json_valid(d.other_names) THEN d.other_names ELSE '[]' END) j
+    WHERE d.name=? AND d.category=4 AND d.not_found=0 AND j.type='text'`).pluck();
+  const verifiedName = db.prepare('SELECT name FROM character_verified_names WHERE tag=?').pluck();
+  const combinedIdentities = (name: string, local: ReadonlySet<string>) => {
+    if (!snapshot) return local;
+    const offline = snapshot.exactCandidates(name);
+    return offline && new Set([...local, ...offline.map(tag => normalizeTag(snapshot.costumeBase(tag)))]);
+  };
+  const hasCatalogName = (original: string, tag: string) => {
+    const key = fullKey(original);
+    const primary = verifiedName.get(tag) as string | undefined;
+    return (
+      (wikiNames.all(tag) as string[]).some(name => fullKey(name) === key)
+      || snapshot?.character(tag)?.names.some(name => fullKey(name) === key)
+      || (verifiedCharacterNames[tag] ?? []).some(name => fullKey(name) === key)
+      || (primary !== undefined && fullKey(primary) === key)
+    );
+  };
   // 作品的子系列、歌曲等可确认父作品，但不反向展开成所有子作品。
   const expandWorks = (tags: Iterable<string>): Set<string> => {
     const out = new Set(tags);
@@ -180,7 +199,7 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
     }
     return out;
   };
-  const match = (artwork: PixivArtwork): PixivMatch => {
+  const match = (artwork: PixivArtwork, checkMissingEnglish = false): PixivMatch => {
     const workByCharacter = new Map<string, string[]>();
     const worksFor = (tag: string): string[] => {
       let assigned = workByCharacter.get(tag);
@@ -210,10 +229,11 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
     const matched = new Set<string>();
     const exactNames = new Set<string>();
     const qualifiedNames = new Set<string>();
+    const missingEnglish = new Set<string>();
     const postNames = new Set(names.map(group => fullKey(group[0]!)));
     let ambiguous = false;
     let unresolved = false;
-    for (const group of names) {
+    for (const [index, group] of names.entries()) {
       const original = group[0]!;
       // 原文明示普通词或 cosplay 时不认角色；普通译名不能否定明确的原文角色名。
       if (/^(?:R-18G?|AI(?:生成|イラスト)?)$/i.test(original.normalize('NFKC'))
@@ -238,6 +258,28 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
       // 未限定的普通词保持原义。作品限定的标签可以和普通词同名。
       if (general.has(rawKey) && !qualifier) continue;
       let raw = strict.size ? strict : characters.get(rawKey);
+      const english = artwork.tags.tags[index]?.translation?.en?.trim();
+      let bilingualTag: string | undefined;
+      let untranslatedTag: string | undefined;
+      // 原名精确对应词库中的角色，且同一 Pixiv 标签的英文译名与规范标签一致。
+      // 只在没有作品上下文时补充身份依据，作品限定和同名仍走原有消歧。
+      if (!qualifier && !scope.size && (english || checkMissingEnglish)) {
+        const owners = combinedIdentities(original, strict);
+        if (owners?.size === 1) {
+          const [tag] = owners;
+          if (tag && !tag.startsWith(CUSTOM) && hasCatalogName(original, tag)) {
+            if (english) {
+              if (fullKey(english) === fullKey(tag) && !general.has(searchKey(english)) && !qualifiedGeneral.has(fullKey(english))) {
+                const englishOwners = combinedIdentities(english, identities(english));
+                if (englishOwners && [...englishOwners].every(owner => owner === tag)) bilingualTag = tag;
+              }
+            } else if (!isFullName(original) || !strict.size) {
+              untranslatedTag = tag;
+            }
+          }
+        }
+      }
+      if (bilingualTag && !strict.size) raw = new Set([bilingualTag]);
       if (qualifier && !strict.size && !scope.size) {
         if (raw?.size || group.slice(1).some(n => characters.has(searchKey(n)))) unresolved = true;
         continue;
@@ -318,18 +360,21 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
       }
       if (unresolvedName) unresolved = true;
       if (candidates.size > 1) ambiguous = true;
-      // 仅认页面原文的完整姓名，不把机器译名或去掉限定词后的搜索命中升级为证据。
-      if (candidates.size === 1 && strict.size === 1) {
+      if (candidates.size === 1) {
         const tag = [...candidates][0]!;
-        if (strict.has(tag) && isFullName(original) && isFullName(tag)) exactNames.add(tag);
-        if (strict.has(tag) && qualifier) qualifiedNames.add(tag);
+        if (tag === bilingualTag || (strict.size === 1 && strict.has(tag) && isFullName(original) && isFullName(tag))) exactNames.add(tag);
+        if (strict.size === 1 && strict.has(tag) && qualifier) qualifiedNames.add(tag);
+        if (tag === untranslatedTag) missingEnglish.add(tag);
+      } else if (!candidates.size && untranslatedTag) {
+        // 仅在离线索引里的精确原名，补取译名后也可交叉确认。
+        missingEnglish.add(untranslatedTag);
       }
       if (qualifier && scope.size && candidates.size === 1) {
         qualifiedNames.add([...candidates][0]!);
       }
       for (const tag of candidates) matched.add(tag);
     }
-    // 短名仍需作品确认；完整姓名须原文唯一命中，且角色已有作品资料、页面未标其他作品。
+    // 没有作品标签时，只有确认过的姓名可用，且角色本身仍需有作品资料。
     // 自建角色是用户自己起的名字，不用作品确认。
     const confirmed = (tag: string, knownWorks: string[]) =>
       knownWorks.some(w => workTags.has(w))
@@ -351,7 +396,9 @@ export function createPixivMatcher(db: Db, catalog: CharacterCatalog, copyrights
     const automatic = tags.length > 0 && !ambiguous && !unresolved
       && (artwork.pageCount === 1 || tags.length === 1)
       && tags.every(tag => tag.startsWith(CUSTOM) || (confirmedCharacters.has(tag) && (!original || worksFor(tag).every(w => w === 'original'))));
-    return { tags, automatic, ...(original ? { original: true } : {}) };
+    const needsEnglishTranslation = !automatic && !original && !ambiguous && !unresolved && tags.length < 2
+      && missingEnglish.size === 1 && [...missingEnglish].some(tag => (!tags.length || tags.includes(tag)) && worksFor(tag).length > 0);
+    return { tags, automatic, ...(original ? { original: true } : {}), ...(needsEnglishTranslation ? { needsEnglishTranslation: true } : {}) };
   };
   return Object.assign(match, {
     refresh(tags: string[]) {

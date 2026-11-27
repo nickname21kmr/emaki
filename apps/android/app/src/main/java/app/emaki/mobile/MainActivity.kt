@@ -56,6 +56,7 @@ import app.emaki.mobile.ui.FailedScreen
 import app.emaki.mobile.ui.FileChooser
 import app.emaki.mobile.ui.FindScreen
 import app.emaki.mobile.ui.ImagePicker
+import app.emaki.mobile.ui.SiteOpener
 import app.emaki.mobile.ui.ForgetDialog
 import app.emaki.mobile.ui.LocalPaper
 import app.emaki.mobile.ui.OfflineScreen
@@ -164,6 +165,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** 网页上打开插件对应的外部网站（Pixiv 这类）：站内浏览（SiteActivity） */
+    private val siteOpener = SiteOpener { address, pluginId, siteId, url ->
+        startActivity(SiteActivity.intent(this, address, pluginId, siteId, url))
+    }
+
     private fun openAppSettings() {
         runCatching {
             startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
@@ -193,7 +199,7 @@ class MainActivity : ComponentActivity() {
         AlbumSync.cancelLegacy(this)
         setContent {
             EmakiTheme {
-                App(model, fileChooser, imagePicker, albumSync, ::setBarIcons)
+                App(model, fileChooser, imagePicker, albumSync, siteOpener, ::setBarIcons)
             }
         }
     }
@@ -306,6 +312,7 @@ private fun App(
     fileChooser: FileChooser,
     imagePicker: ImagePicker,
     albumSync: AlbumSyncRequest,
+    siteOpener: SiteOpener,
     setBarIcons: (Boolean) -> Unit,
 ) {
     val screen by model.screen.collectAsStateWithLifecycle()
@@ -373,6 +380,7 @@ private fun App(
                 fileChooser = fileChooser,
                 imagePicker = imagePicker,
                 albumSync = albumSync,
+                siteOpener = siteOpener,
                 onPaper = { webPaper = it },
                 onPath = { model.onWebPath(s, it) },
                 onUnpaired = { code -> model.onWebUnpaired(s, code) },

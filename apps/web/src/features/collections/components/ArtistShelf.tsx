@@ -2,12 +2,14 @@ import type { Artist } from '@emaki/shared';
 import { Link } from 'react-router';
 import { Thumb } from '@/components/media/Thumb';
 import { formatCount } from '@/lib/format';
+import { useCountUnit } from '@/lib/countUnit';
 
 /**
  * 合集页的「画师」：识别出来的画师，按张数排。点进去是图库按这位画师筛选。
  * 认不出画师的图不在这里。
  */
 export function ArtistShelf({ list }: { list: Artist[] }) {
+  const unit = useCountUnit();
   return (
     <ul className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-5 gap-y-7">
       {list.map((a) => (
@@ -22,7 +24,7 @@ export function ArtistShelf({ list }: { list: Artist[] }) {
               {a.name}
             </div>
             <div className="truncate text-xs text-fg-muted">
-              <span className="tabular">{formatCount(a.imageCount)} 张</span>
+              <span className="tabular">{formatCount(a.imageCount)} {unit}</span>
               {/* 有推特显示账号；名字是日文名时再给出标签，方便对照 */}
               <span className="ml-1.5 text-fg-subtle">{a.twitter ? `@${a.twitter}` : a.name !== a.tag.replace(/_/g, ' ') ? a.tag : ''}</span>
             </div>

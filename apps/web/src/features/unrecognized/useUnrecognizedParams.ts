@@ -31,7 +31,8 @@ export const artKindFilterUseful = (summary?: UnrecognizedSummary) =>
  * 汇总到了以后补默认值（replace，不留历史）：分段取第一个非空的，主题 / 类型同理。
  * 返回的 summary 是按 artKind 筛过的汇总（分段、主题的默认值和计数都跟着筛选走）；筛选用不上了就去掉 artKind。
  */
-export function useUnrecognizedParams(pendingBooks = 0) {
+/** books：能不能去合集页（「合集」停用了就没有「成册待整理」，地址里写了也换成别的分段） */
+export function useUnrecognizedParams(pendingBooks = 0, books = true) {
   const [sp, setSp] = useSearchParams();
   const area: UnrecognizedArea = pick(UNRECOGNIZED_AREAS, sp.get('area')) ?? 'art';
   const bucket = area === 'art' ? pick(VIEWS, sp.get('bucket')) : undefined;
@@ -50,7 +51,7 @@ export function useUnrecognizedParams(pendingBooks = 0) {
       set('artKind', undefined);
       set('theme', undefined);
     } else if (area === 'art') {
-      let b: UnrecognizedView | undefined = bucket;
+      let b: UnrecognizedView | undefined = bucket === 'books' && !books ? undefined : bucket;
       if (!b) b = (['suggested', 'unsure', 'untagged'] as const).find((x) => summary.art[x] > 0) ?? (pendingBooks > 0 ? 'books' : 'suggested');
       if (b === 'shelved' && summary.art.shelved === 0) b = 'suggested';
       set('bucket', b);
@@ -64,7 +65,7 @@ export function useUnrecognizedParams(pendingBooks = 0) {
       set('artKind', undefined);
     }
     if (next.toString() !== sp.toString()) setSp(next, { replace: true });
-  }, [summary, pendingBooks, area, bucket, theme, kind, artKind, sp, setSp]);
+  }, [summary, pendingBooks, books, area, bucket, theme, kind, artKind, sp, setSp]);
 
   const go = (patch: Record<string, string | undefined>) => {
     const next = new URLSearchParams(sp);

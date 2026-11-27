@@ -11,7 +11,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { assistantCommands, createLibraryMcp, READ_TOOLS, SESSION_TOOLS, toolName, type ToolHost } from '../../src/assistant/tools.ts';
+import { assistantCommands, createLibraryMcp, PLUGIN_TOOLS, READ_TOOLS, SESSION_TOOLS, toolName, type ToolHost } from '../../src/assistant/tools.ts';
 import { DEFINITIONS } from '../../src/commands/index.ts';
 import type { CommandDef } from '../../src/commands/registry.ts';
 import { EventBus } from '../../src/core/events.ts';
@@ -95,8 +95,20 @@ describe('每个 HTTP 写路由都对应一个命令（附录 #33、#35）', () 
     const pairing = (r: { path: string; file: string }) => r.file === 'access/lan.ts' && r.path.startsWith('/api/v1/pair');
     // 手机上传的一段字节（http/uploads.ts，docs/mobile.md 5.4）：请求体是二进制，进不了注册表；只写 .part 和进度，入库在命令 upload.complete 里
     const chunk = (r: { method: string; path: string; file: string }) => r.file === 'http/uploads.ts' && r.method === 'PUT' && r.path === '/api/uploads/:id';
+    // 准备安装的插件 zip（http/pluginPackages.ts，docs/plugins.md E2）：请求体是二进制；只解到 staging、读清单，装在命令 plugins.install 里
+    const pluginZip = (r: { method: string; path: string; file: string }) =>
+      r.file === 'http/pluginPackages.ts' && r.method === 'PUT' && r.path === '/api/plugins/packages';
+    // 插件视图的桥接（http/pluginViews.ts，docs/plugins.md 第 5 节）：调用转发到注册表里的命令和查询（本身不是一个命令）；插件自己的存储；记一次视图出错
+    const pluginBridge = (r: { method: string; path: string; file: string }) =>
+      r.file === 'http/pluginViews.ts' && r.method === 'POST' && ['/api/plugins/:id/call', '/api/plugins/:id/storage', '/api/plugins/:id/errors'].includes(r.path);
     const allowed = (r: { method: string; path: string; file: string }) =>
-      compat.has(`${r.method} ${r.path}`) || r.path === '/api/commands/:name' || r.path.startsWith('/api/assistant/') || pairing(r) || chunk(r);
+      compat.has(`${r.method} ${r.path}`) ||
+      r.path === '/api/commands/:name' ||
+      r.path.startsWith('/api/assistant/') ||
+      pairing(r) ||
+      chunk(r) ||
+      pluginZip(r) ||
+      pluginBridge(r);
     const stray = writes.filter((r) => !allowed(r));
     expect(stray).toEqual([]);
     for (const r of COMPAT_ROUTES) for (const c of r.commands) expect(byName.get(c)?.kind, `${r.path} → ${c}`).toBe('command');
@@ -130,7 +142,7 @@ describe('MCP 工具从注册表生成（附录 #35）', () => {
       clock: () => NOW,
     });
     // 有数据库文件（SQL 工具）、绑定了网页会话（ask_user）：工具最全的情况
-    const server = createLibraryMcp(demo.ds.registry, '/tmp/emaki-registry-test.sqlite', host, 'session-1', 'session-1');
+    const server = createLibraryMcp(demo.ds.registry, '/tmp/emaki-registry-test.sqlite', host, 'session-1', 'session-1', { plugins: demo.ds.plugins });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(a);
     client = new Client({ name: 'registry-test', version: '1' });
@@ -144,7 +156,7 @@ describe('MCP 工具从注册表生成（附录 #35）', () => {
 
   it('每个工具都来自注册表：写工具是助手能用的命令，读工具是查询；其余只有会话工具', () => {
     const generated = assistantCommands(demo.ds.registry).map((c) => toolName(c.name));
-    expect(tools.map((t) => t.name).sort()).toEqual([...SESSION_TOOLS, ...READ_TOOLS, ...generated].sort());
+    expect(tools.map((t) => t.name).sort()).toEqual([...SESSION_TOOLS, ...READ_TOOLS, ...PLUGIN_TOOLS, ...generated].sort());
     for (const c of assistantCommands(demo.ds.registry)) expect(ASSISTANT_SCOPES, c.name).toContain(c.scope);
   });
 
@@ -184,8 +196,11 @@ describe('MCP 工具从注册表生成（附录 #35）', () => {
       expect(names.has(toolName(c)), c).toBe(true);
     // 被授权的 scope 里没有一个命令落在外面，外面的也没有混进来
     const allowed = commands.filter((c) => ASSISTANT_SCOPES.includes(c.scope)).map((c) => toolName(c.name));
+    // plugins_save_view 是手写的（要在对话里出卡片），名字和命令 plugins.saveView 生成的一样；plugins_list 是读的
     expect(
-      [...names].filter((n) => !(SESSION_TOOLS as readonly string[]).includes(n) && !(READ_TOOLS as readonly string[]).includes(n)).sort(),
+      [...names]
+        .filter((n) => !(SESSION_TOOLS as readonly string[]).includes(n) && !(READ_TOOLS as readonly string[]).includes(n) && n !== 'plugins_list')
+        .sort(),
     ).toEqual(allowed.sort());
   });
 

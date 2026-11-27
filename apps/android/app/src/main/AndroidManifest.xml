@@ -49,6 +49,13 @@
             </intent-filter>
         </activity>
 
+        <!-- App 里的站内浏览（docs/plugins.md 第 6 节 site@1）：插件对应的外部网站本身（Pixiv 这类），加上插件的按钮 -->
+        <activity
+            android:name=".SiteActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- 「分享到 Emaki」：在别的 App 里分享图片，传到电脑（没有界面，拷一份排进后台上传就关掉） -->
         <activity
             android:name=".ShareActivity"

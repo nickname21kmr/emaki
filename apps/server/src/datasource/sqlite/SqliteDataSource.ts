@@ -52,6 +52,9 @@ import { importDictIfNeeded } from '../../services/i18n/dict.ts';
 import { SqliteLocalizer, type Localizer } from '../../services/i18n/localizer.ts';
 import { relocalizeAll } from '../../domain/catalog/relocalize.ts';
 import { LibraryWatcher, type WatchedRoot } from '../../services/watch/LibraryWatcher.ts';
+import { Plugins } from '../../domain/plugins/plugins.ts';
+import { PluginMedia } from '../../services/plugins/media.ts';
+import { PluginPackages } from '../../services/plugins/packages.ts';
 import { config } from '../../config.ts';
 import { pendingPixivCount, queueUnseenPixivAnimations, syncPixivCharacters } from '../../services/pixiv/sync.ts';
 import { refreshPixivAliases } from '../../services/pixiv/aliases.ts';
@@ -104,6 +107,8 @@ export interface SqliteOpenOptions extends Partial<EnginePorts> {
    * 角色收拢、自动关联）之前执行，所以灌进来的数据和真实图库一样经过这些启动步骤
    */
   seed?: (db: Db) => void;
+  /** 安全模式（docs/plugins.md 第 8 节）；不给按 config（--safe、EMAKI_SAFE=1） */
+  safeMode?: boolean;
 }
 
 /**
@@ -152,6 +157,8 @@ export class SqliteDataSource {
     // 审计记录：上次中途退出、没做完的命令标成 interrupted（同一个 operationId 再来要求先核对），只留最近的一批
     ds.registry.audit.open();
     ds.purgeRemovedRoots();
+    // 插件：清掉没装完的包、卸载以后没有插件指向的包（docs/plugins.md E2）
+    ds.plugins.cleanup();
     // 派生数据的版本（propagation/versions.ts，附录 #23）：版本对不上的整体重算一次再记下。
     // 来源解析：来源变了的由反应清掉过期的 Pixiv 建议、重新登记补充；
     // 内容类型 / 主题 / 质量分（T27）：版本过期的行在 HTTP 监听前同步重算；EMAKI_CLASSIFY=0 跳过（全部按插画统计，保持旧值）
@@ -403,6 +410,10 @@ export class SqliteDataSource {
   readonly changes: ChangeLog;
   /** 设备与访问（docs/mobile.md 第 2 节）：局域网入口的配置、配对、设备凭证 */
   readonly access: Access;
+  /** 插件管理（docs/plugins.md 第 9 节）：启用、改名、覆盖的值、侧栏 */
+  readonly plugins: Plugins;
+  /** 插件视图里的图片：短期令牌（docs/plugins.md 第 5 节，http/pluginViews.ts） */
+  readonly pluginMedia: PluginMedia;
 
   protected constructor(db: Db, bus: EventBus, dataDir: string, opts: SqliteOpenOptions) {
     this.ports = resolvePorts(opts);
@@ -453,6 +464,13 @@ export class SqliteDataSource {
     this.exclusions = new ExclusionQueries(this.ctx);
     this.changes = new ChangeLog(this.ctx);
     this.access = new Access({ db, bus, dataDir, clock: this.ctx.clock });
+    this.plugins = new Plugins(
+      this.ctx,
+      opts.safeMode ?? config.safeMode,
+      new PluginPackages(dataDir, this.ports.clock),
+      config.appVersion,
+    );
+    this.pluginMedia = new PluginMedia(this.ports.clock);
     this.duplicates = new DuplicateQueries(this.ctx, this.pendingTrash);
     this.searchQueries = new SearchQueries(db, this.derived);
     this.dedupe = new DedupeService({
@@ -659,7 +677,8 @@ export class SqliteDataSource {
     const cachedIds = this.ctx.db
       .prepare(
         `SELECT i.id FROM images i JOIN pixiv_character_checks p ON p.image_id = i.id AND p.checked_at IS NULL
-         WHERE i.id IN (SELECT value FROM json_each(?)) AND i.source_post_id IN (SELECT post_id FROM pixiv_artwork_cache)`,
+         WHERE p.post_id=i.source_post_id AND p.sha256=i.sha256
+           AND i.id IN (SELECT value FROM json_each(?)) AND i.source_post_id IN (SELECT post_id FROM pixiv_artwork_cache)`,
       )
       .pluck()
       .all(JSON.stringify(ids)) as number[];
@@ -677,7 +696,7 @@ export class SqliteDataSource {
     // 只挑有缓存的图，client 不会被调用；万一调用了也不联网
     const offline = { artwork: async () => { throw new Error('离线重新匹配不联网'); } };
     try {
-      await syncPixivCharacters(this.ctx, job, this.makeCatalog, offline, 0, undefined, { imageIds: cachedIds });
+      await syncPixivCharacters(this.ctx, job, this.makeCatalog, offline, 0, undefined, { imageIds: cachedIds, recheckCached: true });
     } catch (error) {
       console.warn(`[pixiv-tags] 切换识别方式后本地重新匹配失败：${String(error)}`);
       return 0;

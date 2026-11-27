@@ -5,7 +5,7 @@
  * 可补发的事件（changed、command、auto-change）带递增的 id，SSE 的 id 行是 `<启动 id>.<序号>`；
  * 断线重连时浏览器带着 Last-Event-ID 回来，服务端补发漏掉的；补不上（重启过、漏得太多）先推一条 resync，前端整体刷新。
  */
-import type { AutoChangeEvent, LibraryChangedReason } from './api.ts';
+import type { AutoChangeEvent, LibraryChangedReason, PluginNoticeEvent } from './api.ts';
 import type { ID } from './domain.ts';
 
 /**
@@ -42,6 +42,7 @@ export const DOMAIN_CHANGES = [
   'duplicates.changed',
   'settings.changed',
   'pose.changed',
+  'plugins.changed',
   'library.opened',
 ] as const;
 export type DomainChange = (typeof DOMAIN_CHANGES)[number];
@@ -100,4 +101,4 @@ export interface HelloEvent {
 }
 
 /** 可补发的事件（带 id） */
-export type ReplayableEvent = Omit<ChangedEvent, 'id'> | Omit<CommandEvent, 'id'> | Omit<AutoChangeEvent, 'id'>;
+export type ReplayableEvent = Omit<ChangedEvent, 'id'> | Omit<CommandEvent, 'id'> | Omit<AutoChangeEvent, 'id'> | Omit<PluginNoticeEvent, 'id'>;

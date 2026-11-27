@@ -1,3 +1,4 @@
+import { useCanVisit } from '@/pages';
 import type { LibrarySummary } from '@emaki/shared';
 import { ArrowRight } from 'lucide-react';
 import type { CSSProperties, ReactNode } from 'react';
@@ -20,6 +21,8 @@ const CELL_2X2 = ['compact:pr-4', 'compact:pr-0 compact:pl-4', 'compact:border-t
  * 数都来自汇总接口（服务端按命名口径算好）：已认出比例、已看过比例、别册张数不在这里算（附录 #28、#29）。
  */
 export function StatsStrip({ summary: s }: { summary: LibrarySummary }) {
+  // 别册停用了（docs/plugins.md 9.4）就不提它
+  const annexOn = useCanVisit()('/annex');
   const works = useWorks({ sort: 'imageCount' });
   const topWork = works.data?.[0];
 
@@ -40,7 +43,7 @@ export function StatsStrip({ summary: s }: { summary: LibrarySummary }) {
         index={0}
         to="/gallery"
         label="张插画"
-        hint={[firstHint, s.images.annex > 0 ? `另有 ${formatCount(s.images.annex)} 张在别册` : ''].filter(Boolean).join(' · ') || undefined}
+        hint={[firstHint, s.images.annex > 0 && annexOn ? `另有 ${formatCount(s.images.annex)} 张在别册` : ''].filter(Boolean).join(' · ') || undefined}
         aside={week > 0 ? <WeekBars days={s.added.last7Days} /> : null}
       >
         <RollingNumber id="images" value={s.images.illustrations} size="xl" className={NUMERAL} />

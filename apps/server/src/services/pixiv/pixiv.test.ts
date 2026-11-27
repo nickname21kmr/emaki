@@ -98,11 +98,28 @@ it('指定范围补标签只处理选定图片，同投稿其他待查图片保�
   expect(pendingPixivCount(ctx)).toBe(1);expect(client.artwork).toHaveBeenCalledTimes(1);
 });
 
+it('文件内容相同时，修改时间更新不丢待查项，也不重查已经撤销的项', async () => {
+  db.exec("UPDATE pixiv_character_checks SET checked_at='done',result='dismissed' WHERE image_id=2");
+  db.exec("UPDATE images SET modified_at='changed-before-request'");
+  queuePixivImages(ctx,[1,2]);
+  expect(pendingPixivCount(ctx)).toBe(1);
+  const client={artwork:async()=>{
+    db.exec("UPDATE images SET modified_at='changed-during-request' WHERE id=1");
+    return art(1,['アリス']);
+  }};
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(links()).toHaveLength(1);
+  expect(links()[0]).toMatchObject({image_id:1});
+  expect(db.prepare('SELECT checked_at,result FROM pixiv_character_checks WHERE image_id=2').get())
+    .toEqual({checked_at:'done',result:'dismissed'});
+  expect(pendingPixivCount(ctx)).toBe(0);
+});
+
 it('同投稿后加入的图片和文件变化复用原始标签；未匹配也不重复联网', async () => {
   const client={artwork:vi.fn().mockResolvedValue(art(1,['不认识的名字']))};
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
   addImage(3,'123');
-  db.exec("UPDATE images SET modified_at='new' WHERE id=1");
+  db.exec("UPDATE images SET sha256='new-content' WHERE id=1");
   queuePixivImages(ctx);
   const summary=await syncPixivCharacters(ctx,job,makeCatalog,client,0);
   expect(client.artwork).toHaveBeenCalledTimes(1);
@@ -200,12 +217,17 @@ it('网络返回前改成手动角色、或文件改变，不会应用过期的�
   const client={artwork:async()=>{
     const id=makeCatalog().catalog.ensureCharacter(A,'now').id;
     db.prepare("INSERT INTO image_characters(image_id,character_id,decision,actor,added_at) VALUES (1,?,'manual','user','now')").run(id);
-    db.exec("UPDATE images SET modified_at='new-file' WHERE id=2");
+    db.exec("UPDATE images SET sha256='new-content' WHERE id=2");
+    queuePixivImages(ctx,[2]);
     return art(1,['ボブ']);
   }};
   await syncPixivCharacters(ctx,job,makeCatalog,client,0);
   expect(links()).toHaveLength(1);
   expect(db.prepare('SELECT * FROM v_character_suggestions').all()).toHaveLength(0);
+  expect(pendingPixivCount(ctx)).toBe(1);
+  await syncPixivCharacters(ctx,job,makeCatalog,client,0);
+  expect(links()).toHaveLength(2);
+  expect(pendingPixivCount(ctx)).toBe(0);
 });
 
 it.each([
@@ -298,6 +320,7 @@ it('解析 Pixiv 响应、校验 ID；404 跳过，403 不重试', async () => {
   const fetchImpl = vi.fn().mockResolvedValue({ status:200, text:async () => JSON.stringify({error:false,body:art(2,['アリス'])}),headers:{get:()=>null} });
   const client = new PixivClient(fetchImpl);
   expect((await client.artwork('123',controller.signal))?.pageCount).toBe(2);
+  expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://www.pixiv.net/ajax/illust/123?lang=en');
   await expect(client.artwork('456',controller.signal)).rejects.toThrow('ID');
   // 只有 Pixiv 自己的 {error:true} 才算作品不存在（原来空响应体的 404 也算，现在按失败处理）
   fetchImpl.mockResolvedValue({status:404,text:async()=>JSON.stringify({error:true,message:'x',body:[]}),headers:{get:()=>null}});
@@ -560,6 +583,84 @@ it('短名仍由投稿里的作品标签确认；自建角色不用确认', () =
   expect(match({...art(1,['アリス'],'1',['ゲームA']),isOriginal:true})).toEqual({tags:[A],automatic:true});
   expect(match({...art(1,['アリス','オリジナル'],'1',['ゲームA']),isOriginal:false})).toEqual({tags:[A],automatic:true});
   expect(match({...art(1,['ミドリ'],'1',[]),isOriginal:true})).toEqual({tags:[`emaki:character:${custom}`],automatic:true,original:true});
+});
+
+const SEREN = 'azuma_seren';
+const serenArtwork = (english?: string): PixivArtwork => ({
+  id: '123',
+  pageCount: 6,
+  tags: { tags: [{ tag: '東雪蓮', ...(english && { translation: { en: english } }) }] },
+});
+
+function wikiName(tag: string, original: string) {
+  db.prepare("INSERT INTO danbooru_tags(name,category,copyrights,other_names,fetched_at) VALUES (?,4,?,?, 'now')")
+    .run(tag, JSON.stringify(['game_a']), JSON.stringify([original]));
+}
+
+it('Pixiv 原名和同一标签的译名一起确认角色，不按汉字长度判断', () => {
+  wikiName(SEREN, '東雪蓮');
+  wikiName('twin_tail_(ultra_series)', 'ツインテール');
+  const { catalog, copyrights } = makeCatalog();
+  const match = createPixivMatcher(db, catalog, copyrights);
+
+  expect(match(serenArtwork('Azuma Seren'))).toEqual({ tags: [SEREN], automatic: true });
+  expect(match(serenArtwork())).toEqual({ tags: [SEREN], automatic: false });
+  expect(match(serenArtwork('Another Character'))).toEqual({ tags: [SEREN], automatic: false });
+  expect(match({ ...serenArtwork(), tags: { tags: [{ tag: '東雪蓮' }, { tag: '別人', translation: { en: 'Azuma Seren' } }] } }).automatic).toBe(false);
+  const conflictingWork = serenArtwork('Azuma Seren');
+  conflictingWork.tags.tags.push({ tag: 'ゲームB' });
+  expect(match(conflictingWork).automatic).toBe(false);
+  const multiCharacter = serenArtwork('Azuma Seren');
+  multiCharacter.tags.tags.push({ tag: 'ボブ' });
+  expect(match(multiCharacter).automatic).toBe(false);
+  const hair = { tag: 'ツインテール', translation: { en: 'twin ponytails' } };
+  expect(match({ ...serenArtwork(), tags: { tags: [hair] } })).toEqual({ tags: ['twin_tail_(ultra_series)'], automatic: false });
+});
+
+it('离线原名可参与译名确认，离线同名冲突会阻止自动采纳', () => {
+  const indexDb = openDatabase(':memory:');
+  indexDb.exec(`
+    PRAGMA user_version=1;
+    CREATE TABLE character(tag TEXT PRIMARY KEY, works TEXT, names TEXT);
+    CREATE TABLE name(identity_key TEXT, search_key TEXT, tag TEXT);
+    CREATE TABLE work(identity_key TEXT, tag TEXT);
+  `);
+  const index = new OfflineCharacterIndex(indexDb);
+  try {
+    const original = '東雪蓮';
+    indexDb.prepare('INSERT INTO character VALUES (?,?,?)').run(SEREN, '["game_a"]', JSON.stringify([original]));
+    const add = indexDb.prepare('INSERT INTO name VALUES (?,?,?)');
+    add.run(identityKey(original), searchKey(original), SEREN);
+    const copyrights = new DanbooruCatalog(db, makeCatalog().copyrights, index);
+    const catalog = new CharacterCatalog(db, { copyrights });
+    const match = createPixivMatcher(db, catalog, copyrights);
+    expect(match(serenArtwork('Azuma Seren'))).toEqual({ tags: [SEREN], automatic: true });
+
+    wikiName(SEREN, original);
+    add.run(identityKey(original), searchKey(original), B);
+    expect(createPixivMatcher(db, catalog, copyrights)(serenArtwork('Azuma Seren'))).toEqual({ tags: [SEREN], automatic: false });
+  } finally {
+    index.close();
+  }
+});
+
+it('用已有译名复算选定图片，缺译名的旧缓存按投稿补取且只请求一次', async () => {
+  wikiName(SEREN, '東雪蓮');
+  cacheArtwork(db, serenArtwork('Azuma Seren'), 'before');
+  const client = { artwork: vi.fn().mockResolvedValue(serenArtwork()) };
+
+  await syncPixivCharacters(ctx, job, makeCatalog, client, 0, undefined, { imageIds: [1], recheckCached: true });
+  expect(client.artwork).not.toHaveBeenCalled();
+  expect(links()).toEqual([{ image_id: 1, character_id: expect.any(Number) }]);
+
+  cacheArtwork(db, serenArtwork(), 'before');
+  await syncPixivCharacters(ctx, job, makeCatalog, client, 0);
+  expect(client.artwork).toHaveBeenCalledTimes(1);
+  expect(db.prepare("SELECT result FROM pixiv_character_checks WHERE image_id=2").pluck().get()).toBe('suggested');
+  queuePixivImages(ctx);
+  await syncPixivCharacters(ctx, job, makeCatalog, client, 0);
+  expect(client.artwork).toHaveBeenCalledTimes(1);
+  expect(links()).toHaveLength(1);
 });
 
 function takina() {
@@ -959,7 +1060,7 @@ it('Pixiv 明确拒绝的投稿跳过接着查，不算连续失败；自动补�
   queuePixivImages(ctx);
   const reply=(status:number,body:unknown)=>({status,headers:{get:()=>null},text:async()=>JSON.stringify(body)});
   const fetchImpl=vi.fn().mockImplementation(async(url:string)=>{
-    const id=url.split('/').pop()!;
+    const id=new URL(url).pathname.split('/').pop()!;
     if(id==='100') return reply(200,{error:true,message:'',body:[]});
     if(id==='200'||id==='300') return reply(400,{error:true,message:'',body:[]});
     return reply(200,{error:false,body:art(1,['アリス'],id)});

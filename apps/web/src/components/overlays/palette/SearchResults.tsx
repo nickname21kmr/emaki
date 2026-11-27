@@ -19,6 +19,7 @@ import {
   TagTile,
   WorkTile,
 } from './items';
+import { useCountUnit } from '@/lib/countUnit';
 
 type CharacterHit = Extract<SearchHit, { type: 'character' }>;
 type WorkHit = Extract<SearchHit, { type: 'work' }>;
@@ -49,6 +50,7 @@ export function SearchResults({
   commands: PaletteCommand[];
   actions: SearchActions;
 }) {
+  const unit = useCountUnit();
   // 这个组件只在有输入时挂载：清空再输入会重新建 observer，不会闪出上一轮的旧结果
   const search = useSearch(query);
   const hits = search.data ?? [];
@@ -126,7 +128,7 @@ export function SearchResults({
               subtitle={aliasHint(work.aliases, work.danbooruTag, work.name, query)}
               trailing={
                 <span>
-                  {formatCount(work.characterCount)} 位角色 · {formatCount(work.imageCount)} 张
+                  {formatCount(work.characterCount)} 位角色 · {formatCount(work.imageCount)} {unit}
                 </span>
               }
             />
@@ -181,6 +183,7 @@ function CharacterRow({
   query: string;
   onSelect: SearchActions['openCharacter'];
 }) {
+  const unit = useCountUnit();
   const { character: c, workName } = hit;
   return (
     <PaletteItem
@@ -189,7 +192,7 @@ function CharacterRow({
       leading={<CharacterAvatar name={c.name} coverImageId={c.coverImageId} coverFocus={c.coverFocus} coverRating={c.coverRating} />}
       title={<Highlight text={c.name} query={query} />}
       subtitle={<Dotted parts={[workName, aliasHint(c.aliases, c.danbooruTag, c.name, query)]} />}
-      trailing={<CountMeta count={c.imageCount} newCount={c.newCount} />}
+      trailing={<CountMeta count={c.imageCount} newCount={c.newCount} unit={unit} />}
     />
   );
 }

@@ -38,6 +38,8 @@ export function getChapter(pathname: string, now: Date = new Date()): Chapter {
       return { mark: '整理', sub: '其三' };
     case 'settings':
       return { mark: '附录', sub: '设置' };
+    case 'plugins':
+      return { mark: '附录', sub: '插件' };
     default:
       return { mark: '扉页', sub: toCjkDate(now) };
   }

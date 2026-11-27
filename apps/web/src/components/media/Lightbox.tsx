@@ -1,10 +1,12 @@
-import type { ContentKind, ID } from '@emaki/shared';
+import type { ContentKind, ID, ImageDetail } from '@emaki/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { Pause, PanelRight, Play, Shapes, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Dialog as D } from 'radix-ui';
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useLocation, useNavigate, useNavigationType } from 'react-router';
+import { Slot, useEntryHotkey } from '@/blocks/Slot';
+import { shortcutOf } from '@/blocks/slots';
 import { imageUrl } from '@/lib/api';
 import { blurLabel, blurReason } from '@/lib/blur';
 import { formatCount } from '@/lib/format';
@@ -26,6 +28,7 @@ import { useImageActions } from './lightbox/useImageActions';
 import { useZoomPan } from '@/lib/pager/zoom';
 import { EASE_OUT } from '@/lib/motion';
 import { AssistantDarkroomSlot, AssistantLightboxButton } from '@/features/assistant/AssistantLauncher';
+import { PluginLightboxButtons } from '@/features/plugins/PluginLinks';
 import { closeAssistant, useAssistantDock, useViewportWidth } from '@/features/assistant/dock';
 import { isNarrow, useViewport } from '@/lib/viewport';
 
@@ -322,14 +325,15 @@ function LightboxView({
   };
   useHotkey('arrowleft', guard(() => go(-1)), { repeat: true });
   useHotkey('arrowright', guard(() => go(1)), { repeat: true });
-  useHotkey('i', guard(sheetMode ? toggleSheet : toggleInfo));
+  // 按钮的快捷键登记在按钮的条目上（blocks/slots.ts 的 key）：按钮上的提示、按键一处定，条目不画时按键也不响应
+  useEntryHotkey('lightbox.info', guard(sheetMode ? toggleSheet : toggleInfo));
   // 改动的快捷键和信息面板的按钮一样按这台设备的能力（IMAGE_ACTION_NEEDS）
-  useHotkey('f', guard(actions.toggleFavorite), { enabled: actions.allow.favorite });
-  useHotkey('e', guard(actions.exclude), { enabled: actions.allow.exclude });
-  useHotkey('o', guard(actions.toggleOriginal), { enabled: actions.allow.original });
+  useEntryHotkey('lightbox.favorite', guard(actions.toggleFavorite), { enabled: actions.allow.favorite });
+  useEntryHotkey('lightbox.exclude', guard(actions.exclude), { enabled: actions.allow.exclude });
+  useEntryHotkey('lightbox.original', guard(actions.toggleOriginal), { enabled: actions.allow.original });
   const [kindOpen, setKindOpen] = useState(false);
-  useHotkey('c', guard(() => setKindOpen(true)), { enabled: !!base && !kindOpen && actions.allow.kind });
-  useHotkey('space', guard(() => setPaused((p) => !p)), { enabled: slideshow });
+  useEntryHotkey('lightbox.kind', guard(() => setKindOpen(true)), { enabled: !!base && !kindOpen && actions.allow.kind });
+  useEntryHotkey('lightbox.slideshow', guard(() => setPaused((p) => !p)), { enabled: slideshow });
 
   // 引信烧完：等下一张的 960 缩略图解码好再前进，最后一张之后绕回开头
   const advance = () => {
@@ -422,6 +426,7 @@ function LightboxView({
           kindOpen={kindOpen}
           onKindOpenChange={setKindOpen}
           onSetKind={actions.setKind}
+          detail={detail}
         />
 
         <Stage
@@ -578,6 +583,7 @@ function TopBar({
   kindOpen,
   onKindOpenChange,
   onSetKind,
+  detail,
 }: {
   index: number;
   total: number;
@@ -597,6 +603,8 @@ function TopBar({
   kindOpen: boolean;
   onKindOpenChange: (open: boolean) => void;
   onSetKind: (kind: ContentKind | 'auto') => void;
+  /** 这张图的详情（装的插件的按钮看来源；还没到时不画它们） */
+  detail: ImageDetail | undefined;
 }) {
   return (
     <div
@@ -616,33 +624,51 @@ function TopBar({
         {fileName && <span className="truncate text-[13px] text-white/55 compact:hidden">{fileName}</span>}
       </div>
       <div className="pointer-events-auto flex shrink-0 items-center gap-1">
-        {playing !== undefined && (
-          <LbButton label={playing ? '暂停放映' : '继续放映'} shortcut="Space" onClick={onTogglePlay}>
-            {playing ? <Pause /> : <Play />}
-          </LbButton>
-        )}
-        {kind && (
-          <KindMenu
-            label="把这张归入"
-            current={kind}
-            align="end"
-            open={kindOpen}
-            onOpenChange={onKindOpenChange}
-            onSelect={onSetKind}
-            trigger={
-              <LbButton label="归入…" shortcut="C" active={kindOpen}>
-                <Shapes />
+        {/* 按钮按登记的顺序（blocks/slots.ts 的 lightbox.toolbar） */}
+        <Slot
+          id="lightbox.toolbar"
+          plugins={<PluginLightboxButtons detail={detail} />}
+          render={{
+            'lightbox.slideshow': () =>
+              playing !== undefined && (
+                <LbButton label={playing ? '暂停放映' : '继续放映'} shortcut={shortcutOf('lightbox.slideshow')} onClick={onTogglePlay}>
+                  {playing ? <Pause /> : <Play />}
+                </LbButton>
+              ),
+            'lightbox.kind': () =>
+              kind && (
+                <KindMenu
+                  label="把这张归入"
+                  current={kind}
+                  align="end"
+                  open={kindOpen}
+                  onOpenChange={onKindOpenChange}
+                  onSelect={onSetKind}
+                  trigger={
+                    <LbButton label="归入…" shortcut={shortcutOf('lightbox.kind')} active={kindOpen}>
+                      <Shapes />
+                    </LbButton>
+                  }
+                />
+              ),
+            'lightbox.assistant': () => <AssistantLightboxButton />,
+            'lightbox.info': () => (
+              <LbButton
+                label={sheet ? (panelOpen ? '收起信息' : '展开信息') : panelOpen ? '收起信息' : '显示信息'}
+                shortcut={shortcutOf('lightbox.info')}
+                active={panelOpen}
+                onClick={onTogglePanel}
+              >
+                <PanelRight />
               </LbButton>
-            }
-          />
-        )}
-        <AssistantLightboxButton />
-        <LbButton label={sheet ? (panelOpen ? '收起信息' : '展开信息') : panelOpen ? '收起信息' : '显示信息'} shortcut="I" active={panelOpen} onClick={onTogglePanel}>
-          <PanelRight />
-        </LbButton>
-        <LbButton label="关闭" shortcut="Esc" onClick={onClose}>
-          <X />
-        </LbButton>
+            ),
+            'lightbox.close': () => (
+              <LbButton label="关闭" shortcut={shortcutOf('lightbox.close')} onClick={onClose}>
+                <X />
+              </LbButton>
+            ),
+          }}
+        />
       </div>
     </div>
   );

@@ -69,6 +69,7 @@ import { SelectionBar, type SelectionAction } from '@/features/characters/detail
 import { useScopedSelection } from '@/features/characters/detail/useScopedSelection';
 import { CollectionImagePicker } from './components/CollectionImagePicker';
 import { PageBlocks } from '@/blocks/PageBlocks';
+import { Slot } from '@/blocks/Slot';
 import { useAllowedActions, type Need } from '@/lib/capabilities';
 
 const RATINGS: Rating[] = ['general', 'sensitive', 'questionable', 'explicit'];
@@ -143,56 +144,83 @@ function Detail({ data }: { data: GetCollectionResponse }) {
         title={displayTitle(c)}
         subtitle={[`${formatCount(c.pageCount)} 页`, byline(c)].filter(Boolean).join(' · ')}
         actions={
-          <>
-            <ReadActions id={c.id} unit="页" />
-            {(menu.edit || menu.reveal) && <Menu
-              width={220}
-              trigger={
-                <Button variant="ghost" size="sm" aria-label="更多">
-                  <Ellipsis className="size-4" />
-                </Button>
-              }
-            >
-              {menu.edit && <>
-              <MenuItem icon={<PencilLine />} onSelect={() => setDialog('rename')}>
-                改名…
-              </MenuItem>
-              <KindSub kind={c.kind} onChange={(kind) => update.mutate({ kind })} />
-              {folder ? (
-                <MenuItem icon={<RotateCcw />} onSelect={() => update.mutate({ kind: 'auto' })}>
-                  恢复自动判断类型
-                </MenuItem>
-              ) : (
-                <MenuItem icon={<ImagePlus />} onSelect={() => setAdding(true)}>
-                  添加图片…
-                </MenuItem>
-              )}
-              <MenuSub label="页序" icon={<ArrowDownAZ />}>
-                <MenuRadioGroup value={data.pageOrder} onValueChange={(v) => update.mutate({ pageOrder: v as 'name' | 'mtime' })}>
-                  <MenuRadioItem value="name">按文件名</MenuRadioItem>
-                  <MenuRadioItem value="mtime">按文件修改时间</MenuRadioItem>
-                </MenuRadioGroup>
-              </MenuSub>
-              <MenuItem icon={<Layers />} onSelect={() => setDialog('series')}>
-                归入系列…
-              </MenuItem>
-              </>}
-              {menu.reveal && (
-                <MenuItem
-                  icon={<FolderOpen />}
-                  onSelect={() => data.pages[0] && void api.revealImage(data.pages[0].imageId).catch(() => undefined)}
-                >
-                  在资源管理器中显示
-                </MenuItem>
-              )}
-              {menu.edit && <>
-              <MenuSeparator />
-              <MenuItem icon={<CircleOff />} danger onSelect={() => dismiss.mutate()}>
-                {folder ? '不成册' : '解散（图片都还在）'}
-              </MenuItem>
-              </>}
-            </Menu>}
-          </>
+          <Slot
+            id="page.collection"
+            render={{
+              'collection.read': () => <ReadActions id={c.id} unit="页" />,
+              'collection.more': () =>
+                (menu.edit || menu.reveal) && (
+                  <Menu
+                    width={220}
+                    trigger={
+                      <Button variant="ghost" size="sm" aria-label="更多">
+                        <Ellipsis className="size-4" />
+                      </Button>
+                    }
+                  >
+                    <Slot
+                      id="menu.collection"
+                      render={{
+                        'collection.rename': () =>
+                          menu.edit && (
+                            <MenuItem icon={<PencilLine />} onSelect={() => setDialog('rename')}>
+                              改名…
+                            </MenuItem>
+                          ),
+                        'collection.kind': () => menu.edit && <KindSub kind={c.kind} onChange={(kind) => update.mutate({ kind })} />,
+                        'collection.restoreKind': () =>
+                          menu.edit &&
+                          folder && (
+                            <MenuItem icon={<RotateCcw />} onSelect={() => update.mutate({ kind: 'auto' })}>
+                              恢复自动判断类型
+                            </MenuItem>
+                          ),
+                        'collection.addImages': () =>
+                          menu.edit &&
+                          !folder && (
+                            <MenuItem icon={<ImagePlus />} onSelect={() => setAdding(true)}>
+                              添加图片…
+                            </MenuItem>
+                          ),
+                        'collection.pageOrder': () =>
+                          menu.edit && (
+                            <MenuSub label="页序" icon={<ArrowDownAZ />}>
+                              <MenuRadioGroup value={data.pageOrder} onValueChange={(v) => update.mutate({ pageOrder: v as 'name' | 'mtime' })}>
+                                <MenuRadioItem value="name">按文件名</MenuRadioItem>
+                                <MenuRadioItem value="mtime">按文件修改时间</MenuRadioItem>
+                              </MenuRadioGroup>
+                            </MenuSub>
+                          ),
+                        'collection.series': () =>
+                          menu.edit && (
+                            <MenuItem icon={<Layers />} onSelect={() => setDialog('series')}>
+                              归入系列…
+                            </MenuItem>
+                          ),
+                        'collection.reveal': () =>
+                          menu.reveal && (
+                            <MenuItem
+                              icon={<FolderOpen />}
+                              onSelect={() => data.pages[0] && void api.revealImage(data.pages[0].imageId).catch(() => undefined)}
+                            >
+                              在资源管理器中显示
+                            </MenuItem>
+                          ),
+                        'collection.dismiss': () =>
+                          menu.edit && (
+                            <>
+                              <MenuSeparator />
+                              <MenuItem icon={<CircleOff />} danger onSelect={() => dismiss.mutate()}>
+                                {folder ? '不成册' : '解散（图片都还在）'}
+                              </MenuItem>
+                            </>
+                          ),
+                      }}
+                    />
+                  </Menu>
+                ),
+            }}
+          />
         }
       />
       {adding && <CollectionImagePicker id={c.id} memberIds={data.pages.map((p) => p.imageId)} open={adding} onOpenChange={setAdding} />}
@@ -330,46 +358,65 @@ function GroupDetail({ data }: { data: GetCollectionResponse }) {
         title={displayTitle(c)}
         subtitle={[`${formatCount(c.pageCount)} 张`, castLine].filter(Boolean).join(' · ')}
         actions={
-          <>
-            <Button variant="ghost" size="sm" icon={<ImagePlus className="size-3.5" />} onClick={() => setDialog('add')}>
-              添加图片…
-            </Button>
-            <ReadActions id={c.id} unit="张" />
-            {(menu.edit || menu.organize || menu.reveal) && <Menu
-              width={220}
-              trigger={
-                <Button variant="ghost" size="sm" aria-label="更多">
-                  <Ellipsis className="size-4" />
+          <Slot
+            id="page.group"
+            render={{
+              'group.add': () => (
+                <Button variant="ghost" size="sm" icon={<ImagePlus className="size-3.5" />} onClick={() => setDialog('add')}>
+                  添加图片…
                 </Button>
-              }
-            >
-              {menu.edit && <>
-              <MenuItem icon={<PencilLine />} onSelect={() => setDialog('rename')}>
-                改名…
-              </MenuItem>
-              <KindSub kind={c.kind} onChange={(kind) => update.mutate({ kind })} />
-              </>}
-              {menu.organize && (
-                <MenuItem icon={<FolderInput />} onSelect={() => setDialog('organize')}>
-                  整理到子文件夹…
-                </MenuItem>
-              )}
-              {menu.reveal && (
-                <MenuItem
-                  icon={<FolderOpen />}
-                  onSelect={() => data.pages[0] && void api.revealImage(data.pages[0].imageId).catch(() => undefined)}
-                >
-                  在资源管理器中显示
-                </MenuItem>
-              )}
-              {menu.edit && <>
-              <MenuSeparator />
-              <MenuItem icon={<CircleOff />} danger onSelect={() => dismiss.mutate()}>
-                解散组图（图片都还在）
-              </MenuItem>
-              </>}
-            </Menu>}
-          </>
+              ),
+              'group.read': () => <ReadActions id={c.id} unit="张" />,
+              'group.more': () =>
+                (menu.edit || menu.organize || menu.reveal) && (
+                  <Menu
+                    width={220}
+                    trigger={
+                      <Button variant="ghost" size="sm" aria-label="更多">
+                        <Ellipsis className="size-4" />
+                      </Button>
+                    }
+                  >
+                    <Slot
+                      id="menu.group"
+                      render={{
+                        'group.rename': () =>
+                          menu.edit && (
+                            <MenuItem icon={<PencilLine />} onSelect={() => setDialog('rename')}>
+                              改名…
+                            </MenuItem>
+                          ),
+                        'group.kind': () => menu.edit && <KindSub kind={c.kind} onChange={(kind) => update.mutate({ kind })} />,
+                        'group.organize': () =>
+                          menu.organize && (
+                            <MenuItem icon={<FolderInput />} onSelect={() => setDialog('organize')}>
+                              整理到子文件夹…
+                            </MenuItem>
+                          ),
+                        'group.reveal': () =>
+                          menu.reveal && (
+                            <MenuItem
+                              icon={<FolderOpen />}
+                              onSelect={() => data.pages[0] && void api.revealImage(data.pages[0].imageId).catch(() => undefined)}
+                            >
+                              在资源管理器中显示
+                            </MenuItem>
+                          ),
+                        'group.dismiss': () =>
+                          menu.edit && (
+                            <>
+                              <MenuSeparator />
+                              <MenuItem icon={<CircleOff />} danger onSelect={() => dismiss.mutate()}>
+                                解散组图（图片都还在）
+                              </MenuItem>
+                            </>
+                          ),
+                      }}
+                    />
+                  </Menu>
+                ),
+            }}
+          />
         }
       />
       <PageBody className="flex-1">

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { JOB_KINDS, JOB_LABEL as JOB_LABELS, type Job, type JobKind } from '@emaki/shared';
+import type { Points } from './points.ts';
+import { JOB_KINDS, JOB_LABEL as JOB_LABELS, jobTitle, type Job, type JobKind } from '@emaki/shared';
 import type { EventBus } from './events.ts';
 import { jobActor, runAs } from '../propagation/actor.ts';
 
@@ -36,9 +37,11 @@ const KEEP_FINISHED = 100;
 
 /**
  * 两条道（2026-09-28）：识别主要吃显卡，单独一条 gpu 道；扫描、缩略图、查重、同步吃 CPU / 硬盘，在 io 道里串行。
- * 两条道同时跑，所以缩略图不会再把识别堵在后面。每种任务在哪条道登记在任务种类的注册表里
+ * 两条道同时跑，所以缩略图不会再把识别堵在后面。插件的任务（E5，多是联网下载）再单开一条 plugin 道：
+ * 下载着的时候新图的扫描、缩略图照常跑，长的扫描也不挡下载。每种任务在哪条道登记在任务种类的注册表里
  */
-const LANE = (kind: JobKind): 'io' | 'gpu' => JOB_KINDS[kind].lane;
+type Lane = (typeof JOB_KINDS)[JobKind]['lane'];
+const LANE = (kind: JobKind): Lane => JOB_KINDS[kind].lane;
 
 /**
  * 任务队列：每条道同一时间只跑一个任务，道内按优先级出队，同优先级先进先出。
@@ -48,7 +51,9 @@ export class JobQueue {
   private readonly jobs: Job[] = [];
   private readonly runners = new Map<string, JobRunner>();
   private readonly controllers = new Map<string, AbortController>();
-  private readonly running = { io: false, gpu: false };
+  private readonly running: Record<Lane, boolean> = { io: false, gpu: false, plugin: false };
+  /** 内部点（引擎的上下文建好以后接上，datasource/sqlite/context.ts）；单元测试里没有 */
+  points: Points | null = null;
 
   constructor(
     private readonly bus: EventBus,
@@ -59,6 +64,10 @@ export class JobQueue {
      */
     private readonly onFinished?: (kind: JobKind) => void,
   ) {}
+
+  usePoints(points: Points): void {
+    this.points = points;
+  }
 
   list(): Job[] {
     // 最新的在前，只返回最近 20 条
@@ -84,11 +93,44 @@ export class JobQueue {
       finishedAt: null,
     };
     this.jobs.push(job);
-    this.runners.set(job.id, this.resolveRunner(kind));
+    // 执行体是内部点 job:<种类>（第 3 层插件能改）：跑的时候再套补丁，排队期间补丁变了也按跑的时候的
+    const runner = this.resolveRunner(kind);
+    this.runners.set(job.id, (ctx) => (this.points ? this.points.wrap(`job:${kind}`, runner) : runner)(ctx));
     this.trim();
     this.publish(job);
     void this.pump();
     return job;
+  }
+
+  /**
+   * 插件的任务（kind 是 plugin，docs/plugins.md 第 6 节）：名字是插件登记的，执行体直接给（在插件的子进程里跑）。
+   * 每次都是一个新任务，不和别的合并；排队、通道、进度、取消都和内置的一样
+   */
+  enqueueTask(o: { title: string; plugin: string; run: JobRunner }): Job {
+    const job: Job = {
+      id: randomUUID(),
+      kind: 'plugin',
+      title: o.title,
+      plugin: o.plugin,
+      status: 'queued',
+      progress: 0,
+      total: null,
+      message: `${o.title}：等待中`,
+      etaSeconds: null,
+      startedAt: null,
+      finishedAt: null,
+    };
+    this.jobs.push(job);
+    this.runners.set(job.id, o.run);
+    this.trim();
+    this.publish(job);
+    void this.pump();
+    return job;
+  }
+
+  /** 一个任务现在的样子（插件查自己的任务） */
+  get(id: string): Job | undefined {
+    return this.jobs.find((j) => j.id === id);
   }
 
   cancel(id: string): void {
@@ -111,7 +153,7 @@ export class JobQueue {
   }
 
   /** 这条道里优先级最高的；同优先级按先进先出 */
-  private pickNext(lane: 'io' | 'gpu'): Job | undefined {
+  private pickNext(lane: Lane): Job | undefined {
     let best: Job | undefined;
     for (const j of this.jobs) {
       if (j.status !== 'queued' || LANE(j.kind) !== lane) continue;
@@ -123,9 +165,10 @@ export class JobQueue {
   private async pump(): Promise<void> {
     void this.pumpLane('io');
     void this.pumpLane('gpu');
+    void this.pumpLane('plugin');
   }
 
-  private async pumpLane(lane: 'io' | 'gpu'): Promise<void> {
+  private async pumpLane(lane: Lane): Promise<void> {
     if (this.running[lane]) return;
     const job = this.pickNext(lane);
     if (!job) return;
@@ -135,7 +178,7 @@ export class JobQueue {
     this.controllers.set(job.id, controller);
     job.status = 'running';
     job.startedAt = new Date().toISOString();
-    job.message = `${JOB_LABELS[job.kind]}：进行中`;
+    job.message = `${jobTitle(job)}：进行中`;
     this.publish(job);
 
     let yielded = false;
@@ -177,14 +220,14 @@ export class JobQueue {
       job.message =
         typeof result === 'string' && job.status === 'done'
           ? result
-          : `${JOB_LABELS[job.kind]}：${job.status === 'done' ? (yielded ? '已让出，稍后继续' : '完成') : '已取消'}`;
+          : `${jobTitle(job)}：${job.status === 'done' ? (yielded ? '已让出，稍后继续' : '完成') : '已取消'}`;
     } catch (err) {
       job.status = controller.signal.aborted ? 'cancelled' : 'failed';
       // 取消时抛出的（下载被中断「This operation was aborted」之类）不算失败
       job.message =
         job.status === 'cancelled'
-          ? `${JOB_LABELS[job.kind]}：已取消`
-          : `${JOB_LABELS[job.kind]}失败：${err instanceof Error ? err.message : String(err)}`;
+          ? `${jobTitle(job)}：已取消`
+          : `${jobTitle(job)}失败：${err instanceof Error ? err.message : String(err)}`;
     } finally {
       job.finishedAt = new Date().toISOString();
       job.etaSeconds = null;

@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>作品排行</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        margin: 0;
+        padding: 4px 2px 24px;
+        font-family: var(--font-sans, system-ui, sans-serif);
+        font-size: var(--font-text-md-size, 14px);
+        line-height: 1.6;
+        color: var(--color-text-primary, #222);
+        background: var(--color-background-primary, #fff);
+      }
+      .muted {
+        color: var(--color-text-secondary, #666);
+      }
+      .stats {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+      .stat {
+        min-width: 120px;
+        padding: 12px 16px;
+        border-radius: var(--border-radius-md, 12px);
+        background: var(--color-background-secondary, #f6f6f6);
+        box-shadow: var(--shadow-hairline, none);
+      }
+      .stat b {
+        display: block;
+        font-size: var(--font-heading-lg-size, 20px);
+        font-variant-numeric: tabular-nums;
+      }
+      .bar-row {
+        display: grid;
+        grid-template-columns: 44px minmax(6em, 12em) 1fr 5.5em;
+        align-items: center;
+        gap: 12px;
+        padding: 6px 8px;
+        border-radius: var(--border-radius-sm, 8px);
+        cursor: pointer;
+      }
+      .bar-row:hover {
+        background: var(--color-background-tertiary, #eee);
+      }
+      .bar-row img {
+        width: 44px;
+        height: 44px;
+        object-fit: cover;
+        border-radius: var(--border-radius-sm, 8px);
+        background: var(--color-background-tertiary, #eee);
+      }
+      .bar {
+        height: 10px;
+        border-radius: 999px;
+        background: var(--color-background-tertiary, #eee);
+        overflow: hidden;
+      }
+      .bar > span {
+        display: block;
+        height: 100%;
+        border-radius: 999px;
+        background: var(--color-text-info, #c33);
+      }
+      .num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      /* 窄屏（手机）：去掉条，只留封面、名字、张数 */
+      @media (max-width: 560px) {
+        .bar-row {
+          grid-template-columns: 44px 1fr auto;
+        }
+        .bar {
+          display: none;
+        }
+      }
+      .toolbar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin: 4px 0 10px;
+      }
+      button {
+        font: inherit;
+        font-size: var(--font-text-sm-size, 13px);
+        padding: 3px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--color-border-primary, #ddd);
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+      }
+      button[aria-pressed='true'] {
+        background: var(--color-background-inverse, #222);
+        color: var(--color-text-inverse, #fff);
+        border-color: transparent;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stats" class="stats"></div>
+    <div class="toolbar">
+      <span class="muted">排序</span>
+      <button data-sort="imageCount">按张数</button>
+      <button data-sort="recent">按最近新增</button>
+      <button id="ask" hidden>问 AI 助手</button>
+    </div>
+    <div id="list"><p class="muted">加载中…</p></div>
+
+    <script src="/plugin-sdk/app.js"></script>
+    <script type="module">
+      const view = await Emaki.connect({ name: 'works-chart', version: '0.1.0' });
+      const $ = (id) => document.getElementById(id);
+      let sort = (await view.storage.get('sort')) ?? 'imageCount';
+
+      function sparkline(values) {
+        const w = 120,
+          h = 28,
+          max = Math.max(1, ...values);
+        const pts = values.map((v, i) => `${(i / (values.length - 1)) * w},${h - (v / max) * (h - 4) - 2}`).join(' ');
+        return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="1.5" /></svg>`;
+      }
+
+      async function render() {
+        const [stats, works] = await Promise.all([view.read('/api/stats'), view.read(`/api/works?sort=${sort}`)]);
+        const week = stats.addedLast7Days.reduce((a, b) => a + b, 0);
+        $('stats').innerHTML = `
+          <div class="stat"><span class="muted">图片</span><b>${stats.imageCount.toLocaleString()}</b></div>
+          <div class="stat"><span class="muted">作品</span><b>${stats.workCount}</b></div>
+          <div class="stat"><span class="muted">角色</span><b>${stats.characterCount}</b></div>
+          <div class="stat"><span class="muted">最近七天新增 ${week}</span><b class="muted">${sparkline(stats.addedLast7Days)}</b></div>`;
+        for (const b of document.querySelectorAll('[data-sort]')) b.setAttribute('aria-pressed', String(b.dataset.sort === sort));
+        const top = works.slice(0, 15);
+        const key = sort === 'recent' ? 'recentImageCount' : 'imageCount';
+        // 告诉 AI 助手这一页显示的是什么：你在这一页问它时一起发过去（docs/plugins.md 12.8）
+        view.setContext(
+          `作品排行（${sort === 'recent' ? '按最近新增' : '按张数'}，前 ${top.length} 部）：` + top.map((w, i) => `${i + 1}. ${w.name} ${w[key]} 张`).join('；'),
+        );
+        const max = Math.max(1, ...top.map((w) => w[key]));
+        $('list').innerHTML = top
+          .map(
+            (w) => `<div class="bar-row" data-id="${w.id}" title="打开「${w.name}」">
+              <img data-cover="${w.coverImageId ?? ''}" alt="" />
+              <span>${w.name}</span>
+              <div class="bar"><span style="width:${(w[key] / max) * 100}%"></span></div>
+              <span class="num">${w[key].toLocaleString()} 张</span>
+            </div>`,
+          )
+          .join('');
+        // 封面一张一张取（在 Claude 里打开时是 data: 地址，所以只取看得到的这十几张）
+        for (const img of document.querySelectorAll('img[data-cover]'))
+          if (img.dataset.cover) img.src = await view.thumb(img.dataset.cover, 240);
+      }
+
+      $('list').addEventListener('click', (e) => {
+        const row = e.target.closest('[data-id]');
+        if (row) view.open(`/works/${row.dataset.id}`);
+      });
+      for (const b of document.querySelectorAll('[data-sort]'))
+        b.addEventListener('click', async () => {
+          sort = b.dataset.sort;
+          await view.storage.set('sort', sort);
+          await render();
+        });
+      // 请你问 AI 助手一句：放进助手的输入框，你按发送才发（助手没开时按钮不显示）
+      $('ask').hidden = !view.inEmaki;
+      $('ask').onclick = async () => {
+        if (!(await view.ask('看看这个作品排行：哪几部作品还有很多图没认出角色？'))) $('ask').textContent = 'AI 助手没开';
+      };
+      view.onChanged(() => render());
+      await render();
+    </script>
+  </body>
+</html>

@@ -25,6 +25,10 @@ import type { ImageActions } from './useImageActions';
 import { TRASH_HINT, useCharacter, useSettings } from '@/lib/queries';
 import { CharacterAvatar } from '@/features/gallery/CharacterPicker';
 import { PoseInfoRowLazy } from '@/features/pose/lazy';
+import { Slot, slotEntries, type SlotRenderers } from '@/blocks/Slot';
+import { shortcutOf } from '@/blocks/slots';
+import { useDisabledEntries } from '@/lib/plugins';
+import { patchable } from '@/lib/points';
 
 const RATINGS = Object.keys(RATING_LABEL) as Rating[];
 
@@ -34,7 +38,10 @@ const RATINGS = Object.keys(RATING_LABEL) as Rating[];
  * variant="sheet"（窄屏的底部面板，A1，InfoSheet.tsx）：操作那一排排在最前面（平时只露出它），展开后才是头部和其余信息；
  * 外面的纸和滚动由 InfoSheet 管。
  */
-export function InfoPanel({
+/** 看图器的信息栏是内部点 component:lightbox.InfoPanel（第 3 层插件能改，lib/points.tsx） */
+export const InfoPanel = patchable('component:lightbox.InfoPanel', InfoPanelView);
+
+function InfoPanelView({
   base,
   detail,
   error,
@@ -58,39 +65,44 @@ export function InfoPanel({
   expanded?: boolean;
 }) {
   const artistsOn = useSettings().data?.tagger.artists ?? false;
+  // 各栏按登记的顺序（blocks/slots.ts 的 lightbox.panel）
   const body = detail ? (
-    <>
-      <PanelCharacters
-        characterIds={actions.characterIds}
-        links={detail.characterLinks}
-        suggestions={detail.characterSuggestions}
-        actions={actions}
-        onNavigate={onNavigate}
-      />
-
-      {/* 没开画师识别、也没改过的图不占地方 */}
-      {(artistsOn || detail.artists.length > 0 || detail.artistsManual) && (
-        <PanelArtists artists={detail.artists} manual={detail.artistsManual} actions={actions} onNavigate={onNavigate} />
-      )}
-
-      <Section title="分级">
-        {actions.allow.rating ? (
-          <Segmented<Rating>
-            size="sm"
-            value={actions.rating ?? detail.rating}
-            onChange={actions.setRating}
-            options={RATINGS.map((r) => ({ value: r, label: RATING_LABEL[r] }))}
+    <Slot
+      id="lightbox.panel"
+      render={{
+        'lightbox.characters': () => (
+          <PanelCharacters
+            characterIds={actions.characterIds}
+            links={detail.characterLinks}
+            suggestions={detail.characterSuggestions}
+            actions={actions}
+            onNavigate={onNavigate}
           />
-        ) : (
-          <span className="text-[13px]">{RATING_LABEL[actions.rating ?? detail.rating]}</span>
-        )}
-      </Section>
-
-      <KindSection detail={detail} actions={actions} />
-
-      <Details detail={detail} actions={actions} onNavigate={onNavigate} />
-      <PanelTags tags={detail.tags} onTagClick={onTagClick} />
-    </>
+        ),
+        // 没开画师识别、也没改过的图不占地方
+        'lightbox.artists': () =>
+          (artistsOn || detail.artists.length > 0 || detail.artistsManual) && (
+            <PanelArtists artists={detail.artists} manual={detail.artistsManual} actions={actions} onNavigate={onNavigate} />
+          ),
+        'lightbox.rating': () => (
+          <Section title="分级">
+            {actions.allow.rating ? (
+              <Segmented<Rating>
+                size="sm"
+                value={actions.rating ?? detail.rating}
+                onChange={actions.setRating}
+                options={RATINGS.map((r) => ({ value: r, label: RATING_LABEL[r] }))}
+              />
+            ) : (
+              <span className="text-[13px]">{RATING_LABEL[actions.rating ?? detail.rating]}</span>
+            )}
+          </Section>
+        ),
+        'lightbox.contentKind': () => <KindSection detail={detail} actions={actions} />,
+        'lightbox.details': () => <Details detail={detail} actions={actions} onNavigate={onNavigate} />,
+        'lightbox.tags': () => <PanelTags tags={detail.tags} onTagClick={onTagClick} />,
+      }}
+    />
   ) : error ? (
     <div className="border-t border-line px-5 py-10 text-center">
       <div className="text-[13px] font-medium">读不到这张图的详情</div>
@@ -136,60 +148,70 @@ export function InfoPanel({
  * （手机上默认是收藏、归为原创、排除三个）。
  */
 function ActionTiles({ base, actions }: { base: ImageItem | undefined; actions: ImageActions }) {
-  const tiles = [
-    actions.allow.favorite && (
-      <ActionTile
-        key="favorite"
-        icon={<Heart />}
-        label={actions.favorite ? '已收藏' : '收藏'}
-        tooltip={actions.favorite ? '取消收藏' : '收藏'}
-        shortcut="F"
-        active={actions.favorite}
-        disabled={!base}
-        onClick={actions.toggleFavorite}
-      />
-    ),
-    actions.allow.original && (
-      <ActionTile
-        key="original"
-        icon={<Sparkles />}
-        label={actions.original ? '已归原创' : '归为原创'}
-        tooltip={actions.original ? '移出原创' : '归为原创：画师自己的原创角色，不再出现在未识别'}
-        shortcut="O"
-        active={actions.original}
-        disabled={!base || (base.kind !== 'illustration' && base.kind !== 'comic')}
-        onClick={actions.toggleOriginal}
-      />
-    ),
-    actions.allow.reveal && (
-      <ActionTile key="reveal" icon={<FolderOpen />} label="定位" tooltip="在资源管理器中显示" disabled={!base} onClick={actions.reveal} />
-    ),
-    actions.allow.exclude && (
-      <ActionTile
-        key="exclude"
-        icon={<Ban />}
-        label="排除"
-        tooltip="排除：不再出现在图库和统计里，文件不会被删除"
-        shortcut="E"
-        pending={actions.busy.exclude}
-        disabled={!base || !!actions.leaving}
-        onClick={actions.exclude}
-      />
-    ),
-    actions.allow.trash && (
-      <ActionTile
-        key="trash"
-        icon={<Trash2 />}
-        label="回收站"
-        tooltip={TRASH_HINT}
-        danger
-        pending={actions.busy.trash}
-        // 刚排除 / 移走的那张还停在原地：连点不会落到下一张
-        disabled={!base || !!actions.leaving}
-        onClick={actions.trash}
-      />
-    ),
-  ].filter(Boolean);
+  const disabled = useDisabledEntries();
+  // 按登记的顺序（blocks/slots.ts 的 lightbox.actions）；平分一行要先知道有几个，所以不用 <Slot>
+  const render: SlotRenderers<'lightbox.actions'> = {
+    'lightbox.favorite': () =>
+      actions.allow.favorite && (
+        <ActionTile
+          key="favorite"
+          icon={<Heart />}
+          label={actions.favorite ? '已收藏' : '收藏'}
+          tooltip={actions.favorite ? '取消收藏' : '收藏'}
+          shortcut={shortcutOf('lightbox.favorite')}
+          active={actions.favorite}
+          disabled={!base}
+          onClick={actions.toggleFavorite}
+        />
+      ),
+    'lightbox.original': () =>
+      actions.allow.original && (
+        <ActionTile
+          key="original"
+          icon={<Sparkles />}
+          label={actions.original ? '已归原创' : '归为原创'}
+          tooltip={actions.original ? '移出原创' : '归为原创：画师自己的原创角色，不再出现在未识别'}
+          shortcut={shortcutOf('lightbox.original')}
+          active={actions.original}
+          disabled={!base || (base.kind !== 'illustration' && base.kind !== 'comic')}
+          onClick={actions.toggleOriginal}
+        />
+      ),
+    'lightbox.reveal': () =>
+      actions.allow.reveal && (
+        <ActionTile key="reveal" icon={<FolderOpen />} label="定位" tooltip="在资源管理器中显示" disabled={!base} onClick={actions.reveal} />
+      ),
+    'lightbox.exclude': () =>
+      actions.allow.exclude && (
+        <ActionTile
+          key="exclude"
+          icon={<Ban />}
+          label="排除"
+          tooltip="排除：不再出现在图库和统计里，文件不会被删除"
+          shortcut={shortcutOf('lightbox.exclude')}
+          pending={actions.busy.exclude}
+          disabled={!base || !!actions.leaving}
+          onClick={actions.exclude}
+        />
+      ),
+    'lightbox.trash': () =>
+      actions.allow.trash && (
+        <ActionTile
+          key="trash"
+          icon={<Trash2 />}
+          label="回收站"
+          tooltip={TRASH_HINT}
+          danger
+          pending={actions.busy.trash}
+          // 刚排除 / 移走的那张还停在原地：连点不会落到下一张
+          disabled={!base || !!actions.leaving}
+          onClick={actions.trash}
+        />
+      ),
+  };
+  const tiles = slotEntries('lightbox.actions', disabled)
+    .map((id) => render[id]())
+    .filter(Boolean);
   if (!tiles.length) return null;
   return (
     <div className="grid gap-1 px-3 pb-4" style={{ gridTemplateColumns: `repeat(${tiles.length}, minmax(0, 1fr))` }}>

@@ -125,7 +125,7 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - `lib/queries.ts`：全部数据 hook；修改一律用 `useMutate(fn)`，自动结果 toast + 撤销 + 刷新。界面上显示的计数读 `useSummary()`（汇总接口，见下面「数字从哪来」）
 - `lib/stores.ts`：`usePrefs`（本机偏好：模糊开关与范围、照片 / 文字模糊、悬停显示、底色、网格密度、书架 / 列表、行高、图库类型、收拢组图、阅读器单双页与翻页方向）`useLightbox`（`show(ids, index)` 打开看图器）`useSelection`（多选）`useOverlays` `useUndoStore`
 - `lib/viewport.ts`（`useViewport` 和排法规则）、`lib/gestures.ts`（触屏手势的判定）、`lib/useLongPress.ts`、`lib/pager/`（播放器的翻页和缩放，见下面「播放器」）
-- `lib/motion.ts`、`lib/viewTransition.ts`、`lib/kinds.ts`（类型的图标、`ANIMATED_LABEL`；类型名、印章字、说明转自 `packages/shared`）、`lib/blur.ts`（转出 `packages/shared` 的 `blurReason`）、`lib/format.ts`（`formatCount` `formatCompact` `formatBytes` `formatRelative` `formatDate`；`RATING_LABEL` 转自 shared）、`lib/hotkeys.ts`（`useHotkey('mod+k', fn)`）、`lib/events.ts`（SSE：`changed` 按变化类型只让相关的 query 失效（`REFRESH`），写操作等自己那条事件的刷新（`settleRefresh`），助手的可撤销修改进撤销栈；识别进行中排名类列表最多一分钟重拉一次，未识别列表只标记过期）、`lib/urlPrefs.ts`（收拢组图的模式进 URL）
+- `lib/motion.ts`、`lib/viewTransition.ts`、`lib/kinds.ts`（类型的图标、`ANIMATED_LABEL`；类型名、印章字、说明转自 `packages/shared`）、`lib/blur.ts`（转出 `packages/shared` 的 `blurReason`）、`lib/format.ts`（`formatCount` `formatCompact` `formatBytes` `formatRelative` `formatDate`；`RATING_LABEL` 转自 shared）、`lib/hotkeys.ts`（`useHotkey('mod+k', fn)`）、`lib/events.ts`（SSE：`changed` 按变化类型只让相关的 query 失效（`REFRESH`），写操作等自己那条事件的刷新（`settleRefresh`），助手的可撤销修改进撤销栈；识别进行中排名类列表最多一分钟重拉一次，未识别列表只标记过期；同一个浏览器里几个标签页共用一条 `/api/events`（`openSharedEventStream`：Web Locks 选一个标签页去连、BroadcastChannel 转给别的，回到前台的标签页把连接抢过来）——浏览器对同一个网站最多同时开 6 个连接，以前每个标签页各占一条长连接，开上几个标签页图片就排不上队；助手会话的推送也只在助手开着或正在跑时连）、`lib/urlPrefs.ts`（收拢组图的模式进 URL）
 - `blocks/`：页面区块注册表 `registry.ts` 和按注册表渲染的 `PageBlocks`（见下面「页面区块」）
 
 ### 按能力显示入口（docs/mobile.md 4.4）
@@ -136,6 +136,8 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - 侧栏的项写目标地址，need 取那一页的；设置的新分区在 `features/settings/sections.ts` 写 need；命令面板的命令、看图器和多选栏的操作各自写 need；
 - 页面里改东西的按钮按它调的命令的 scope 判断（`useCan`），能读不能改的页面照常显示、改的入口隐藏；
 - 会发出请求的（助手设置、手机访问状态这类设备上必然 403 的）用 `known(need)`：确定是电脑上才发。
+- **插件停用的页面也走同一个判断**（[plugins.md](plugins.md) 9.4）：每一页属于一个内置插件（`@emaki/shared` 的 `BUILTIN_PLUGINS`），停用了 `canVisit` 就是 false，`PageGate` 显示「这一页已停用」。
+  侧栏和手机底部标签栏的项、顺序、名字来自插件（`lib/plugins.ts` 的 `useNav`）；链接到别的页面时照样用 `useCanVisit()`，停用的就不显示。新页面要登记到某个内置插件的 `page@1`（`lib/plugins.test.ts` 检查）。
 
 页面的筛选状态放在 URL 查询参数（`useSearchParams`），刷新后保留。会影响列表里有哪些图的本机偏好也写进 URL：图库的类型 `?kind=`、收拢组图 `?collapse=`（没写时把偏好补进去，写了以 URL 为准），AI 助手拿到的页面地址和用户看到的一致。
 
@@ -183,9 +185,14 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 - 「未识别」的大图是处理队列，不是播放器：换图带盖章的动画（`PreviewStage`），只用底层的 `useSwipePager` 认左右滑。
 
 - 底部面板的「往下拖收起 / 往上拉展开」也只有一份：`lib/useSheetDrag.ts`（`ui/Sheet` 和看图器窄屏的 `lightbox/InfoSheet` 都用它；过了 slop 才接管，拖动区里的按钮照常能点）。
+- 列表的拖动排序也只有一份：`lib/useDragSort.ts`（插件页的「页面顺序」用；鼠标、触屏都行，按住把手拖，别的行实时让位，能拖到别的列表，靠近上下边自动滚，Esc 放回去）。
+  落点的判定是纯函数（`sortTarget`、`moveTo`，`useDragSort.test.ts` 测，还扫源码：`data-sort-item` 只和它一起用）；键盘和读屏用每一行的「上移 / 下移」。
+- 第 3 层插件能改的组件和函数（docs/plugins.md 第 7 节）：`lib/points.tsx` 的 `patchable('component:…', 组件)`、`patchableFn('fn:…', 函数)`，名字登记在 `@emaki/shared` 的 `WEB_POINTS`
+  （和源码对不上 `lib/points.test.tsx` 会失败）。改了它们的 props、签名，服务端的 `pointContracts.test.ts` 会提醒更新约定的快照（`npm run points:contracts -w @emaki/server`），
+  改它们的插件会自动停用等确认；只改里面的实现不影响。排名的张数后面的字用 `useCountUnit()`（`lib/countUnit.ts`），不直接写「张」。
 
-**规矩**：翻页、缩放、点按、长按、拖面板这类交互只能有一个实现。新的地方要「左右翻一张」「捏合放大」就用 `lib/pager`，要不一样的手感就改 `lib/pager`（所有播放器一起变），
-不在页面里另写一套。这也是以后 mod 的前提（core-architecture.md 第 10.2 节）：同一个行为只在一处，改它只要改一处。
+**规矩**：翻页、缩放、点按、长按、拖面板、拖动排序这类交互只能有一个实现。新的地方要「左右翻一张」「捏合放大」就用 `lib/pager`，要不一样的手感就改 `lib/pager`（所有播放器一起变），
+不在页面里另写一套。这也是以后插件的前提（core-architecture.md 第 10.2 节）：同一个行为只在一处，改它只要改一处。
 验收：没有端到端测试（纯函数的部分有单元测试：`lib/gestures.test.ts`、`lib/pager/usePageTrack.test.ts`、`lib/useSheetDrag.test.ts`；`lib/pager/pager.test.ts`、`useSheetDrag.test.ts` 还会扫一遍源码，翻页、缩放、拖面板的判定在别处被用到就失败）；改 `lib/pager` 后在电脑（点击、按键、滚轮、触控板）和触屏（拖动、捏合、双击、下滑关闭）上把阅读器和看图器都走一遍。
 - **多选**：电脑上照旧悬停勾选圈、Ctrl / Shift 点击；触屏上长按一张进入多选，页头有「选择」（`SelectButton`，`useSelection.start(scope)` 进入还没选图的多选模式，`isSelecting` 判断）。
 
@@ -321,7 +328,8 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 7. **手机访问**（`features/access/PhoneAccessSection`，[mobile.md](mobile.md) 第 2 节）：开关「让手机连接这台电脑」（默认关）；打开后是状态（监听的端口、局域网地址，`error` 红底醒目写出，Windows 防火墙要允许「专用网络」的提醒）、
    电脑名称、端口、「用二维码添加」（`uqr` 编码后画成 SVG，包一层 `data-theme="light"`，深色主题下也是浅底深码）；下面「等你批准的请求」（大号 3 + 3 校验码、剩余时间、批准 / 拒绝，权限默认折叠）和「已连接的设备」（编辑名称和权限、移除先确认）。
    数据是查询 `access.status`（`useAccessStatus`，局域网入口上 403 时为 null），SSE 的 `access` 事件让它重新取。这些命令不可撤销、不占撤销栈（`useMutate(…, { undo: false })`）。
-8. **关于**：版本、数据目录、快捷键入口。
+8. **插件**（`PluginsSection`，[plugins.md](plugins.md) 9.7）：只放「在侧栏显示『插件』」开关和「管理插件」链接；插件页 `/plugins` 单独一页（`features/plugins/`），装插件和授权单也在那里（12.3）。
+9. **关于**：版本、数据目录、快捷键入口。
 
 设置修改即时保存（`api.updateSettings`，toast「已保存」），滑块松手时才保存。
 

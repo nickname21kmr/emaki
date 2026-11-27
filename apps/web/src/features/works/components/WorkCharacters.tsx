@@ -8,6 +8,7 @@ import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import { useOnEnterView } from '@/features/characters/detail/useInView';
 import { AVATAR_GAP, AVATAR_MIN, TOP_COUNT } from './constants';
+import { useCountUnit } from '@/lib/countUnit';
 
 const TOP_GRID = 'grid grid-cols-2 gap-4 md:grid-cols-4';
 const AVATAR_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(116px,1fr))] gap-x-4 gap-y-6 justify-items-center';
@@ -48,6 +49,7 @@ export function WorkCharacters({
   error?: unknown;
   onRetry?: () => void;
 }) {
+  const unit = useCountUnit();
   const sentinel = useOnEnterView<HTMLDivElement>(onLoadMore, expanded && hasMore && !loadingMore);
   const gridRef = useRef<HTMLDivElement>(null);
   const [cols, setCols] = useState(10);
@@ -119,7 +121,7 @@ export function WorkCharacters({
               >
                 <AvatarTile
                   character={c}
-                  caption={`${formatCount(c.imageCount)} 张`}
+                  caption={`${formatCount(c.imageCount)} ${unit}`}
                   badge={
                     c.newCount > 0 ? (
                       <Badge tone="ink" dot="var(--c-ok)">

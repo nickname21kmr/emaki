@@ -16,6 +16,8 @@ export const SECTIONS = [
   { id: 'phone', title: '手机访问', need: 'devices' },
   { id: 'assistant', title: 'AI 助手 · 实验', need: 'assistant' },
   { id: 'pose', title: '姿势检索 · 实验', need: 'desktop' },
+  // 插件（docs/plugins.md 9.7）：只放「插件」页在不在侧栏、去插件页；谁都能看，开关要 plugins
+  { id: 'plugins', title: '插件', need: null },
   { id: 'about', title: '关于', need: null },
 ] as const satisfies readonly { id: string; title: string; need: Need }[];
 

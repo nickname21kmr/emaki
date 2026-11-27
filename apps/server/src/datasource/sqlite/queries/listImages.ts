@@ -6,7 +6,7 @@ import { collapsedImages, decideCollapse } from './collapsedImages.ts';
  *
  * 用 keyset 游标而不是 offset：扫描期间不断插入新图，offset 分页会让无限滚动出现重复或漏图。
  */
-import { searchKey, TAG_FILTER_MIN_SCORE, type ImageItem, type ImageSort, type ListImagesQuery, type Page } from '@emaki/shared';
+import { BUILTIN_DEFAULT_SORT, searchKey, TAG_FILTER_MIN_SCORE, type ImageItem, type ImageSort, type ListImagesQuery, type Page } from '@emaki/shared';
 import { tagsOfArtist } from '../artists.ts';
 import type { Db } from '../../../db/connection.ts';
 import { hydrateImages, IMAGE_COLS, type ImageRow } from '../hydrate.ts';
@@ -267,7 +267,7 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
   // 按姿势类别筛选、没指定排序时按离代表骨架的距离（近的在前，游标用偏移：距离不在图片行里）
   // 按 PoseWear 姿势筛选、没指定排序时按匹配名次（原型按 0.6·骨架相似 + 0.4·标签分排好的，低置信的不另外往后挪）
   const byPose = !q.sort && (q.posewearPose ? 'poseRank' : q.poseClass ? 'poseDistance' : null);
-  const sort: ImageSort | 'poseDistance' | 'poseRank' = byPose || (q.sort === 'page' && collection === null ? 'addedAt' : (q.sort ?? 'addedAt'));
+  const sort: ImageSort | 'poseDistance' | 'poseRank' = byPose || (q.sort === 'page' && collection === null ? 'addedAt' : (q.sort ?? BUILTIN_DEFAULT_SORT));
 
   if (!q.collectionId && !q.poseClass && !q.posewearPose && decideCollapse(q.collapseCollections, q.cursor, total)) return collapsedImages(db, q, w, countWhere.join(' AND '), p, total);
 

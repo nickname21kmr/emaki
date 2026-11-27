@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import type { AssistantBackend, AssistantCard, AssistantContext, AssistantModel, AssistantSession } from '@emaki/shared';
+import { pluginPagePath, type AssistantBackend, type AssistantCard, type AssistantContext, type AssistantModel, type AssistantSession } from '@emaki/shared';
 import { ApiRequestError } from '@/lib/api';
 import { useLightbox, useSelection, useUndoStore } from '@/lib/stores';
 import { undo as undoMutation } from '@/lib/queries';
@@ -12,6 +12,7 @@ import { openSessionEvents } from './sessionEvents';
 import { composerContext, erratumOf, reconcileModelSelection, toggleResultImage, type ResultSelection } from './presentation';
 import { focusComposer, useAssistantDock } from './dock';
 import { useAssistantView, type UndoResult } from './viewState';
+import { useViewContext } from '@/features/plugins/view/viewContext';
 
 export type SessionSummary = Pick<AssistantSession, 'id' | 'title' | 'backend' | 'updatedAt'>;
 
@@ -107,7 +108,18 @@ export function useConversation(backend: AssistantBackend | null): ConversationV
   // 读模型列表会临时拉起 Agent 进程，只在打开后读
   const models = useQuery({ queryKey: ['assistant-models', sessionId], queryFn: () => assistantApi.models(sessionId), enabled: open && Boolean(sessionId), staleTime: 60000, retry: false });
   const running = session?.status === 'running' || session?.status === 'waiting';
-  const context = composerContext(location.pathname + location.search, scope, selected, viewedId, resultSelection);
+  // 在插件的页面上：页面报的「现在显示的是什么」随问题一起发（docs/plugins.md 12.8）
+  const viewContext = useViewContext(s => s.current);
+  const onView = viewContext && location.pathname === pluginPagePath(viewContext.plugin, viewContext.page) ? viewContext : null;
+  const context = { ...composerContext(location.pathname + location.search, scope, selected, viewedId, resultSelection), ...(onView && { view: onView }) };
+  // 插件页面请你问的一句（askAssistant）：接在输入框里，不替你发
+  const incoming = useAssistantDock(s => s.incoming);
+  useEffect(() => {
+    if (!incoming || !sessionId) return;
+    useAssistantView.getState().setDraft(sessionId, cur => (cur.trim() ? `${cur.trimEnd()}\n${incoming}` : incoming));
+    useAssistantDock.setState({ incoming: null });
+    requestAnimationFrame(() => focusComposer(true));
+  }, [incoming, sessionId]);
   const interruptedRequest = session?.messages.find(m => m.id === session.interruption?.messageId);
 
   useEffect(() => { setResultSelection(null); }, [sessionId, location.pathname, location.search, selected, scope]);
@@ -186,9 +198,18 @@ export function useConversation(backend: AssistantBackend | null): ConversationV
     // eslint-disable-next-line react-hooks/exhaustive-deps -- chooseSession / create 每次渲染都是新的
   }, [open, backend, sessionId, sessions.data]);
 
+  // 会话的实时推送只在助手开着、或者正在跑时连：每条推送占一个连接，浏览器对同一个网站最多同时开 6 个，
+  // 收起以后还连着的话，开几个标签页图片就排不上队了。收起、没在跑时只取一次快照（胶囊的状态）
+  const listening = open || running;
   useEffect(() => {
     if (!sessionId) return;
     let disposed = false;
+    if (!listening) {
+      void assistantApi.session(sessionId).then(s => { if (!disposed) setSession(s); }).catch(e => {
+        if (!disposed && isMissing(e)) forgetSession();
+      });
+      return () => { disposed = true; };
+    }
     // 又连上了：之前「后端暂时连不上」那类报错不再成立
     const reconnected = () => {
       setConnected(true);
@@ -223,7 +244,7 @@ export function useConversation(backend: AssistantBackend | null): ConversationV
     });
     return () => { disposed = true; closeEvents(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- forgetSession / dropSessions 每次渲染都是新的
-  }, [sessionId, client, connectionAttempt]);
+  }, [sessionId, client, connectionAttempt, listening]);
 
   // 助手在这次会话里新改的图库也进顶栏撤销栈（Ctrl+Z / ↶）；第一份快照里的算历史，不记
   useEffect(() => {

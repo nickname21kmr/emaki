@@ -6,6 +6,7 @@ import { CircleHelp, Ellipsis, Eye, EyeOff, Search, Undo2 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useLocation } from 'react-router';
 import { useScrollContainer } from '@/components/layout/ScrollContainer';
+import { useNavLabel } from '@/lib/plugins';
 import { getChapter } from './chapters';
 import { IconButton, Kbd, Menu, MenuItem, MenuSeparator } from '@/components/ui';
 import { cn } from '@/lib/cn';
@@ -37,6 +38,7 @@ export function PageHeader({
   sticky,
   kicker,
   chapter = true,
+  nav,
 }: {
   title: ReactNode;
   subtitle?: ReactNode;
@@ -50,7 +52,11 @@ export function PageHeader({
   kicker?: ReactNode;
   /** 画册式页头（卷号 + 衬线标题 + 双线）；详情页传 false */
   chapter?: boolean;
+  /** 这一页的导航项 id：在「插件」页改了这一页的名字，标题跟着变（title 是原名，docs/plugins.md 9.6） */
+  nav?: string;
 }) {
+  const navTitle = useNavLabel(nav ?? '', typeof title === 'string' ? title : '');
+  if (nav) title = navTitle;
   const headRef = useRef<HTMLElement>(null);
   // 手机横屏不吸顶（lib/viewport.ts 的 stickyHeaderFits）
   const viewport = useViewport();

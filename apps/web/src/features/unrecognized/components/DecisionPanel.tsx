@@ -20,6 +20,7 @@ import type { Triage } from '../useTriage';
 import { CharacterSearch } from './CharacterSearch';
 import { ActionKey, PanelSection, SuggestionRow } from './PanelParts';
 import { RunTaggerButton } from './RunTaggerButton';
+import { SourceLink } from '@/features/plugins/PluginLinks';
 import { useUnrecognizedSummary } from '@/lib/queries';
 import { useTagJob } from '../useTagJob';
 
@@ -187,10 +188,8 @@ function ImageMeta({ image, position, total }: { image: ImageItem; position: num
       <div className="mt-0.5 flex min-w-0 items-center gap-1 text-[12.5px] text-fg-subtle">
         {source ? (
           source.url ? (
-            <a
+            <SourceLink
               href={source.url}
-              target="_blank"
-              rel="noreferrer"
               className="inline-flex min-w-0 items-center gap-1 underline-offset-4 transition-colors hover:text-fg-muted hover:underline"
             >
               <span className="truncate">
@@ -198,7 +197,7 @@ function ImageMeta({ image, position, total }: { image: ImageItem; position: num
                 {source.artist && ` · ${source.artist}`}
               </span>
               <ExternalLink className="size-3 shrink-0" />
-            </a>
+            </SourceLink>
           ) : (
             <span className="truncate">
               {SITE_LABEL[source.site]}

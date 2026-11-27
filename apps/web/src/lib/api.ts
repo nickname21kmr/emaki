@@ -59,6 +59,11 @@ import type {
   MoveImagesBody,
   MovePreview,
   MutationResult,
+  NavSection,
+  PluginCallResult,
+  PluginPackage,
+  PluginsState,
+  PluginView,
   NetworkCheckResponse,
   PickFolderResponse,
   PromotableSuggestions,
@@ -162,10 +167,12 @@ function toQueryString(params?: object): string {
   return s ? `?${s}` : '';
 }
 
-export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** raw：请求体是二进制（插件的 zip 包），不转 JSON */
+export async function request<T>(method: string, path: string, body?: unknown, raw?: { data: Blob; type: string }): Promise<T> {
   let res: Response;
   const headers: Record<string, string> = {};
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (raw) headers['Content-Type'] = raw.type;
+  else if (body !== undefined) headers['Content-Type'] = 'application/json';
   // 写请求带 operationId（Idempotency-Key）：同一个键重试，服务端返回第一次的结果，不会做两遍
   if (method !== 'GET') headers['Idempotency-Key'] = uuid();
   // 连不上、或者很久没回应：让连接状态探一下是不是电脑不在了（lib/connection.ts）
@@ -174,7 +181,7 @@ export async function request<T>(method: string, path: string, body?: unknown): 
     res = await fetch(`/api${path}`, {
       method,
       headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: raw ? raw.data : body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
     suspect();
@@ -314,6 +321,48 @@ export const api = {
   revertChange: (id: ID) => post<MutationResult>(`/changes/${encodeURIComponent(id)}/revert`),
   /** 连一下 Danbooru、Hugging Face 和国内镜像，排查同步失败 */
   checkNetwork: () => get<NetworkCheckResponse>('/system/network-check'),
+
+  // 插件（docs/plugins.md 第 9 节）：都能撤销
+  /** 全部插件和生效的结果；safe：按安全模式算（网址带 ?safe） */
+  plugins: (safe = false) => get<PluginsState>('/plugins', safe ? { safe: 1 } : undefined),
+  setPluginEnabled: (id: string, enabled: boolean) => post<MutationResult>(`/plugins/${encodeURIComponent(id)}/enabled`, { enabled }),
+  /** 停用全部改内部的插件（安全模式下「插件」页的「全部停用」） */
+  disableInternalPlugins: () => post<MutationResult>('/plugins/disable-internal', {}),
+  /** 插件的设置（setting@1）：凭证只写不读；空字符串是清掉 */
+  setPluginSettings: (id: string, values: Record<string, string | null>) =>
+    post<MutationResult>(`/plugins/${encodeURIComponent(id)}/settings`, { values }),
+  /** 改装的插件的授权：清单要的里面给哪些（文件夹 null 是不给，不写是照旧） */
+  setPluginGrant: (
+    id: string,
+    grant: { scopes: string[]; network: string[]; background: boolean; folders: Record<string, { rootId: string; dir: string } | null> },
+  ) => post<MutationResult>(`/plugins/${encodeURIComponent(id)}/grant`, grant),
+  renamePlugin: (id: string, name: string | null) => post<MutationResult>(`/plugins/${encodeURIComponent(id)}/name`, { name }),
+  removePlugin: (id: string) => del<MutationResult>(`/plugins/${encodeURIComponent(id)}`),
+  createOverride: (body: { name: string; values: Record<string, string>; enabled?: boolean }) =>
+    post<MutationResult & { id: string }>('/plugins/overrides', body),
+  setOverrideValues: (id: string, values: Record<string, string>) =>
+    post<MutationResult>(`/plugins/${encodeURIComponent(id)}/overrides`, { values }),
+  setNav: (body: { sections?: Record<NavSection, string[]>; visible?: Record<string, boolean> }) => post<MutationResult>('/plugins/nav', body),
+  chooseOverride: (key: string, plugin: string | null) => post<MutationResult>('/plugins/overrides/choice', { key, plugin }),
+  // 装插件（E2）：先准备（读清单、算要新给的权限），授权单上确认了再装
+  inspectPluginZip: (file: File) =>
+    request<PluginPackage>('PUT', `/plugins/packages?name=${encodeURIComponent(file.name)}`, undefined, { data: file, type: 'application/zip' }),
+  inspectPlugin: (source: { kind: 'folder'; path: string } | { kind: 'git'; url: string; ref?: string }) =>
+    post<PluginPackage>('/plugins/packages/inspect', { source }),
+  checkPluginUpdate: (id: string) => post<PluginPackage>(`/plugins/${encodeURIComponent(id)}/check-update`),
+  installPlugin: (token: string, folders?: Record<string, { rootId: string; dir: string }>, showInNav?: boolean) =>
+    post<MutationResult & { id: string }>('/plugins/install', { token, ...(folders && { folders }), ...(showInNav !== undefined && { showInNav }) }),
+  /** 准备好的包（助手的保存卡片、确认链接只有 token） */
+  pluginPackage: (token: string) => get<PluginPackage>(`/plugins/packages/${encodeURIComponent(token)}`),
+
+  // 插件的视图（docs/plugins.md 第 5 节，服务端 http/pluginViews.ts）：不进撤销栈，视图里改了数据的命令照常有撤销 token
+  pluginView: (id: string, page: string) => get<PluginView>(`/plugins/${encodeURIComponent(id)}/pages/${encodeURIComponent(page)}`),
+  pluginCall: (id: string, name: string, args: Record<string, unknown>) =>
+    post<PluginCallResult>(`/plugins/${encodeURIComponent(id)}/call`, { name, arguments: args }),
+  pluginStorage: (id: string, body: { op: 'get' | 'delete'; key: string } | { op: 'set'; key: string; value: unknown } | { op: 'list'; prefix?: string }) =>
+    post<{ value?: unknown; keys?: string[]; ok?: boolean }>(`/plugins/${encodeURIComponent(id)}/storage`, body),
+  pluginError: (id: string, message: string, source = '视图') =>
+    post<{ autoDisabled: boolean }>(`/plugins/${encodeURIComponent(id)}/errors`, { source, message }),
 
   // 手机访问（docs/mobile.md 第 2 节）：scope 是 devices，只有本机入口能用（局域网入口上是 403）；都不可撤销、不占撤销栈
   accessStatus: () => get<AccessStatus>('/access'),

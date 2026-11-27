@@ -6,6 +6,7 @@ import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import { useSearch } from '@/lib/queries';
 import { FieldLabel, Hint } from './RuleFields';
+import { useCountUnit } from '@/lib/countUnit';
 
 export interface PickedCharacter {
   id: ID;
@@ -24,6 +25,7 @@ export function CharacterPicker({
   value: PickedCharacter | null;
   onChange: (v: PickedCharacter | null) => void;
 }) {
+  const unit = useCountUnit();
   const [q, setQ] = useState('');
   const [highlight, setHighlight] = useState(0);
   const query = q.trim();
@@ -107,7 +109,7 @@ export function CharacterPicker({
                     {c.name}
                     {workName && <span className="ml-2 text-[12px] font-normal text-fg-subtle">{workName}</span>}
                   </span>
-                  <span className="shrink-0 text-[12px] text-fg-subtle tabular">{formatCount(c.imageCount)} 张</span>
+                  <span className="shrink-0 text-[12px] text-fg-subtle tabular">{formatCount(c.imageCount)} {unit}</span>
                   <Check className={cn('size-4 shrink-0 text-shu', selected ? 'opacity-100' : 'opacity-0')} />
                 </button>
               );
@@ -124,7 +126,7 @@ export function CharacterPicker({
         <p className="mt-3 text-[12.5px] text-fg-muted">
           将排除 <span className="font-semibold text-fg">{value.name}</span>
           {value.workName && <span className="text-fg-subtle"> · {value.workName}</span>} 的{' '}
-          <span className="tabular">{formatCount(value.imageCount)}</span> 张插画
+          <span className="tabular">{formatCount(value.imageCount)}</span> {unit}插画
         </p>
       )}
     </div>

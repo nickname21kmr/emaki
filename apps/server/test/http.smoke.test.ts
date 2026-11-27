@@ -6,7 +6,7 @@
  * 最后一条用例列出全部路由（命令 / 查询注册表里的地址，加上 src/app.ts、src/http/*.ts 里手写的），确保这里每个都测到了（新增路由忘了补冒烟会失败）。
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { SCOPES } from '@emaki/shared';
@@ -19,6 +19,8 @@ import type { IdMap } from '../src/demo/seed.ts';
 import { NOW } from './contract/harness.ts';
 import { buildContractDb } from './fixtures/contract-db.ts';
 import { patchSettingsInternal } from '../src/datasource/sqlite/settings.ts';
+import { makeTmpDir } from './helpers/tmp.ts';
+import { makeZip } from './helpers/zip.ts';
 import { ensurePoseClasses } from '../src/services/pose/job.ts';
 
 // 真实实现会弹出 Windows 的选择文件夹对话框，测试里换成固定返回值
@@ -1043,6 +1045,203 @@ describe('手机访问（注册表：access.*、devices.*，只在本机入口�
     expect(ds.access.devices.authenticate(token)).toEqual({ error: 'device_revoked' });
     expect((await call('GET', '/api/access')).json.devices).toEqual([]);
     expect((await call('DELETE', `/api/devices/${device.id}`)).status).toBe(404);
+  });
+});
+
+describe('插件（注册表：plugins.*，docs/plugins.md 第 9 节）', () => {
+  route('GET /api/plugins', async () => {
+    const { status, json } = await call('GET', '/api/plugins');
+    expect(status).toBe(200);
+    expect(json.safeMode).toBe(false);
+    expect(json.plugins.find((p: { id: string }) => p.id === 'core.annex')).toMatchObject({ enabled: true, source: 'builtin' });
+    expect((await call('GET', '/api/plugins?safe=1')).json.safeMode).toBe(true);
+  });
+  route('POST /api/plugins/:id/enabled', async () => {
+    expect(await call('POST', '/api/plugins/core.annex/enabled', { enabled: false })).toMatchObject({ status: 200, json: { ok: true, message: '已停用「别册」' } });
+    expect((await call('GET', '/api/plugins')).json.disabledPages).toEqual(['annex']);
+    expect((await call('POST', '/api/plugins/core.settings/enabled', { enabled: false })).status).toBe(400);
+    expect((await call('POST', '/api/plugins/nope/enabled', { enabled: true })).status).toBe(404);
+  });
+  route('POST /api/plugins/disable-internal', async () => {
+    // 没有在跑的改内部的插件（在跑的、全部停用、撤销见 test/plugins/internal.test.ts）
+    expect(await call('POST', '/api/plugins/disable-internal', {})).toMatchObject({ status: 400, json: { error: '没有在跑的改内部的插件' } });
+  });
+  route('POST /api/plugins/:id/name', async () => {
+    expect(await call('POST', '/api/plugins/core.annex/name', { name: '杂项' })).toMatchObject({ status: 200, json: { message: '已改名为「杂项」' } });
+    expect((await call('POST', '/api/plugins/core.annex/name', { name: '' })).status).toBe(400);
+  });
+  route('POST /api/plugins/overrides', async () => {
+    const made = await call('POST', '/api/plugins/overrides', { name: '按修改时间', values: { 'images.defaultSort': 'modifiedAt' } });
+    expect(made).toMatchObject({ status: 200, json: { ok: true, id: 'mine.override-1', message: '已新建并启用「按修改时间」' } });
+    expect((await call('POST', '/api/plugins/overrides', { name: 'x', values: { 'images.defaultSort': 'page' } })).status).toBe(400);
+  });
+  route('POST /api/plugins/:id/overrides', async () => {
+    const { json } = await call('POST', '/api/plugins/overrides', { name: 'A', values: { 'images.defaultSort': 'modifiedAt' } });
+    expect((await call('POST', `/api/plugins/${json.id}/overrides`, { values: { 'images.defaultSort': 'bytes' } })).status).toBe(200);
+    expect((await call('GET', '/api/plugins')).json.overrides['images.defaultSort'].value).toBe('bytes');
+  });
+  route('POST /api/plugins/overrides/choice', async () => {
+    const a = (await call('POST', '/api/plugins/overrides', { name: 'A', values: { 'images.defaultSort': 'modifiedAt' } })).json.id;
+    await call('POST', '/api/plugins/overrides', { name: 'B', values: { 'images.defaultSort': 'bytes' } });
+    expect((await call('POST', '/api/plugins/overrides/choice', { key: 'images.defaultSort', plugin: a })).status).toBe(200);
+    expect((await call('GET', '/api/plugins')).json.overrides['images.defaultSort'].value).toBe('modifiedAt');
+    expect((await call('POST', '/api/plugins/overrides/choice', { key: 'nope', plugin: null })).status).toBe(400);
+  });
+  route('DELETE /api/plugins/:id', async () => {
+    const { json } = await call('POST', '/api/plugins/overrides', { name: 'A', values: { 'images.defaultSort': 'modifiedAt' } });
+    expect(await call('DELETE', `/api/plugins/${json.id}`)).toMatchObject({ status: 200, json: { message: '已删除「A」' } });
+    expect((await call('DELETE', '/api/plugins/core.gallery')).status).toBe(400);
+  });
+  route('POST /api/plugins/nav', async () => {
+    const r = await call('POST', '/api/plugins/nav', { visible: { plugins: true } });
+    expect(r).toMatchObject({ status: 200, json: { ok: true } });
+    expect((await call('GET', '/api/plugins')).json.nav.footer.find((n: { id: string }) => n.id === 'plugins').visible).toBe(true);
+    expect((await call('POST', '/api/plugins/nav', {})).status).toBe(400);
+    expect((await call('POST', '/api/plugins/nav', { visible: { settings: false } })).status).toBe(400);
+  });
+
+  // 装插件（E2）：先准备（zip / 文件夹 / git），再按授权单装
+  const sampleManifest = {
+    id: 'example.smoke',
+    name: '冒烟',
+    version: '0.1.0',
+    contributes: { 'override@1': { 'images.defaultSort': 'modifiedAt' } },
+  };
+  const putZip = (body: Buffer, name = 'smoke.zip') =>
+    app.inject({ method: 'PUT', url: `/api/plugins/packages?name=${encodeURIComponent(name)}`, payload: body, headers: { 'content-type': 'application/zip' } });
+  route('PUT /api/plugins/packages', async () => {
+    const res = await putZip(makeZip({ 'emaki-plugin.json': JSON.stringify(sampleManifest) }));
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ source: { kind: 'file', location: 'smoke.zip' }, manifest: { id: 'example.smoke' }, problems: [], added: {} });
+    expect((await putZip(Buffer.from('nope'))).statusCode).toBe(400);
+  });
+  route('POST /api/plugins/install', async () => {
+    const { token } = (await putZip(makeZip({ 'emaki-plugin.json': JSON.stringify(sampleManifest) }))).json();
+    expect(await call('POST', '/api/plugins/install', { token })).toMatchObject({ status: 200, json: { ok: true, id: 'example.smoke', message: '已安装并启用「冒烟」' } });
+    expect((await call('GET', '/api/plugins')).json.overrides['images.defaultSort']).toMatchObject({ value: 'modifiedAt', plugin: 'example.smoke' });
+    expect((await call('POST', '/api/plugins/install', { token })).status).toBe(400);
+  });
+  route('POST /api/plugins/packages/inspect', async () => {
+    const dir = makeTmpDir('smoke-plugin');
+    writeFileSync(path.join(dir, 'emaki-plugin.json'), JSON.stringify(sampleManifest));
+    const { status, json } = await call('POST', '/api/plugins/packages/inspect', { source: { kind: 'folder', path: dir } });
+    expect(status).toBe(200);
+    expect(json).toMatchObject({ source: { kind: 'folder', location: dir }, manifest: { id: 'example.smoke' } });
+    expect((await call('POST', '/api/plugins/packages/inspect', { source: { kind: 'git', url: 'ext::sh -c id' } })).status).toBe(400);
+  });
+  route('POST /api/plugins/:id/check-update', async () => {
+    const dir = makeTmpDir('smoke-plugin');
+    writeFileSync(path.join(dir, 'emaki-plugin.json'), JSON.stringify(sampleManifest));
+    const { json } = await call('POST', '/api/plugins/packages/inspect', { source: { kind: 'folder', path: dir } });
+    await call('POST', '/api/plugins/install', { token: json.token });
+    writeFileSync(path.join(dir, 'emaki-plugin.json'), JSON.stringify({ ...sampleManifest, version: '0.2.0' }));
+    const upd = await call('POST', '/api/plugins/example.smoke/check-update');
+    expect(upd).toMatchObject({ status: 200, json: { manifest: { version: '0.2.0' }, current: { version: '0.1.0' } } });
+    expect((await call('POST', '/api/plugins/core.annex/check-update')).status).toBe(400);
+  });
+  route('GET /api/plugins/packages/:token', async () => {
+    const { token } = (await putZip(makeZip({ 'emaki-plugin.json': JSON.stringify(sampleManifest) }))).json();
+    expect(await call('GET', `/api/plugins/packages/${token}`)).toMatchObject({ status: 200, json: { token, manifest: { id: 'example.smoke' } } });
+    expect((await call('GET', '/api/plugins/packages/nope')).status).toBe(404);
+  });
+
+  // 视图（E4）：装一个带页面的插件，打开、调工具、记错、取图
+  const viewManifest = {
+    id: 'example.view',
+    name: '视图',
+    version: '0.1.0',
+    permissions: { scopes: ['read'] },
+    contributes: { 'page@1': [{ id: 'main', view: 'index.html' }], 'nav.item@1': [{ id: 'main', label: '视图', page: 'main' }] },
+  };
+  const installView = async () => {
+    const { token } = (await putZip(makeZip({ 'emaki-plugin.json': JSON.stringify(viewManifest), 'index.html': '<p>hi</p>' }))).json();
+    await call('POST', '/api/plugins/install', { token });
+  };
+  route('GET /api/plugins/:id/pages/:page', async () => {
+    await installView();
+    const { status, json } = await call('GET', '/api/plugins/example.view/pages/main');
+    expect(status).toBe(200);
+    expect(json).toMatchObject({ pluginId: 'example.view', pageId: 'main', title: '视图', html: '<p>hi</p>', mediaBase: expect.stringMatching(/^\/api\/plugin-media\//) });
+    expect(json.tools.map((t: { name: string }) => t.name)).toEqual(['read_library', 'read_media']);
+    expect((await call('GET', '/api/plugins/example.view/pages/nope')).status).toBe(404);
+  });
+  route('POST /api/plugins/:id/call', async () => {
+    await installView();
+    const r = await call('POST', '/api/plugins/example.view/call', { name: 'read_library', arguments: { path: '/api/summary' } });
+    expect(r.status).toBe(200);
+    expect(r.json.isError).toBeUndefined();
+    const denied = await call('POST', '/api/plugins/example.view/call', { name: 'curation_set_favorite', arguments: { operationId: 'x', ids: ['1'], value: true } });
+    expect(denied).toMatchObject({ status: 200, json: { isError: true } });
+    expect((await call('POST', '/api/plugins/core.annex/call', { name: 'read_library', arguments: {} })).status).toBe(409);
+  });
+  route('POST /api/plugins/:id/storage', async () => {
+    await installView();
+    expect(await call('POST', '/api/plugins/example.view/storage', { op: 'set', key: 'tab', value: { a: 1 } })).toMatchObject({ status: 200 });
+    expect((await call('POST', '/api/plugins/example.view/storage', { op: 'get', key: 'tab' })).json).toMatchObject({ value: { a: 1 } });
+    expect((await call('POST', '/api/plugins/example.view/storage', { op: 'list' })).json).toMatchObject({ keys: ['tab'] });
+    expect((await call('POST', '/api/plugins/example.view/storage', { op: 'nope' })).status).toBe(400);
+  });
+  route('POST /api/plugins/:id/errors', async () => {
+    await installView();
+    expect(await call('POST', '/api/plugins/example.view/errors', { message: '握手超时' })).toMatchObject({ status: 200, json: { autoDisabled: false } });
+    expect((await call('POST', '/api/plugins/example.view/errors', {})).status).toBe(400);
+  });
+  route('GET /api/plugin-media/:token/:size/:imageId', async () => {
+    await installView();
+    const { json } = await call('GET', '/api/plugins/example.view/pages/main');
+    const images = (await call('GET', '/api/images?limit=1')).json.items as { id: string }[];
+    if (images[0]) expect((await app.inject({ method: 'GET', url: `${json.mediaBase}/thumb/${images[0].id}` })).statusCode).not.toBe(403);
+    expect((await app.inject({ method: 'GET', url: '/api/plugin-media/nope/thumb/1' })).statusCode).toBe(404);
+  });
+  route('GET /api/plugin-media/:token/file/*', async () => {
+    await installView();
+    const { json } = await call('GET', '/api/plugins/example.view/pages/main');
+    const dir = ds.plugins.dataDir('example.view');
+    mkdirSync(path.join(dir, 'cache'), { recursive: true });
+    writeFileSync(path.join(dir, 'cache', 'a.png'), 'png');
+    writeFileSync(path.join(dir, 'notes.txt'), 'txt');
+    const get = async (rel: string) => (await app.inject({ method: 'GET', url: `${json.mediaBase}/file/${rel}` })).statusCode;
+    expect(await get('cache/a.png')).toBe(200);
+    // 只给插件文件夹里的图片
+    expect(await get('notes.txt')).toBe(404);
+    expect(await get('..%2F..%2F..%2Femaki.sqlite')).toBe(404);
+    expect(await get('cache/none.png')).toBe(404);
+    expect((await app.inject({ method: 'GET', url: '/api/plugin-media/nope/file/a.png' })).statusCode).toBe(404);
+  });
+  route('GET /api/plugin-web/:id/:key/*', async () => {
+    // 附带的「一个作品算一张」有改网页的入口：装上以后网页拿得到它，停用了就没有
+    const pkg = await ds.plugins.inspect({ kind: 'folder', path: path.resolve(import.meta.dirname, '../../../plugins/count-by-work') });
+    expect((await call('POST', '/api/plugins/install', { token: pkg.token })).status).toBe(200);
+    const url = (await call('GET', '/api/plugins')).json.webPatches[0].url as string;
+    const res = await app.inject({ method: 'GET', url });
+    expect([res.statusCode, res.headers['content-type'], res.body]).toEqual([200, 'text/javascript; charset=utf-8', expect.stringContaining('fn:count.unit')]);
+    expect((await app.inject({ method: 'GET', url: url.replace('web/patch.js', 'emaki-plugin.json') })).statusCode).toBe(404);
+    await call('POST', '/api/plugins/count-by-work/enabled', { enabled: false });
+    expect((await app.inject({ method: 'GET', url })).statusCode).toBe(404);
+  });
+  route('GET /api/plugins/sites', async () => {
+    // 演示环境里没有带网站脚本的插件
+    expect(await call('GET', '/api/plugins/sites')).toMatchObject({ status: 200, json: [] });
+  });
+  route('POST /api/plugins/:id/settings', async () => {
+    await installView();
+    // 这个插件没有设置
+    expect(await call('POST', '/api/plugins/example.view/settings', { values: { a: 'b' } })).toMatchObject({ status: 400 });
+    expect((await call('POST', '/api/plugins/nope/settings', { values: {} })).status).toBe(404);
+  });
+  route('POST /api/plugins/:id/grant', async () => {
+    await installView();
+    const none = { scopes: [], network: [], background: false, folders: {} };
+    expect(await call('POST', '/api/plugins/example.view/grant', none)).toMatchObject({ status: 200, json: { ok: true } });
+    expect((await call('GET', '/api/plugins')).json.plugins.find((p: { id: string }) => p.id === 'example.view').grant.scopes).toEqual([]);
+    // 不能多给清单没要的；内置的没有授权
+    expect((await call('POST', '/api/plugins/example.view/grant', { ...none, scopes: ['settings'] })).status).toBe(400);
+    expect((await call('POST', '/api/plugins/core.annex/grant', none)).status).toBe(400);
+  });
+  route('POST /api/plugins/ai-views', async () => {
+    const r = await call('POST', '/api/plugins/ai-views', { name: 'smoke', title: '冒烟页', html: '<p>ai</p>' });
+    expect(r).toMatchObject({ status: 200, json: { status: 'needs_confirmation', id: 'ai.smoke', name: '冒烟页', version: '1.0.0' } });
+    expect((await call('POST', '/api/plugins/ai-views', { name: 'smoke', title: '冒烟页', html: '<p>ai</p>', scopes: ['settings'] })).status).toBe(400);
   });
 });
 

@@ -1,73 +1,43 @@
 import { DEVICE_DEFAULT_SCOPES, type Scope } from '@emaki/shared';
-import { Check } from 'lucide-react';
-import { cn } from '@/lib/cn';
-import { EXTRA_SCOPES, scopeText, sortScopes } from './format';
+import { DANGER_SCOPES, EXTRA_SCOPES, scopeText, sortScopes } from './format';
+import { GrantList } from './GrantList';
 
 /**
- * 勾选设备的权限（docs/mobile.md 2.5）：上面是默认给的，下面是要你另外勾的；说明来自 shared 的 SCOPES。
- * 管理设备、在电脑屏幕上弹窗这两项永远不给，不列出来。墨色勾（不用朱，朱只做印）
+ * 设备的权限（docs/mobile.md 2.5）：和装插件的授权单同一种样子（GrantList，docs/plugins.md 4.2「一张授权单」），每一项一个开关；
+ * 上面是默认给的，下面是要你另外打开的；说明来自 shared 的 SCOPES，会动文件、改规则和设置的朱色标出。
+ * 管理设备、在电脑屏幕上弹窗这两项永远不给，不列出来
  */
 export function ScopePicker({ value, onChange }: { value: readonly Scope[]; onChange: (next: Scope[]) => void }) {
   const set = new Set(value);
-  const toggle = (s: Scope) => {
+  const toggle = (s: Scope, on: boolean) => {
     const next = new Set(set);
-    if (next.has(s)) next.delete(s);
-    else next.add(s);
+    if (on) next.add(s);
+    else next.delete(s);
     onChange(sortScopes(next));
   };
+  const items = (scopes: readonly Scope[]) =>
+    scopes.map((s) => {
+      const { head, detail } = scopeText(s);
+      return {
+        key: s,
+        text: head,
+        detail,
+        danger: DANGER_SCOPES.includes(s),
+        checked: set.has(s),
+        onCheckedChange: (on: boolean) => toggle(s, on),
+        label: head,
+      };
+    });
   return (
-    <div className="space-y-3">
-      <ScopeGroup title="默认给的" scopes={DEVICE_DEFAULT_SCOPES} checked={set} onToggle={toggle} />
-      <ScopeGroup title="默认不给（会动文件、改设置、整库批量改）" scopes={EXTRA_SCOPES} checked={set} onToggle={toggle} />
+    <div className="space-y-4">
+      <fieldset>
+        <legend className="mb-1.5 text-[12px] font-medium text-fg-subtle">默认给的</legend>
+        <GrantList items={items(DEVICE_DEFAULT_SCOPES)} />
+      </fieldset>
+      <fieldset>
+        <legend className="mb-1.5 text-[12px] font-medium text-fg-subtle">默认不给（会动文件、改设置、整库批量改）</legend>
+        <GrantList items={items(EXTRA_SCOPES)} />
+      </fieldset>
     </div>
-  );
-}
-
-function ScopeGroup({
-  title,
-  scopes,
-  checked,
-  onToggle,
-}: {
-  title: string;
-  scopes: readonly Scope[];
-  checked: ReadonlySet<Scope>;
-  onToggle: (s: Scope) => void;
-}) {
-  return (
-    <fieldset>
-      <legend className="mb-1 text-[12px] font-medium text-fg-subtle">{title}</legend>
-      <ul className="-mx-2 grid gap-x-2 sm:grid-cols-2">
-        {scopes.map((s) => {
-          const on = checked.has(s);
-          const { head, detail } = scopeText(s);
-          return (
-            <li key={s}>
-              <button
-                type="button"
-                role="checkbox"
-                aria-checked={on}
-                onClick={() => onToggle(s)}
-                className="flex w-full items-start gap-2.5 rounded-[8px] px-2 py-1.5 text-left hover:bg-hover"
-              >
-                <span
-                  aria-hidden
-                  className={cn(
-                    'mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[5px]',
-                    on ? 'bg-ink text-fg-inverse' : 'text-transparent ring-1 ring-line-strong ring-inset',
-                  )}
-                >
-                  <Check className="size-3" strokeWidth={2.5} />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[13px] leading-5">{head}</span>
-                  {detail && <span className="block text-[11.5px] leading-4 text-fg-subtle">{detail}</span>}
-                </span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-    </fieldset>
   );
 }

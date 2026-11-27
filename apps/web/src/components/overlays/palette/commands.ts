@@ -1,24 +1,18 @@
-import { JOB_LABEL, matchesQuery, type MutationResult, type Settings, type ThemePreference } from '@emaki/shared';
+import { jobTitle } from '@emaki/shared';
+import { JOB_LABEL, matchesQuery, NAV_SECTIONS, type MutationResult, type NavEntry, type NavSection, type Settings, type ThemePreference } from '@emaki/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  Ban,
   CircleHelp,
-  Copy,
   Eye,
   EyeOff,
   FolderSync,
-  House,
-  Images,
   Keyboard,
   Monitor,
   Moon,
   ScanFace,
   ScanSearch,
-  Settings as SettingsIcon,
   Sun,
   Undo2,
-  UsersRound,
-  LibraryBig,
   type LucideIcon,
 } from 'lucide-react';
 import { useNavigate } from 'react-router';
@@ -29,7 +23,9 @@ import { formatCount } from '@/lib/format';
 import { qk, requestUndo, undoTitle, useMutate, useSettings, useStartJob, useSummary } from '@/lib/queries';
 import { placeText } from '@/lib/undoPlace';
 import { useOverlays, usePrefs, useUndoStore } from '@/lib/stores';
-import { pageNeed } from '@/pages';
+import { navIcon } from '@/components/layout/Sidebar';
+import { useNav } from '@/lib/plugins';
+import { pageNeed, useShowsEntry } from '@/pages';
 import { GLOBAL_KEYS, PAGE_JUMPS, type KeyCombo } from '../shortcuts';
 
 export interface PaletteCommand {
@@ -71,9 +67,11 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
   const { data: settings } = useSettings();
   // 计数读汇总接口（附录 #28）
   const { data: summary } = useSummary();
+  const nav = useNav();
+  const showsEntry = useShowsEntry();
 
   const startJob = useStartJob((job) => {
-    const label = JOB_LABEL[job.kind];
+    const label = jobTitle(job);
     return job.status === 'queued' ? `${label}已加入任务队列` : `已开始${label}`;
   });
 
@@ -107,45 +105,17 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
     fn();
   };
 
-  const nav: PaletteCommand[] = [
-    ...PAGE_JUMPS.map((p) => ({
-      value: `go:${p.to}`,
-      section: 'go' as const,
-      label: p.label,
-      keywords: NAV_KEYWORDS[p.to] ?? [],
-      icon: NAV_ICON[p.to] ?? House,
-      keys: [p.key],
-      need: pageNeed(p.to),
-      run: go(p.to),
-    })),
-    {
-      value: 'go:/collections',
-      section: 'go',
-      label: '合集',
-      keywords: ['collections', 'heji', '本子', '画集', 'doujin', 'artbook'],
-      icon: LibraryBig,
-      need: pageNeed('/collections'),
-      run: go('/collections'),
-    },
-    {
-      value: 'go:/excluded',
-      section: 'go',
-      label: '已排除',
-      keywords: NAV_KEYWORDS['/excluded'] ?? [],
-      icon: Ban,
-      need: pageNeed('/excluded'),
-      run: go('/excluded'),
-    },
-    {
-      value: 'go:/settings',
-      section: 'go',
-      label: '设置',
-      keywords: NAV_KEYWORDS['/settings'] ?? [],
-      icon: SettingsIcon,
-      need: pageNeed('/settings'),
-      run: go('/settings'),
-    },
-  ];
+  // 前往：侧栏的导航项（插件的 nav.item，docs/plugins.md 9.6）——停用的页面不列，改的名字跟着变，不在侧栏里的页面（「插件」）也能从这里去
+  const goItems: PaletteCommand[] = paletteGoItems(nav, showsEntry).map((n) => ({
+    value: `go:${n.to}`,
+    section: 'go' as const,
+    label: n.label,
+    keywords: NAV_KEYWORDS[n.to] ?? [],
+    icon: navIcon(n.icon),
+    ...(n.key && { keys: [n.key] }),
+    need: pageNeed(n.to),
+    run: go(n.to),
+  }));
 
   const actions: PaletteCommand[] = [
     {
@@ -242,7 +212,29 @@ export function usePaletteCommands(close: () => void): PaletteCommand[] {
     },
   ];
 
-  return allowed([...nav, ...actions], caps);
+  return allowed([...goItems, ...actions], caps);
+}
+
+/** 命令面板里原来的顺序（数字键跳页的在前）；插件加的、原来没有的排在后面，按侧栏的顺序 */
+const PALETTE_ORDER = ['home', 'gallery', 'characters', 'unrecognized', 'duplicates', 'annex', 'collections', 'excluded', 'settings'];
+
+/**
+ * 命令面板的「前往」（纯函数，测试直接调）：全部导航项（在不在侧栏都算），不放入口的（没权限、插件停用了、pages.ts 的 entry）不要，
+ * 「原创」这种要按图库情况填地址的捷径不要；数字键跳页的标上键。
+ */
+export function paletteGoItems(
+  nav: Record<NavSection, NavEntry[]>,
+  showsEntry: (to: string) => boolean,
+): (NavEntry & { key?: string })[] {
+  const all = NAV_SECTIONS.flatMap((s) => nav[s]).filter((n) => !n.to.includes(':') && showsEntry(n.to));
+  const rank = (n: NavEntry) => {
+    const i = PALETTE_ORDER.indexOf(n.id);
+    return i < 0 ? PALETTE_ORDER.length : i;
+  };
+  return all
+    .map((n, i) => ({ n, i }))
+    .sort((a, b) => rank(a.n) - rank(b.n) || a.i - b.i)
+    .map(({ n }) => ({ ...n, ...(PAGE_JUMPS.find((p) => p.to === n.to) && { key: PAGE_JUMPS.find((p) => p.to === n.to)!.key }) }));
 }
 
 /** 本地过滤命令：标签或任一关键词包含输入即可（共用的 matchesQuery） */
@@ -250,21 +242,13 @@ export function matchCommand(cmd: PaletteCommand, query: string): boolean {
   return matchesQuery(query, [cmd.label, ...cmd.keywords]);
 }
 
-// 和侧边栏同一套图标，用户一眼能对上
-const NAV_ICON: Record<string, LucideIcon> = {
-  '/': House,
-  '/gallery': Images,
-  '/characters': UsersRound,
-  '/unrecognized': CircleHelp,
-  '/duplicates': Copy,
-};
-
 const NAV_KEYWORDS: Record<string, string[]> = {
   '/': ['home', '首页', '主页', 'shouye', 'sy'],
   '/gallery': ['gallery', 'images', '图库', '插画', 'tuku', 'tk'],
   '/characters': ['characters', '角色', 'juese', 'js'],
   '/unrecognized': ['unrecognized', 'inbox', '未识别', '待确认', 'weishibie', 'wsb'],
   '/duplicates': ['duplicates', '重复', 'chongfu', 'cf'],
+  '/collections': ['collections', 'heji', '本子', '画集', 'doujin', 'artbook'],
   '/excluded': ['excluded', '排除', '已排除', 'paichu', 'pc'],
   '/settings': ['settings', 'preferences', '设置', 'shezhi', 'sz'],
 };

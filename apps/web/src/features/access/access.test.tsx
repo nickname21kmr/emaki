@@ -146,10 +146,12 @@ describe('显示规则', () => {
   });
 
   it('可以另外勾的不含管理设备、在电脑屏幕上弹窗（永远不给）', () => {
-    expect(EXTRA_SCOPES).toEqual(['organize-files', 'settings', 'rules', 'duplicates', 'jobs', 'import']);
+    expect(EXTRA_SCOPES).toEqual(['organize-files', 'settings', 'rules', 'duplicates', 'jobs', 'import', 'install-plugins']);
     const html = renderToStaticMarkup(<ScopePicker value={DEVICE_DEFAULT_SCOPES} onChange={() => {}} />);
-    expect(html.match(/role="checkbox"/g)).toHaveLength(DEVICE_GRANTABLE_SCOPES.length);
+    // 和授权单同一种样子：每一项一个开关（docs/plugins.md 4.2），会动文件、改规则和设置的朱色标出
+    expect(html.match(/role="switch"/g)).toHaveLength(DEVICE_GRANTABLE_SCOPES.length);
     expect(html.match(/aria-checked="true"/g)).toHaveLength(DEVICE_DEFAULT_SCOPES.length);
+    expect(html.match(/text-danger/g)).toHaveLength(3);
     expect(html).not.toContain(SCOPES.devices.slice(0, 6));
     expect(html).not.toContain(SCOPES.desktop.slice(0, 6));
   });
@@ -222,7 +224,7 @@ describe('设置 →「手机访问」静态渲染', () => {
       expect(html).toContain(t);
     expect(html).toContain('权限：默认权限');
     expect(html).toContain('aria-expanded="false"');
-    expect(html).not.toContain('role="checkbox"');
+    expect(html).not.toContain('默认给的');
   });
 
   it('已连接的设备：名称、型号、最后访问和地址、权限，编辑 / 移除', () => {
