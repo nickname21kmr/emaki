@@ -9,7 +9,7 @@ import { useBlurPrefs, usePrefs } from '@/lib/stores';
 import { useCoverPosition } from './useCoverPosition';
 
 /** kind 只给逐张的图传（照片、文字按偏好模糊）；封面、头像不传，只按分级 */
-type ThumbSource = Pick<ImageItem, 'id' | 'dominantColor' | 'rating'> & Partial<Pick<ImageItem,'modifiedAt'>> & { kind?: ContentKind | null };
+type ThumbSource = Pick<ImageItem, 'id' | 'dominantColor' | 'rating'> & Partial<Pick<ImageItem, 'modifiedAt' | 'fileVersion'>> & { kind?: ContentKind | null };
 
 /**
  * 模糊时的标记放哪（MG-4）：
@@ -72,7 +72,7 @@ export function Thumb({
   original?: boolean;
 }) {
   // 加载失败过的（电脑断开那一会儿），重新连上后换个地址重新加载（lib/connection.ts）
-  const previewLoad = useImageRetry(imageUrl.thumb(image.id, width, image.modifiedAt));
+  const previewLoad = useImageRetry(imageUrl.thumb(image.id, width, image.fileVersion));
   const fullLoad = useImageRetry(original ? imageUrl.file(image.id, image.modifiedAt) : '');
   const preview = previewLoad.src;
   const full = original ? fullLoad.src : null;

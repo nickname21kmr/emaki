@@ -5,10 +5,11 @@ import { Link } from 'react-router';
 import { CoverFan } from '@/components/media/CoverFan';
 import { RollingNumber, SectionTitle, Skeleton, Spinner } from '@/components/ui';
 import { cn } from '@/lib/cn';
-import { useRunningJob } from '@/lib/events';
+import { useIsJobRunning } from '@/lib/events';
 import { formatBytes, formatCount } from '@/lib/format';
 import { useCharactersInfinite, useDuplicates, useSettings, useUnrecognizedInfinite } from '@/lib/queries';
 import { useCanVisit } from '@/pages';
+import { useFirstWaveSettled } from '../useFirstWaveSettled';
 import { AvatarRow, PhotoPair } from './PeekStack';
 
 type CardState = 'active' | 'waiting' | 'cleared' | 'hidden';
@@ -39,11 +40,16 @@ export function TriageCards({ summary: s }: { summary: LibrarySummary }) {
   // 这台设备去不了的页（src/pages.ts，手机上默认没有「重复」）不放卡片，也不去拉它的数据
   const canVisit = useCanVisit();
   const unrecognized = useUnrecognizedInfinite({ area: 'art', bucket: 'unsure' }, 12);
-  const duplicates = useDuplicates(false, canVisit('/duplicates'));
   const custom = useCharactersInfinite({ source: 'custom', sort: 'imageCount' });
   const settings = useSettings();
-  const dedupeJob = useRunningJob('dedupe');
-  const tagJob = useRunningJob('tag');
+  // 重复组的整份列表（真实库 700 多 KB）在这里只为「可释放 X」和一对预览，组数本身读汇总：
+  // 没有重复就不拉；有的话等首屏别的查询都回来再拉，不和它们抢后端（一次只处理一个请求）。「可释放 X」和预览晚一点出现
+  const hasDuplicates = s.duplicates > 0;
+  const settled = useFirstWaveSettled(!unrecognized.isPending && !custom.isPending && !settings.isPending, 'duplicates');
+  const duplicates = useDuplicates(false, canVisit('/duplicates') && hasDuplicates && settled);
+  // 只看有没有在跑（布尔值）：任务的进度事件每 150ms 一条，不跟着重渲染
+  const dedupeRunning = useIsJobRunning('dedupe');
+  const tagRunning = useIsJobRunning('tag');
 
   // 待处理的唯一定义在汇总接口（triage）：等你确认的张数、成册待整理的本数、待识别的张数，这里不再自己加减
   const queued = s.triage.waiting;
@@ -54,19 +60,21 @@ export function TriageCards({ summary: s }: { summary: LibrarySummary }) {
     const tagged = items.filter((it) => it.tagged);
     return (tagged.length ? tagged : items).slice(0, 5).map((it) => it.image);
   }, [unrecognized.data]);
-  const firstGroup = duplicates.data?.[0];
+  // 汇总说没有重复了就不看这份列表：关掉的查询还留着上一次的结果
+  const groups = hasDuplicates ? duplicates.data : undefined;
+  const firstGroup = groups?.[0];
   const reclaimable = useMemo(
     () =>
-      (duplicates.data ?? []).reduce(
+      (groups ?? []).reduce(
         (total, g) => total + g.images.reduce((s, img) => (g.suggestedKeepIds.includes(img.id) ? s : s + img.bytes), 0),
         0,
       ),
-    [duplicates.data],
+    [groups],
   );
 
   const lastRun = settings.data?.dedupe.lastRunAt ?? null;
   const dedupeWaiting =
-    !!dedupeJob || (!!settings.data && (lastRun === null || (!!s.recentImport && lastRun < s.recentImport.at)));
+    dedupeRunning || (!!settings.data && (lastRun === null || (!!s.recentImport && lastRun < s.recentImport.at)));
   const customTotal = custom.data?.pages[0]?.total;
 
   const cards: Card[] = [
@@ -85,8 +93,8 @@ export function TriageCards({ summary: s }: { summary: LibrarySummary }) {
         .filter(Boolean)
         .join(' · '),
       quietText: queued > 0 ? `认不出的图会出现在这里 · 还有 ${formatCount(queued)} 张排队` : '每一张都认出了角色',
-      waitingLabel: tagJob ? '识别中' : '排队识别',
-      waitingIcon: tagJob ? <Spinner className="size-3.5" /> : <Clock3 className="size-3.5" />,
+      waitingLabel: tagRunning ? '识别中' : '排队识别',
+      waitingIcon: tagRunning ? <Spinner className="size-3.5" /> : <Clock3 className="size-3.5" />,
       peek: (wide) =>
         unrecognizedImages.length >= 3 ? (
           <div className={wide ? 'w-[300px]' : 'w-[150px]'}>
@@ -107,9 +115,15 @@ export function TriageCards({ summary: s }: { summary: LibrarySummary }) {
       unit: '组',
       description: reclaimable > 0 ? `处理后可释放 ${formatBytes(reclaimable)}` : '同一张图的多个副本',
       quietText: dedupeWaiting ? (queued > 0 ? '识别完成后会自动查找重复的图' : '稍后会自动开始') : '没有发现重复的图',
-      waitingLabel: dedupeJob ? '正在查找' : '还没查找',
-      waitingIcon: dedupeJob ? <Spinner className="size-3.5" /> : <Clock3 className="size-3.5" />,
-      peek: () => (firstGroup ? <PhotoPair images={firstGroup.images} exact={firstGroup.kind === 'exact'} /> : null),
+      waitingLabel: dedupeRunning ? '正在查找' : '还没查找',
+      waitingIcon: dedupeRunning ? <Spinner className="size-3.5" /> : <Clock3 className="size-3.5" />,
+      // 预览比卡片晚到（重复组最后才拉）：淡入，不是突然冒出来；它是绝对定位的，不挤动卡片里别的东西
+      peek: () =>
+        firstGroup ? (
+          <div className="animate-fade-in">
+            <PhotoPair images={firstGroup.images} exact={firstGroup.kind === 'exact'} />
+          </div>
+        ) : null,
     },
     {
       key: 'custom',

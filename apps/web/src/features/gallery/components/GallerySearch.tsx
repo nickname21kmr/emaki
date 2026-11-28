@@ -7,7 +7,7 @@ import { Kbd, SearchInput, Spinner } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import { useImageCount, useTagPhrase, useTagSuggestions } from '@/lib/queries';
-import { useDebounced } from '../useDebounced';
+import { useDebounced, useDebouncedCommit } from '@/lib/useDebounced';
 import { mergeTags } from '../useGalleryParams';
 
 type Row = { kind: 'exact' } | { kind: 'phrase' } | { kind: 'tag'; s: TagSuggestion };
@@ -64,14 +64,8 @@ export function GallerySearch({
     setText(value);
   }, [value]);
 
-  useEffect(() => {
-    const q = text.trim();
-    if (q === value) return;
-    const t = window.setTimeout(() => commit(q), 250);
-    return () => window.clearTimeout(t);
-    // commit 只读 ref，不需要进依赖
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text, value]);
+  // 停顿 250ms 写进 URL。拼音还没上屏时不写（不然网址里是拼音，网格先换成「没有找到」再换回来），上屏后马上写
+  useDebouncedCommit(text, 250, text.trim() !== value, (t) => commit(t.trim()));
 
   // ---------------------------------------------------------------- 下拉
 

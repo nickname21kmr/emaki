@@ -1,4 +1,5 @@
 import type { LibrarySummary } from '@emaki/shared';
+import { useEffect, useState } from 'react';
 import { PageBody, PageHeader } from '@/components/layout/PageHeader';
 import { ErrorState } from '@/components/ui';
 import { formatCount, formatRelative } from '@/lib/format';
@@ -10,10 +11,11 @@ import { Onboarding } from './components/Onboarding';
 import { RecentCharacters, RecentCharactersSkeleton } from './components/RecentCharacters';
 import { StatsStrip, StatsStripSkeleton } from './components/StatsStrip';
 import { TriageCards, TriageCardsSkeleton } from './components/TriageCards';
-import { DailyPlate } from './components/DailyPlate';
+import { DailyPlate, DailyPlateSkeleton, usePrefetchDailyPlate } from './components/DailyPlate';
 import { ImportPanel } from './components/ImportPanel';
+import { lastPlate } from './dailyPlateState';
 import { greeting, importPhase, type ImportPhase } from './utils';
-import { useRunningJob } from '@/lib/events';
+import { useIsJobRunning } from '@/lib/events';
 import { PageBlocks } from '@/blocks/PageBlocks';
 
 /**
@@ -24,11 +26,19 @@ export function HomePage() {
   // 首页的数都读汇总接口（P5，附录 #28）
   const summary = useSummary();
   const s = summary.data;
+  // 「今日一枚」的抽图不等汇总回来：这里就发，和汇总接口并行（DailyPlate 挂上时用的是同一个查询）
+  usePrefetchDailyPlate();
+  // 这个库没有可陈列的插画（空库、只有别册）：记下来，下次骨架里不给「今日一枚」占位置
+  const noPlate = !!s && s.images.illustrations === 0;
+  useEffect(() => {
+    if (noPlate) lastPlate.set(false);
+  }, [noPlate]);
+  // 只看哪几种任务在跑（布尔值）：任务的进度事件每 150ms 一条，订阅 Job 对象的话整页跟着重渲染。进度由导入面板、横幅自己订阅
   const jobs = {
-    scan: useRunningJob('scan'),
-    thumbnail: useRunningJob('thumbnail'),
-    tag: useRunningJob('tag'),
-    dedupe: useRunningJob('dedupe'),
+    scan: useIsJobRunning('scan'),
+    thumbnail: useIsJobRunning('thumbnail'),
+    tag: useIsJobRunning('tag'),
+    dedupe: useIsJobRunning('dedupe'),
   };
   const phase = s ? importPhase(s, jobs) : null;
 
@@ -94,9 +104,12 @@ function Subtitle({ summary: s, phase }: { summary: LibrarySummary; phase: Impor
 }
 
 function HomeSkeleton() {
+  // 上次有「今日一枚」就在它的位置放同一个占位（DailyPlate 抽到之前也是它）：汇总回来、图抽到时，下面几块都不挪地方
+  const [plate] = useState(lastPlate.get);
   return (
     <div className="flex flex-col gap-10">
       <StatsStripSkeleton />
+      {plate && <DailyPlateSkeleton />}
       <TriageCardsSkeleton />
       <RecentCharactersSkeleton />
       <LatestImagesSkeleton />

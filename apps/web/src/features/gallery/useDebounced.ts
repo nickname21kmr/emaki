@@ -1,11 +1,2 @@
-import { useEffect, useState } from 'react';
-
-/** 值停止变化 delay 毫秒后才更新（搜索输入用） */
-export function useDebounced<T>(value: T, delay: number): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const t = window.setTimeout(() => setDebounced(value), delay);
-    return () => window.clearTimeout(t);
-  }, [value, delay]);
-  return debounced;
-}
+// 防抖全站一份，在 lib/useDebounced.ts（认输入法的组合状态）；这里留着给原来从这儿引的地方
+export { useDebounced } from '@/lib/useDebounced';

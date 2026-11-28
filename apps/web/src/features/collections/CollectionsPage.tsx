@@ -51,8 +51,12 @@ function ShelfView({ params, setParams }: { params: URLSearchParams; setParams: 
   const postsLoading = kind === null && showPosts && postsQ.isPending;
   // 画师：识别出来的才有（设置 → 识别 里打开「识别画师」）；搜索框也筛画师名
   const artistsQ = useArtists();
-  // 搜索归一化用共用的 matchesQuery（附录 #38）
-  const artists = (artistsQ.data ?? []).filter((a) => matchesQuery(debounced, [a.name, a.tag, a.twitter, ...a.tags, ...a.aliases]));
+  // 搜索归一化用共用的 matchesQuery（附录 #38）。两千多位画师：只在数据或搜索词变了时重新筛，
+  // 搜索框每敲一个字、切类型这些都不重筛
+  const artists = useMemo(
+    () => (artistsQ.data ?? []).filter((a) => matchesQuery(debounced, [a.name, a.tag, a.twitter, ...a.tags, ...a.aliases])),
+    [artistsQ.data, debounced],
+  );
   const used = [counts, ...(plan.books ? [booksQ] : []), ...(plan.groups ? [manualQ] : []), ...(plan.fetchPosts ? [postsQ] : [])];
   const failed = used.find((r) => r.isError);
   const pending =

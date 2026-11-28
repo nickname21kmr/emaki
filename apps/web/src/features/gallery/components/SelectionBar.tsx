@@ -12,13 +12,14 @@ import {
   type ReactNode,
 } from 'react';
 import { Menu, MenuItem, MenuLabel, MenuSeparator, MenuSub, RollingNumber, Spinner, Tooltip } from '@/components/ui';
+import { useActionLock } from '@/lib/actionLock';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { formatCount, RATING_LABEL } from '@/lib/format';
 import { KIND_ICON, KIND_LABEL } from '@/lib/kinds';
 import { useAllowedActions, type Need } from '@/lib/capabilities';
 import { modKeyLabel, useHotkey } from '@/lib/hotkeys';
-import { TRASH_HINT, useMutate } from '@/lib/queries';
+import { patchImages, TRASH_HINT, useMutate } from '@/lib/queries';
 import { useLightbox, useOverlays, useSelection } from '@/lib/stores';
 import { AddToGroupDialog, selectionIds } from '@/components/media/CollectionControls';
 import { KindMenu } from '@/components/media/KindMenu';
@@ -53,7 +54,7 @@ const CLEARS_SELECTION: BulkImageAction['type'][] = ['assign', 'exclude', 'trash
  * 多选后底部浮起的墨色胶囊工具栏。
  * 用 sticky 贴在滚动区底部（而不是 fixed 贴窗口），这样它永远居中在「纸」上，不受侧边栏宽度影响。
  *
- * 快捷键：Esc 取消选择 · Ctrl+A 全选已加载 · E 排除 · F 收藏 · C 归入…（改类型，再按 1–7）· G 收进组图…
+ * 快捷键：Esc 取消选择 · Ctrl+A 全选已加载 · E 排除 · F 收藏 · C 归入…（改类型，再按 1–7）· G 收进组图… · Delete 移到回收站
  * 按画师看时（artist）多一个「移出画师」：认错了的图从这位画师里拿掉。
  */
 export function SelectionBar({
@@ -99,14 +100,28 @@ export function SelectionBar({
     return () => useOverlays.getState().setBarLifted(false);
   }, [barUp]);
 
-  const bulk = useMutate((v: { ids: ID[]; action: BulkImageAction }) => api.bulkImages(v), {
+  // 同一种动作还在进行就先不接，别的种类照常接（lib/actionLock.ts）
+  const lock = useActionLock<BulkImageAction['type']>();
+  const bulk = useMutate((v: { ids: ID[]; action: BulkImageAction; unlock: () => void }) => api.bulkImages({ ids: v.ids, action: v.action }), {
     onSuccess: (_, v) => {
-      if (CLEARS_SELECTION.includes(v.action.type)) clear();
+      if (!CLEARS_SELECTION.includes(v.action.type)) return;
+      clear();
+      // 选择已经清空：这种动作现在就能接着做（另选几张再排除），不等后面的整轮刷新
+      v.unlock();
     },
+    // 收藏先改缓存，心和按钮马上变（失败了改回去）
+    optimistic: (v, client) => (v.action.type === 'favorite' ? patchImages(client, v.ids, { favorite: v.action.value }) : undefined),
   });
   const run = (action: BulkImageAction) => {
-    if (!count || bulk.isPending) return;
-    bulk.mutate({ ids: [...ids], action });
+    if (!count || lock.held(action.type)) return;
+    // 会让图离开视图的几种互斥：请求回来、选择清空之前，不接另一种（排除和回收站不能叠在同一批上）
+    if (CLEARS_SELECTION.includes(action.type) && CLEARS_SELECTION.some((t) => lock.held(t))) return;
+    const unlock = lock.hold(action.type);
+    // 选择还留着的动作（收藏、分级）等刷新完再放开：按钮是照列表里的状态算的，没刷新完再按会把同样的再提交一遍
+    void bulk
+      .mutateAsync({ ids: [...ids], action, unlock })
+      .catch(() => {})
+      .finally(unlock);
   };
 
   // 选中的里面（已加载的部分）全是收藏 → 按钮变「取消收藏」
@@ -152,8 +167,8 @@ export function SelectionBar({
   useHotkey('c', (e) => !fromOverlay(e) && setKindOpen(true), { enabled: keys && allow.kind });
   useHotkey('f', (e) => !fromOverlay(e) && run({ type: 'favorite', value: !allFavorite }), { enabled: keys && allow.favorite });
   useHotkey('g', (e) => !fromOverlay(e) && setGrouping(true), { enabled: keys && !kindOpen && allow.group });
-
-  const pendingType = bulk.isPending ? bulk.variables?.action.type : undefined;
+  // Delete = 「回收站」按钮：同一个动作，照样能撤销
+  useHotkey('delete', (e) => !fromOverlay(e) && run({ type: 'trash' }), { enabled: keys && !kindOpen && allow.trash });
 
   return (
     // assistant-cover-shift：助手附页覆盖在纸上时，在露出的那块里居中（index.css）
@@ -217,7 +232,7 @@ export function SelectionBar({
               onCandidate={(danbooruTag) => run({ type: 'assignTag', danbooruTag })}
             >
               {/* 露出的纸窄于 190 时也收进「更多」，sr-only 留着当锚点 */}
-              <BarButton icon={<UserRoundPlus />} pending={pendingType === 'assign' || pendingType === 'assignTag'} aria-haspopup="dialog" className="@max-[190px]/bar:sr-only">
+              <BarButton icon={<UserRoundPlus />} pending={lock.held('assign') || lock.held('assignTag')} aria-haspopup="dialog" className="@max-[190px]/bar:sr-only">
                 归到角色…
               </BarButton>
             </CharacterPicker>}
@@ -236,7 +251,7 @@ export function SelectionBar({
               ]}
             >
               {/* 很窄时收进「更多」；sr-only 留着当选择器的锚点 */}
-              <BarButton icon={<Palette />} pending={pendingType === 'artist' || pendingType === 'artist-auto'} aria-haspopup="dialog" className="@max-[400px]/bar:sr-only">
+              <BarButton icon={<Palette />} pending={lock.held('artist') || lock.held('artist-auto')} aria-haspopup="dialog" className="@max-[400px]/bar:sr-only">
                 画师…
               </BarButton>
             </ArtistPicker>}
@@ -252,7 +267,7 @@ export function SelectionBar({
             {allow.favorite && <Tooltip content={allFavorite ? '取消收藏' : '收藏'} shortcut="F" side="top">
               <BarButton
                 icon={<Heart className={cn(allFavorite && 'fill-current')} />}
-                pending={pendingType === 'favorite'}
+                pending={lock.held('favorite')}
                 onClick={() => run({ type: 'favorite', value: !allFavorite })}
                 className="@max-[400px]/bar:hidden"
               >
@@ -264,7 +279,7 @@ export function SelectionBar({
               align="center"
               width={168}
               trigger={
-                <BarButton icon={<ShieldHalf />} pending={pendingType === 'rating'} trailing={<ChevronDown />} className="@max-[600px]/bar:hidden">
+                <BarButton icon={<ShieldHalf />} pending={lock.held('rating')} trailing={<ChevronDown />} className="@max-[600px]/bar:hidden">
                   分级
                 </BarButton>
               }
@@ -284,7 +299,7 @@ export function SelectionBar({
               onSelect={(value) => run({ type: 'kind', value })}
               trigger={
                 // 窄时收进「更多」；用 sr-only 而不是 hidden，按 C 打开时菜单还能贴着胶囊弹出
-                <BarButton icon={<Shapes />} pending={pendingType === 'kind'} trailing={<ChevronDown />} className="@max-[600px]/bar:sr-only">
+                <BarButton icon={<Shapes />} pending={lock.held('kind')} trailing={<ChevronDown />} className="@max-[600px]/bar:sr-only">
                   归入
                 </BarButton>
               }
@@ -312,7 +327,7 @@ export function SelectionBar({
               <Tooltip content="排除：不再出现在图库和统计里，文件不会被删除" shortcut="E" side="top">
                 <BarButton
                   icon={<Ban />}
-                  pending={pendingType === 'exclude'}
+                  pending={lock.held('exclude')}
                   onClick={() => run({ type: 'exclude' })}
                   className="@max-[600px]/bar:hidden"
                 >
@@ -321,10 +336,10 @@ export function SelectionBar({
               </Tooltip>
             )}
 
-            {allow.trash && <Tooltip content={TRASH_HINT} side="top">
+            {allow.trash && <Tooltip content={TRASH_HINT} shortcut="Delete" side="top">
               <BarButton
                 icon={<Trash2 />}
-                pending={pendingType === 'trash'}
+                pending={lock.held('trash')}
                 onClick={() => run({ type: 'trash' })}
                 className="hover:bg-danger hover:text-white @max-[600px]/bar:hidden"
               >
@@ -346,7 +361,7 @@ export function SelectionBar({
               trigger={
                 <BarButton
                   icon={<Ellipsis />}
-                  pending={pendingType === 'exclude' || pendingType === 'trash' || pendingType === 'rating' || pendingType === 'kind'}
+                  pending={lock.held('exclude') || lock.held('trash') || lock.held('rating') || lock.held('kind')}
                   className="@min-[600px]/bar:hidden"
                 >
                   更多
@@ -412,7 +427,7 @@ export function SelectionBar({
                 </MenuItem>
               )}
               {allow.exclude && <MenuItem icon={<Ban />} shortcut="E" onSelect={() => run({ type: 'exclude' })}>排除</MenuItem>}
-              {allow.trash && <MenuItem icon={<Trash2 />} danger onSelect={() => run({ type: 'trash' })}>回收站</MenuItem>}
+              {allow.trash && <MenuItem icon={<Trash2 />} danger shortcut="Delete" onSelect={() => run({ type: 'trash' })}>回收站</MenuItem>}
             </Menu>
             </>
             )}

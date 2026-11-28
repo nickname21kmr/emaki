@@ -205,9 +205,17 @@ const post = <T>(path: string, body: unknown = {}) => request<T>('POST', path, b
 const patch = <T>(path: string, body: unknown) => request<T>('PATCH', path, body);
 const del = <T>(path: string) => request<T>('DELETE', path);
 
+/**
+ * 缩略图生成方式的版本，拼在缩略图地址里（tv）。换缩略图生成方式时加一（档位、画质、缩放的做法）。
+ * 地址带着文件版本 v 的缩略图，浏览器会存 30 天、不再回来问（服务端 commands/queries.ts 的 getThumbnail）；
+ * 文件没变而缩略图的做法变了，只有地址跟着变才看得到新的。服务端不读这个参数
+ */
+const THUMB_VERSION = 1;
+
 /** 图片 URL（不走 fetch，直接给 <img src>） */
 export const imageUrl = {
-  thumb: (id: ID, width: 240 | 480 | 960 = 480, version?: string) => `/api/images/${encodeURIComponent(id)}/thumb?w=${width}${version ? `&v=${encodeURIComponent(version)}` : ''}`,
+  thumb: (id: ID, width: 240 | 480 | 960 = 480, version?: string) =>
+    `/api/images/${encodeURIComponent(id)}/thumb?w=${width}&tv=${THUMB_VERSION}${version ? `&v=${encodeURIComponent(version)}` : ''}`,
   file: (id: ID, version?: string) => `/api/images/${encodeURIComponent(id)}/file${version ? `?v=${encodeURIComponent(version)}` : ''}`,
 };
 

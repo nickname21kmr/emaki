@@ -1,7 +1,7 @@
 import type { ID, ImageItem } from '@emaki/shared';
 import { ChevronLeft, ChevronRight, Eye, EyeOff, ImageOff } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { Spinner, Tooltip } from '@/components/ui';
 import { imageUrl } from '@/lib/api';
 import { cn } from '@/lib/cn';
@@ -15,8 +15,9 @@ import { useTouchZoom } from '@/lib/pager/useTouchZoom';
 import { clampPan, zoomAround, type Zoom, type ZoomApi, type ZoomBounds } from '@/lib/pager/zoom';
 import type { LightboxRect } from '@/lib/stores';
 import { stagePadding, useViewport } from '@/lib/viewport';
+import { wantsFull } from './cache';
 
-export type StageMeta = Pick<ImageItem, 'width' | 'height' | 'rating' | 'dominantColor' | 'fileName'> & Partial<Pick<ImageItem,'modifiedAt'>>;
+export type StageMeta = Pick<ImageItem, 'width' | 'height' | 'rating' | 'dominantColor' | 'fileName'> & Partial<Pick<ImageItem, 'modifiedAt' | 'fileVersion'>>;
 
 /** 轨道上的一张：当前这张和前后各一张（前后的用缓存里现成的信息，没有就先空着） */
 export interface StageSlide {
@@ -32,6 +33,14 @@ export interface StageSlide {
 const EASE = EASE_OUT;
 /** 从格子里拿起到居中的时长（秒） */
 const LIFT_S = 0.46;
+/** 刚打开的这段时间里（毫秒），双击的第二下不算数：Windows 的双击间隔默认 500，慢一点的双击也要挡住 */
+const OPEN_GUARD_MS = 600;
+/**
+ * 原图显出来的时长，按它解码好的那一刻定（三个值依次是 imgClass 里 transition 的 opacity、filter、scale，揭开模糊的时长不动）：
+ * 拿起途中就好了的，落定时淡入短一点（它已经在后面等了一阵）；摆在旁边、看不见的直接换上，滑进来时已经是清晰的；
+ * 其余（翻到以后才好的、放映）照常 500 ms
+ */
+const FULL_FADE = { lifted: '180ms, 500ms, 500ms', aside: '0ms, 500ms, 500ms' } as const;
 const plateTransform = ({ x, y, scale }: { x: number; y: number; scale: number }) =>
   `translate3d(${x}px, ${y}px, 0) scale(${scale})`;
 
@@ -42,12 +51,14 @@ function fitBox(meta: StageMeta | undefined, availW: number, availH: number) {
 }
 
 /**
- * 看图器的舞台：居中显示图片，先 960 缩略图再换原图；滚轮 / 双击缩放，放大后拖动平移。
- * 点击图片外的空白处关闭。
+ * 看图器的舞台：居中显示图片，先缩略图再换原图；滚轮 / 双击缩放，放大后拖动平移。
+ * 点击图片外的空白处关闭（按下、松开都在空白处才算）。
  * 翻页和触屏缩放和阅读器是同一份（lib/pager）：前后一张摆在轨道上，←→、箭头、拖动、触控板左右滑都是轨道滑一格，胶片条跳页直接换；
  * 捏合 / 双击缩放、放大后拖动平移、单击切换界面（useTouchZoom）。看图器自己的：下滑关闭（跟手缩小变淡，过阈值放回网格）、
  * 上滑展开信息（窄屏的底部面板）、从格子里拿起和放回、放映时交叉淡化（这时不摆前后张）、鼠标滚轮缩放和拖动平移。
  * 图片四周的留白按窗口和输入方式定（lib/viewport.ts 的 stagePadding：电脑上左右给箭头留 84、上下 68，触屏窄屏铺满宽度）。
+ * 原图按「停没停稳」挂（settled，见 cache.ts 的 wantsFull）：停稳以后当前张和前进方向的那一张才挂，挂上就留着；
+ * 按住方向键快翻时每一格只有缩略图（垫一层网格里现成的 480，再叠 960）。
  */
 export function Stage({
   index,
@@ -55,6 +66,8 @@ export function Stage({
   slide,
   zoomApi,
   direction,
+  settled,
+  travel,
   hasPrev,
   hasNext,
   loadingNext,
@@ -77,6 +90,10 @@ export function Stage({
   zoomApi: ZoomApi;
   /** 切换方向（-1 / 0 / 1）：前后张没摆在轨道上时（跳页、信息还没到），新图从哪边进来 */
   direction: number;
+  /** 停稳了（换图以后一小会儿没再换）：这时才挂原图 */
+  settled: boolean;
+  /** 最近一次往哪边翻的（-1 / 1）：停稳后前进方向的那一张也先挂上原图 */
+  travel: number;
   hasPrev: boolean;
   hasNext: boolean;
   /** 在已加载的最后一张往后翻，正在等下一页 */
@@ -219,6 +236,14 @@ export function Stage({
   const drag = useRef<{ sx: number; sy: number; x0: number; y0: number; moved: boolean } | null>(null);
   const suppressClick = useRef(false);
   const [dragging, setDragging] = useState(false);
+  // 鼠标这一下是在哪按下的：按下、松开都在空白处（没拖走）才算点背景。
+  // 在图上按下、拖到图外松开，click 会派发到两处的共同祖先（舞台）上，只看 click 的 target 分不出来
+  const pressed = useRef<{ x: number; y: number; onBackdrop: boolean } | null>(null);
+  // 打开的时刻。双击格子打开时，第二下落在刚飞出来的图版上（dblclick）或者背景上（detail 是 2 的 click），都不算数。
+  // 比的是第二下按下的时刻（事件自带的 timeStamp）：打开那一下主线程忙着挂载，第二下排队等到处理时可能已经过了 600 ms
+  const openedAt = useRef(performance.now());
+  const lastPressAt = useRef(-Infinity);
+  const justOpened = () => lastPressAt.current - openedAt.current < OPEN_GUARD_MS;
 
   const onMouseDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || !zoomed) return;
@@ -242,8 +267,8 @@ export function Stage({
     setDragging(false);
   };
   const onDoubleClick = (e: React.MouseEvent) => {
-    // 触屏的双击由手势处理，浏览器补发的 dblclick 不再算一次
-    if (fromTouch()) return;
+    // 触屏的双击由手势处理，浏览器补发的 dblclick 不再算一次；双击打开的第二下也不是要放大
+    if (fromTouch() || justOpened()) return;
     const { px, py } = toStage(e.clientX, e.clientY);
     zoomToggle(px, py);
   };
@@ -275,6 +300,7 @@ export function Stage({
   const [landedFor, setLandedFor] = useState<LightboxRect | null>(null);
   useEffect(() => {
     if (!originRect) return;
+    openedAt.current = performance.now();
     let timer = 0;
     const frame = requestAnimationFrame(() => {
       setLiftedFor(originRect);
@@ -288,6 +314,13 @@ export function Stage({
   const holding = !!from && liftedFor !== originRect;
   const lifting = !!originRect && landedFor !== originRect;
   const idle = !!slideshow?.idle;
+
+  // 垫在图版最下面的缩略图，960 和原图到之前先有画面。从网格点开的那一张用网格那一档（已经解码好，拿起时不会白一下），
+  // 之后按 id 认它：翻走、翻回来都不换地址。别的图版垫 480（全库都有，网格里多半已经在内存）。
+  // 放映时不垫：换片前 960 已经解码好了
+  const lifted = useRef<{ id: ID; thumb: 240 | 480 | 960 } | null>(null);
+  if (originRect?.thumb && current) lifted.current = { id: current.id, thumb: originRect.thumb };
+  const underlayOf = (id: ID) => (lifted.current?.id === id ? lifted.current.thumb : slideshow ? undefined : 480);
 
   /** 第 i 张的图版。当前这张接拿起 / 放回、缩放、双击；前后张只是摆着（滑进来时还是同一个元素，不重新加载） */
   const plate = (i: number, isCurrent: boolean) => {
@@ -337,10 +370,13 @@ export function Stage({
             blurred={sl.blurred}
             blurLabel={sl.blurLabel}
             onReveal={sl.onReveal}
-            placeholder={isCurrent ? originRect?.thumb : undefined}
+            underlay={underlayOf(sl.id)}
             flat={isCurrent && !!returnRect}
             slide={!!slideshow}
             holdFull={isCurrent && lifting}
+            // 放映时只有当前这一张，照旧一挂上就拿原图
+            loadFull={!!slideshow || wantsFull({ settled, offset: i - index, travel, pixels: sl.meta.width * sl.meta.height })}
+            priority={isCurrent ? 'high' : 'low'}
           />
         </div>
       </motion.div>
@@ -354,18 +390,35 @@ export function Stage({
         'group/stage relative min-h-0 min-w-0 flex-1 touch-none overflow-hidden select-none',
         zoomed ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : idle && 'cursor-none',
       )}
-      onPointerDown={(e) => route(e, () => void (touchZoom.handlers.onPointerDown(e) || pager.handlers.onPointerDown(e)), () => onMouseDown(e))}
+      onPointerDown={(e) => {
+        if (e.pointerType !== 'touch') {
+          pressed.current = { x: e.clientX, y: e.clientY, onBackdrop: e.target === e.currentTarget };
+          lastPressAt.current = e.timeStamp;
+        }
+        route(e, () => void (touchZoom.handlers.onPointerDown(e) || pager.handlers.onPointerDown(e)), () => onMouseDown(e));
+      }}
       onPointerMove={(e) => route(e, () => void (touchZoom.handlers.onPointerMove(e) || pager.handlers.onPointerMove(e)), () => onMouseMove(e))}
       onPointerUp={(e) => route(e, () => void (touchZoom.handlers.onPointerUp(e) || pager.handlers.onPointerUp(e)), endDrag)}
       onPointerCancel={(e) => route(e, () => void (touchZoom.handlers.onPointerCancel(e) || pager.handlers.onPointerCancel()), endDrag)}
       onClick={(e) => {
         // 触屏的点按由手势处理（单击切换界面，不关闭）
         if (fromTouch()) return;
+        const press = pressed.current;
+        pressed.current = null;
         if (suppressClick.current) {
           suppressClick.current = false;
           return;
         }
-        if (e.target === e.currentTarget && !zoomed) onBackdropClick();
+        if (e.target !== e.currentTarget || zoomed) return;
+        // 不是在空白处按下的，或者按下以后拖走了：不算点背景（Esc 和 × 还在）
+        if (!press?.onBackdrop || Math.hypot(e.clientX - press.x, e.clientY - press.y) >= 5) return;
+        // 双击格子打开时，图版已经从鼠标底下飞走，第二下落在背景上
+        if (e.detail > 1 && justOpened()) return;
+        onBackdropClick();
+      }}
+      onDoubleClick={(e) => {
+        // 放大着时鼠标一按下就被舞台抓住（拖动平移），dblclick 派发在舞台上、到不了图版：在这里还原
+        if (zoomed && e.target === e.currentTarget && !fromTouch()) reset();
       }}
     >
       {/* 放映时旧图留在原位淡出，新图同时淡入（交叉淡化），不摆前后张；平时是轨道（lib/pager）。
@@ -425,7 +478,7 @@ export function Stage({
               !idle && 'group-hover/stage:text-white/35',
             )}
           >
-            {slideshow ? '放映中 · 空格暂停 · ← → 切换 · Esc 退出' : '滚轮缩放 · 双击放大 · ← → 切换 · I 信息'}
+            {slideshow ? '放映中 · 空格暂停 · ← → 切换 · Esc 退出' : '滚轮缩放 · 双击放大 · ← → 或空格切换 · I 信息'}
           </motion.div>
         )}
       </AnimatePresence>
@@ -444,40 +497,61 @@ function showDecoded(img: HTMLImageElement, show: () => void) {
     .then(show);
 }
 
-/** 一张图：主色占位 → 960 缩略图 → 原图淡入。按 id 重新挂载，加载状态天然隔离。 */
+/**
+ * 一张图：主色占位 → 垫底的缩略图 → 960 缩略图 → 原图淡入。按 id 重新挂载，加载状态天然隔离。
+ * 原图等 loadFull 才挂，挂上就留着：翻走再翻回来还是现成的，不重新加载。
+ */
 function StageImage({
   id,
   meta,
   blurred,
   blurLabel,
   onReveal,
-  placeholder,
+  underlay,
   flat,
   slide,
   holdFull,
+  loadFull,
+  priority,
 }: {
   id: ID;
   meta: StageMeta;
   blurred: boolean;
   blurLabel: string;
   onReveal: () => void;
-  /** 网格里同一张的缩略图宽度：拿起时垫在最下面 */
-  placeholder?: 240 | 480 | 960;
+  /** 垫在最下面的缩略图宽度：从网格拿起的是网格里那一档，别的是 480 */
+  underlay?: 240 | 480 | 960;
   /** 放回时去掉投影 */
   flat?: boolean;
   /** 放映中：外层已经在交叉淡化，缩略图（已预先解码）直接出现，不再叠一层淡入 */
   slide?: boolean;
   /** 拿起动画还没落定：原图下好了也先不换上去 */
   holdFull?: boolean;
+  /** 现在可以挂原图了（停稳以后的当前张和前进方向的那一张） */
+  loadFull: boolean;
+  /** 正在看的这张 high：网格里几十张缩略图同时在下载时，它不用排队；前后摆着的 low，不和它抢 */
+  priority: 'high' | 'low';
 }) {
+  const [underlayLoaded, setUnderlayLoaded] = useState(false);
   const [thumbLoaded, setThumbLoaded] = useState(false);
   const [fullLoaded, setFullLoaded] = useState(false);
+  const [fullMounted, setFullMounted] = useState(loadFull);
+  if (loadFull && !fullMounted) setFullMounted(true);
+  // 图解码好的那一刻它在哪（摆在旁边、还在拿起途中）决定怎么显出来，见 FULL_FADE
+  const live = useRef({ holdFull, priority });
+  live.current = { holdFull, priority };
+  const [thumbAside, setThumbAside] = useState(false);
+  const [fullFade, setFullFade] = useState<string>();
   // 电脑断开那一会儿加载失败的，重新连上后换个地址重新加载（lib/connection.ts）
-  const thumb = useImageRetry(imageUrl.thumb(id, 960, meta.modifiedAt));
+  const thumb = useImageRetry(imageUrl.thumb(id, 960, meta.fileVersion));
   const full = useImageRetry(imageUrl.file(id, meta.modifiedAt));
   const [failedFull, setFailedFull] = useState<string | null>(null);
   const fullFailed = failedFull === full.src;
   const fullShown = fullLoaded && !holdFull;
+  // 网格刚显示过的缩略图挂上时就是 complete，onLoad 可能来不及接：挂载时看一眼，主色底就不用闪那一帧
+  const underlayRef = useCallback((el: HTMLImageElement | null) => {
+    if (el?.complete && el.naturalWidth > 0) setUnderlayLoaded(true);
+  }, []);
 
   const imgClass = cn(
     'absolute inset-0 size-full object-contain transition-[opacity,filter,scale] duration-500 ease-[var(--ease-out-soft)]',
@@ -490,16 +564,31 @@ function StageImage({
         'relative size-full overflow-hidden rounded-[3px] transition-shadow duration-300',
         !flat && 'shadow-[0_40px_120px_-30px_rgb(0_0_0/0.8)]',
       )}
-      style={{ backgroundColor: placeholder || thumbLoaded || fullShown ? undefined : meta.dominantColor }}
+      style={{ backgroundColor: underlayLoaded || thumbLoaded || fullShown ? undefined : meta.dominantColor }}
     >
-      {placeholder && !fullShown && <img src={imageUrl.thumb(id, placeholder, meta.modifiedAt)} alt="" draggable={false} className={imgClass} />}
+      {underlay && !fullShown && (
+        <img
+          ref={underlayRef}
+          src={imageUrl.thumb(id, underlay, meta.fileVersion)}
+          alt=""
+          draggable={false}
+          // 很小、后端有现成的：不管在哪一格都先拿，快翻时至少有它
+          fetchPriority="high"
+          onLoad={() => setUnderlayLoaded(true)}
+          className={imgClass}
+        />
+      )}
       <img
         src={thumb.src}
         alt=""
         draggable={false}
-        // 看图器里正在看的这张优先：网格里几十张缩略图同时在下载时，它不用排队
-        fetchPriority="high"
-        onLoad={(e) => showDecoded(e.currentTarget, () => setThumbLoaded(true))}
+        fetchPriority={priority}
+        onLoad={(e) =>
+          showDecoded(e.currentTarget, () => {
+            setThumbAside(live.current.priority === 'low');
+            setThumbLoaded(true);
+          })
+        }
         onError={thumb.onError}
         className={cn(
           imgClass,
@@ -507,25 +596,31 @@ function StageImage({
           thumbLoaded && !fullShown ? 'opacity-100' : 'opacity-0',
           fullShown && 'delay-300',
         )}
-        style={slide && !fullShown ? { transitionDuration: '0ms' } : undefined}
+        style={fullShown ? undefined : slide ? { transitionDuration: '0ms' } : thumbAside ? { transitionDuration: FULL_FADE.aside } : undefined}
       />
-      {!fullFailed && (
+      {fullMounted && !fullFailed && (
         <img
           src={full.src}
           alt={meta.fileName}
           draggable={false}
           decoding="async"
-          fetchPriority="high"
-          onLoad={(e) => showDecoded(e.currentTarget, () => setFullLoaded(true))}
+          fetchPriority={priority}
+          onLoad={(e) =>
+            showDecoded(e.currentTarget, () => {
+              setFullFade(live.current.priority === 'low' ? FULL_FADE.aside : live.current.holdFull ? FULL_FADE.lifted : undefined);
+              setFullLoaded(true);
+            })
+          }
           onError={() => {
             setFailedFull(full.src);
             full.onError();
           }}
           className={cn(imgClass, fullShown ? 'opacity-100' : 'opacity-0')}
+          style={fullFade ? { transitionDuration: fullFade } : undefined}
         />
       )}
 
-      {!fullLoaded && !fullFailed && (
+      {fullMounted && !fullLoaded && !fullFailed && (
         <div className="pointer-events-none absolute right-3 bottom-3 animate-[fade-in_0.3s_0.6s_both]">
           <Spinner className="size-4 text-white/70 drop-shadow" />
         </div>

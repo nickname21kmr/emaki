@@ -1,4 +1,4 @@
-import { ANNEX_KINDS, type ContentKind } from '@emaki/shared';
+import { ANNEX_KINDS, type ContentKind, type ImageItem } from '@emaki/shared';
 import { useCallback, useEffect, useMemo, type ReactNode } from 'react';
 import { Navigate, useParams, useSearchParams } from 'react-router';
 import { PageBody, PageHeader } from '@/components/layout/PageHeader';
@@ -33,6 +33,9 @@ const LAYOUT: Record<ContentKind, CardVariant | { rowHeight: number }> = {
 
 /** 别册里的一页：一个别册类型，或者跨类型的「动图」筛选（D5） */
 type AnnexScope = ContentKind | 'animated';
+
+/** 动图跨类型时格子左下角的类型印；模块级函数，memo 的格子不会因为它整屏重渲染 */
+const kindBadge = (img: ImageItem) => <KindBadge kind={img.kind} />;
 
 /**
  * 别册（T32b）：截图、漫画、文字、照片、表情——不是插画的图收在这里，
@@ -122,7 +125,7 @@ function AnnexView({ scope, count }: { scope: AnnexScope | null; count: number |
           {typeof layout === 'string' ? (
             <CardGrid {...common} variant={layout} />
           ) : (
-            <ImageGrid {...common} rowHeight={layout.rowHeight} renderBadges={kind ? undefined : (img) => <KindBadge kind={img.kind} />} />
+            <ImageGrid {...common} rowHeight={layout.rowHeight} renderBadges={kind ? undefined : kindBadge} />
           )}
         </div>
         <GridFooter loadingMore={isFetchingNextPage} done={!hasNextPage} total={list.data?.pages[0]?.total ?? 0} />

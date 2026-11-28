@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { MotionConfig } from 'motion/react';
 import { lazy, StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -7,29 +7,25 @@ import { Toaster } from 'sonner';
 import { ThemeSync } from '@/components/layout/ThemeSync';
 import { TooltipProvider } from '@/components/ui';
 import { ConnectionBanner } from '@/features/access/ConnectionBanner';
-import { api, ApiRequestError } from './lib/api';
+import { api } from './lib/api';
 import { watchForbidden } from './lib/capabilities';
 import { watchConnection } from './lib/connection';
 import { useDeviceAuth } from './lib/deviceAuth';
 import { meRetry, qk } from './lib/queries';
+import { createQueryClient } from './lib/queryClient';
 import { routes } from './router';
 import './styles/index.css';
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      // 本地后端，数据变化靠 SSE 通知，不需要频繁轮询
-      staleTime: 30_000,
-      refetchOnWindowFocus: false,
-      // 后端重启（十几秒）期间连不上：读取类请求多重试几次（1、2、4、8、10、10 秒），其他错误只重试一次
-      retry: (count, err) => (err instanceof ApiRequestError && err.code === 'network' ? count < 6 : count < 1),
-      retryDelay: (count) => Math.min(1000 * 2 ** count, 10_000),
-    },
-  },
-});
+// 缺省的过期、回收、重试时间都在 lib/queryClient.ts
+const queryClient = createQueryClient();
 
 // 谁在调用（lib/capabilities.ts）：一开始就去问，页面等它的时间最短；请求回 403 forbidden 时重新问（权限可能刚在电脑上改了）
 void queryClient.prefetchQuery({ queryKey: qk.me, queryFn: api.me, retry: meRetry, retryDelay: 500 });
+// 侧栏、首页一挂上就要的三样跟着一起发，不等组件挂上之后的 effect，少一波往返。queryFn 和 lib/queries.ts 里的 hook 是同一个，
+// hook 挂上时接着用这次请求，不会再发一遍
+void queryClient.prefetchQuery({ queryKey: qk.summary, queryFn: api.summary });
+void queryClient.prefetchQuery({ queryKey: qk.settings, queryFn: api.settings });
+void queryClient.prefetchQuery({ queryKey: qk.health, queryFn: api.health, staleTime: Infinity });
 watchForbidden(queryClient);
 // 连不上电脑：浏览器里顶部提示、App 里交给 App；重新连上时全部重新取（lib/connection.ts）
 watchConnection(queryClient);

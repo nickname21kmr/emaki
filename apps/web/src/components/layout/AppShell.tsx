@@ -7,6 +7,7 @@ import { useServerEvents } from '@/lib/events';
 import { useSettings } from '@/lib/queries';
 import { useGlobalHotkeys } from './useGlobalHotkeys';
 import { ScrollContainerContext } from './ScrollContainer';
+import { focusIsNowhere, isScrollKey, shouldFocusPaper } from './scrollFocus';
 import { Sidebar } from './Sidebar';
 import { TabBar } from './TabBar';
 import { AssistantLauncher, AssistantSpacer } from '@/features/assistant/AssistantLauncher';
@@ -23,6 +24,7 @@ export function AppShell() {
   useServerEvents();
   useGlobalHotkeys();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const shellRef = useRef<HTMLDivElement>(null);
   const { pathname, key } = useLocation();
   const navType = useNavigationType();
   const settings = useSettings().data;
@@ -45,6 +47,8 @@ export function AppShell() {
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    // 焦点哪也不在、或者还留在侧栏 / 标签栏上：放到纸上，进了页面直接能用 PageDown / 空格 / Home / End 滚，Tab 也从内容开始
+    if (shellRef.current && shouldFocusPaper(document.activeElement, document.body, shellRef.current, el)) el.focus({ preventScroll: true });
     const saved = navType === 'POP' ? positions.current.get(key) : undefined;
     if (saved === undefined) return void el.scrollTo({ top: 0 });
     // 虚拟列表要一两帧才把高度撑开：最多重试 3 帧
@@ -59,18 +63,34 @@ export function AppShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在换页时执行；同页改查询参数不回顶
   }, [pathname]);
 
+  // 换页之外焦点也会落回 body（对话框、看图器关掉时原来的元素已经不在了；点的东西随后被卸载了）：按滚动键时先把焦点放到纸上。
+  // 不拦按键：浏览器在按键事件派发完之后才按当前焦点找滚动目标，滚动照旧由它来做（按住连滚、平滑滚动都是原生的）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = scrollRef.current;
+      if (!el || !isScrollKey(e) || !focusIsNowhere(document.activeElement, document.body)) return;
+      // 开着对话框、看图器、菜单时按键是它们的（助手附页不算，它不占页面的按键）
+      if (document.querySelector('[role="dialog"]:not([data-assistant-sheet]),[role="alertdialog"],[role="menu"]')) return;
+      el.focus({ preventScroll: true });
+    };
+    window.addEventListener('keydown', onKey, { capture: true });
+    return () => window.removeEventListener('keydown', onKey, { capture: true });
+  }, []);
+
   // 还没有任何图库文件夹 → 首次使用引导。必须放在所有 hook 之后（hook 数量不能随数据变化）
   if (settings && settings.libraryRoots.length === 0 && canWelcome) return <Navigate to="/welcome" replace />;
 
   return (
     <ScrollContainerContext.Provider value={scrollRef}>
       {/* 文档本身永远不滚：只有侧栏和纸各自滚 */}
-      <div className="flex h-full overflow-hidden bg-canvas compact:flex-col compact:pt-[env(safe-area-inset-top)]">
+      <div ref={shellRef} className="flex h-full overflow-hidden bg-canvas compact:flex-col compact:pt-[env(safe-area-inset-top)]">
         <Sidebar />
         <main className="min-w-0 flex-1 py-2 pr-2 compact:min-h-0 compact:p-0 short:pr-[max(0.5rem,env(safe-area-inset-right))]">
           <div
             ref={scrollRef}
-            className="relative h-full overflow-x-hidden overflow-y-auto rounded-[var(--radius-sheet)] bg-sheet paper chapter-scope shadow-[var(--shadow-sheet)] scrollbar-thin compact:rounded-none compact:shadow-none"
+            // 能接焦点（不进 Tab 顺序）：键盘滚动要焦点在滚动容器上。outline-none：聚焦时不画焦点框（index.css 的 :focus-visible 会给整张纸描一圈朱线）
+            tabIndex={-1}
+            className="relative h-full overflow-x-hidden overflow-y-auto rounded-[var(--radius-sheet)] bg-sheet paper chapter-scope shadow-[var(--shadow-sheet)] outline-none scrollbar-thin compact:rounded-none compact:shadow-none"
           >
             <Outlet />
           </div>

@@ -5,10 +5,11 @@ import { useCallback, useMemo, useState } from 'react';
 import { AddToGroupDialog, CollapseGroupsMenu, selectionIds } from '@/components/media/CollectionControls';
 import { ImageGrid, ImageGridSkeleton } from '@/components/media/ImageGrid';
 import { Button, EmptyState, ErrorState, Segmented } from '@/components/ui';
+import { useActionLock } from '@/lib/actionLock';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { themeQuery } from '@/lib/customTheme';
-import { useImagesInfinite, useMutate, useWork } from '@/lib/queries';
+import { patchImages, useImagesInfinite, useMutate, useWork } from '@/lib/queries';
 import { KindBadge } from '@/components/media/KindBadge';
 import { usePrefs } from '@/lib/stores';
 import { ImagesToolbar } from '@/features/characters/detail/ImagesToolbar';
@@ -53,18 +54,24 @@ export function WorkImages({ workId, gridKey, dialogOpen = false }: { workId: ID
   const [grouping, setGrouping] = useState(false);
   const selection = useScopedSelection(scope, images, dialogOpen || artistOpen);
 
+  // 两个动作做完都清空选择：只在请求在路上时算「忙」，一回来就能接着选、接着做，不等后面的整轮刷新（lib/actionLock.ts）
+  const lock = useActionLock<'favorite' | 'exclude'>();
   const favorite = useMutate(
-    ({ ids, value }: { ids: ID[]; value: boolean }) => api.bulkImages({ ids, action: { type: 'favorite', value } }),
-    { onSuccess: selection.clear },
+    ({ ids, value }: { ids: ID[]; value: boolean }) => lock.during('favorite', api.bulkImages({ ids, action: { type: 'favorite', value } })),
+    {
+      onSuccess: selection.clear,
+      // 心马上变：先改缓存，失败了改回去
+      optimistic: ({ ids, value }, client) => patchImages(client, ids, { favorite: value }),
+    },
   );
-  const exclude = useMutate((ids: ID[]) => api.bulkImages({ ids, action: { type: 'exclude' } }), {
+  const exclude = useMutate((ids: ID[]) => lock.during('exclude', api.bulkImages({ ids, action: { type: 'exclude' } })), {
     onSuccess: selection.clear,
   });
 
   // 收拢的组图格按整组算：整组都收藏了才算收藏
   const starred = useMemo(() => new Map(images.flatMap((i) => selectionIds(i).map((id) => [id, i.collectionGroup?.allFavorite ?? i.favorite] as const))), [images]);
   const allFavorite = selection.ids.length > 0 && selection.ids.every((id) => starred.get(id));
-  const busy = favorite.isPending || exclude.isPending;
+  const busy = lock.any();
 
   const actions: SelectionAction[] = [
     {
@@ -72,7 +79,7 @@ export function WorkImages({ workId, gridKey, dialogOpen = false }: { workId: ID
       need: 'curate',
       label: allFavorite ? '取消收藏' : '收藏',
       icon: allFavorite ? <HeartOff /> : <Heart />,
-      loading: favorite.isPending,
+      loading: lock.held('favorite'),
       disabled: busy,
       onClick: () => favorite.mutate({ ids: selection.ids, value: !allFavorite }),
     },
@@ -83,7 +90,7 @@ export function WorkImages({ workId, gridKey, dialogOpen = false }: { workId: ID
       need: 'curate',
       label: '排除',
       icon: <EyeOff />,
-      loading: exclude.isPending,
+      loading: lock.held('exclude'),
       disabled: busy,
       onClick: () => exclude.mutate(selection.ids),
     },

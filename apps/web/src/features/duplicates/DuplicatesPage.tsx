@@ -60,7 +60,9 @@ export function DuplicatesPage() {
     );
 
   const pendingQ = useDuplicates(false);
-  const resolvedQ = useDuplicates(true);
+  // 「已处理」只在切到那个视图时才取：真实库这份列表有 8 MB 多，默认的待处理视图用不到它；
+  // 不这样的话每处理一组（duplicates.changed）两份都要重取一遍。关着的查询只标记过期，切过去时再取
+  const resolvedQ = useDuplicates(true, view === 'resolved');
   const stats = useStats();
   const settings = useSettings();
   const roots = useMemo(() => new Map((settings.data?.libraryRoots ?? []).map((r) => [r.id, r] as const)), [settings.data]);
@@ -247,7 +249,10 @@ export function DuplicatesPage() {
 
   let subtitle: string;
   if (view === 'resolved') {
-    subtitle = resolvedQ.data ? `已处理 ${formatCount(resolvedQ.data.length)} 组` : '正在加载…';
+    // 只在这个视图里才取：切过来时先显示上次的列表，重新取的这一会儿写明正在更新
+    subtitle = resolvedQ.data
+      ? `已处理 ${formatCount(resolvedQ.data.length)} 组${resolvedQ.isFetching ? ' · 正在更新…' : ''}`
+      : '正在加载…';
   } else if (pendingQ.data) {
     subtitle = groups.length ? `${formatCount(groups.length)} 组 · 可释放 ${formatBytes(suggestedReclaim)}` : '没有待处理的重复';
   } else {

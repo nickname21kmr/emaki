@@ -1,22 +1,23 @@
 import type { ContentKind, ID } from '@emaki/shared';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Pause, PanelRight, Play, Shapes, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Dialog as D } from 'radix-ui';
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useLocation, useNavigate, useNavigationType } from 'react-router';
-import { imageUrl } from '@/lib/api';
+import { api, imageUrl } from '@/lib/api';
 import { blurLabel, blurReason } from '@/lib/blur';
 import { formatCount } from '@/lib/format';
 import { isTypingTarget, modKeyLabel, useHotkey } from '@/lib/hotkeys';
-import { useImage } from '@/lib/queries';
+import { qk } from '@/lib/queries';
 import { useBlurPrefs, useLightbox } from '@/lib/stores';
-import { findCachedImage, preloadAhead, preloadNeighbors, whenDecoded } from './lightbox/cache';
+import { findCachedImage, preloadAhead, preloadNeighbors, preloadSettled, settleTimer, whenDecoded } from './lightbox/cache';
 import { useCachedImage, useCachedImages } from './lightbox/useCachedImages';
 import { Filmstrip } from './lightbox/Filmstrip';
 import { entryKey, isLightboxEntry, markLightboxEntry, popAction, setLightboxPopHandler } from './lightbox/history';
 import { InfoPanel } from './lightbox/InfoPanel';
 import { InfoSheet } from './lightbox/InfoSheet';
+import { KEYS_BELONG_TO, ownsPageKey } from './lightbox/keys';
 import { KindMenu } from './KindMenu';
 import { LbButton } from './lightbox/LbButton';
 import { cn } from '@/lib/cn';
@@ -30,6 +31,8 @@ import { closeAssistant, useAssistantDock, useViewportWidth } from '@/features/a
 import { isNarrow, useViewport } from '@/lib/viewport';
 
 const EASE = EASE_OUT;
+/** 翻页键的注册方式：默认行为由处理函数自己决定拦不拦（见 lightbox/keys.ts），按住连着翻 */
+const PAGE_KEY = { preventDefault: false, repeat: true } as const;
 
 /**
  * 全局看图器（挂在 AppShell 里）。任何地方调用 useLightbox.getState().show(ids, index) 打开。
@@ -37,7 +40,11 @@ const EASE = EASE_OUT;
  * 布局：深色 scrim 上左边是舞台（图片居中、可缩放），右边一张可折叠的信息「纸」（I 切换）。
  * 不论亮暗主题，看图器本身都是深色的 —— 让图片说话；信息面板仍跟随主题。
  *
- * 快捷键：← → 切换 · I 信息面板 · F 收藏 · E 排除 · + - 0 缩放 · Esc 先还原缩放再关闭
+ * 快捷键：← → 切换（空格 / PageDown 下一张，Shift+空格 / PageUp 上一张，Home / End 首尾）· I 信息面板 · F 收藏 · E 排除 ·
+ * Delete 移到回收站 · + - 0 缩放 · Esc 先还原缩放再关闭
+ *
+ * 加载：先缩略图。换了一张以后 200 ms 没再换才算停稳（useSettled），停稳了才拿原图和详情，
+ * 按住方向键快翻时路过的图只放缩略图；哪几格挂原图见 lightbox/cache.ts 的 wantsFull。
  *
  * 助手（开启后）：附页进暗房，排在信息面板右边；窄于 1280 时两者只放一个。焦点在附页里时 Esc 只收起附页。
  *
@@ -139,7 +146,7 @@ export function Lightbox() {
         >
           <D.Title className="sr-only">看图</D.Title>
           <D.Description className="sr-only">
-            左右方向键切换，I 显示信息，F 收藏，E 排除，Esc 关闭
+            左右方向键或空格切换，Home 回到第一张，I 显示信息，F 收藏，E 排除，Delete 移到回收站，Esc 关闭
           </D.Description>
           {/* 关闭时内容保留到淡出结束，快捷键里再判断 open */}
           {id && <LightboxView id={id} ids={ids} index={index} escapeRef={escapeRef} />}
@@ -284,9 +291,11 @@ function LightboxView({
     root.querySelectorAll<HTMLElement>('[data-lb-glow]').forEach((el) => (el.style.opacity = String(0.2 * (1 - (p ?? 0)))));
   };
 
-  const detailQuery = useImage(id);
-  const detail = detailQuery.data?.id === id ? detailQuery.data : undefined;
   const cached = useCachedImage(id);
+  const settled = useSettled(id);
+  // 详情：基本信息已经在列表缓存里的，等停稳再去拿（缓存里有现成的照常用）；不在的要靠它才知道尺寸，马上拿
+  const detailQuery = useQuery({ queryKey: qk.image(id), queryFn: () => api.image(id), enabled: settled || !cached });
+  const detail = detailQuery.data?.id === id ? detailQuery.data : undefined;
   const base = cached ?? detail;
 
   // 「显示」只对点过的那几张生效，关掉看图器就忘掉
@@ -302,11 +311,17 @@ function LightboxView({
   useEffect(() => {
     prevIndex.current = index;
   }, [index]);
+  // 停稳以后先预载哪一边：最近一次翻的方向；那边没有图了（第一张、已载入的最后一张）就是另一边
+  const heading = useTravel(id, index);
+  const travel = ids[index + heading] ? heading : -heading;
 
   useEffect(() => {
     preloadNeighbors(client, ids, index);
     if (slideshow) preloadAhead(client, ids, index);
   }, [client, ids, index, slideshow, base?.modifiedAt]);
+  useEffect(() => {
+    if (settled) preloadSettled(client, ids, index, travel);
+  }, [client, ids, index, travel, settled, base?.modifiedAt]);
 
   escapeRef.current = () => {
     if (!zoomApi.zoomed) return false;
@@ -317,7 +332,7 @@ function LightboxView({
   // 焦点在菜单 / 弹出框或助手附页里时，方向键和字母键留给它们；淡出过程中也不再响应
   const guard = (fn: () => void) => (e: KeyboardEvent) => {
     if (!useLightbox.getState().open) return;
-    if (e.target instanceof Element && e.target.closest('[data-radix-popper-content-wrapper], [data-assistant-sheet]')) return;
+    if (e.target instanceof Element && e.target.closest(KEYS_BELONG_TO)) return;
     fn();
   };
   useHotkey('arrowleft', guard(() => go(-1)), { repeat: true });
@@ -327,16 +342,38 @@ function LightboxView({
   useHotkey('f', guard(actions.toggleFavorite), { enabled: actions.allow.favorite });
   useHotkey('e', guard(actions.exclude), { enabled: actions.allow.exclude });
   useHotkey('o', guard(actions.toggleOriginal), { enabled: actions.allow.original });
+  // 和信息面板的「回收站」按钮是同一个动作：原地停一下再换下一张，Ctrl+Z 撤销，按住不连删
+  useHotkey('delete', guard(actions.trash), { enabled: actions.allow.trash });
   const [kindOpen, setKindOpen] = useState(false);
   useHotkey('c', guard(() => setKindOpen(true)), { enabled: !!base && !kindOpen && actions.allow.kind });
-  useHotkey('space', guard(() => setPaused((p) => !p)), { enabled: slideshow });
+
+  // 翻页键（和阅读器同一组）。这些键在控件上本来有用，确定归看图器（ownsPageKey）才拦默认行为；held = 按住时连着触发
+  const tabbing = useTabbing();
+  // 按住产生的自动重复只认在看图器里按下的那一下：在「未识别」按空格打开看图器，手还没松开时不能接着往后翻
+  const pressedHere = useRef<string | null>(null);
+  const pageKey = (fn: () => void, held = true) => (e: KeyboardEvent) => {
+    if (!useLightbox.getState().open || !ownsPageKey(e, tabbing.current)) return;
+    e.preventDefault();
+    if (!e.repeat) pressedHere.current = e.key;
+    else if (!held || pressedHere.current !== e.key) return;
+    fn();
+  };
+  // 跳到别处：之前在等下一页时按的「下一张」作废，不然下一页到了会被往后挪一张
+  const jump = (i: number) => useLightbox.setState({ index: i, originRect: null, pendingNext: false });
+  useHotkey('pagedown', pageKey(() => go(1)), PAGE_KEY);
+  useHotkey(['pageup', 'shift+space'], pageKey(() => go(-1)), PAGE_KEY);
+  // 空格：平时是下一张，放映时是暂停 / 继续
+  useHotkey('space', pageKey(slideshow ? () => setPaused((p) => !p) : () => go(1), !slideshow), PAGE_KEY);
+  useHotkey('home', pageKey(() => jump(0), false), PAGE_KEY);
+  // End 只在整个列表都载入了才有：后面还有没载入的页时，「最后一张」只能是已载入的最后一张，和顶栏的总数对不上
+  useHotkey('end', pageKey(() => jump(useLightbox.getState().ids.length - 1), false), { ...PAGE_KEY, enabled: !hasMore });
 
   // 引信烧完：等下一张的 960 缩略图解码好再前进，最后一张之后绕回开头
   const advance = () => {
     const s = useLightbox.getState();
     if (!s.open || s.returning || s.ids.length < 2) return;
     const next = (s.index + 1) % s.ids.length;
-    void whenDecoded(imageUrl.thumb(s.ids[next]!, 960, findCachedImage(client,s.ids[next]!)?.modifiedAt)).then(() => {
+    void whenDecoded(imageUrl.thumb(s.ids[next]!, 960, findCachedImage(client,s.ids[next]!)?.fileVersion)).then(() => {
       const t = useLightbox.getState();
       // 等的时候被手动翻页或关掉了，就不再自动前进
       if (t.open && !t.returning && t.ids === s.ids && t.index === s.index) useLightbox.setState({ index: next, originRect: null });
@@ -430,6 +467,8 @@ function LightboxView({
           slide={slideAt}
           zoomApi={zoomApi}
           direction={direction}
+          settled={settled}
+          travel={travel}
           hasPrev={index > 0}
           hasNext={index < ids.length - 1 || hasMore}
           loadingNext={pendingNext}
@@ -475,8 +514,7 @@ function LightboxView({
           index={index}
           // 放大时整块画面都要拖动、滚轮缩放，底边也不能让给胶片条；窄屏的底边是信息面板
           hidden={slideshow || !!returning || zoomApi.zoomed || sheetMode}
-          // 跳到别处：之前在等下一页时按的「下一张」作废，不然下一页到了会被往后挪一张
-          onPick={(i) => useLightbox.setState({ index: i, originRect: null, pendingNext: false })}
+          onPick={jump}
         />
 
         {slideshow && ids.length > 1 && (
@@ -681,4 +719,48 @@ function usePageHidden() {
     return () => document.removeEventListener('visibilitychange', on);
   }, []);
   return hidden;
+}
+
+/**
+ * 「停稳」：当前这张换了以后 SETTLE_MS 没再换。刚打开时就是停稳的（打开的那张马上拿原图）；
+ * 翻回刚才停稳过的那张也算（它的原图还挂着）。
+ */
+function useSettled(id: ID): boolean {
+  const [settledId, setSettledId] = useState(id);
+  const [timer] = useState(() => settleTimer(setSettledId));
+  useEffect(() => {
+    if (id === settledId) timer.stop();
+    else timer.move(id);
+  }, [id, settledId, timer]);
+  useEffect(() => timer.stop, [timer]);
+  return id === settledId;
+}
+
+/** 最近一次是往哪边翻的（1 往后 / -1 往前，还没翻过当作往后）。当前这张没换、只是下标跟着列表变了的不算 */
+function useTravel(id: ID, index: number): number {
+  const last = useRef({ id, index, travel: 1 });
+  const s = last.current;
+  if (s.id !== id) last.current = { id, index, travel: Math.sign(index - s.index) || s.travel };
+  else s.index = index;
+  return last.current.travel;
+}
+
+/** 最近一次动焦点用的是 Tab（true）还是鼠标 / 触摸（false）：给 ownsPageKey 判断键盘焦点是不是正停在某个控件上 */
+function useTabbing() {
+  const tabbing = useRef(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Tab') tabbing.current = true;
+    };
+    const onPointer = () => {
+      tabbing.current = false;
+    };
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('pointerdown', onPointer, true);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('pointerdown', onPointer, true);
+    };
+  }, []);
+  return tabbing;
 }
