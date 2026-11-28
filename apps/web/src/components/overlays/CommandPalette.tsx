@@ -9,11 +9,11 @@ import { Kbd } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { qk } from '@/lib/queries';
 import { useOverlays } from '@/lib/stores';
+import { useDebounced } from '@/lib/useDebounced';
 import { usePaletteCommands } from './palette/commands';
 import { EmptyQuery } from './palette/EmptyQuery';
 import { toRecent, useRecentCharacters, useTrackRecentCharacters } from './palette/recent';
 import { SearchResults, type SearchActions } from './palette/SearchResults';
-import { useDebouncedValue } from './palette/useDebouncedValue';
 
 /**
  * ⌘K 命令面板：跳到角色 / 作品 / 标签，以及常用命令。
@@ -67,7 +67,8 @@ function PaletteBody() {
   const setOpen = useOverlays((s) => s.setCommandOpen);
   const [input, setInput] = useState('');
   const query = input.trim();
-  const debounced = useDebouncedValue(query, 120);
+  // 拼音还没上屏时不更新（lib/useDebounced.ts）：不拿拼音字母去搜
+  const debounced = useDebounced(query, 120);
 
   const close = useCallback(() => setOpen(false), [setOpen]);
   const commands = usePaletteCommands(close);

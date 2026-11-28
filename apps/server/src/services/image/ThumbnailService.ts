@@ -2,11 +2,13 @@
  * 缩略图服务：HTTP 按需生成（高优先级）+ 后台任务补齐（低优先级）。
  * 缓存按 sha256 存：<dataDir>/thumbs/v1/ab/<sha256>_<w>.webp，完全重复的图共用一份；文件内容换了 sha 就变了，自然是新的缩略图，
  * 旧 sha 的缓存没人引用后由缓存回收删掉（domain/analysis/cacheGc.ts）。
+ * 换缩略图的生成方式（档位、画质、缩放的做法）时，把前端 apps/web/src/lib/api.ts 的 THUMB_VERSION 加一：
+ * 地址带文件版本的缩略图浏览器会存 30 天（commands/queries.ts 的 getThumbnail），地址不变就一直是旧的。
  * 这里只生成文件；算出来的主色、dHash、生成时间、解码错误、帧数、相机都交给分析模块写（domain/analysis/analyze.ts，P4a），
  * 相机让类型变了时由分析模块声明 image.kindChanged，帧数让是否动图变了时声明 image.animatedChanged（D5：帧数不影响类型）。
  */
 import type { ImageFormat, ThumbWidth } from '@emaki/shared';
-import { existsSync } from 'node:fs';
+import { accessSync, existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import os from 'node:os';
 import PQueue from 'p-queue';
@@ -33,6 +35,12 @@ export interface ThumbRow {
   frame_count?: number | null;
 }
 
+/** 取到的缩略图：缓存文件，和它实际是哪一档。原图不在时会退回别的档（见 generate），不一定是请求的那一档 */
+export interface ThumbFile {
+  file: string;
+  width: ThumbWidth;
+}
+
 /** 超过这个大小的原图直接把路径交给 sharp，不整个读进内存 */
 const MAX_BUFFERED = 256 * 1024 * 1024;
 const BATCH = 200;
@@ -43,10 +51,24 @@ const PENDING_WHERE = `(i.thumb_at IS NULL OR (i.frame_count IS NULL AND i.forma
 const CAMERA_WHERE = `i.format = 'jpeg' AND i.camera IS NULL AND ${FILE_LIVE('i')}`;
 const ROOT_JOIN = `JOIN library_roots r ON r.id = i.root_id AND ${ROOT_ACTIVE('r')}`;
 
+/**
+ * 缩略图在不在缓存里：每个缩略图请求都在主线程上问一次，所以不用 existsSync。Windows 上它发现文件存在以后还要再 stat 一次
+ * （Node 用来认出目标不存在的符号链接），实测每次 0.2～0.4 毫秒，是一次缩略图请求里最贵的一步；access 只要约 0.02 毫秒。
+ * 缓存目录里都是自己写的普通文件，没有符号链接，用不着那次 stat
+ */
+function isCached(file: string): boolean {
+  try {
+    accessSync(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export class ThumbnailService {
   /** sharp 跑在 libuv 线程池，和 fs 读写共用；并发保持在 2~4，别让 HTTP 读原图排队 */
   readonly queue = new PQueue({ concurrency: Math.max(2, Math.min(4, Math.floor(os.availableParallelism() / 4))) });
-  private readonly inflight = new Map<string, Promise<string | null>>();
+  private readonly inflight = new Map<string, Promise<ThumbFile | null>>();
 
   constructor(
     private readonly d: {
@@ -69,10 +91,13 @@ export class ThumbnailService {
     return new Date(this.d.now?.() ?? Date.now()).toISOString();
   }
 
-  /** 按需生成：HTTP 用 priority 10，后台任务用 0。返回缓存文件路径；原图解不了时返回 null */
-  ensure(row: ThumbRow, width: ThumbWidth, priority = 10): Promise<string | null> {
+  /**
+   * 按需生成：HTTP 用 priority 10，后台任务用 0。返回缓存文件和它实际的档；原图解不了时返回 null。
+   * 调用方要看返回的 width：HTTP 的 ETag、能不能长缓存都按实际给出的档定，不按请求的档
+   */
+  ensure(row: ThumbRow, width: ThumbWidth, priority = 10): Promise<ThumbFile | null> {
     const file = thumbPath(this.d.thumbsRoot, row.sha256, width);
-    if (existsSync(file)) return Promise.resolve(file);
+    if (isCached(file)) return Promise.resolve({ file, width });
     // 合并并发请求：网格会对同一张图同时要 240 和 480
     const key = `${row.sha256}_${width}`;
     let p = this.inflight.get(key);
@@ -84,23 +109,23 @@ export class ThumbnailService {
     return p;
   }
 
-  private anyCached(sha: string): string | null {
-    for (const w of [480, 960, 240]) {
-      const f = thumbPath(this.d.thumbsRoot, sha, w);
-      if (existsSync(f)) return f;
+  private anyCached(sha: string): ThumbFile | null {
+    for (const width of [480, 960, 240] as const) {
+      const file = thumbPath(this.d.thumbsRoot, sha, width);
+      if (existsSync(file)) return { file, width };
     }
     return null;
   }
 
-  private async generate(row: ThumbRow, width: ThumbWidth): Promise<string | null> {
+  private async generate(row: ThumbRow, width: ThumbWidth): Promise<ThumbFile | null> {
     const file = thumbPath(this.d.thumbsRoot, row.sha256, width);
-    if (existsSync(file)) return file;
+    if (existsSync(file)) return { file, width };
 
     // 240 且 480 已存在：从 480 缩，便宜
     const f480 = thumbPath(this.d.thumbsRoot, row.sha256, 480);
     if (width === 240 && existsSync(f480)) {
       await writeFileAtomic(file, await sharp(f480).resize(fitBox(240)).webp(WEBP).toBuffer());
-      return file;
+      return { file, width };
     }
 
     const abs = toAbs(row.root_path, row.rel_path);
@@ -126,7 +151,7 @@ export class ThumbnailService {
         // 多行可能共享同一 sha（完全重复）：分析模块按 sha 写
         recordPixels(this.d.db, row.sha256, { dominantColor: px.dominantColor, dhash: px.dhash, at: this.nowIso() });
       }
-      return file;
+      return { file, width };
     } catch (err) {
       recordDecodeError(this.d.db, row.sha256, `解码失败：${(err as Error).message}`);
       return null;
@@ -140,7 +165,7 @@ export class ThumbnailService {
   private async backfillOne(row: ThumbRow): Promise<string | null> {
     const f480 = thumbPath(this.d.thumbsRoot, row.sha256, 480);
     const f240 = thumbPath(this.d.thumbsRoot, row.sha256, 240);
-    if (!existsSync(f480)) return this.generate(row, 480);
+    if (!existsSync(f480)) return (await this.generate(row, 480))?.file ?? null;
     if (row.frame_count == null && ['webp','png','avif','gif','html'].includes(row.format)) {
       try { await this.frameMetadata(row,toAbs(row.root_path,row.rel_path)); }
       catch (error) {

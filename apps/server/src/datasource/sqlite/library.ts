@@ -254,28 +254,30 @@ export class LibraryQueries {
       const cur = tops.get(x.k);
       if (!cur || x.n > cur.n) tops.set(x.k, x);
     }
-    const previews = new Map<ContentKind, ContentKindSummary['previews']>();
-    for (const x of db
-      .prepare(
-        `SELECT k, id, rating, color, width, height FROM (
-           SELECT content_kind AS k, id, rating, dominant_color AS color, width, height,
-                  ROW_NUMBER() OVER (PARTITION BY content_kind ORDER BY added_at DESC, id DESC) AS rn
-           FROM v_counted_images) WHERE rn <= 3 ORDER BY k, rn`,
-      )
-      .all() as { k: ContentKind; id: number; rating: ContentKindSummary['previews'][number]['rating']; color: string | null; width: number; height: number }[]) {
-      const list = previews.get(x.k) ?? [];
-      list.push({ id: toId(x.id), rating: x.rating, dominantColor: x.color ?? DEFAULT_DOMINANT, width: x.width, height: x.height });
-      previews.set(x.k, list);
-    }
+    // 每类最新 3 张：一类一条，沿 idx_images_kind_live（content_kind, added_at, id）倒着走，够 3 张就停。
+    // 以前对计入统计的图整表开窗取每类前 3，9 万张的库要 0.2 秒。
+    // +i.excluded_by：不让查询改走带 excluded_by 的索引（插画占大半，走过去要把这一类整个排一遍）
+    const latest = this.ctx.stmt(
+      `SELECT i.id, i.rating, i.dominant_color AS color, i.width, i.height FROM images i
+       WHERE ${LIVE_IMAGES} AND +i.excluded_by IS NULL AND i.content_kind = ?
+       ORDER BY i.added_at DESC, i.id DESC LIMIT 3`,
+    );
     return CONTENT_KINDS.map((kind) => {
       const c = counts.get(kind);
+      const newest = latest.all(kind) as {
+        id: number;
+        rating: ContentKindSummary['previews'][number]['rating'];
+        color: string | null;
+        width: number;
+        height: number;
+      }[];
       return {
         kind,
         count: c?.n ?? 0,
         recentCount: c?.r ?? 0,
         lastAddedAt: c?.last ?? null,
         topFolder: tops.get(kind)?.top ?? null,
-        previews: previews.get(kind) ?? [],
+        previews: newest.map((x) => ({ id: toId(x.id), rating: x.rating, dominantColor: x.color ?? DEFAULT_DOMINANT, width: x.width, height: x.height })),
       };
     });
   }

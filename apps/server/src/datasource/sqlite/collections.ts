@@ -35,7 +35,7 @@ import type { SqliteContext } from './context.ts';
 import type { Derived } from './derived.ts';
 import { toCharacter, toWork } from './library.ts';
 import { DEFAULT_DOMINANT, iso, parseId, toId } from './sql.ts';
-import { COUNTED, HAS_CHARACTER, imageWorkRows, ROOT_ACTIVE, VISIBLE } from '../../readmodel/terms.ts';
+import { COUNTED, HAS_CHARACTER, imageWorkRows, LIVE_IMAGES, ROOT_ACTIVE, VISIBLE } from '../../readmodel/terms.ts';
 import type { UndoRecorder } from './undo.ts';
 import type { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
 import { resolveSuggestedCharacter } from './suggestions.ts';
@@ -170,14 +170,17 @@ export class CollectionQueries {
       }
       return m;
     };
-    // 角色命中：只要摘要时只算本子（从本子出发按合集索引找页，几千个组图的页不用碰）
+    // 角色命中：只要摘要时只算本子（从本子出发按合集索引找页，几千个组图的页不用碰）。
+    // CROSS JOIN 固定先走 collections：不筛选时条件是 dc.id IS NOT NULL，优化器会改从 images 的 excluded_by 索引出发，把 9 万张图过一遍
+    // （30–46 ms，固定后约 4 ms）。+i.excluded_by 同理，不让它拿这个索引找页
     const charHits = hits(
       scope.cast
         ? `SELECT i.collection_id AS c, ic.character_id AS x, COUNT(*) AS n FROM v_counted_images i
            JOIN image_characters ic ON ic.image_id = i.id WHERE i.collection_id ${inScope} GROUP BY 1, 2`
         : `SELECT i.collection_id AS c, ic.character_id AS x, COUNT(*) AS n FROM collections dc
-           JOIN v_counted_images i ON i.collection_id = dc.id JOIN image_characters ic ON ic.image_id = i.id
-           WHERE dc.kind = 'doujin' AND dc.state = 'active' AND dc.id ${inScope} GROUP BY 1, 2`,
+           CROSS JOIN images i JOIN image_characters ic ON ic.image_id = i.id
+           WHERE dc.kind = 'doujin' AND dc.state = 'active' AND dc.id ${inScope}
+             AND i.collection_id = dc.id AND ${LIVE_IMAGES} AND +i.excluded_by IS NULL GROUP BY 1, 2`,
     );
     // 图的作品（imageWorkRows：和 v_image_works 同口径，直接连底表——连视图时 SQLite 会把整个 UNION 视图对每一行重扫一遍，副本上要 11 秒）
     const workHits = scope.works

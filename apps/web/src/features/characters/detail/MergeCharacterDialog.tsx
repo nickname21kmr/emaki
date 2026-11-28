@@ -2,7 +2,7 @@ import type { Character, ID } from '@emaki/shared';
 import { Command } from 'cmdk';
 import { ArrowRight, Search } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Thumb } from '@/components/media/Thumb';
 import { Button, Dialog, DialogFooter, Kbd, Skeleton } from '@/components/ui';
@@ -10,6 +10,7 @@ import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import { useCharactersInfinite, useMutate, useSearch, useWorks } from '@/lib/queries';
+import { useDebounced } from '@/lib/useDebounced';
 import { EASE_OUT } from '@/lib/motion';
 import { useRecentCharacters } from '@/features/gallery/recentCharacters';
 
@@ -217,13 +218,4 @@ function CoverThumb({ character, className }: { character: Character; className:
       className={cn('shrink-0', className)}
     />
   );
-}
-
-function useDebounced<T>(value: T, ms: number): T {
-  const [v, setV] = useState(value);
-  useEffect(() => {
-    const t = window.setTimeout(() => setV(value), ms);
-    return () => window.clearTimeout(t);
-  }, [value, ms]);
-  return v;
 }

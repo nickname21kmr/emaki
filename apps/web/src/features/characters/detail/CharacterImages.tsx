@@ -8,11 +8,12 @@ import { ImageGrid, ImageGridSkeleton } from '@/components/media/ImageGrid';
 import { KindBadge } from '@/components/media/KindBadge';
 import { folderNameOf, MoveImagesDialog } from '@/components/media/MoveImagesDialog';
 import { Button, EmptyState, ErrorState } from '@/components/ui';
+import { useActionLock } from '@/lib/actionLock';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { themeQuery } from '@/lib/customTheme';
 import { formatCount } from '@/lib/format';
-import { useImagesInfinite, useMutate } from '@/lib/queries';
+import { patchImages, useImagesInfinite, useMutate } from '@/lib/queries';
 import { shouldBlur } from '@/lib/blur';
 import { useBlurPrefs, usePrefs } from '@/lib/stores';
 import { ImagesToolbar } from './ImagesToolbar';
@@ -76,22 +77,28 @@ export function CharacterImages({
     return new Set(images.slice(0, newSinceLastVisit).map((i) => i.id));
   }, [filters.isDefault, newSinceLastVisit, images]);
 
+  // 这几个动作做完都清空选择：只在请求在路上时算「忙」，一回来就能接着选、接着做，不等后面的整轮刷新（lib/actionLock.ts）
+  const lock = useActionLock<'unassign' | 'cover' | 'favorite'>();
   const unassign = useMutate(
-    (ids: ID[]) => api.bulkImages({ ids, action: { type: 'unassign', characterId: character.id } }),
+    (ids: ID[]) => lock.during('unassign', api.bulkImages({ ids, action: { type: 'unassign', characterId: character.id } })),
     { onSuccess: selection.clear },
   );
-  const setCover = useMutate((imageId: ID) => api.updateCharacter(character.id, { coverImageId: imageId }), {
+  const setCover = useMutate((imageId: ID) => lock.during('cover', api.updateCharacter(character.id, { coverImageId: imageId })), {
     onSuccess: selection.clear,
   });
   const favorite = useMutate(
-    ({ ids, value }: { ids: ID[]; value: boolean }) => api.bulkImages({ ids, action: { type: 'favorite', value } }),
-    { onSuccess: selection.clear },
+    ({ ids, value }: { ids: ID[]; value: boolean }) => lock.during('favorite', api.bulkImages({ ids, action: { type: 'favorite', value } })),
+    {
+      onSuccess: selection.clear,
+      // 心马上变：先改缓存，失败了改回去
+      optimistic: ({ ids, value }, client) => patchImages(client, ids, { favorite: value }),
+    },
   );
 
   // 收拢的组图格按整组算：整组都收藏了才算收藏
   const starred = useMemo(() => new Map(images.flatMap((i) => selectionIds(i).map((id) => [id, i.collectionGroup?.allFavorite ?? i.favorite] as const))), [images]);
   const allFavorite = selection.ids.length > 0 && selection.ids.every((id) => starred.get(id));
-  const busy = unassign.isPending || setCover.isPending || favorite.isPending;
+  const busy = lock.any();
 
   const actions: SelectionAction[] = [
     ...(selection.count === 1
@@ -102,8 +109,9 @@ export function CharacterImages({
             need: 'catalog' as const,
             label: '设为封面',
             icon: <ImageUp />,
-            loading: setCover.isPending,
-            disabled: busy || selection.ids[0] === character.coverImageId,
+            loading: lock.held('cover'),
+            // 封面是不是这张要等角色刷新回来才知道：这一个按钮照旧等到刷新完
+            disabled: busy || setCover.isPending || selection.ids[0] === character.coverImageId,
             onClick: () => selection.ids[0] && setCover.mutate(selection.ids[0]),
           },
         ]
@@ -113,7 +121,7 @@ export function CharacterImages({
       need: 'curate',
       label: allFavorite ? '取消收藏' : '收藏',
       icon: allFavorite ? <HeartOff /> : <Heart />,
-      loading: favorite.isPending,
+      loading: lock.held('favorite'),
       disabled: busy,
       onClick: () => favorite.mutate({ ids: selection.ids, value: !allFavorite }),
     },
@@ -133,7 +141,7 @@ export function CharacterImages({
       need: 'curate',
       label: '从该角色移除',
       icon: <UserRoundMinus />,
-      loading: unassign.isPending,
+      loading: lock.held('unassign'),
       disabled: busy,
       onClick: () => unassign.mutate(selection.ids),
     },

@@ -1,11 +1,15 @@
 import { rmSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { performance } from 'node:perf_hooks';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../core/events.ts';
 import { openDatabase, type Db } from '../../db/connection.ts';
 import { migrate } from '../../db/migrate.ts';
+import { runAs } from '../../propagation/actor.ts';
+import { sqliteFactory, type ContractEnv } from '../../../test/contract/harness.ts';
 import { makeTmpDir } from '../../../test/helpers/tmp.ts';
 import { SqliteDataSource } from '../../../test/helpers/client.ts';
-import { refreshTagCounts } from './search.ts';
+import type { Derived } from './derived.ts';
+import { refreshTagCounts, SearchQueries } from './search.ts';
 
 /** 原来的写法：从计入张数的图出发联 image_tags 分组。新写法要和它逐个一致 */
 function expectedCounts(db: Db): Map<number, number> {
@@ -131,5 +135,182 @@ describe('一句话拆标签 / ⌘K 中文标签', () => {
 
     await ds.close();
     rmSync(dataDir, { recursive: true, force: true });
+  });
+});
+
+describe('标签张数只在会改到它的变化之后重数', () => {
+  let env: ContractEnv | undefined;
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await env?.close();
+    env = undefined;
+  });
+  const img = (id: string) => env!.id('image', id);
+  /** tags.image_count 和从计入张数的图重新全量数的一致 */
+  const expectExact = (db: Db) => {
+    const want = expectedCounts(db);
+    expect(want.size).toBeGreaterThan(0);
+    expect(actualCounts(db)).toEqual(want);
+  };
+
+  it('收藏、改分级、归类、移出、放下、标原创、进角色页之后搜索和联想：不重数', async () => {
+    env = await sqliteFactory();
+    const ds = env.ds as SqliteDataSource;
+    const c5 = env.id('character', 'c5');
+    await ds.tagSuggestions({ q: '' });
+    const refresh = vi.spyOn(ds.searchQueries, 'refreshNow');
+    const ops: (() => Promise<unknown>)[] = [
+      () => ds.bulkImages({ ids: [img('i5')], action: { type: 'favorite', value: true } }),
+      () => ds.bulkImages({ ids: [img('i6')], action: { type: 'rating', value: 'general' } }),
+      () => ds.bulkImages({ ids: [img('i27')], action: { type: 'assign', characterId: c5 } }),
+      () => ds.bulkImages({ ids: [img('i19')], action: { type: 'unassign', characterId: c5 } }),
+      () => ds.bulkImages({ ids: [img('i26')], action: { type: 'shelve', value: true } }),
+      () => ds.bulkImages({ ids: [img('i29')], action: { type: 'original', value: true } }),
+      () => ds.markCharacterSeen(env!.id('character', 'c1')),
+    ];
+    for (const op of ops) {
+      await op();
+      expect((await ds.tagSuggestions({ q: '' })).length).toBeGreaterThan(0);
+      await ds.search({ q: 'girl' });
+    }
+    expect(refresh).not.toHaveBeenCalled();
+    expectExact(ds.ctx.db);
+  });
+
+  it('排除、移到回收站、撤销、后台任务认出一批之后：下一次联想就重数，张数和重新全量数的一致', async () => {
+    env = await sqliteFactory();
+    const ds = env.ds as SqliteDataSource;
+    const db = ds.ctx.db;
+    const count = async () => (await ds.tagSuggestions({ q: '1girl' }))[0]!.count;
+    const refresh = vi.spyOn(ds.searchQueries, 'refreshNow');
+    const start = await count();
+    expect(refresh).toHaveBeenCalledTimes(1); // 进程里第一次
+    const excluded = await ds.bulkImages({ ids: [img('i5')], action: { type: 'exclude' } });
+    expect(await count()).toBe(start - 1);
+    expectExact(db);
+    const trashed = await ds.bulkImages({ ids: [img('i6'), img('i9')], action: { type: 'trash' } });
+    expect(await count()).toBe(start - 3);
+    expectExact(db);
+    await ds.undo(trashed.undoToken!);
+    await ds.undo(excluded.undoToken!);
+    expect(await count()).toBe(start);
+    expectExact(db);
+    // 识别任务给一张图写了新标签（后台任务声明证据变了）
+    db.prepare("INSERT INTO tags (id, name, category) VALUES (9001, 'new_tag', 'general')").run();
+    db.prepare('INSERT INTO image_tags (image_id, tag_id, score) VALUES (?, 9001, 0.9)').run(Number(img('i5')));
+    runAs('job:tag', () => ds.ctx.apply(() => ds.ctx.changed({ type: 'evidence.changed', ids: [Number(img('i5'))], provider: 'tagger' })));
+    expect((await ds.tagSuggestions({ q: 'new_tag' })).map((t) => t.count)).toEqual([1]);
+    expectExact(db);
+  });
+
+  it('后台任务连着写库：时间窗里只重数一次，过了窗口才再数；用户的操作不等', () => {
+    const db = openDatabase(':memory:');
+    migrate(db);
+    db.exec("INSERT INTO library_roots (id, path) VALUES (1, 'D:/x'); INSERT INTO tags (id, name, category) VALUES (1, 'thighhighs', 'general');");
+    const add = (id: number) => {
+      db.prepare(
+        `INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
+         VALUES (?, 1, ?, 'a.png', 1, 1, 1, 'png', ?, 'x', 'x')`,
+      ).run(id, `${id}.png`, `s${id}`);
+      db.prepare('INSERT INTO image_tags (image_id, tag_id, score) VALUES (?, 1, 0.9)').run(id);
+    };
+    let now = 1_000_000;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    let windowMs = 60_000;
+    const derived = { get: () => ({ characters: new Map(), works: new Map(), builtAt: 0 }) } as unknown as Derived;
+    const q = new SearchQueries(db, derived, { countsSoftMs: () => windowMs });
+    const refresh = vi.spyOn(q, 'refreshNow');
+    const count = () => q.tagSuggestions({ q: 'thigh' })[0]?.count ?? 0;
+    add(1);
+    expect(count()).toBe(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    // 后台任务每几秒写一批
+    for (const id of [2, 3, 4]) {
+      now += 5_000;
+      add(id);
+      q.dropKeys();
+      q.markCountsStale(true);
+      expect(count()).toBe(1);
+    }
+    expect(refresh).toHaveBeenCalledTimes(1);
+    now += 46_000;
+    expect(count()).toBe(4);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    // 用户的操作（硬失效）：马上重数
+    add(5);
+    q.dropKeys();
+    q.markCountsStale();
+    expect(count()).toBe(5);
+    // 任务都结束了（窗口变成 0）：攒着的软失效下一次搜索就重数
+    add(6);
+    q.dropKeys();
+    q.markCountsStale(true);
+    expect(count()).toBe(5);
+    windowMs = 0;
+    expect(count()).toBe(6);
+    db.close();
+  });
+});
+
+describe('归类弹窗的搜索（forAssignment）', () => {
+  let env: ContractEnv | undefined;
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await env?.close();
+    env = undefined;
+  });
+
+  it('还没建档的候选整份缓存：结果和每次现算的一样；按标签建档、排除之后候选跟着变', async () => {
+    env = await sqliteFactory();
+    const ds = env.ds as SqliteDataSource;
+    const db = ds.ctx.db;
+    const img = (id: string) => env!.id('image', id);
+    // 再加两条对不上角色的建议：一条在未识别的图上，一条在已经排除的图上（不计入）
+    db.prepare(
+      "INSERT INTO character_evidence (image_id, provider, tag, score) VALUES (?, 'tagger', 'test_boy_(emaki_test)', 0.4), (?, 'tagger', 'hidden_girl_(emaki_test)', 0.4)",
+    ).run(Number(img('i28')), Number(img('i32')));
+    ds.ctx.invalidate();
+    const queries = ['test', 'girl', 'emaki', 'mika', 'test girl', 'boy', 'hidden', 'ブルー', 'zzz'];
+    /** 不带缓存、每次现算的结果 */
+    const uncached = (q: string) => new SearchQueries(db, ds.derived).search({ q, forAssignment: true }, ds.makeCatalog().catalog);
+    const expectSame = async () => {
+      for (const q of queries) expect(await ds.search({ q, forAssignment: true }), q).toEqual(uncached(q));
+    };
+    const candidates = async (q: string) =>
+      (await ds.search({ q, forAssignment: true })).flatMap((h) => (h.type === 'characterCandidate' ? [h.danbooruTag] : []));
+    expect(await candidates('test')).toEqual(['test_boy_(emaki_test)', 'test_girl_(emaki_test)']);
+    expect(await candidates('hidden')).toEqual([]);
+    await expectSame();
+
+    // 敲字的过程中候选不再现算
+    const prepare = vi.spyOn(db, 'prepare');
+    const computed = () => prepare.mock.calls.filter(([sql]) => String(sql).includes('FROM v_character_suggestions s JOIN v_counted_images')).length;
+    for (const q of ['t', 'te', 'tes', 'test']) await ds.search({ q, forAssignment: true });
+    expect(computed()).toBe(0);
+    // 收藏、改分级、放下不影响候选
+    await ds.bulkImages({ ids: [img('i5')], action: { type: 'favorite', value: true } });
+    await ds.bulkImages({ ids: [img('i28')], action: { type: 'rating', value: 'sensitive' } });
+    await ds.bulkImages({ ids: [img('i28')], action: { type: 'shelve', value: true } });
+    expect(await candidates('test')).toEqual(['test_boy_(emaki_test)', 'test_girl_(emaki_test)']);
+    expect(computed()).toBe(0);
+    prepare.mockRestore();
+
+    // 按标签建档：这个标签有角色了，不再是候选，而是角色
+    const made = await ds.acceptSuggestion(img('i27'), 'test_girl_(emaki_test)');
+    expect(await candidates('test')).toEqual(['test_boy_(emaki_test)']);
+    expect(
+      (await ds.search({ q: 'test', forAssignment: true })).some((h) => h.type === 'character' && h.character.danbooruTag === 'test_girl_(emaki_test)'),
+    ).toBe(true);
+    await expectSame();
+    await ds.undo(made.undoToken!);
+    expect(await candidates('test')).toEqual(['test_boy_(emaki_test)', 'test_girl_(emaki_test)']);
+    await expectSame();
+    // 排除带着这条建议的图：不计入，候选没了；恢复后回来
+    const excluded = await ds.bulkImages({ ids: [img('i28')], action: { type: 'exclude' } });
+    expect(await candidates('test')).toEqual(['test_girl_(emaki_test)']);
+    await expectSame();
+    await ds.undo(excluded.undoToken!);
+    expect(await candidates('test')).toEqual(['test_boy_(emaki_test)', 'test_girl_(emaki_test)']);
+    await expectSame();
   });
 });

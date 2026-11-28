@@ -42,6 +42,7 @@ import { toast } from 'sonner';
 import { api, ApiRequestError, metaOf, withMeta } from './api';
 import { settleRefresh, useLiveJobs } from './events';
 import { modKeyLabel } from './hotkeys';
+import type { Rollback } from './optimisticImages';
 import { uuid } from './random';
 import { usePrefs, useUndoReveal, useUndoStore, type CollapseMode, type UndoEntry, type UndoFocus } from './stores';
 import { confirmText, madeHere, needsConfirm } from './undoPlace';
@@ -632,6 +633,9 @@ export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** 乐观更新用：先改缓存里这几张图（现在只有收藏），返回回滚函数。配 useMutate 的 optimistic */
+export { patchImages } from './optimisticImages';
+
 /**
  * 通用修改 hook：成功 → toast（带撤销）+ 刷新相关的查询（等 SSE 那条事件的刷新，只刷新一遍）；失败 → 错误 toast。
  *
@@ -653,19 +657,33 @@ export function useMutate<TVars, TResult extends MutationResult = MutationResult
     entry?: (result: TResult, vars: TVars) => UndoEntry | null;
     /** 撤销后要指给用户看什么；不传时从参数里的 ids / id 猜是哪些图 */
     focus?: (vars: TVars) => UndoFocus | undefined;
+    /**
+     * 乐观更新：请求发出前先把缓存改成做完之后的样子，界面不等接口和随后的整轮刷新；返回回滚函数，请求失败时调。
+     * 只给结果确定、回滚简单的操作用（现在只有收藏：patchImages）
+     */
+    optimistic?: (vars: TVars, client: QueryClient) => Rollback | undefined;
   } = {},
 ) {
   const client = useQueryClient();
   const labelOf = (vars: TVars) => (typeof opts.label === 'function' ? opts.label(vars) : opts.label);
   return useMutation({
     mutationFn: fn,
-    // 一点下去就占住撤销栈顶：乐观更新的页面不等接口返回就往下走，这时按 Ctrl+Z 也该撤这一步
-    onMutate: (vars): string | undefined =>
-      opts.undo === false ? undefined : beginPending(labelOf(vars) ?? '刚才的操作', opts.focus ? opts.focus(vars) : focusOf(vars)),
-    onSuccess: async (result, vars, pending) => {
+    onMutate: (vars): { pending?: string; rollback?: Rollback } => {
+      // 一点下去就占住撤销栈顶：乐观更新的页面不等接口返回就往下走，这时按 Ctrl+Z 也该撤这一步
+      const pending =
+        opts.undo === false ? undefined : beginPending(labelOf(vars) ?? '刚才的操作', opts.focus ? opts.focus(vars) : focusOf(vars));
+      let rollback: Rollback | undefined;
+      try {
+        rollback = opts.optimistic?.(vars, client);
+      } catch {
+        // 改缓存出了岔子不挡正事：请求照发，界面等刷新
+      }
+      return { pending, rollback };
+    },
+    onSuccess: async (result, vars, ctx) => {
       // silent 的自己弹提示，但 token / 占位照样进撤销栈
       announce(result, client, {
-        pending,
+        pending: ctx.pending,
         silent: opts.silent,
         barrier: opts.undo === false ? null : (labelOf(vars) ?? result.message),
         ...(opts.entry && { entry: opts.entry(result, vars) }),
@@ -673,8 +691,10 @@ export function useMutate<TVars, TResult extends MutationResult = MutationResult
       opts.onSuccess?.(result, vars);
       await settleRefresh(client, metaOf(result));
     },
-    onError: (err, _vars, pending) => {
-      if (pending) settlePending(pending, null, true);
+    onError: (err, _vars, ctx) => {
+      if (ctx?.pending) settlePending(ctx.pending, null, true);
+      // 乐观改过的改回去。后端回了话就再对一遍（这期间可能有别的刷新落过地）；连不上的不去取，等重新连上时全部重新取
+      ctx?.rollback?.({ refetch: !(err instanceof ApiRequestError && err.code === 'network') });
       if (opts.onError) opts.onError(errorMessage(err), err);
       else toast.error(errorMessage(err));
     },

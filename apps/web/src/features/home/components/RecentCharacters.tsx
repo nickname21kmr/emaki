@@ -15,7 +15,8 @@ export function RecentCharacters({ summary }: { summary: LibrarySummary }) {
   const recent = useTopCharacters({ workId: 'recent', limit: 14 });
   const top = useTopCharacters({ limit: 6 });
   const total = useCharactersInfinite({ workId: 'recent', limit: 1 }).data?.pages[0]?.total;
-  const works = useWorks();
+  // 只按 id 找作品名，和顺序无关：和统计条、角色页用同一份作品列表（同一个查询键），首页不把作品表拉两遍
+  const works = useWorks({ sort: 'imageCount' });
   const workName = useMemo(() => new Map((works.data ?? []).map((w) => [w.id, w.name])), [works.data]);
   const empty = recent.isSuccess && recent.data.length === 0;
 

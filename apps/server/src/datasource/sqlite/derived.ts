@@ -2,12 +2,18 @@ import { performance } from 'node:perf_hooks';
 /**
  * 派生缓存：每个角色 / 作品的张数、封面等聚合结果缓存在内存，数据变化时失效重建。
  * 口径见 TASKS.md「全局约定 → 数据口径」：张数、+N、最近在收只数插画（v_illust_images，D3），其余类型记在 otherCount。
+ *
+ * 整份重建在真实库上要 0.6–1 秒，所以不是每次写入都整份失效（propagation/cacheScope.ts 定范围）：
+ * 收藏、分级只在改到现在的封面图时失效；归类、原创只重算涉及的角色和作品的张数（封面等下一次整份重建再重挑）；
+ * 进角色页「看过了」只重算那个角色的「+N」。其余变化照旧整份失效。
  */
 import { searchKey, type CharacterSource, type FocusPoint, type Rating } from '@emaki/shared';
 import { hashString, hslToHex } from '../../util/color.ts';
 import { FOCUS_TAGS, inferCoverFocus } from '../../services/covers/focus.ts';
 import { COVER_TAG_WEIGHTS, coverQuality, isUnfitCover } from '../../services/covers/quality.ts';
+import type { CacheScope } from '../../propagation/cacheScope.ts';
 import type { SqliteContext } from './context.ts';
+import { localDay } from './softCache.ts';
 import { DAY, iso, RECENT_DAYS } from './sql.ts';
 import { ART_KINDS_SQL, ILLUSTRATION } from '../../readmodel/terms.ts';
 
@@ -69,40 +75,272 @@ export interface DerivedData {
   builtAt: number;
 }
 
-/** recent 窗口随时间移动，缓存最多用 5 分钟 */
-const MAX_AGE = 5 * 60_000;
+/**
+ * recent 窗口（最近 30 天）随时间移动，但按天算：缓存最多用 1 小时，本地日期变了也重建。
+ * 也是定向重算的兜底：万一有漏，下一次整份重建会纠正
+ */
+const MAX_AGE = 60 * 60_000;
+/** 一次定向重算最多认这么多张图，再多就整份重建 */
+const RECOUNT_MAX_IMAGES = 500;
+/** 受影响的作品不超过这么多时一部一部重数（最大的一部十几毫秒，多数不到 1 毫秒）；再多就把全部作品一遍数完（约 0.14 秒） */
+const RECOUNT_WORKS_EACH = 8;
+
+/** 整份重建时顺手记下的，定向重算要用 */
+interface Tracking {
+  /** 现在的封面图：角色的 effectiveCoverId，加上作品 covers 里的全部 */
+  coverIds: Set<number>;
+  /** 图 → 它关联的角色。变化只带图的 id，「改之前属于哪些角色」要靠它 */
+  charsOfImage: Map<number, number[]>;
+  /** 编目的规模（catalogShape） */
+  catalog: string;
+}
+
+/**
+ * 编目的规模：角色、作品的行数和最大 id，角色的作品、别名的行数。采纳建议会按标签建档（新角色、新作品、别名），
+ * 标原创会建「原创」作品，撤销时又删掉，这些都不单独声明变化；规模对不上就是名字、别名、作品关系要重读，整份重建。
+ * 每次提交之后都对一遍（不到 0.1 毫秒），所以同一个 id 删了又建也看得出来
+ */
+function catalogShape(db: SqliteContext['db']): string {
+  return db
+    .prepare(
+      `SELECT (SELECT COUNT(*) FROM characters) || ':' || (SELECT COALESCE(MAX(id), 0) FROM characters)
+         || ':' || (SELECT COUNT(*) FROM works) || ':' || (SELECT COALESCE(MAX(id), 0) FROM works)
+         || ':' || (SELECT COUNT(*) FROM character_works) || ':' || (SELECT COUNT(*) FROM aliases)`,
+    )
+    .pluck()
+    .get() as string;
+}
+
+/** 角色的插画张数、最近入库、30 天内张数、「+N」；scoped = 只算 @ids 里的角色（走 character_id 的索引） */
+const charStatsSql = (scoped: boolean) => `SELECT ic.character_id AS id, COUNT(*) AS image_count, MAX(i.added_at) AS last_added_at,
+        SUM(i.added_at >= @cutoff) AS recent_count,
+        SUM(i.added_at > COALESCE(c.last_seen_at, @cutoff)) AS new_count
+ FROM image_characters ic
+ JOIN v_illust_images i ON i.id = ic.image_id
+ JOIN characters c ON c.id = ic.character_id
+ ${scoped ? 'WHERE ic.character_id IN (SELECT value FROM json_each(@ids))' : ''}
+ GROUP BY ic.character_id`;
+/** 角色的非插画张数（漫画、截图等） */
+const charOtherSql = (scoped: boolean) => `SELECT ic.character_id AS id, COUNT(*) AS n FROM image_characters ic
+ JOIN v_counted_images i ON i.id = ic.image_id
+ WHERE NOT ${ILLUSTRATION}${scoped ? ' AND ic.character_id IN (SELECT value FROM json_each(@ids))' : ''} GROUP BY ic.character_id`;
+/** 作品的三个数，一遍数完 */
+const WORK_COUNTS = `COALESCE(SUM(${ILLUSTRATION}), 0) AS image_count, COALESCE(SUM(${ILLUSTRATION} AND i.added_at >= @cutoff), 0) AS recent_count,
+        COALESCE(SUM(NOT ${ILLUSTRATION}), 0) AS other_count`;
+/** 全部作品：v_image_works（UNION 视图）只扫一遍。以前插画和非插画各扫一遍，合计约 210 ms，现在约 140 ms */
+const WORK_STATS_SQL = `SELECT w.work_id AS id, ${WORK_COUNTS}
+ FROM v_image_works w JOIN v_counted_images i ON i.id = w.image_id GROUP BY w.work_id`;
+/** 一部作品：先按作品的索引找出它的图 */
+const WORK_STATS_ONE_SQL = `SELECT ${WORK_COUNTS} FROM v_counted_images i
+ WHERE i.id IN (SELECT image_id FROM v_image_works WHERE work_id = @work)`;
+
+interface CharStats {
+  id: number;
+  image_count: number;
+  last_added_at: string | null;
+  new_count: number | null;
+  recent_count: number | null;
+}
+interface WorkStats {
+  image_count: number;
+  recent_count: number;
+  other_count: number;
+}
 
 export class Derived {
   private data: DerivedData | null = null;
+  private track: Tracking | null = null;
   /** 软失效（后台任务写库）之后、重建之前为 true；见 SoftCache */
   private softStale = false;
   private builtPerf = 0;
+  /** 建的那天（本地日期） */
+  private builtDay = 0;
+  /** 等着定向重算的（下一次 get 时做）：角色关联变了的图、原创标记变了的图、刚看过的角色 */
+  private readonly pending = { links: new Set<number>(), original: new Set<number>(), seen: new Set<number>() };
 
-  /** softMs：后台任务写库后，旧数据最多再用多久（整份重建要几百毫秒，识别期间每 5 秒来一次失效） */
+  /**
+   * softMs：后台任务写库后，旧数据最多再用多久（整份重建要几百毫秒，识别期间每几秒来一次失效）。
+   * 给函数是因为它看当时有没有后台任务在跑：跑着的时候多用一会儿，都结束了就按短的算（SqliteDataSource）
+   */
   constructor(
     private readonly ctx: SqliteContext,
-    private readonly softMs = 0,
+    private readonly softMs: () => number = () => 0,
   ) {}
 
   invalidate(soft = false): void {
     if (soft && this.data) this.softStale = true;
-    else this.data = null;
+    else this.drop();
+  }
+
+  /** 后台任务结束：软失效过的直接丢掉，任务结束那次推送拿到最终的数（后面还排着任务时软窗口是 30 秒，不结清会一直旧） */
+  settleSoft(): void {
+    if (this.softStale) this.drop();
+  }
+
+  private drop(): void {
+    this.data = null;
+    this.track = null;
+    this.pending.links.clear();
+    this.pending.original.clear();
+    this.pending.seen.clear();
+  }
+
+  /**
+   * 一次提交只改到一部分（propagation/cacheScope.ts 的 derived）：
+   * - covers 收藏、分级变了的图：张数不受影响。自动封面优先挑收藏的、按分级分档，封面的分级也存在这里（敏感封面要打码），
+   *   所以其中有现在的封面图时整份失效；不是封面的不动，封面等下一次整份重建再重挑。
+   * - links / original 角色关联、原创标记变了的图：只重算涉及的角色和作品的张数，下一次 get 时做（封面不重挑）。
+   *   做不了就整份失效：图太多、改到现在的封面图、这份缓存已经被后台任务写旧了（反查表不准）。
+   * - seen 刚看过的角色：只重算它们的「+N」和上次看过的时间。
+   * 后台任务写的（soft）不做定向重算，照旧软失效。
+   */
+  narrow(scope: CacheScope['derived'], soft = false): void {
+    if (scope.all) return this.invalidate(soft);
+    if (!this.data || !this.track) return;
+    const touched = scope.links.length || scope.original.length || scope.seen.length;
+    // 每次提交之后都对一遍编目的规模：没人声明却变了（按标签建档、撤销建档）就整份失效。
+    // 已经软失效的不用再判：后台任务在建角色，等软窗口到了本来就要整份重建
+    if (!this.softStale && catalogShape(this.ctx.db) !== this.track.catalog) return this.invalidate(soft);
+    const { coverIds } = this.track;
+    const cover = (ids: readonly number[]) => ids.some((id) => coverIds.has(id));
+    if (cover(scope.covers)) return this.invalidate(soft);
+    if (!touched) return;
+    if (soft) return this.invalidate(true);
+    const p = this.pending;
+    if (scope.links.length || scope.original.length) {
+      if (this.softStale || cover(scope.links) || cover(scope.original)) return this.drop();
+      for (const id of scope.links) p.links.add(id);
+      for (const id of scope.original) p.original.add(id);
+      if (new Set([...p.links, ...p.original]).size > RECOUNT_MAX_IMAGES) return this.drop();
+    }
+    for (const id of scope.seen) p.seen.add(id);
   }
 
   get(): DerivedData {
     const now = this.ctx.clock();
-    const expired = this.softStale && performance.now() - this.builtPerf >= this.softMs;
-    if (!this.data || now - this.data.builtAt > MAX_AGE || expired) {
-      this.data = this.build(now);
-      this.softStale = false;
-      this.builtPerf = performance.now();
-    }
+    const expired = this.softStale && performance.now() - this.builtPerf >= this.softMs();
+    if (!this.data || !this.track || now - this.data.builtAt > MAX_AGE || localDay(now) !== this.builtDay || expired) return this.rebuild(now);
+    const p = this.pending;
+    if ((p.links.size || p.original.size || p.seen.size) && !this.applyPending(this.data, this.track)) return this.rebuild(now);
     return this.data;
   }
 
-  private build(now: number): DerivedData {
+  private rebuild(now: number): DerivedData {
+    this.drop();
+    const built = this.build(now);
+    this.data = built.data;
+    this.track = built.track;
+    this.softStale = false;
+    this.builtPerf = performance.now();
+    this.builtDay = localDay(now);
+    return built.data;
+  }
+
+  /**
+   * 定向重算：等着的那些图涉及的角色、作品，按和整份重建同一条语句重新数（从事实重算，不是加减）。
+   * 返回 false = 这次做不了，要整份重建：编目变了、有角色从没图变成有图或反过来（封面、作品的角色数要跟着变）。
+   * 封面不动。重算过的记录换成新对象，data 也换一个外层对象，别处按对象记着旧结果的不会被悄悄改掉
+   */
+  private applyPending(data: DerivedData, track: Tracking): boolean {
+    const db = this.ctx.db;
+    if (catalogShape(db) !== track.catalog) return false;
+    const { links, original, seen } = this.pending;
+    // 和这份缓存建的时候同一个时间口径
+    const cutoff = iso(data.builtAt - RECENT_DAYS * DAY);
+
+    // 受影响的角色：改之前关联着这些图的（反查表）∪ 现在关联着的
+    const current = new Map<number, number[]>();
+    if (links.size) {
+      for (const [iid, cid] of db
+        .prepare('SELECT image_id, character_id FROM image_characters WHERE image_id IN (SELECT value FROM json_each(?)) ORDER BY image_id, character_id')
+        .raw()
+        .all(JSON.stringify([...links])) as [number, number][]) {
+        const list = current.get(iid);
+        if (list) list.push(cid);
+        else current.set(iid, [cid]);
+      }
+    }
+    const linked = new Set<number>();
+    for (const iid of links) {
+      for (const cid of track.charsOfImage.get(iid) ?? []) linked.add(cid);
+      for (const cid of current.get(iid) ?? []) linked.add(cid);
+    }
+    const charIds = [...new Set([...linked, ...seen])];
+    const characters: CharacterRec[] = [];
+    if (charIds.length) {
+      const ids = JSON.stringify(charIds);
+      const stats = new Map((db.prepare(charStatsSql(true)).all({ cutoff, ids }) as CharStats[]).map((r) => [r.id, r]));
+      const other = new Map((db.prepare(charOtherSql(true)).all({ ids }) as { id: number; n: number }[]).map((r) => [r.id, r.n]));
+      const seenAt = new Map(
+        db.prepare('SELECT id, last_seen_at FROM characters WHERE id IN (SELECT value FROM json_each(?))').raw().all(ids) as [number, string | null][],
+      );
+      for (const id of charIds) {
+        const c = data.characters.get(id);
+        if (!c || !seenAt.has(id)) return false;
+        const st = stats.get(id);
+        const next: CharacterRec = {
+          ...c,
+          lastSeenAt: seenAt.get(id) ?? null,
+          imageCount: st?.image_count ?? 0,
+          otherCount: other.get(id) ?? 0,
+          newCount: st?.new_count ?? 0,
+          lastAddedAt: st?.last_added_at ?? null,
+          recentCount: st?.recent_count ?? 0,
+        };
+        const had = (n: number) => n > 0;
+        if (had(c.imageCount) !== had(next.imageCount) || had(c.otherCount) !== had(next.otherCount)) return false;
+        characters.push(next);
+      }
+    }
+
+    // 受影响的作品：这些角色的作品；原创标记变了的，再加上「原创」作品和这些图手动指定的作品
+    const workIds = new Set<number>();
+    for (const cid of linked) for (const wid of data.characters.get(cid)!.workIds) workIds.add(wid);
+    if (original.size) {
+      for (const w of data.works.values()) if (w.danbooruTag === 'original') workIds.add(w.id);
+      for (const wid of db
+        .prepare('SELECT DISTINCT work_id FROM image_copyrights WHERE image_id IN (SELECT value FROM json_each(?))')
+        .pluck()
+        .all(JSON.stringify([...original])) as number[])
+        workIds.add(wid);
+    }
+    const works: WorkRec[] = [];
+    const counted = (w: WorkRec, st: WorkStats | undefined): WorkRec => ({
+      ...w,
+      imageCount: st?.image_count ?? 0,
+      otherCount: st?.other_count ?? 0,
+      recentImageCount: st?.recent_count ?? 0,
+    });
+    if (workIds.size > RECOUNT_WORKS_EACH) {
+      const all = new Map((db.prepare(WORK_STATS_SQL).all({ cutoff }) as (WorkStats & { id: number })[]).map((r) => [r.id, r]));
+      for (const w of data.works.values()) works.push(counted(w, all.get(w.id)));
+    } else {
+      const one = db.prepare(WORK_STATS_ONE_SQL);
+      for (const wid of workIds) {
+        const w = data.works.get(wid);
+        if (!w) return false;
+        works.push(counted(w, one.get({ cutoff, work: wid }) as WorkStats));
+      }
+    }
+
+    for (const c of characters) data.characters.set(c.id, c);
+    for (const w of works) data.works.set(w.id, w);
+    for (const iid of links) {
+      const list = current.get(iid);
+      if (list) track.charsOfImage.set(iid, list);
+      else track.charsOfImage.delete(iid);
+    }
+    links.clear();
+    original.clear();
+    seen.clear();
+    this.data = { ...data };
+    return true;
+  }
+
+  private build(now: number): { data: DerivedData; track: Tracking } {
     const db = this.ctx.db;
     const cutoff = iso(now - RECENT_DAYS * DAY);
+    const catalog = catalogShape(db);
 
     // A 基础行
     const charRows = db
@@ -137,59 +375,25 @@ export class Derived {
     }[];
 
     // B 角色统计
-    const charStats = new Map(
-      (
-        db
-          .prepare(
-            `SELECT ic.character_id AS id, COUNT(*) AS image_count, MAX(i.added_at) AS last_added_at,
-                    SUM(i.added_at >= @cutoff) AS recent_count,
-                    SUM(i.added_at > COALESCE(c.last_seen_at, @cutoff)) AS new_count
-             FROM image_characters ic
-             JOIN v_illust_images i ON i.id = ic.image_id
-             JOIN characters c ON c.id = ic.character_id
-             GROUP BY ic.character_id`,
-          )
-          .all({ cutoff }) as {
-          id: number;
-          image_count: number;
-          last_added_at: string | null;
-          new_count: number | null;
-          recent_count: number | null;
-        }[]
-      ).map((r) => [r.id, r]),
-    );
+    const charStats = new Map((db.prepare(charStatsSql(false)).all({ cutoff }) as CharStats[]).map((r) => [r.id, r]));
 
     // B' 非插画张数（漫画、截图等）
-    const charOther = new Map(
-      (
-        db
-          .prepare(
-            `SELECT ic.character_id AS id, COUNT(*) AS n FROM image_characters ic
-             JOIN v_counted_images i ON i.id = ic.image_id WHERE NOT ${ILLUSTRATION} GROUP BY ic.character_id`,
-          )
-          .all() as { id: number; n: number }[]
-      ).map((r) => [r.id, r.n]),
-    );
-    const workOther = new Map(
-      (
-        db
-          .prepare(
-            `SELECT w.work_id AS id, COUNT(*) AS n FROM v_image_works w
-             JOIN v_counted_images i ON i.id = w.image_id WHERE NOT ${ILLUSTRATION} GROUP BY w.work_id`,
-          )
-          .all() as { id: number; n: number }[]
-      ).map((r) => [r.id, r.n]),
-    );
+    const charOther = new Map((db.prepare(charOtherSql(false)).all() as { id: number; n: number }[]).map((r) => [r.id, r.n]));
 
     // C 自动封面（T25.5，CB-2）：封面要好看——每个角色按分级档位先取 40 张候选，
     // 再按「画面质量分」排（见 coverQuality），最后在角色之间去重。只用插画；没有插画才用漫画页兜底（tier +3），截图等永远不用（T27）
     // 排序在 JS 里做（T22：原来是整张表开窗 ROW_NUMBER，真实库 3 万多行要 190 ms；取行 + 排序约 60 ms）。
     // 顺序：档位（分级、漫画垫底）→ 收藏在前 → 同框人少的在前 → 识别分数高的在前 → 短边长的在前 → 新的在前；每个角色取前 40
-    const crowd = new Map(
-      (db.prepare('SELECT image_id, COUNT(*) AS n FROM image_characters GROUP BY image_id').all() as { image_id: number; n: number }[]).map(
-        (r) => [r.image_id, r.n],
-      ),
-    );
+    // 图 → 角色：同框人数从它来（以前单独按图分组数一遍），定向重算也靠它知道一张图原来属于哪些角色
+    const charsOfImage = new Map<number, number[]>();
+    for (const [iid, cid] of db.prepare('SELECT image_id, character_id FROM image_characters ORDER BY image_id, character_id').raw().all() as [
+      number,
+      number,
+    ][]) {
+      const list = charsOfImage.get(iid);
+      if (list) list.push(cid);
+      else charsOfImage.set(iid, [cid]);
+    }
     const byChar = new Map<number, CoverCandidate[]>();
     for (const r of db
       .prepare(
@@ -198,7 +402,7 @@ export class Derived {
          WHERE ${ART_KINDS_SQL}`,
       )
       .all() as CoverCandidate[]) {
-      r.others = (crowd.get(r.iid) ?? 1) - 1;
+      r.others = (charsOfImage.get(r.iid)?.length ?? 1) - 1;
       const list = byChar.get(r.cid);
       if (list) list.push(r);
       else byChar.set(r.cid, [r]);
@@ -242,18 +446,8 @@ export class Derived {
       db.prepare('SELECT c.id FROM characters c JOIN v_counted_images i ON i.id = c.cover_image_id').pluck().all() as number[],
     );
 
-    // E 作品统计
-    const workStats = new Map(
-      (
-        db
-          .prepare(
-            `SELECT w.work_id AS id, COUNT(*) AS image_count, SUM(i.added_at >= ?) AS recent_count
-             FROM v_image_works w JOIN v_illust_images i ON i.id = w.image_id
-             GROUP BY w.work_id`,
-          )
-          .all(cutoff) as { id: number; image_count: number; recent_count: number | null }[]
-      ).map((r) => [r.id, r]),
-    );
+    // E 作品统计：插画张数、30 天内张数、非插画张数一遍数完
+    const workStats = new Map((db.prepare(WORK_STATS_SQL).all({ cutoff }) as (WorkStats & { id: number })[]).map((r) => [r.id, r]));
 
     // F 作品的角色数：只数有插画的角色，和角色列表的默认口径一致（只在漫画等里出现的另算，见 otherOnlyCount）
     const workCharCount = new Map<number, number>();
@@ -282,7 +476,7 @@ export class Derived {
         aliases: all.filter((a) => a.visible).map((a) => a.alias),
         color: w.color ?? hslToHex(hashString(w.name) % 360, 62, 58),
         imageCount: st?.image_count ?? 0,
-        otherCount: workOther.get(w.id) ?? 0,
+        otherCount: st?.other_count ?? 0,
         recentImageCount: st?.recent_count ?? 0,
         characterCount: workCharCount.get(w.id) ?? 0,
         coverImageId: null,
@@ -435,7 +629,9 @@ export class Derived {
         }
     }
 
-    return { characters, works, builtAt: now };
+    const track: Tracking = { coverIds: new Set(coverIds), charsOfImage, catalog };
+    for (const w of works.values()) for (const c of w.covers) track.coverIds.add(c.imageId);
+    return { data: { characters, works, builtAt: now }, track };
   }
 }
 

@@ -74,6 +74,11 @@ export type Change =
   | ImageChange<'curation.vetoesChanged'>
   // 编目：characterIds 是涉及的角色；ids 是已知受影响的图（可以为空）
   | ImageChange<'catalog.characterChanged', { characterIds: number[] }>
+  /**
+   * 进了角色页、清掉「+N」：只改了角色的「上次看过」时间。和 catalog.characterChanged 对外是同一个名字，分开声明是因为它
+   * 改不到名字、别名、绑定：不用重算「自建角色能对上 Danbooru」，缓存也只动这个角色的「+N」（cacheScope.ts）
+   */
+  | ImageChange<'catalog.characterSeen', { characterIds: number[] }>
   | ImageChange<'catalog.merged', { characterIds: number[] }>
   | ImageChange<'catalog.bindingChanged', { characterIds: number[] }>
   // 可见性
@@ -131,6 +136,7 @@ export const ALL_CHANGES: readonly ChangeType[] = [
   'root.visibilityChanged',
   'root.modeChanged',
   'catalog.characterChanged',
+  'catalog.characterSeen',
   'catalog.merged',
   'catalog.bindingChanged',
   'collections.changed',
@@ -168,6 +174,8 @@ export const PUBLIC_CHANGE: Record<ChangeType, DomainChange | null> = {
   'curation.artistsChanged': 'curation.artistsChanged',
   'curation.vetoesChanged': 'curation.vetoesChanged',
   'catalog.characterChanged': 'catalog.characterChanged',
+  // 「看过了」对外就是角色变了（前端按它刷新角色的查询）
+  'catalog.characterSeen': 'catalog.characterChanged',
   'catalog.merged': 'catalog.merged',
   'catalog.bindingChanged': 'catalog.bindingChanged',
   'visibility.rulesChanged': 'visibility.rulesChanged',

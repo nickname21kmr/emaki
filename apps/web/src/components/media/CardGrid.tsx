@@ -1,12 +1,13 @@
 import type { ImageItem } from '@emaki/shared';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Heart } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useReducedMotion } from 'motion/react';
 import { cn } from '@/lib/cn';
 import { formatDate } from '@/lib/format';
-import { MountFrame, SelectCircle, useGridBox, useGridInteractions, useLightboxFeed } from './ImageGrid';
-import { GroupBadge, selectionIds, toggleImageSelection } from './CollectionControls';
+import { MountFrame, SelectCircle, useGridBox, useGridInteractions, useLightboxFeed, useScrollPointerLock, useTileActions, type TileActions } from './ImageGrid';
+import { GroupBadge, selectionIds } from './CollectionControls';
+import { shouldLoadMore } from './gridPaging';
 import { TileMarks } from './KindBadge';
 import { Thumb } from './Thumb';
 import { useLongPress } from '@/lib/useLongPress';
@@ -74,14 +75,17 @@ export function CardGrid({
 
   const virtualRows = virtualizer.getVirtualItems();
   const lastIndex = virtualRows[virtualRows.length - 1]?.index ?? -1;
+  const measured = width > 0;
   useEffect(() => {
-    if (hasMore && !loadingMore && lastIndex >= rowCount - 3) onLoadMore?.();
-  }, [lastIndex, rowCount, hasMore, loadingMore, onLoadMore]);
+    if (shouldLoadMore({ hasMore, loadingMore, measured, lastRendered: lastIndex, rowCount, ahead: 3 })) onLoadMore?.();
+  }, [lastIndex, rowCount, measured, hasMore, loadingMore, onLoadMore]);
 
   const thumbWidth = variant === 'sticker' ? 240 : 480;
+  const actions = useTileActions(handleClick);
+  const pointerEvents = useScrollPointerLock(containerRef, virtualizer.isScrolling);
 
   return (
-    <div ref={containerRef} className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+    <div ref={containerRef} className="relative w-full" style={{ height: virtualizer.getTotalSize(), pointerEvents }}>
       {virtualRows.map((vr) => {
         const start = vr.index * cols;
         const row = images.slice(start, start + cols);
@@ -104,9 +108,8 @@ export function CardGrid({
                   selected={selected}
                   selectable={!!selectionScope}
                   selecting={selecting}
-                  onClick={(e) => handleClick(e, image, index)}
-                  onToggle={() => toggleImageSelection(image)}
-                  onLongPress={selectionScope ? () => void (!selected && toggleImageSelection(image)) : undefined}
+                  index={index}
+                  actions={actions}
                 />
               );
             })}
@@ -117,17 +120,17 @@ export function CardGrid({
   );
 }
 
-function Card({
+/** 一张卡片。memo，和 ImageGrid 的格子一样：动作走固定引用的 actions */
+const Card = memo(function Card({
   image,
+  index,
   variant,
   height,
   thumbWidth,
   selected,
   selectable,
   selecting,
-  onClick,
-  onToggle,
-  onLongPress,
+  actions,
 }: {
   image: ImageItem;
   variant: CardVariant;
@@ -136,13 +139,14 @@ function Card({
   selected: boolean;
   selectable: boolean;
   selecting: boolean;
-  onClick: (e: React.MouseEvent) => void;
-  onToggle: () => void;
-  /** 触屏长按进入多选（A1） */
-  onLongPress?: () => void;
+  index: number;
+  actions: TileActions;
 }) {
   const scroll = useScrollPeek(variant === 'shot');
-  const longPress = useLongPress(onLongPress);
+  // 触屏长按进入多选（A1）
+  const longPress = useLongPress(selectable ? () => actions.longPress(image, selected) : undefined);
+  const onClick = (e: React.MouseEvent) => actions.open(e, image, index);
+  const onToggle = () => actions.toggle(image);
   const ratio = image.height / Math.max(image.width, 1);
   return (
     <figure className="min-w-0">
@@ -193,7 +197,7 @@ function Card({
       )}
     </figure>
   );
-}
+});
 
 /**
  * 截图的「翻看」：只有被悬停的那一张，停 0.3 秒后 object-position 从顶部匀速滑到底部（2.4 秒），

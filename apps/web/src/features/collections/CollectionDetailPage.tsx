@@ -68,6 +68,7 @@ import { WorkPicker } from '@/features/characters/detail/WorkPicker';
 import { SelectionBar, type SelectionAction } from '@/features/characters/detail/SelectionBar';
 import { useScopedSelection } from '@/features/characters/detail/useScopedSelection';
 import { CollectionImagePicker } from './components/CollectionImagePicker';
+import { coverRead } from './coverRead';
 import { PageBlocks } from '@/blocks/PageBlocks';
 import { useAllowedActions, type Need } from '@/lib/capabilities';
 
@@ -130,6 +131,7 @@ function Detail({ data }: { data: GetCollectionResponse }) {
   const manualWorks = data.works.filter((x) => x.manual).map((x) => x.work.id);
 
   if (c.kind === 'group') return <GroupDetail data={data} />;
+  const cover = coverRead(c.id, readProgress.get(c.id), '页');
 
   return (
     <div className="flex min-h-full flex-col">
@@ -203,7 +205,14 @@ function Detail({ data }: { data: GetCollectionResponse }) {
           render={{
             'collection.head': () => (
               <section className="mt-2 grid grid-cols-[240px_minmax(0,1fr)] gap-10 max-[900px]:grid-cols-1">
-                <BookPlate collection={c} size="lg" />
+                {/* 点封面就读（有进度接着读）。group/book：悬停时封面翻开，和书架上的书一样。链接只包住书本身，不跟着右边的奥付拉高 */}
+                <Link
+                  to={cover.href}
+                  aria-label={`${cover.label}《${displayTitle(c)}》`}
+                  className="group/book mx-auto block w-[240px] self-start rounded-[var(--radius-book)] outline-none focus-visible:ring-2 focus-visible:ring-shu focus-visible:ring-offset-4 focus-visible:ring-offset-sheet"
+                >
+                  <BookPlate collection={c} size="lg" />
+                </Link>
                 <Colophon data={data} onReview={(v) => update.mutate({ reviewed: v })} />
               </section>
             ),
@@ -317,6 +326,7 @@ function GroupDetail({ data }: { data: GetCollectionResponse }) {
   const menu = useAllowedActions(COLLECTION_MENU_NEEDS);
   const names = data.cast.slice(0, 2).map((x) => x.character.name);
   const castLine = names.length ? names.join('、') + (data.cast.length > 2 ? ` 等 ${data.cast.length} 位` : '') : null;
+  const cover = coverRead(c.id, readProgress.get(c.id), '张');
 
   return (
     <div className="flex min-h-full flex-col">
@@ -379,9 +389,14 @@ function GroupDetail({ data }: { data: GetCollectionResponse }) {
           render={{
             'group.head': () => (
               <section className="mt-2 grid grid-cols-[300px_minmax(0,1fr)] items-center gap-10 max-[900px]:grid-cols-1">
-                <div className="group/fan mx-auto w-full max-w-[300px]">
+                {/* 点封面就读（有进度接着读），和本子的扉页一样 */}
+                <Link
+                  to={cover.href}
+                  aria-label={`${cover.label}《${displayTitle(c)}》`}
+                  className="group/fan mx-auto block w-full max-w-[300px] rounded-[18px] outline-none focus-visible:ring-2 focus-visible:ring-shu focus-visible:ring-offset-4 focus-visible:ring-offset-sheet"
+                >
                   <CoverFan covers={c.covers} label={displayTitle(c)} bigCenter />
-                </div>
+                </Link>
                 <GroupFacts data={data} />
               </section>
             ),

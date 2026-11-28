@@ -9,7 +9,7 @@ import { collapsedImages, decideCollapse } from './collapsedImages.ts';
 import { searchKey, TAG_FILTER_MIN_SCORE, type ImageItem, type ImageSort, type ListImagesQuery, type Page } from '@emaki/shared';
 import { tagsOfArtist } from '../artists.ts';
 import type { Db } from '../../../db/connection.ts';
-import { hydrateImages, IMAGE_COLS, type ImageRow } from '../hydrate.ts';
+import { hydrateImages, IMAGE_COLS, loadImageItems, type ImageRow } from '../hydrate.ts';
 import { THEME_FILTERS } from '../../../services/classify/theme.ts';
 import { ANIMATED_SQL, ART_KINDS_SQL, HAS_CHARACTER, IMAGE_IN_WORK, LIVE_IMAGES, UNRECOGNIZED } from '../../../readmodel/terms.ts';
 import { decodeCursor, encodeCursor, parseId } from '../sql.ts';
@@ -38,8 +38,15 @@ const isKeyset = (x: unknown): x is [string | number, number] =>
   Array.isArray(x) && x.length === 2 && (typeof x[0] === 'string' || typeof x[0] === 'number') && typeof x[1] === 'number';
 const isOffset = (x: unknown): x is number => typeof x === 'number' && Number.isInteger(x) && x >= 0;
 
+/** 图库文字搜索命中的标签、角色、作品 id */
+export interface TextMatch {
+  tagIds: number[];
+  characterIds: number[];
+  workIds: number[];
+}
+
 /** 图库文字搜索命中的标签、角色、作品 id（qk 已经是 searchKey） */
-function matchText(db: Db, qk: string): { tagIds: number[]; characterIds: number[]; workIds: number[] } {
+function matchText(db: Db, qk: string): TextMatch {
   const tagIds = db
     .prepare(
       `SELECT id FROM tags WHERE instr(search_key(name), @qk) > 0
@@ -70,8 +77,14 @@ function matchText(db: Db, qk: string): { tagIds: number[]; characterIds: number
 
 /** 总数缓存（T22）：key 是去掉分页和排序的查询条件；不传就每次现算 */
 export type CountCache = (key: string, compute: () => number) => number;
+/**
+ * 文字搜索命中哪些标签、角色、作品的缓存：key 是搜索键（searchKey 之后的 q）；不传就每次现算。
+ * 现算要对 1.5 万个标签逐个调 search_key、再扫 20 多万行中文名（40–150 ms），而同一个词翻页、重拉时每个请求都要用。
+ * 结果只和标签、角色、作品、别名、词库有关，和哪张图收藏了、放下了、什么分级无关
+ */
+export type TextMatchCache = (key: string, compute: () => TextMatch) => TextMatch;
 
-export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Page<ImageItem> {
+export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache, texts?: TextMatchCache): Page<ImageItem> {
   // 翻页查询和数总数用两套写法（T22）：翻页沿排序索引走，用 EXISTS 找够一页就停；
   // 数总数要看完所有命中的图，用 IN（先按作品 / 标签索引把命中的图 id 找出来）快得多。其余条件两边一样。
   // 只对命中很多的条件这样分；角色命中的图很少，两边都用 IN
@@ -239,7 +252,7 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
   if (qk) {
     // 文件名、标签（英文名或中文名）、角色（名字、别名、日文名）、作品（名字、别名；作品下的角色也算）。
     // 以前只看文件名和英文标签，「ミカ」「未花」「蔚蓝档案」都搜不到（用户 2026-09-29）
-    const m = matchText(db, qk);
+    const m = texts ? texts(qk, () => matchText(db, qk)) : matchText(db, qk);
     p.qk = qk;
     p.qtags = JSON.stringify(m.tagIds);
     p.qchars = JSON.stringify(m.characterIds);
@@ -249,11 +262,15 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
       OR EXISTS (SELECT 1 FROM image_characters ic WHERE ic.image_id = i.id AND ic.character_id IN (SELECT value FROM json_each(@qchars)))
       OR EXISTS (SELECT 1 FROM image_copyrights x WHERE x.image_id = i.id AND x.work_id IN (SELECT value FROM json_each(@qworks)))
       OR (i.original_at IS NOT NULL AND EXISTS (SELECT 1 FROM works ow WHERE ow.danbooru_tag = 'original' AND ow.id IN (SELECT value FROM json_each(@qworks)))))`);
-    countWhere.push(`(instr(search_key(i.file_name), @qk) > 0
-      OR i.id IN (SELECT it.image_id FROM image_tags it WHERE it.tag_id IN (SELECT value FROM json_each(@qtags)))
-      OR i.id IN (SELECT ic.image_id FROM image_characters ic WHERE ic.character_id IN (SELECT value FROM json_each(@qchars)))
-      OR i.id IN (SELECT x.image_id FROM image_copyrights x WHERE x.work_id IN (SELECT value FROM json_each(@qworks)))
-      OR (i.original_at IS NOT NULL AND EXISTS (SELECT 1 FROM works ow WHERE ow.danbooru_tag = 'original' AND ow.id IN (SELECT value FROM json_each(@qworks)))))`);
+    // 数总数：标签、角色、作品几支先看（按索引找出命中的图），都不中才对文件名调 search_key。
+    // 写成 CASE WHEN 才一定短路；OR 不保证，文件名那支每一行都会先算一遍（q=girl 数一次 230 → 110 ms）。
+    // 翻页的写法（上面）不跟着改：那边是逐行 EXISTS，排到文件名前面，命中少的搜索反而可能更慢，没量过
+    countWhere.push(`(CASE
+      WHEN i.id IN (SELECT it.image_id FROM image_tags it WHERE it.tag_id IN (SELECT value FROM json_each(@qtags))) THEN 1
+      WHEN i.id IN (SELECT ic.image_id FROM image_characters ic WHERE ic.character_id IN (SELECT value FROM json_each(@qchars))) THEN 1
+      WHEN i.id IN (SELECT x.image_id FROM image_copyrights x WHERE x.work_id IN (SELECT value FROM json_each(@qworks))) THEN 1
+      WHEN i.original_at IS NOT NULL AND EXISTS (SELECT 1 FROM works ow WHERE ow.danbooru_tag = 'original' AND ow.id IN (SELECT value FROM json_each(@qworks))) THEN 1
+      ELSE instr(search_key(i.file_name), @qk) > 0 END)`);
   }
 
   const from = 'FROM images i';
@@ -281,12 +298,15 @@ export function listImages(db: Db, q: ListImagesQuery, counts?: CountCache): Pag
           : q.seed !== undefined
           ? SEEDED_RANDOM_EXPR
           : RANDOM_EXPR;
-    const rows = db
-      .prepare(`SELECT ${IMAGE_COLS} ${from} WHERE ${w} ORDER BY ${order}, i.id LIMIT @lim OFFSET @off`)
-      .all({ ...p, ...(sort === 'random' && q.seed !== undefined ? { seed: q.seed } : {}), lim: limit + 1, off: offset }) as ImageRow[];
-    const hasMore = rows.length > limit;
-    if (hasMore) rows.pop();
-    return { items: hydrateImages(db, rows), nextCursor: hasMore ? encodeCursor(offset + limit) : null, total };
+    // 先只排 id，再按 id 取整行。带着 28 列一起排的话，翻得越深（OFFSET 越大）排序器里留的行越多：
+    // 9 万张的库随机翻到第 6 万张那页 290 → 90 ms，结果一样
+    const ids = db
+      .prepare(`SELECT i.id ${from} WHERE ${w} ORDER BY ${order}, i.id LIMIT @lim OFFSET @off`)
+      .pluck()
+      .all({ ...p, ...(sort === 'random' && q.seed !== undefined ? { seed: q.seed } : {}), lim: limit + 1, off: offset }) as number[];
+    const hasMore = ids.length > limit;
+    if (hasMore) ids.pop();
+    return { items: loadImageItems(db, ids), nextCursor: hasMore ? encodeCursor(offset + limit) : null, total };
   }
 
   const expr = SORT_EXPR[sort];

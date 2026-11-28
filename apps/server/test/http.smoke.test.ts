@@ -417,6 +417,9 @@ describe('图片、未识别、重复、排除（注册表：images.*、curation
     expect(res.headers['content-type']).toContain('image/svg+xml');
     expect(res.headers['cache-control']).toBe('public, max-age=31536000, immutable');
     expect(res.body).toContain('<svg');
+    // 演示数据的占位图不看版本：地址带上文件版本 v 和前端的 tv，缓存头还是默认的那一档
+    const versioned = await call('GET', '/api/images/i1/thumb?w=300&tv=1&v=2026-01-01T00%3A00%3A00.000Z');
+    expect([versioned.status, versioned.res.headers['cache-control']]).toEqual([200, 'public, max-age=31536000, immutable']);
     expect((await call('GET', '/api/images/i999/thumb')).status).toBe(404);
   });
 

@@ -76,16 +76,6 @@ export function useElementSize<T extends HTMLElement>(): [RefObject<T | null>, {
   return [ref, size];
 }
 
-/** 输入防抖：搜索框打字时不必每个字都请求一次 */
-export function useDebounced<T>(value: T, delay: number): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const t = window.setTimeout(() => setDebounced(value), delay);
-    return () => window.clearTimeout(t);
-  }, [value, delay]);
-  return debounced;
-}
-
 /** 按「contain」把 w×h 塞进 boxW×boxH，返回显示尺寸 */
 export function fitContain(w: number, h: number, boxW: number, boxH: number) {
   if (w <= 0 || h <= 0 || boxW <= 0 || boxH <= 0) return { width: 0, height: 0 };

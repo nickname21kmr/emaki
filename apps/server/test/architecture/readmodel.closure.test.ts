@@ -34,11 +34,11 @@ afterEach(() => env.close());
 
 const sql = (s: string, ...args: unknown[]) => ds.ctx.db.prepare(s).run(...args);
 const one = (s: string, ...args: unknown[]) => ds.ctx.db.prepare(s).pluck().get(...args);
-/** 测试里直接改了表之后，做一次无关紧要的用户操作，让缓存按用户操作强刷新 */
-const touch = async () => {
-  const any = (await ds.listImages({ limit: 1 })).items[0]!;
-  await ds.bulkImages({ ids: [any.id], action: { type: 'favorite', value: any.favorite } });
-};
+/**
+ * 测试里直接改了表之后，让缓存全部失效。以前是随便做一次收藏：现在缓存按变化类型失效（propagation/cacheScope.ts），
+ * 收藏只清带收藏筛选的总数，不能再拿来当「强刷新」
+ */
+const touch = async () => ds.ctx.invalidate();
 /** 未识别「插画 · 漫画」里的几张 */
 const queued = async (n: number) => (await ds.listUnrecognized({ area: 'art', limit: n })).items.map((x) => x.image.id);
 const image = async (id: string) => (await ds.getImage(id))!;

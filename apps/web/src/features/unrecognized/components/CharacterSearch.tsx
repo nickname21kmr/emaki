@@ -5,8 +5,9 @@ import { Chip, ChipAvatar, Kbd, SearchInput, Spinner } from '@/components/ui';
 import { NewCharacterDialog } from '@/features/characters/overview/NewCharacterDialog';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
+import { useImeComposing } from '@/lib/ime';
 import { useSearch } from '@/lib/queries';
-import { useDebounced } from '../hooks';
+import { useDebounced } from '@/lib/useDebounced';
 import type { AssignTarget } from '../types';
 
 /**
@@ -72,9 +73,11 @@ export function CharacterSearch({
 
   const typing = q.trim().length > 0;
   const list = typing ? results : recent;
+  // 拼音还没上屏：框里是字母，term 停在上一次的值（lib/useDebounced.ts），这时算「还在输入」
+  const composing = useImeComposing();
   const searching = typing && (term !== q.trim() || search.isFetching) && !results.length;
-  // 结果回来之后才出现，免得手快回车误开新建（RV-T-14 ③）
-  const canCreate = typing && !searching && term === q.trim() && !search.isError
+  // 结果回来之后才出现，免得手快回车误开新建（RV-T-14 ③）；组合中也不出现，不然会冒出「新建角色『fu'ning'na』」
+  const canCreate = typing && !composing && !searching && term === q.trim() && !search.isError
     && !results.some((r) => r.name === term || r.matchedName === term);
   const count = list.length + (canCreate ? 1 : 0);
   const activeIndex = Math.min(active, Math.max(0, count - 1));

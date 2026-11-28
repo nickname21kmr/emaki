@@ -1,8 +1,13 @@
 import type { ImageSort, ListImagesQuery, Rating } from '@emaki/shared';
+import { rmSync } from 'node:fs';
+import path from 'node:path';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { EventBus } from '../../../core/events.ts';
 import { openDatabase, type Db } from '../../../db/connection.ts';
 import { migrate } from '../../../db/migrate.ts';
-import { listImages } from './listImages.ts';
+import { SqliteDataSource } from '../../../../test/helpers/client.ts';
+import { makeTmpDir } from '../../../../test/helpers/tmp.ts';
+import { listImages, type TextMatch, type TextMatchCache } from './listImages.ts';
 
 /** 可复现的伪随机 */
 function rng(seed: number) {
@@ -195,6 +200,49 @@ describe('排序 × 顺序：翻完所有页不重不漏，顺序正确', () => 
     }
 });
 
+describe('随机排序（不收拢）：先只排 id、再按 id 取整行', () => {
+  it.each([[undefined], [7], [1073741823]])('seed=%s：和带着整行排序的写法逐页一样，偏移游标接得上，每一项的内容不变', (seed) => {
+    // 原来的写法：一条查询带着整行排序，LIMIT / OFFSET 取一页（这里只取 id，顺序由同一个 ORDER BY 决定）
+    const old = (where: string) =>
+      db
+        .prepare(`SELECT i.id FROM v_counted_images i WHERE ${where} ORDER BY (((i.id + @seed) * 2654435761) % 4294967296), i.id LIMIT @lim OFFSET @off`)
+        .pluck();
+    // 每一项的内容：和按入库时间翻页（整行直接取出来的那条路）拿到的同一张图逐字段相同
+    const byId = new Map<string, unknown>();
+    let c: string | undefined;
+    do {
+      const page = listImages(db, { limit: 200, cursor: c });
+      for (const item of page.items) byId.set(item.id, item);
+      c = page.nextCursor ?? undefined;
+    } while (c);
+
+    let checked = 0;
+    for (const [q, where] of [
+      [{}, '1'],
+      [{ favorite: true }, 'i.favorite = 1'],
+      [{ order: 'desc' }, '1'], // 随机不分正倒序
+    ] as [ListImagesQuery, string][]) {
+      const reference = old(where);
+      for (const limit of [1, 37, 200]) {
+        let cursor: string | undefined;
+        let offset = 0;
+        for (let pages = 0; pages < (limit === 1 ? 25 : 100); pages++) {
+          const page = listImages(db, { ...q, sort: 'random', seed, limit, cursor });
+          const want = reference.all({ seed: seed ?? 0, lim: limit, off: offset }) as number[];
+          expect(page.items.map((i) => Number(i.id)), JSON.stringify({ q, limit, offset })).toEqual(want);
+          for (const item of page.items) expect(item).toEqual(byId.get(item.id));
+          checked += page.items.length;
+          offset += limit;
+          cursor = page.nextCursor ?? undefined;
+          if (!cursor) break;
+        }
+        if (limit > 1) expect(cursor, '翻到底了').toBeUndefined();
+      }
+    }
+    expect(checked).toBeGreaterThan(1000);
+  });
+});
+
 it('翻页途中插入新图不会产生重复', () => {
   const first = listImages(db, { limit: 50 });
   insert(10);
@@ -316,5 +364,157 @@ describe('是否动图（D5）', () => {
     const sql = sqls.find((s) => s.includes('LIMIT @lim'))!;
     const plan = (d.prepare(`EXPLAIN QUERY PLAN ${sql}`).all({ lim: 6 }) as { detail: string }[]).map((r) => r.detail).join('\n');
     expect(plan).toContain('idx_images_animated_live');
+  });
+});
+
+describe('文字搜索：数总数的写法、候选的缓存', () => {
+  let d: Db;
+  beforeAll(() => {
+    d = openDatabase(':memory:');
+    migrate(d);
+    d.exec(`INSERT INTO library_roots (id, path, enabled) VALUES (1, 'D:/a', 1);
+      INSERT INTO exclusions (id, kind, target, label, created_at) VALUES (1, 'tag', 'x', 'x', 'x');
+      INSERT INTO works (id, name, danbooru_tag, created_at) VALUES
+        (1, 'Blue Archive', 'blue_archive', 'x'), (2, '原创', 'original', 'x'), (3, 'Arknights', 'arknights', 'x');
+      INSERT INTO characters (id, name, danbooru_tag, source, created_at) VALUES
+        (1, '未花', 'misono_mika', 'danbooru', 'x'), (2, 'Amiya', NULL, 'custom', 'x');
+      INSERT INTO character_works (character_id, work_id) VALUES (1, 1), (2, 3);
+      INSERT INTO aliases (owner_type, owner_id, alias, search_key, origin, visible, position) VALUES ('work', 3, '明日方舟', '明日方舟', 'user', 1, 0);
+      INSERT INTO tags (id, name, category) VALUES (1, 'thighhighs', 'general'), (2, 'long_hair', 'general');
+      INSERT INTO tag_name_keys (search_key, tag, kind, source) VALUES ('长发', 'long_hair', 'zh', 'dict');`);
+    const img = d.prepare(`INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at, excluded_by, original_at)
+      VALUES (@id, 1, @file, @file, 100, 150, 1, 'png', @sha, @at, 'x', @ex, @original)`);
+    const add = (id: number, file: string, extra: { excluded?: boolean; original?: boolean } = {}) =>
+      img.run({ id, file, sha: `s${id}`, at: `2026-01-${String(id).padStart(2, '0')}`, ex: extra.excluded ? 1 : null, original: extra.original ? '2026-02-01' : null });
+    add(1, 'Mika_01.png'); // 只有文件名里有 mika
+    add(2, 'a.png'); // 只有标签 thighhighs
+    add(3, 'b.png'); // 只有角色未花（标签 misono_mika；她的作品 Blue Archive 也算）
+    add(4, 'c.png'); // 只有手动指定的作品 Blue Archive
+    add(5, 'd.png', { original: true }); // 原创图
+    add(6, 'e.png'); // 什么都没有
+    add(7, 'Thighhighs_long.png'); // 文件名、两个标签都中
+    add(8, 'mika_thighhighs.png', { excluded: true }); // 被排除：都不算
+    add(9, 'f.png'); // 角色 Amiya（作品 Arknights，别名 明日方舟）
+    add(10, 'g.png'); // 标签 long_hair（中文名 长发）
+    d.exec(`INSERT INTO image_tags (image_id, tag_id, score) VALUES (2, 1, 0.9), (7, 1, 0.9), (7, 2, 0.9), (8, 1, 0.9), (10, 2, 0.9);
+      INSERT INTO image_copyrights (image_id, work_id) VALUES (4, 1);`);
+    const ic = d.prepare("INSERT INTO image_characters (image_id, character_id, decision, actor, added_at) VALUES (?, ?, 'manual', 'user', 'x')");
+    ic.run(3, 1);
+    ic.run(9, 2);
+  });
+
+  const all = (q: ListImagesQuery, fn = listImages) => {
+    const ids: number[] = [];
+    let cursor: string | undefined;
+    for (let guard = 0; guard < 50; guard++) {
+      const page = fn(d, { ...q, limit: 2, cursor });
+      ids.push(...page.items.map((i) => Number(i.id)));
+      if (!page.nextCursor) return ids.sort((a, b) => a - b);
+      cursor = page.nextCursor;
+    }
+    throw new Error('分页没有结束');
+  };
+
+  // 翻页的条件还是原来的写法（逐行 EXISTS、文件名在最前），数总数是 CASE WHEN：两边筛出来的必须是同一批图
+  it.each<[string, string, number[]]>([
+    ['只有文件名命中', 'mika_0', [1]],
+    ['文件名和角色标签各中一张', 'MIKA', [1, 3]],
+    ['只有标签命中', 'thighhigh', [2, 7]],
+    ['标签的中文名', '长发', [7, 10]],
+    ['只有作品命中（手动指定的作品、作品下的角色）', 'blue archive', [3, 4]],
+    ['作品的别名', '明日方舟', [9]],
+    ['「原创」', '原创', [5]],
+    ['文件名和标签都中的只算一次', 'long', [7, 10]],
+    ['什么都不中', 'zzzz', []],
+  ])('%s', (_name, q, want) => {
+    expect(all({ q })).toEqual(want);
+    expect(listImages(d, { q }).total).toBe(want.length);
+    // 和别的条件一起、收拢时（组图那条查询用的也是数总数的写法）
+    expect(listImages(d, { q, collapseCollections: true }).total).toBe(want.length);
+    expect(listImages(d, { q, orientation: 'portrait' }).total).toBe(want.length);
+    expect(listImages(d, { q, favorite: true }).total).toBe(0);
+  });
+
+  it('同一个词第二次搜不再去标签、角色、作品表里找候选；换一个词才再找', () => {
+    const memo = new Map<string, TextMatch>();
+    const keys: string[] = [];
+    const texts: TextMatchCache = (key, compute) => {
+      keys.push(key);
+      let hit = memo.get(key);
+      if (!hit) memo.set(key, (hit = compute()));
+      return hit;
+    };
+    const sqls: string[] = [];
+    const prepare = d.prepare.bind(d);
+    const spy = vi.spyOn(d, 'prepare').mockImplementation(((sql: string) => {
+      sqls.push(sql);
+      return prepare(sql);
+    }) as typeof d.prepare);
+    const candidates = () => sqls.filter((s) => s.includes('tag_name_keys') || s.includes('FROM aliases')).length;
+    try {
+      const first = listImages(d, { q: 'Mika' }, undefined, texts);
+      expect(candidates()).toBe(3); // 标签、作品、角色各一条
+      const again = listImages(d, { q: 'ＭＩＫＡ', limit: 1 }, undefined, texts);
+      expect(candidates()).toBe(3);
+      expect(again.total).toBe(first.total);
+      expect(keys).toEqual(['mika', 'mika']);
+      expect(memo.get('mika')).toEqual({ tagIds: [], characterIds: [1], workIds: [] });
+      listImages(d, { q: 'blue' }, undefined, texts);
+      expect(candidates()).toBe(6);
+      // 不带缓存的调用照旧每次现找
+      listImages(d, { q: 'Mika' });
+      expect(candidates()).toBe(9);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(all({ q: 'mika' }, (db, q) => listImages(db, q, undefined, texts))).toEqual([1, 3]);
+  });
+});
+
+describe('文字搜索候选的缓存跟着库里的变化失效（经引擎，结果缓存的 qtext: 键）', () => {
+  it('改角色名、加别名、识别出新标签之后再搜，结果是新的；收藏、改分级、放下不影响', async () => {
+    const dir = makeTmpDir('qtext');
+    const ds = await SqliteDataSource.open(new EventBus(), path.join(dir, 'data'), { memory: true, autoJobs: false, importDict: false });
+    try {
+      const db = ds.ctx.db;
+      db.exec(`INSERT INTO library_roots (id, path) VALUES (1, 'D:/a');
+        INSERT INTO characters (id, name, source, created_at) VALUES (1, 'Alpha', 'custom', 'x');
+        INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at, tagged_at)
+          VALUES (1, 1, '1.png', '1.png', 100, 150, 1, 'png', 's1', 'x', 'x', 'x'), (2, 1, '2.png', '2.png', 100, 150, 1, 'png', 's2', 'x', 'x', 'x');
+        INSERT INTO image_characters (image_id, character_id, decision, actor, added_at) VALUES (1, 1, 'manual', 'user', 'x');`);
+      ds.ctx.invalidate();
+      const hits = async (q: string) => {
+        const page = await ds.listImages({ q });
+        expect(page.total).toBe(page.items.length);
+        return page.items.map((i) => i.id);
+      };
+      // 先把这几个词都搜一遍：没命中的结果也进了缓存
+      expect(await hits('alpha')).toEqual(['1']);
+      expect(await hits('beta')).toEqual([]);
+      expect(await hits('gamma')).toEqual([]);
+      expect(await hits('newtag')).toEqual([]);
+
+      // 和候选无关的操作：缓存留着也好、清掉也好，结果都一样
+      await ds.updateImage('1', { favorite: true });
+      await ds.updateImage('1', { rating: 'explicit' });
+      await ds.bulkImages({ ids: ['2'], action: { type: 'shelve', value: true } });
+      expect(await hits('alpha')).toEqual(['1']);
+      expect(await hits('beta')).toEqual([]);
+
+      await ds.updateCharacter('1', { name: 'Beta' });
+      expect(await hits('beta')).toEqual(['1']);
+      await ds.updateCharacter('1', { aliases: ['Gamma'] });
+      expect(await hits('gamma')).toEqual(['1']);
+      // 识别任务写进新标签（后台任务经 apply 声明变化）
+      ds.ctx.apply(() => {
+        db.exec(`INSERT INTO tags (id, name, category) VALUES (901, 'newtag_x', 'general');
+          INSERT INTO image_tags (image_id, tag_id, score) VALUES (2, 901, 0.9);`);
+        ds.ctx.changed({ type: 'evidence.changed', ids: [2], provider: 'tagger' });
+      });
+      expect(await hits('newtag')).toEqual(['2']);
+    } finally {
+      await ds.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

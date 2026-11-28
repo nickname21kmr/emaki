@@ -1,21 +1,23 @@
 import type { ID, ImageItem } from '@emaki/shared';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Check, CheckCheck, Heart } from 'lucide-react';
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useScrollContainer } from '@/components/layout/ScrollContainer';
 import { cn } from '@/lib/cn';
 import { api } from '@/lib/api';
-import { useMutate } from '@/lib/queries';
+import { patchImages, useMutate } from '@/lib/queries';
 import { isSelecting, useLightbox, useSelection } from '@/lib/stores';
 import { pickRevealed } from '@/lib/undoPlace';
 import { GroupBadge, selectionIds, toggleImageSelection } from './CollectionControls';
 import { TileMarks } from './KindBadge';
 import { useUndoRevealTarget } from '@/lib/useUndoReveal';
+import { shouldLoadMore } from './gridPaging';
 import { justify } from './justify';
 import { Thumb } from './Thumb';
 import type { BlurContext } from '@/lib/blur';
 import { useCan } from '@/lib/capabilities';
 import { Button, IconButton } from '@/components/ui';
+import { gridThumbTier } from '@/lib/thumbTier';
 import { useLongPress } from '@/lib/useLongPress';
 import { balancedRows, gridGap, gridRowHeight, useViewport } from '@/lib/viewport';
 
@@ -90,9 +92,15 @@ export function ImageGrid({
   }, [rows, virtualizer]);
 
   const { selection, selecting, handleClick, gridId, ids } = useGridInteractions(images, selectionScope, onOpen);
-  const favorite = useMutate(({ ids, value }: { ids: ID[]; value: boolean }) => api.bulkImages({ ids, action: { type: 'favorite', value } }));
+  const favorite = useMutate(({ ids, value }: { ids: ID[]; value: boolean }) => api.bulkImages({ ids, action: { type: 'favorite', value } }), {
+    // 心一点就变：先改缓存，不等接口和整轮刷新（翻得越深刷新越久）；失败了改回去
+    optimistic: ({ ids, value }, client) => patchImages(client, ids, { favorite: value }),
+  });
   // 收藏要 curate（lib/capabilities.ts）：没有的设备上格子里只显示已收藏的心，点不了
   const canFavorite = useCan('curate');
+  const actions = useTileActions(handleClick, (image) =>
+    favorite.mutate({ ids: selectionIds(image), value: !(image.collectionGroup?.allFavorite ?? image.favorite) }),
+  );
 
   useLightboxFeed(gridId, ids, { total, hasMore, loadingMore, onLoadMore }, (id) => {
     const at = images.findIndex((i) => selectionIds(i).includes(id));
@@ -120,12 +128,15 @@ export function ImageGrid({
 
   const virtualRows = virtualizer.getVirtualItems();
   const lastIndex = virtualRows[virtualRows.length - 1]?.index ?? -1;
+  const measured = width > 0;
   useEffect(() => {
-    if (hasMore && !loadingMore && lastIndex >= rows.length - 4) onLoadMore?.();
-  }, [lastIndex, rows.length, hasMore, loadingMore, onLoadMore]);
+    if (shouldLoadMore({ hasMore, loadingMore, measured, lastRendered: lastIndex, rowCount: rows.length, ahead: 4 })) onLoadMore?.();
+  }, [lastIndex, rows.length, measured, hasMore, loadingMore, onLoadMore]);
+
+  const pointerEvents = useScrollPointerLock(containerRef, virtualizer.isScrolling);
 
   return (
-    <div ref={containerRef} className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+    <div ref={containerRef} className="relative w-full" style={{ height: virtualizer.getTotalSize(), pointerEvents }}>
       {virtualRows.map((vr) => {
         const row = rows[vr.index]!;
         return (
@@ -142,23 +153,17 @@ export function ImageGrid({
                 <Tile
                   key={image.id}
                   image={image}
+                  index={index}
                   width={w}
                   height={row.height}
                   selected={selected}
                   flash={flash.has(image.id)}
                   selectable={!!selectionScope}
                   selecting={selecting}
-                  onClick={(e) => handleClick(e, image, index)}
-                  onToggle={() => toggleImageSelection(image)}
-                  // 触屏长按：进入多选并选中这一张（A1）；已经选中的不动
-                  onLongPress={selectionScope ? () => void (!selected && toggleImageSelection(image)) : undefined}
-                  onFavorite={
-                    canFavorite
-                      ? () => favorite.mutate({ ids: selectionIds(image), value: !(image.collectionGroup?.allFavorite ?? image.favorite) })
-                      : undefined
-                  }
-                  overlay={renderOverlay?.(image)}
-                  badges={renderBadges?.(image)}
+                  canFavorite={canFavorite}
+                  actions={actions}
+                  renderOverlay={renderOverlay}
+                  renderBadges={renderBadges}
                   rated={rated?.(image)}
                   blurContext={blurContext}
                 />
@@ -202,6 +207,70 @@ export function useGridBox() {
     };
   }, [scrollRef]);
   return { scrollRef, containerRef, width, scrollMargin };
+}
+
+/** 滚动锁着的时候，鼠标累计真的挪了这么多像素就算「要去点什么了」（转滚轮时手上的轻微晃动不算） */
+const POINTER_RELEASE_PX = 4;
+
+/**
+ * 滚动期间网格不吃指针（ImageGrid、CardGrid 共用；只在能悬停的设备上，触屏不变）：返回给网格容器的 pointer-events。
+ *
+ * 鼠标停在图上滚的时候，内容从指针下面滑过，每滚一下就换一个被悬停的格子，进、出各起几个过渡，
+ * 其中阴影、描边不能交给合成器，每帧都要重算样式、重绘。滚动时让网格不吃指针，这些就都不发生。
+ * 滚动一停（虚拟列表的 isScrolling：最后一次滚动事件后 150ms）就恢复。锁着的时候：
+ *   - 鼠标真的动了（要去点什么）：马上放开，不等滚动停下；
+ *   - 点了一下（滚轮刚停、触控板惯性的尾巴上）：这一下落在网格底下的滚动容器上，这里转给指针底下的那个格子，不会点了没反应。
+ */
+export function useScrollPointerLock(containerRef: RefObject<HTMLElement | null>, isScrolling: boolean): 'none' | undefined {
+  const { hover } = useViewport();
+  // 这一段滚动里已经放开过（鼠标动了、点过）：到滚动停下为止不再锁
+  const [released, setReleased] = useState(false);
+  if (released && !isScrolling) setReleased(false);
+  const locked = hover && isScrolling && !released;
+  useEffect(() => {
+    if (!locked) return;
+    let moved = 0;
+    const onMove = (e: PointerEvent) => {
+      // 滚动时浏览器为了更新悬停补发的移动没有位移，不算
+      moved += Math.abs(e.movementX) + Math.abs(e.movementY);
+      if (moved >= POINTER_RELEASE_PX) setReleased(true);
+    };
+    // 锁着时按下：先放开，抬起才落得到格子上。这一下的 click 会发到网格的容器（按下和抬起的共同祖先），
+    // 转发监听挂在 window 上、不随这个 effect 清理：按下之后锁解开（setReleased 触发重渲染）也不会丢这一下
+    const onDown = (e: PointerEvent) => {
+      const grid = containerRef.current;
+      if (!grid || !(e.target instanceof Node) || !e.target.contains(grid)) return;
+      grid.style.pointerEvents = '';
+      setReleased(true);
+      const once = (ce: MouseEvent) => {
+        window.removeEventListener('click', once, true);
+        forwardClick(containerRef.current, ce);
+      };
+      window.addEventListener('click', once, true);
+      // 拖出去、没有 click 的话，下一次按下时摘掉（这个监听要到下一次按下才会触发）
+      window.addEventListener('pointerdown', () => window.removeEventListener('click', once, true), { capture: true, once: true });
+    };
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerdown', onDown, true);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerdown', onDown, true);
+    };
+  }, [locked, containerRef]);
+  return locked ? 'none' : undefined;
+}
+
+/** 把落到网格容器上的那一下点击转给指针底下的格子；悬停才出现的小按钮（心形、勾选圈）这时看不见，转给格子本身 */
+function forwardClick(grid: HTMLElement | null, e: MouseEvent) {
+  if (!grid || !(e.target instanceof Node) || !e.target.contains(grid)) return;
+  let under = document.elementFromPoint(e.clientX, e.clientY);
+  if (!under || !grid.contains(under)) return;
+  const control = under.closest('button');
+  if (control && getComputedStyle(control).opacity === '0') under = control.closest('[data-image-id]')?.querySelector('button') ?? under;
+  const { clientX, clientY, screenX, screenY, ctrlKey, shiftKey, altKey, metaKey, button, detail } = e;
+  under.dispatchEvent(
+    new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, view: window, detail, clientX, clientY, screenX, screenY, ctrlKey, shiftKey, altKey, metaKey, button }),
+  );
 }
 
 /**
@@ -280,6 +349,36 @@ export function useGridInteractions(images: ImageItem[], selectionScope?: string
   return { selection, selecting, handleClick, gridId, ids };
 }
 
+/** 格子上的点击、勾选、长按、收藏（ImageGrid、CardGrid 共用） */
+export interface TileActions {
+  open: (e: React.MouseEvent, image: ImageItem, index: number) => void;
+  toggle: (image: ImageItem) => void;
+  /** 触屏长按：进入多选并选中这一张（A1）；已经选中的不动 */
+  longPress: (image: ImageItem, selected: boolean) => void;
+  favorite: (image: ImageItem) => void;
+}
+
+/**
+ * 格子是 memo 的：传给它的动作引用固定，调用时才取最新的实现。
+ * 不然网格每渲染一次（滚过一行、看图器翻一张、勾选一张）都会给每格新建闭包，屏上七八十格全部跟着重渲染
+ */
+export function useTileActions(
+  handleClick: (e: React.MouseEvent, image: ImageItem, index: number) => void,
+  favorite?: (image: ImageItem) => void,
+): TileActions {
+  const latest = useRef({ handleClick, favorite });
+  latest.current = { handleClick, favorite };
+  return useMemo(
+    () => ({
+      open: (e, image, index) => latest.current.handleClick(e, image, index),
+      toggle: (image) => toggleImageSelection(image),
+      longPress: (image, selected) => void (!selected && toggleImageSelection(image)),
+      favorite: (image) => latest.current.favorite?.(image),
+    }),
+    [],
+  );
+}
+
 /**
  * 页头的「选择」（A1）：触屏上没有悬停出现的勾选圈，给一个看得见的入口；点了进入多选，之后点按图片是勾选。
  * 只在触屏上显示（外层 hidden touch:contents），电脑上照旧悬停勾选圈、Ctrl+点击。
@@ -356,24 +455,28 @@ export function MountFrame({ selected }: { selected: boolean }) {
   );
 }
 
-function Tile({
+/**
+ * 一格。memo：props 只有值和固定引用（actions、父页面给的 renderOverlay / renderBadges），
+ * 网格重渲染时只有真的变了的格子（乐观补丁换掉的那一项、勾选变了的、新进来的行）跟着重渲染
+ */
+const Tile = memo(function Tile({
   image,
+  index,
   width,
   height,
   selected,
   selectable,
   selecting,
-  onClick,
-  onToggle,
-  overlay,
-  badges,
+  canFavorite,
+  actions,
+  renderOverlay,
+  renderBadges,
   rated,
   blurContext,
-  onFavorite,
   flash,
-  onLongPress,
 }: {
   image: ImageItem;
+  index: number;
   width: number;
   height: number;
   selected: boolean;
@@ -381,18 +484,21 @@ function Tile({
   flash?: boolean;
   selectable: boolean;
   selecting: boolean;
-  onClick: (e: React.MouseEvent) => void;
-  onToggle: () => void;
-  overlay?: ReactNode;
-  badges?: ReactNode;
+  canFavorite: boolean;
+  actions: TileActions;
+  renderOverlay?: (image: ImageItem) => ReactNode;
+  renderBadges?: (image: ImageItem) => ReactNode;
   rated?: boolean;
   blurContext?: BlurContext;
-  onFavorite?: () => void;
-  /** 触屏长按（lib/useLongPress.ts） */
-  onLongPress?: () => void;
 }) {
   const thumbWidth = gridThumbWidth(width);
-  const longPress = useLongPress(onLongPress);
+  // 触屏长按（lib/useLongPress.ts）
+  const longPress = useLongPress(selectable ? () => actions.longPress(image, selected) : undefined);
+  const onClick = (e: React.MouseEvent) => actions.open(e, image, index);
+  const onToggle = () => actions.toggle(image);
+  const onFavorite = canFavorite ? () => actions.favorite(image) : undefined;
+  const overlay = renderOverlay?.(image);
+  const badges = renderBadges?.(image);
   const starred = image.collectionGroup?.allFavorite ?? image.favorite;
   const names = !selecting && width >= 120 && height >= 120;
   return (
@@ -486,7 +592,7 @@ function Tile({
       {selectable && <SelectCircle selected={selected} selecting={selecting} onToggle={onToggle} />}
     </div>
   );
-}
+});
 
 /** 网格加载中的骨架 */
 export function ImageGridSkeleton({ rows = 3, rowHeight = 240 }: { rows?: number; rowHeight?: number }) {
@@ -506,8 +612,7 @@ export function ImageGridSkeleton({ rows = 3, rowHeight = 240 }: { rows?: number
 }
 
 
-/** 网格格子按实际像素宽度选缩略图档位 */
-function gridThumbWidth(width: number): 240 | 480 | 960 {
-  const px = width * (window.devicePixelRatio || 1);
-  return px > 480 ? 960 : px > 240 ? 480 : 240;
+/** 网格格子按实际像素宽度选缩略图档位（规则在 lib/thumbTier.ts） */
+function gridThumbWidth(width: number) {
+  return gridThumbTier(width, window.devicePixelRatio);
 }

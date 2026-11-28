@@ -55,6 +55,16 @@ export const useRunningJob = (kind?: Job['kind']) =>
     return running.find((j) => j.kind === 'tag') ?? running[0] ?? null;
   });
 
+/** 这一种任务有没有在跑（useIsJobRunning 的选择器，单独拿出来好测） */
+export const isJobRunning = (jobs: Record<string, Job>, kind: Job['kind']): boolean =>
+  Object.values(jobs).some((j) => j.status === 'running' && j.kind === kind);
+
+/**
+ * 只看「有没有在跑」的地方用它（首页整页、待处理卡片）：返回布尔值，任务的进度事件每 150ms 来一条，值不变就不重渲染。
+ * 要显示进度的（导入面板、横幅）才用 useRunningJob，它每条事件都换一个 Job 对象
+ */
+export const useIsJobRunning = (kind: Job['kind']) => useLiveJobs((s) => isJobRunning(s.jobs, kind));
+
 /** 全部正在运行的任务（侧栏任务环），识别在前 */
 export const useRunningJobs = () =>
   useLiveJobs(
@@ -71,6 +81,23 @@ const isRankQuery = (key: readonly unknown[]) => key[0] === 'works' || (key[0] =
 const isUnrecognizedList = (key: readonly unknown[]) => key[0] === 'unrecognized' && key[1] !== 'summary';
 /** 重复组：识别不会改变它，而真实库一次要传 6 MB（T22），识别期间只标记过期 */
 const isDuplicates = (key: readonly unknown[]) => key[0] === 'duplicates';
+
+/** 缓存里的一个查询，只看这里用到的两样（测试里的假 client 只给 queryKey） */
+interface CachedQuery {
+  queryKey: readonly unknown[];
+  state?: { data?: unknown; isInvalidated?: boolean };
+}
+/** 图库、角色的列表（Top 角色归排名类列表管） */
+const isPagedList = (key: readonly unknown[]) => key[0] === 'images' || (key[0] === 'characters' && key[1] !== 'top');
+/**
+ * 翻了不止一页的图库 / 角色列表：重拉就是已加载的每一页顺序重拉一遍（翻了 20 页是 20 个请求），列表还会在鼠标下挪位。
+ * 后台任务写库时这种列表只标记过期，最多 DEEP_LIST_MS 重拉一次（createInvalidator）；只有第一页的照常实时刷新
+ */
+export function isDeepList(q: CachedQuery): boolean {
+  const pages = (q.state?.data as { pages?: unknown } | undefined)?.pages;
+  return isPagedList(q.queryKey) && Array.isArray(pages) && pages.length > 1;
+}
+const DEEP_LIST_MS = 30_000;
 
 /**
  * 每种变化要刷新哪些查询（按 queryKey 的第一段；附录 #36）。changed 事件带着这次变了的事实，前端只刷新相关的查询，
@@ -103,6 +130,11 @@ export function matchesRoots(roots: ReadonlySet<string>, key: readonly unknown[]
   if (roots.has(String(key[0]))) return true;
   const q = key[1] as { poseClass?: unknown; posewearPose?: unknown } | undefined;
   return roots.has(POSE_LISTS) && key[0] === 'images' && !!(q?.poseClass || q?.posewearPose);
+}
+/** 这一批刷新碰不碰图库 / 角色的列表：all 全部，some 一部分（只有角色，或者只有按姿势筛的图库），none 不碰 */
+function listScope(roots: ReadonlySet<string> | null): 'all' | 'some' | 'none' {
+  if (!roots || (roots.has('images') && roots.has('characters'))) return 'all';
+  return roots.has('images') || roots.has('characters') || roots.has(POSE_LISTS) ? 'some' : 'none';
 }
 export const REFRESH: Record<DomainChange, readonly string[]> = {
   'image.added': WITH_FILES,
@@ -176,10 +208,23 @@ export function rootsFor(changes: readonly DomainChange[] | null | undefined, co
 }
 
 /**
+ * 可以放心放长 staleTime 的重列表（lib/queryClient.ts 给它们设 EVENT_FRESH_STALE_MS）：都在 IMAGE_VIEWS 里，
+ * 除了查重结果和姿势数据（不影响它们），每一种变化都会把它们标记过期，标记过的查询不看 staleTime，重连时全部刷新。
+ * 没放进来的：summary、stats 有按天变的数；artists 只在文件、手动改画师时刷新（识别顺带写的画师不刷它）；
+ * duplicates 的「默认保留」跟着合集归属变，而合集变了不刷它；search、unrecognized 汇总自己写着更短的时间。
+ * queryClient.test.ts 对着 REFRESH 核对这张表
+ */
+export const EVENT_FRESH_ROOTS = ['images', 'image', 'characters', 'character', 'works', 'work', 'collections', 'collection', 'content-kinds'] as const;
+export const EVENT_FRESH_STALE_MS = 10 * 60_000;
+
+/**
  * changed 事件 → 只让相关的 query 失效。用户和助手的操作马上刷新；后台任务的（扫描、识别……）节流 400ms，避免扫描时疯狂刷新。
  * 识别进行中每几秒来一次：排名类列表（作品网格、Top、最近在收）只标记过期、最多一分钟重拉一次，
  * 免得鼠标下的卡片不停换位（MS-6 / TR-12）；其余照常刷新。
- * 被压下的那次到时候要补上，不然识别结束前后的几次更新就一直停在过期状态，后面没有事件来补。
+ * 后台任务（扫描、识别……）写库时，翻了不止一页的图库 / 角色列表（isDeepList）也只标记过期、最多 30 秒重拉一次：
+ * 这种列表重拉一次就是已加载的每一页都拉一遍。不带变化类型的事件（任务结束兜底的那条、resync）照常全部刷新。
+ * 被压下的那次到时候要补上，不然任务结束前后的几次更新就一直停在过期状态，后面没有事件来补。
+ * 同一批里只要有一条是用户或助手的操作，整批按用户操作处理：马上刷新、什么都不压（写操作等的就是这一批）。
  *
  * invalidate 返回这次刷新的 promise（写操作等它，刷新完再算做完：前端只刷新一遍，见 settleRefresh）。
  * changes 不给（null）= 全部刷新（重连补不上、旧后端）
@@ -188,31 +233,67 @@ export function createInvalidator(client: QueryClient) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let rankTimer: ReturnType<typeof setTimeout> | undefined;
   let lastRankRefresh = 0;
-  // 攒着还没刷的：要刷的查询（null = 全部）、最后一次的 reason、等着它的 promise
-  let pending: { roots: Set<string> | null; reason?: LibraryChangedReason; done: Promise<void>; resolve: () => void } | null = null;
+  let listTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastListRefresh = 0;
+  // 翻页列表被压下、还没补拉的范围（同 pending.roots）。不靠查询上的过期标记认：翻到下一页成功后那个标记就没了
+  let owedLists: Set<string> | null = null;
+  // 攒着还没刷的：要刷的查询（null = 全部）、最后一次的 reason、这一批里有没有用户的操作、等着它的 promise
+  let pending: {
+    roots: Set<string> | null;
+    reason?: LibraryChangedReason;
+    userInitiated: boolean;
+    done: Promise<void>;
+    resolve: () => void;
+  } | null = null;
   const refreshRanks = () => {
     lastRankRefresh = Date.now();
     void client.invalidateQueries({ predicate: (q) => isRankQuery(q.queryKey) });
+  };
+  const refreshDeepLists = () => {
+    const roots = owedLists;
+    owedLists = null;
+    lastListRefresh = Date.now();
+    if (roots) void client.invalidateQueries({ predicate: (q) => isDeepList(q) && matchesRoots(roots, q.queryKey) });
   };
   const flush = () => {
     const p = pending;
     pending = null;
     clearTimeout(timer);
     if (!p) return;
-    const reason = p.reason;
-    const throttleRanks = reason === 'tag' && Date.now() - lastRankRefresh < 60_000;
+    const now = Date.now();
+    // 有用户的操作：整批不当后台事件（以前按最后一条的 reason 算，用户的操作会跟着后到的识别事件被压下）
+    const reason = p.userInitiated ? 'mutation' : p.reason;
+    const throttleRanks = reason === 'tag' && now - lastRankRefresh < 60_000;
+    // 全是后台任务的事件，而且知道变了什么：翻页列表可以缓一缓
+    const throttleLists = !p.userInitiated && p.roots !== null && now - lastListRefresh < DEEP_LIST_MS;
     const hit = (key: readonly unknown[]) => !p.roots || matchesRoots(p.roots, key);
     if (!p.roots || [...p.roots].some((r) => r === 'works' || r === 'characters')) {
       clearTimeout(rankTimer);
-      if (!throttleRanks) lastRankRefresh = Date.now();
+      if (!throttleRanks) lastRankRefresh = now;
       // 一分钟到了再补拉一次；至少隔 11 秒，等后端 10 秒的软缓存过期，不然拉回来的还是旧的
-      else rankTimer = setTimeout(refreshRanks, Math.max(lastRankRefresh + 60_000 - Date.now(), 11_000));
+      else rankTimer = setTimeout(refreshRanks, Math.max(lastRankRefresh + 60_000 - now, 11_000));
     }
-    const quiet = (key: readonly unknown[]) =>
-      (throttleRanks && isRankQuery(key)) || (reason === 'tag' && (isUnrecognizedList(key) || isDuplicates(key)));
+    const lists = listScope(p.roots);
+    if (throttleLists && p.roots && lists !== 'none') {
+      // 记下欠着的范围，30 秒到了补拉一次（同样至少隔 11 秒）
+      owedLists = new Set([...(owedLists ?? []), ...p.roots]);
+      clearTimeout(listTimer);
+      listTimer = setTimeout(refreshDeepLists, Math.max(lastListRefresh + DEEP_LIST_MS - now, 11_000));
+    } else if (lists !== 'none') {
+      lastListRefresh = now;
+      // 图库、角色的列表这次全都真的重拉了，欠着的不用补；只刷了一部分（只有角色、只有按姿势筛的）时欠着的照旧到点补
+      if (lists === 'all') {
+        clearTimeout(listTimer);
+        owedLists = null;
+      }
+    }
+    const quiet = (q: CachedQuery) =>
+      (throttleRanks && isRankQuery(q.queryKey)) ||
+      (reason === 'tag' && (isUnrecognizedList(q.queryKey) || isDuplicates(q.queryKey))) ||
+      (throttleLists && isDeepList(q));
     void Promise.all([
-      client.invalidateQueries({ predicate: (q) => hit(q.queryKey) && !quiet(q.queryKey) }),
-      client.invalidateQueries({ predicate: (q) => hit(q.queryKey) && quiet(q.queryKey), refetchType: 'none' }),
+      client.invalidateQueries({ predicate: (q) => hit(q.queryKey) && !quiet(q) }),
+      client.invalidateQueries({ predicate: (q) => hit(q.queryKey) && quiet(q), refetchType: 'none' }),
     ]).finally(p.resolve);
   };
   // reason：'mutation' 是用户或助手的操作，任务种类（scan、tag、thumbnail…）是那个后台任务写的库，'system' 是启动修补
@@ -221,19 +302,22 @@ export function createInvalidator(client: QueryClient) {
     if (!pending) {
       let resolve!: () => void;
       const done = new Promise<void>((r) => (resolve = r));
-      pending = { roots: new Set(), reason, done, resolve };
+      pending = { roots: new Set(), reason, userInitiated: false, done, resolve };
     }
     const cur = pending;
     cur.roots = roots && cur.roots ? new Set([...cur.roots, ...roots]) : null;
     cur.reason = reason;
+    // 不带 reason 的（resync）也算：它要的是马上全部刷新
+    if (reason === 'mutation' || reason === undefined) cur.userInitiated = true;
     clearTimeout(timer);
-    // 用户、助手的操作：马上刷新（同一轮里来的几条合在一起）；后台任务：节流
-    timer = setTimeout(flush, reason === 'mutation' ? 0 : 400);
+    // 用户、助手的操作：马上刷新（同一轮里来的几条合在一起，后到的后台事件不再把它往后拖）；后台任务：节流
+    timer = setTimeout(flush, cur.userInitiated ? 0 : 400);
     return cur.done;
   };
   const dispose = () => {
     clearTimeout(timer);
     clearTimeout(rankTimer);
+    clearTimeout(listTimer);
   };
   return { invalidate, dispose };
 }
@@ -365,7 +449,25 @@ export function openEventStream(
     };
   };
   connect();
+  // 离开页面（换地址、刷新）时关掉：页面进了浏览器的往返缓存还会一直占着连接，
+  // 同一个窗口里来回五六次就把浏览器对本机的 6 条连接占满，新页面的请求全部排队（实测卡 9–47 秒）。从往返缓存回来再连
+  const hide = () => {
+    clearTimeout(retry);
+    source?.close();
+    source = undefined;
+  };
+  const show = (e: PageTransitionEvent) => {
+    if (e.persisted && !source) {
+      delay = 1000;
+      connect();
+    }
+  };
+  const win = typeof window === 'undefined' ? null : window;
+  win?.addEventListener('pagehide', hide);
+  win?.addEventListener('pageshow', show);
   return () => {
+    win?.removeEventListener('pagehide', hide);
+    win?.removeEventListener('pageshow', show);
     clearTimeout(retry);
     source?.close();
   };

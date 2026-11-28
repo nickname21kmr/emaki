@@ -1,6 +1,6 @@
-import type { QueryClient } from '@tanstack/react-query';
+import { InfiniteQueryObserver, QueryClient, QueryObserver } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createInvalidator, openEventStream } from './events';
+import { createInvalidator, isDeepList, openEventStream } from './events';
 
 interface Call {
   predicate: (q: { queryKey: readonly unknown[] }) => boolean;
@@ -90,6 +90,231 @@ describe('createInvalidator：识别中排名列表的节流', () => {
     dispose();
     vi.advanceTimersByTime(5 * 60_000);
     expect(rankRefetches(calls)).toBe(1);
+  });
+});
+
+describe('createInvalidator：后台任务写库时，翻了几页的图库 / 角色列表少重拉', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  interface Page {
+    items: number[];
+    next: number | null;
+  }
+  /** 真 QueryClient 上挂一个已经翻了 pages 页的无限列表（有观察者，算在用）；rounds() 是整链重拉了几轮 */
+  function mountList(client: QueryClient, key: unknown[], pages: number) {
+    let calls = 0;
+    const page = (i: number): Page => ({ items: [i], next: i + 1 < pages ? i + 1 : null });
+    client.setQueryData(key, { pages: Array.from({ length: pages }, (_, i) => page(i)), pageParams: Array.from({ length: pages }, (_, i) => i) });
+    const observer = new InfiniteQueryObserver(client, {
+      queryKey: key,
+      queryFn: ({ pageParam }) => {
+        calls++;
+        return Promise.resolve(page(pageParam));
+      },
+      initialPageParam: 0,
+      getNextPageParam: (last: Page) => last.next ?? undefined,
+      staleTime: Infinity,
+    });
+    const off = observer.subscribe(() => {});
+    return { rounds: () => calls / pages, stale: () => client.getQueryState(key)?.isInvalidated, off };
+  }
+  /** 普通查询（未识别列表、作品这些），fetches() 是重拉了几次 */
+  function mountQuery(client: QueryClient, key: unknown[]) {
+    let calls = 0;
+    client.setQueryData(key, []);
+    const off = new QueryObserver(client, { queryKey: key, queryFn: () => Promise.resolve([++calls]), staleTime: Infinity }).subscribe(() => {});
+    return { fetches: () => calls, off };
+  }
+  const setup = () => {
+    const client = new QueryClient();
+    const { invalidate, dispose } = createInvalidator(client);
+    const deep = mountList(client, ['images', { kind: ['illustration'] }], 3);
+    const firstPage = mountList(client, ['images', { sort: 'addedAt' }], 1);
+    const shelf = mountList(client, ['characters', { sort: 'imageCount' }], 2);
+    /** 一条后台事件，等它的 400ms 节流和重拉跑完 */
+    const background = async (reason: 'scan' | 'tag' = 'tag') => {
+      void invalidate(reason, reason === 'scan' ? ['image.added'] : ['evidence.changed']);
+      await vi.advanceTimersByTimeAsync(400);
+    };
+    return { client, invalidate, dispose, deep, firstPage, shelf, background };
+  };
+
+  it('isDeepList：图库、角色（不含 Top）的无限列表翻到第二页起才算', () => {
+    const pages = (n: number) => ({ data: { pages: Array.from({ length: n }, () => ({})), pageParams: [] } });
+    expect(isDeepList({ queryKey: ['images', {}], state: pages(2) })).toBe(true);
+    expect(isDeepList({ queryKey: ['images', {}], state: pages(1) })).toBe(false);
+    expect(isDeepList({ queryKey: ['characters', { sort: 'name' }], state: pages(3) })).toBe(true);
+    expect(isDeepList({ queryKey: ['characters', 'top', {}], state: pages(3) })).toBe(false);
+    expect(isDeepList({ queryKey: ['unrecognized', 'art'], state: pages(3) })).toBe(false);
+    // 首页每日一图这种普通查询、还没取到数据的、测试里只给 queryKey 的
+    expect(isDeepList({ queryKey: ['images', 'daily', 's', false], state: { data: { items: [] } } })).toBe(false);
+    expect(isDeepList({ queryKey: ['images', {}], state: { data: undefined } })).toBe(false);
+    expect(isDeepList({ queryKey: ['images', {}] })).toBe(false);
+  });
+
+  it('扫描 / 识别的事件：翻了 3 页的只标记过期，只有第一页的照常重拉；30 秒到了补拉一次，之后不再拉', async () => {
+    const { dispose, deep, firstPage, shelf, background } = setup();
+    // 头一条放行（之前没刷过）
+    await background('scan');
+    expect([deep.rounds(), shelf.rounds(), firstPage.rounds()]).toEqual([1, 1, 1]);
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(2600);
+      await background(i % 2 ? 'scan' : 'tag');
+    }
+    // 第 15.4 秒：翻页的两个都没再拉，标着过期；第一页的每条都拉了
+    expect([deep.rounds(), shelf.rounds(), firstPage.rounds()]).toEqual([1, 1, 6]);
+    expect([deep.stale(), shelf.stale()]).toEqual([true, true]);
+    // 上次真的刷新在第 0.4 秒，第 30.4 秒补
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(deep.rounds()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect([deep.rounds(), shelf.rounds(), firstPage.rounds()]).toEqual([2, 2, 6]);
+    expect(deep.stale()).toBe(false);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect([deep.rounds(), shelf.rounds()]).toEqual([2, 2]);
+    dispose();
+  });
+
+  it('任务一直在跑：大约 30 秒重拉一轮，不是每条事件一轮', async () => {
+    const { dispose, deep, firstPage, background } = setup();
+    await background();
+    for (let i = 0; i < 40; i++) {
+      await vi.advanceTimersByTimeAsync(2600);
+      await background();
+    }
+    // 两分钟 41 条事件：第 0.4、30.4、60.4、90.4、120.4 秒各一轮
+    expect(deep.rounds()).toBe(5);
+    expect(firstPage.rounds()).toBe(41);
+    dispose();
+  });
+
+  it('最后一条被压下的离 30 秒到期很近时，至少再等 11 秒（躲过后端的软缓存）', async () => {
+    const { dispose, deep, background } = setup();
+    await background();
+    await vi.advanceTimersByTimeAsync(25_000);
+    await background(); // 第 25.8 秒处理完，窗口第 30.4 秒到期
+    await vi.advanceTimersByTimeAsync(10_999);
+    expect(deep.rounds()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(deep.rounds()).toBe(2);
+    dispose();
+  });
+
+  it('用户的操作一律马上重拉，欠着的那次不用再补', async () => {
+    const { invalidate, dispose, deep, shelf, background } = setup();
+    await background();
+    await vi.advanceTimersByTimeAsync(2600);
+    await background();
+    expect(deep.rounds()).toBe(1);
+    void invalidate('mutation', ['curation.favoriteChanged'], 'curation.setFavorite');
+    await vi.advanceTimersByTimeAsync(0);
+    expect([deep.rounds(), shelf.rounds()]).toEqual([2, 2]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect([deep.rounds(), shelf.rounds()]).toEqual([2, 2]);
+    dispose();
+  });
+
+  it('不带变化类型的事件（任务结束兜底的那条、resync）一律全部重拉', async () => {
+    const { invalidate, dispose, deep, background } = setup();
+    await background();
+    await vi.advanceTimersByTimeAsync(2600);
+    await background();
+    void invalidate('tag');
+    await vi.advanceTimersByTimeAsync(400);
+    expect(deep.rounds()).toBe(2);
+    await vi.advanceTimersByTimeAsync(2600);
+    await background();
+    void invalidate(undefined, null);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deep.rounds()).toBe(3);
+    dispose();
+  });
+
+  it('用户的操作和识别事件落在同一批：按用户的操作处理，马上刷新、什么都不压', async () => {
+    const { client, invalidate, dispose, deep, background } = setup();
+    const triage = mountQuery(client, ['unrecognized', 'art', 'all']);
+    const works = mountQuery(client, ['works', {}]);
+    await background();
+    expect([deep.rounds(), triage.fetches(), works.fetches()]).toEqual([1, 0, 1]);
+    await vi.advanceTimersByTimeAsync(2600);
+    // 用户刚点了「归入」，同一轮里紧跟着来了一条识别的事件
+    let settled = false;
+    void invalidate('mutation', ['curation.charactersChanged'], 'curation.link').then(() => (settled = true));
+    void invalidate('tag', ['evidence.changed']);
+    await vi.advanceTimersByTimeAsync(0);
+    // 不等 400ms；翻页的图库、未识别列表、作品（一分钟内刚拉过）都真的重拉了
+    expect([deep.rounds(), triage.fetches(), works.fetches()]).toEqual([2, 1, 2]);
+    expect(settled).toBe(true);
+    // 反过来（识别事件在前、用户操作在后）一样
+    await vi.advanceTimersByTimeAsync(3000);
+    void invalidate('tag', ['evidence.changed']);
+    void invalidate('mutation', ['curation.charactersChanged'], 'curation.link');
+    await vi.advanceTimersByTimeAsync(0);
+    expect([deep.rounds(), triage.fetches(), works.fetches()]).toEqual([3, 2, 3]);
+    dispose();
+  });
+
+  it('欠着的范围自己记着：中间翻到下一页（查询上的过期标记被清掉）也照样补', async () => {
+    const { client, dispose, deep, background } = setup();
+    await background();
+    await vi.advanceTimersByTimeAsync(2600);
+    await background();
+    expect(deep.stale()).toBe(true);
+    // 取到新的一页：数据更新成功，过期标记没了
+    client.setQueryData(['images', { kind: ['illustration'] }], (d: unknown) => d);
+    expect(deep.stale()).toBe(false);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(deep.rounds()).toBe(2);
+    dispose();
+  });
+
+  it('只刷新了一部分列表的操作（标记看过只刷角色）不取消图库欠着的那次', async () => {
+    const { invalidate, dispose, deep, shelf, background } = setup();
+    await background();
+    await vi.advanceTimersByTimeAsync(2600);
+    await background();
+    void invalidate('mutation', [], 'catalog.markSeen');
+    await vi.advanceTimersByTimeAsync(0);
+    expect([deep.rounds(), shelf.rounds()]).toEqual([1, 2]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(deep.rounds()).toBe(2);
+    dispose();
+  });
+
+  it('提取姿势：按姿势筛的图库翻了几页也一样缓着拉，普通图库始终不碰', async () => {
+    const { client, invalidate, dispose, deep } = setup();
+    const posed = mountList(client, ['images', { poseClass: 'full_03' }], 2);
+    const pose = async () => {
+      void invalidate('pose', ['pose.changed']);
+      await vi.advanceTimersByTimeAsync(400);
+    };
+    await pose();
+    expect(posed.rounds()).toBe(1);
+    for (let i = 0; i < 4; i++) {
+      await vi.advanceTimersByTimeAsync(2600);
+      await pose();
+    }
+    expect(posed.rounds()).toBe(1);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(posed.rounds()).toBe(2);
+    expect(deep.rounds()).toBe(0);
+    dispose();
+  });
+
+  it('dispose 后不再补拉', async () => {
+    const { dispose, deep, background } = setup();
+    await background();
+    await vi.advanceTimersByTimeAsync(2600);
+    await background();
+    dispose();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(deep.rounds()).toBe(1);
   });
 });
 

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import { Kbd, SearchInput, Segmented, Tooltip } from '@/components/ui';
 import { modKeyLabel } from '@/lib/hotkeys';
 import type { CharactersView } from '@/lib/stores';
+import { useDebouncedCommit } from '@/lib/useDebounced';
 
 const VIEW_OPTIONS = [
   { value: 'shelf' as const, label: '书架', icon: <LayoutGrid /> },
@@ -39,14 +40,11 @@ export function SearchBar({
     }
   }, [q]);
 
-  useEffect(() => {
-    if (draft === pushed.current) return;
-    const t = window.setTimeout(() => {
-      pushed.current = draft;
-      commitRef.current(draft);
-    }, 250);
-    return () => window.clearTimeout(t);
-  }, [draft]);
+  // 拼音还没上屏时不写进网址（不然列表先按拼音搜一遍、变成「没有找到」），上屏后马上写
+  useDebouncedCommit(draft, 250, draft !== pushed.current, (v) => {
+    pushed.current = v;
+    commitRef.current(v);
+  });
 
   const commitNow = (v: string) => {
     setDraft(v);

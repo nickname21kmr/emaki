@@ -142,7 +142,8 @@ HTTP 路由、MCP 工具的参数校验都用注册表里的 schema（`http/rout
 ### 4. 服务端数据走 TanStack Query，UI 状态走 zustand
 - 服务端数据只存在 Query 缓存里。失效按事件类型（P6，附录 #36）：每次提交后端推一条 SSE `changed`（这次变了哪些事实），`lib/events.ts` 的 `REFRESH` 把它映射成要失效的查询；
   写操作成功后**不再自己全部 invalidate**，而是等响应头 `x-emaki-event` 那条事件的刷新做完（`settleRefresh`，只刷新一遍），SSE 断着时才按 `x-emaki-changes` 自己刷新。
-  后台任务的事件节流 400 ms，识别中排名列表最多一分钟拉一次；断线重连按 Last-Event-ID 补发，补不上收到 `resync` 全部刷新。
+  后台任务的事件节流 400 ms，识别中排名列表最多一分钟拉一次，翻了不止一页的图库 / 角色列表最多 30 秒重拉一次（同一批里有用户操作就整批马上刷新）；断线重连按 Last-Event-ID 补发，补不上收到 `resync` 全部刷新。
+  缓存缺省 30 秒过期、30 分钟回收；事件覆盖全的重列表（`EVENT_FRESH_ROOTS`）放到 10 分钟过期（`lib/queryClient.ts`）。
 - zustand 只放纯 UI 状态：本机偏好（持久化）、看图器、多选、撤销栈、浮层开关。
 - 页面筛选条件放 URL 查询参数，刷新 / 前进后退都保留；会影响查询结果的本机偏好（图库的类型、收拢组图）也写进 URL（见「读模型」）。
 
@@ -262,7 +263,8 @@ return this.ctx.mutate((u) => {
 3. 决定：手动的（角色、收藏、分级、原创、来源、手动类型……）都挂在 id 上，原样保留；自动关联先留着，过期的模型证据不再拿来**新加**关联（`decideAuto` 规则 5），
    新证据到了（重新识别写入）由 `reevaluateAuto` 按 D2 撤回不再被支持的。
 4. 排队：查重标记（`markDedupeDirty`）、识别（`queueTagging`）、缩略图（`queueAnalysis`）、合集按目录重算，都是订阅这条变化的反应。
-撤销替换也是一次文件内容变化，同样处理。缩略图、原图都按 sha 做 ETag，前端按 `modifiedAt` 带版本取，换了文件不会看到旧缩略图。
+撤销替换也是一次文件内容变化，同样处理。缩略图、原图都按 sha 做 ETag，前端按 `modifiedAt` 带版本取（地址里的 `v`），换了文件地址就变，不会看到旧缩略图；
+缩略图地址里的版本和库里现在的对得上时，服务端才让浏览器长期缓存（见「7. 图片展示」）。
 
 **派生数据的版本**（附录 #23，`propagation/versions.ts`，迁移 037）：来源解析（`source`）、类型判定（`classification`）、合集判定（`collections`）
 上次整体重算用的版本统一记在 `derived_versions`。启动时对一遍：版本对不上就整体重算一次再记下（类型判定只重算 `content_kind_version` 过期的行）；
@@ -315,7 +317,9 @@ SSE 里 `job`、`job-item` 是进度（不编号、不补发）；`changed`、`c
 
 ### 7. 图片展示
 - `Thumb`：主色占位（`dominantColor`）→ 缩略图淡入；敏感分级按偏好模糊。
-- 缩略图三档宽度 240/480/960（webp），按 sha256 缓存，没人引用的由缓存回收删掉（见「分析模块」）。图片 id 稳定（文件内容变了 id 不变），所以 HTTP 用按内容 sha 的 ETag + `private, no-cache`，不用 `immutable`。
+- 缩略图三档宽度 240/480/960（webp），按 sha256 缓存，没人引用的由缓存回收删掉（见「分析模块」）。图片 id 稳定（文件内容变了 id 不变），所以 HTTP 缺省是 ETag（内容 sha + 实际给出的档）+ `private, no-cache`，每次回来问。
+  缩略图的地址带了文件版本（`v=modifiedAt`，`imageUrl.thumb`）、和库里现在的对得上、给出的又正是请求的那一档时，才回 `private, max-age=2592000, immutable`：30 天内浏览器直接用缓存，不发请求。
+  版本对不上的、原图不在而退回别的档的照旧 `no-cache`；原图接口不变。换缩略图的生成方式时把 `apps/web/src/lib/api.ts` 的 `THUMB_VERSION`（地址里的 `tv`）加一，浏览器里存着的旧缩略图才不会接着用。
 - `ImageGrid`：等高行布局（justify.ts）+ `@tanstack/react-virtual` 行虚拟化 + 无限滚动，10 万张也不卡。
 
 ### 8. 角色识别（真实实现）

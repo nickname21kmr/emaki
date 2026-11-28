@@ -97,6 +97,71 @@ describe('收拢的快速路径', () => {
     expect(checked).toBe(4 * 2 * 5 * 4);
   });
 
+  it('文字搜索、按标签筛（命中的组那条用翻页的写法）：和整体分组的写法逐页一样', async () => {
+    await library();
+    const db = ds.ctx.db;
+    db.exec(`INSERT INTO tags (id, name, category) VALUES (1, 'thighhighs', 'general'), (2, 'long_hair', 'general'), (3, 'smile', 'general');`);
+    const tag = db.prepare('INSERT INTO image_tags (image_id, tag_id, score) VALUES (?, ?, 0.9)');
+    const r = rng(3);
+    for (let id = 1; id <= 60; id++) for (const t of [1, 2, 3]) if (r() < 0.35) tag.run(id, t);
+    ds.ctx.invalidate();
+    const filters: ListImagesQuery[] = [
+      { q: 'b_1' },
+      { q: 'thigh' },
+      { q: 'long', favorite: true },
+      { q: 'zzz' },
+      { tags: ['thighhighs'] },
+      { tags: ['long_hair', 'smile'] },
+      { tagsAll: ['thighhighs', 'smile'] },
+      { tagsNone: ['smile'] },
+    ];
+    let checked = 0;
+    for (const sort of ['addedAt', 'fileName', 'random'] as const)
+      for (const f of filters)
+        for (const limit of [1, 4, 100]) {
+          const q: ListImagesQuery = { ...f, sort, seed: sort === 'random' ? 5 : undefined, collapseCollections: true };
+          useWholeCollapseForTests(true);
+          const want = await walk(q, limit);
+          useWholeCollapseForTests(false);
+          const got = await walk(q, limit);
+          expect(got, JSON.stringify({ sort, f, limit })).toEqual(want);
+          checked++;
+        }
+    expect(checked).toBe(3 * 8 * 3);
+  });
+
+  it('随机排序也走快速路径：带种子、不带种子、各种筛选和页大小下，和整体分组的写法逐页一样', async () => {
+    await library();
+    const filters: ListImagesQuery[] = [{}, { favorite: true }, { rating: ['general'] }, { orientation: 'landscape' }, { includeWholeCollections: true, favorite: true }];
+    let checked = 0;
+    const orders = new Map<string, string>();
+    for (const seed of [undefined, 7, 1073741823])
+      for (const order of ['asc', 'desc'] as const)
+        for (const f of filters)
+          for (const limit of [1, 4, 7, 100]) {
+            const q: ListImagesQuery = { ...f, sort: 'random', seed, order, collapseCollections: true };
+            useWholeCollapseForTests(true);
+            const want = await walk(q, limit);
+            useWholeCollapseForTests(false);
+            const got = await walk(q, limit);
+            expect(got, JSON.stringify({ seed, order, f, limit })).toEqual(want);
+            // 一格不重、不漏：格数 = displayTotal
+            const cells = got.flatMap((p) => p.items.map((i) => String(i[0])));
+            expect(new Set(cells).size).toBe(cells.length);
+            expect(cells.length).toBe(got[0]!.displayTotal);
+            if (!Object.keys(f).length) {
+              // 同一个种子：正序倒序、每页几张都是同一个顺序
+              const key = String(seed);
+              if (!orders.has(key)) orders.set(key, cells.join());
+              expect(cells.join()).toBe(orders.get(key));
+            }
+            checked++;
+          }
+    expect(checked).toBe(3 * 2 * 5 * 4);
+    // 换一个种子就换一种顺序
+    expect(new Set(orders.values()).size).toBe(3);
+  });
+
   it('收拢后的总张数和格数：组图成员算进 total，一组只算一格', async () => {
     await library();
     const page = await ds.listImages({ collapseCollections: true, limit: 5 });

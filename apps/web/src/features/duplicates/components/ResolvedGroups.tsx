@@ -3,16 +3,27 @@ import { Equal } from 'lucide-react';
 import { Thumb } from '@/components/media/Thumb';
 import { Badge } from '@/components/ui';
 import { formatCount } from '@/lib/format';
+import { useIncremental } from '../useIncremental';
 import { kindLabel, tileRatio } from '../utils';
 
-/** 「已处理」视图：只读的回看列表，紧凑卡片网格。 */
+/** 每批显示几组：卡片小（最多四张缩略图），一批放够两三屏 */
+const STEP = 60;
+
+/**
+ * 「已处理」视图：只读的回看列表，紧凑卡片网格。
+ * 处理过的组只增不减（真实库有几千组）：照待处理列表的做法分批显示，滚到底附近再加一批，不一次挂上十几万个节点。
+ */
 export function ResolvedGroups({ groups }: { groups: DuplicateGroup[] }) {
+  const { count, hasMore, sentinelRef } = useIncremental(groups.length, STEP);
   return (
-    <div className="grid animate-fade-in grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
-      {groups.map((g) => (
-        <ResolvedCard key={g.id} group={g} />
-      ))}
-    </div>
+    <>
+      <div className="grid animate-fade-in grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
+        {groups.slice(0, count).map((g) => (
+          <ResolvedCard key={g.id} group={g} />
+        ))}
+      </div>
+      {hasMore && <div ref={sentinelRef} className="h-px" aria-hidden />}
+    </>
   );
 }
 

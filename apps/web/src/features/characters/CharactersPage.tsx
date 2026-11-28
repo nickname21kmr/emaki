@@ -20,6 +20,7 @@ import { TopBento } from './overview/TopBento';
 import { WorkChips } from './overview/WorkChips';
 import { WorksShelf } from './overview/WorksShelf';
 import { useWorkIndex } from './overview/works';
+import { restoreUnlessMoved } from './scrollRestore';
 import { EASE_OUT } from '@/lib/motion';
 import { PageBlocks, type BlockRenderers } from '@/blocks/PageBlocks';
 
@@ -211,7 +212,7 @@ export function CharactersPage() {
 
 /**
  * 按作用域记住滚动位置（MS-5）：从某部作品回到总览、浏览器后退时，回到原来的位置。
- * 存在 sessionStorage（读写都可能抛错，比如隐私模式），等淡入动画结束再恢复。
+ * 存在 sessionStorage（读写都可能抛错，比如隐私模式），等淡入动画结束再恢复；这半秒里用户自己先动了（滚轮、触摸、按键、按下鼠标）就不恢复，不把人拽走。
  */
 function useScrollMemory(scrollRef: React.RefObject<HTMLDivElement | null>, key: string) {
   useEffect(() => {
@@ -224,7 +225,7 @@ function useScrollMemory(scrollRef: React.RefObject<HTMLDivElement | null>, key:
     } catch {
       /* 读不到就不恢复 */
     }
-    const t = saved > 0 ? window.setTimeout(() => el.scrollTo({ top: saved }), 450) : undefined;
+    const cancelRestore = saved > 0 ? restoreUnlessMoved(window, () => el.scrollTo({ top: saved }), 450) : undefined;
     let raf = 0;
     const onScroll = () => {
       if (raf) return;
@@ -239,7 +240,7 @@ function useScrollMemory(scrollRef: React.RefObject<HTMLDivElement | null>, key:
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => {
-      window.clearTimeout(t);
+      cancelRestore?.();
       if (raf) cancelAnimationFrame(raf);
       el.removeEventListener('scroll', onScroll);
     };

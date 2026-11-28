@@ -1,4 +1,4 @@
-import type { ContentKind, LibrarySummary } from '@emaki/shared';
+import type { ContentKind, ImageItem, LibrarySummary } from '@emaki/shared';
 import { ArrowRight, FolderPlus, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
@@ -85,6 +85,19 @@ export function GalleryPage() {
   const onlyIllust = Array.isArray(filters.kind) && filters.kind.length === 1 && filters.kind[0] === 'illustration';
   // 混着看好几类时，非插画带类型小标记
   const showKind = !onlyIllust && !(Array.isArray(filters.kind) && filters.kind.length === 1);
+  // 格子是 memo 的：函数引用不变，翻下一页、收藏后列表更新时不用整屏重渲染
+  const renderBadges = useMemo(
+    () =>
+      showKind || lowIds.size
+        ? (img: ImageItem) => (
+            <>
+              {showKind && <KindBadge kind={img.kind} />}
+              {lowIds.has(img.id) && <PoseLowMark />}
+            </>
+          )
+        : undefined,
+    [showKind, lowIds],
+  );
 
   let body: ReactNode;
   if (list.isError && images.length === 0) {
@@ -156,16 +169,7 @@ export function GalleryPage() {
             loadingMore={isFetchingNextPage}
             onLoadMore={loadMore}
             rowHeight={rowHeight}
-            renderBadges={
-              showKind || lowIds.size
-                ? (img) => (
-                    <>
-                      {showKind && <KindBadge kind={img.kind} />}
-                      {lowIds.has(img.id) && <PoseLowMark />}
-                    </>
-                  )
-                : undefined
-            }
+            renderBadges={renderBadges}
           />
         </div>
         <GridFooter loadingMore={isFetchingNextPage} done={!hasNextPage} total={total} />

@@ -7,7 +7,7 @@ import { closeDatabase, openDatabase, type Db } from '../../db/connection.ts';
 import { migrate } from '../../db/migrate.ts';
 import { processPixels, thumbPath } from './pixels.ts';
 import { sharp } from './sharpConfig.ts';
-import { ThumbnailService } from './ThumbnailService.ts';
+import { ThumbnailService, type ThumbRow } from './ThumbnailService.ts';
 import { animationHtml } from '../../../test/helpers/htmlAnimation.ts';
 import { htmlAnimationCache } from './htmlAnimation.ts';
 import type { Change } from '../../propagation/changes.ts';
@@ -130,5 +130,58 @@ describe('ThumbnailService.runBackfill', () => {
     expect(r.dhash).toBe(want.dhash);
     expect(r.dominant_color).toBe(want.dominantColor);
     expect(svc.pendingCount()).toBe(0);
+  });
+});
+
+describe('ThumbnailService.ensure', () => {
+  let dir: string;
+  let thumbs: string;
+  let lib: string;
+  let db: Db;
+  let svc: ThumbnailService;
+  const row = (): ThumbRow => ({ id: 1, sha256: SHA, format: 'png', rel_path: 'a.png', root_path: lib.replaceAll('\\', '/') });
+
+  beforeEach(async () => {
+    dir = makeTmpDir('thumbsvc-ensure');
+    thumbs = path.join(dir, 'thumbs');
+    lib = path.join(dir, 'lib');
+    mkdirSync(lib);
+    const src = await original();
+    writeFileSync(path.join(lib, 'a.png'), src);
+    db = openDatabase(':memory:');
+    migrate(db);
+    db.prepare('INSERT INTO library_roots (id, path) VALUES (1, ?)').run(lib.replaceAll('\\', '/'));
+    db.prepare(`INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at)
+      VALUES (1, 1, 'a.png', 'a.png', 600, 800, ?, 'png', ?, '${T}', '${T}')`).run(src.length, SHA);
+    svc = new ThumbnailService({ db, thumbsRoot: thumbs, now: () => Date.parse(T) });
+  });
+
+  afterEach(() => {
+    closeDatabase(db);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('现做的、缓存里已有的，给的都是请求的那一档', async () => {
+    expect(await svc.ensure(row(), 480)).toEqual({ file: thumbPath(thumbs, SHA, 480), width: 480 });
+    expect(await svc.ensure(row(), 960)).toEqual({ file: thumbPath(thumbs, SHA, 960), width: 960 });
+    // 240 是做 480 时顺带写的：直接从缓存给
+    rmSync(path.join(lib, 'a.png'));
+    expect(await svc.ensure(row(), 240)).toEqual({ file: thumbPath(thumbs, SHA, 240), width: 240 });
+  });
+
+  it('原图不在了：退回缓存里有的别的档，width 是实际给出的那一档；一档都没有是 null', async () => {
+    await svc.ensure(row(), 480);
+    rmSync(path.join(lib, 'a.png'));
+    expect(await svc.ensure(row(), 960)).toEqual({ file: thumbPath(thumbs, SHA, 480), width: 480 });
+    expect(existsSync(thumbPath(thumbs, SHA, 960))).toBe(false);
+    rmSync(thumbs, { recursive: true });
+    expect(await svc.ensure(row(), 960)).toBeNull();
+  });
+
+  it('缓存文件被删掉以后再要：重新生成，不会给出一个不存在的文件', async () => {
+    const first = await svc.ensure(row(), 480);
+    rmSync(first!.file);
+    expect(await svc.ensure(row(), 480)).toEqual(first);
+    expect(existsSync(first!.file)).toBe(true);
   });
 });

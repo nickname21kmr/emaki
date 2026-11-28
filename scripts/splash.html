@@ -1,0 +1,357 @@
+<!doctype html>
+<!--
+  启动页：后端还没监听的那几秒，由 scripts/start.mjs（splash-server.mjs）在后端的端口上先给窗口看的一页。
+  和应用同一个地址，所以读得到应用存在 localStorage 里的主题和底色；后端接手端口后原地刷新，换成真正的应用。
+  不引用任何外部资源（这时候只有这一页能访问）。颜色照 apps/web/src/styles/index.css 各底色的
+  canvas / fg / fg-muted / brand / line 写死在下面，那边改了这里要跟着改（apps/server/test/startScripts.test.ts 会对）。
+-->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Emaki 絵巻</title>
+    <script>
+      // 和 apps/web/index.html 里那段是同一套判断：启动页和接下来的应用同一个明暗、同一种底色，换过去时不闪
+      (function () {
+        var pref = 'system';
+        try {
+          pref = localStorage.getItem('emaki.theme') || 'system';
+        } catch (e) {}
+        var dark = pref === 'dark' || (pref === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        var palette = 'washi';
+        try {
+          palette = JSON.parse(localStorage.getItem('emaki.prefs') || '{}').state.palette || 'washi';
+        } catch (e) {}
+        document.documentElement.dataset.palette = palette;
+      })();
+    </script>
+    <style>
+      :root {
+        color-scheme: light;
+        --canvas: #ece8e0;
+        --fg: #1c1a17;
+        --muted: #6b655b;
+        --brand: #c73a27;
+        --line: rgb(40 30 20 / 0.09);
+      }
+      [data-theme='dark'] {
+        color-scheme: dark;
+        --canvas: #0d0c0b;
+        --fg: #ece6dc;
+        --muted: #a39a8e;
+        --brand: #ee6242;
+        --line: rgb(255 244 228 / 0.08);
+      }
+      [data-palette='mono']:not([data-theme='dark']) {
+        --canvas: #eceef1;
+        --fg: #15171b;
+        --muted: #5d626b;
+        --brand: #15171b;
+        --line: rgb(15 18 25 / 0.09);
+      }
+      [data-palette='mono'][data-theme='dark'] {
+        --canvas: #000000;
+        --fg: #ededed;
+        --muted: #a3a3a3;
+        --brand: #ededed;
+        --line: rgb(255 255 255 / 0.08);
+      }
+      [data-palette='mint']:not([data-theme='dark']) {
+        --canvas: #dcebe4;
+        --fg: #16201c;
+        --muted: #586a62;
+        --brand: #2e7d5b;
+        --line: rgb(20 60 45 / 0.09);
+      }
+      [data-palette='mint'][data-theme='dark'] {
+        --canvas: #08110e;
+        --fg: #e3efe9;
+        --muted: #98ada4;
+        --brand: #7fd1a8;
+        --line: rgb(220 255 240 / 0.08);
+      }
+      [data-palette='sky']:not([data-theme='dark']) {
+        --canvas: #dbe6f0;
+        --fg: #151b23;
+        --muted: #596575;
+        --brand: #2f6fa8;
+        --line: rgb(20 45 75 / 0.09);
+      }
+      [data-palette='sky'][data-theme='dark'] {
+        --canvas: #080d14;
+        --fg: #e3eaf3;
+        --muted: #99a6b6;
+        --brand: #8cc1ee;
+        --line: rgb(220 235 255 / 0.08);
+      }
+      [data-palette='lilac']:not([data-theme='dark']) {
+        --canvas: #e6e1ef;
+        --fg: #1b1922;
+        --muted: #645e72;
+        --brand: #6b54a8;
+        --line: rgb(50 35 80 / 0.09);
+      }
+      [data-palette='lilac'][data-theme='dark'] {
+        --canvas: #0e0c13;
+        --fg: #ebe6f2;
+        --muted: #a59eb1;
+        --brand: #b9a6ef;
+        --line: rgb(240 230 255 / 0.08);
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        /* 和应用的 body 同一个底色（画卷外的桌面）：换成应用时侧栏和纸直接落在它上面 */
+        background: var(--canvas);
+        color: var(--fg);
+        font-family: system-ui, 'Segoe UI', 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        display: grid;
+        place-items: center;
+        user-select: none;
+        cursor: default;
+      }
+      main {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        /* 视觉上的正中比几何正中略高一点 */
+        padding: 0 24px 6vh;
+        text-align: center;
+        animation: fade-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
+      .emblem {
+        width: 64px;
+        height: 64px;
+        color: var(--brand);
+      }
+      h1 {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        margin: 18px 0 0;
+        font-size: 18px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        line-height: 1.4;
+      }
+      h1 span {
+        color: var(--muted);
+        font-family: 'Songti SC', 'Noto Serif CJK SC', 'Noto Serif SC', 'Source Han Serif SC', STSong, SimSun, serif;
+        font-size: 20px;
+        font-weight: 400;
+        letter-spacing: 0;
+      }
+      /* 徽记下面的那一块留固定的高度：从进度换成「没能启动」时徽记不跟着跳 */
+      .below {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        height: 124px;
+      }
+      /* 一条细线，一小段从左滑到右：和应用里总量未知的进度条是同一种画法，这里走得慢一些、匀一些 */
+      .bar {
+        position: relative;
+        flex: none;
+        width: 132px;
+        height: 2px;
+        margin-top: 26px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: var(--line);
+      }
+      .bar::after {
+        content: '';
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 33.333%;
+        border-radius: 999px;
+        background: var(--fg);
+        animation: indeterminate 1.8s cubic-bezier(0.45, 0, 0.3, 1) infinite;
+      }
+      p {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.7;
+        color: var(--muted);
+      }
+      #status {
+        margin-top: 14px;
+        min-height: 1.7em;
+      }
+      #reason,
+      #hint {
+        max-width: 40em;
+        text-wrap: balance;
+        user-select: text;
+        cursor: auto;
+      }
+      /* 没能启动 */
+      .failed .bar {
+        display: none;
+      }
+      .failed #status {
+        margin-top: 18px;
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--fg);
+      }
+      .failed #reason {
+        margin-top: 4px;
+      }
+      [hidden] {
+        display: none;
+      }
+      @keyframes fade-in {
+        from {
+          opacity: 0;
+        }
+      }
+      @keyframes indeterminate {
+        from {
+          transform: translateX(-100%);
+        }
+        to {
+          transform: translateX(300%);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        main,
+        .bar::after {
+          animation: none;
+        }
+        .bar::after {
+          left: 33.333%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main id="splash">
+      <!-- 徽记：和应用侧栏里的是同一枚（apps/web/src/components/ui/Emblem.tsx） -->
+      <svg class="emblem" viewBox="0 0 64 64" aria-hidden="true" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+        <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+          <rect width="64" height="64" fill="#fff" />
+          <rect x="23.4" y="21.4" width="17.2" height="22.2" rx="2.8" fill="#000" />
+        </mask>
+        <circle cx="32" cy="32" r="22.5" stroke-width="3" />
+        <path
+          d="M32 3.8 L35.6 8.4 L28.4 8.4 Z M32 60.2 L35.6 55.6 L28.4 55.6 Z M3.8 32 L8.4 28.4 L8.4 35.6 Z M60.2 32 L55.6 28.4 L55.6 35.6 Z"
+          fill="currentColor"
+          stroke-width="1.2"
+        />
+        <g mask="url(#cut)" stroke-width="2.4">
+          <rect x="20.6" y="21.5" width="13" height="17" rx="1.8" transform="rotate(-16 27 30)" />
+          <rect x="30.4" y="21.5" width="13" height="17" rx="1.8" transform="rotate(16 37 30)" />
+        </g>
+        <rect x="25" y="23" width="14" height="19" rx="1.8" stroke-width="2.4" />
+        <path d="M27.6 37.8 L31 33.9 L33.4 36.2 L35 34.8 L36.8 37.8" stroke-width="2" />
+        <circle cx="34.8" cy="28.2" r="1.5" fill="currentColor" stroke="none" />
+      </svg>
+      <h1>Emaki <span>絵巻</span></h1>
+      <div class="below">
+        <div class="bar"></div>
+        <p id="status" role="status">&nbsp;</p>
+        <p id="reason" hidden></p>
+        <p id="hint" hidden>详细信息在任务栏的黑色窗口里。关掉这个窗口后可以再打开试一次。</p>
+      </div>
+    </main>
+    <script>
+      (function () {
+        // 窗口和任务栏的图标：简化版徽记（apps/web/public/favicon.svg），颜色跟着底色
+        var brand = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim() || '#c73a27';
+        var icon = document.createElement('link');
+        icon.rel = 'icon';
+        icon.type = 'image/svg+xml';
+        icon.href =
+          'data:image/svg+xml,' +
+          encodeURIComponent(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" stroke="' + brand + '" stroke-linecap="round" stroke-linejoin="round">' +
+              '<circle cx="32" cy="32" r="21" stroke-width="6"/>' +
+              '<path d="M32 2 L39 10 L25 10 Z M32 62 L39 54 L25 54 Z M2 32 L10 25 L10 39 Z M62 32 L54 25 L54 39 Z" fill="' + brand + '" stroke-width="1"/>' +
+              '<rect x="23.5" y="21" width="17" height="22" rx="2.5" stroke-width="5"/></svg>',
+          );
+        document.head.appendChild(icon);
+
+        // scripts/start.mjs 报的阶段（splash-server.mjs 的 STAGES）
+        var TEXT = {
+          checking: '正在检查依赖…',
+          installing: '正在安装依赖，第一次会比较久…',
+          building: '正在构建界面…',
+          opening: '正在打开图库…',
+        };
+        // 这么久没有进展就当没能启动。安装依赖和构建本来就慢，启动器还在报进度时不算
+        var PATIENCE = 90000;
+        var root = document.getElementById('splash');
+        var status = document.getElementById('status');
+        var reason = document.getElementById('reason');
+        var hint = document.getElementById('hint');
+        /** 启动器上一次报的阶段 */
+        var stage = null;
+        /** 从什么时候起没有进展；stuck：已经等过头了 */
+        var quiet = Date.now();
+        var stuck = false;
+        /** 已经在刷新了 */
+        var leaving = false;
+
+        function progress(text) {
+          root.classList.remove('failed');
+          status.textContent = text;
+          reason.hidden = hint.hidden = true;
+        }
+        function failed(why) {
+          root.classList.add('failed');
+          status.textContent = '没能启动';
+          reason.textContent = why;
+          reason.hidden = !why;
+          hint.hidden = false;
+        }
+        function report(next, error) {
+          if (next === 'installing' || next === 'building' || next === 'opening' || next !== stage) {
+            quiet = Date.now();
+            stuck = false;
+          }
+          stage = next;
+          if (next === 'failed') failed(error || '');
+          else if (!stuck) progress(TEXT[next] || TEXT.opening);
+        }
+        function poll() {
+          fetch('/api/health', { cache: 'no-store' })
+            .then(function (res) {
+              if (res.ok) {
+                // 后端接手了：原地刷新，拿到的就是应用
+                leaving = true;
+                location.reload();
+                return;
+              }
+              return res.json().then(function (body) {
+                report(body.stage, body.error);
+              });
+            })
+            .catch(function () {
+              // 启动页把端口让给后端的那一瞬连不上；启动器退出了也是连不上。显示的内容先不动，接着试
+            })
+            .then(function () {
+              if (leaving) return;
+              if (!stuck && stage !== 'failed' && Date.now() - quiet > PATIENCE) {
+                stuck = true;
+                failed('等了很久，还是没有准备好。');
+              }
+              setTimeout(poll, 200);
+            });
+        }
+        // 第一次回应来得很快；万一这时正好连不上，先把最常见的那句放上
+        setTimeout(function () {
+          if (stage === null && !stuck) status.textContent = TEXT.opening;
+        }, 600);
+        poll();
+      })();
+    </script>
+  </body>
+</html>
