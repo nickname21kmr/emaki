@@ -216,7 +216,7 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 从上到下（T31）：
 - **首次导入面板** `ImportPanel`：7 天内有文件夹首次导入时显示，扫描、缩略图、识别、查重四步分别判断。
 - **统计条** `StatsStrip`：插画数（只数插画，旁边是 7 天柱状图，今天那根用朱色，下面写「另有 N 张在别册」）、角色数（识别中写「已看过 X%」，识别完写「已认出 X% 的插画」：分母是「插画 · 漫画」队列的范围，不含成册的页和漫画区）、作品数（「收得最多的是『…』」）、总体积；数字用 `RollingNumber`，都读 `useSummary()`。
-- **今日一枚** `DailyPlate`（SEL-9）：按日期种子每天抽一张大图版，右侧竖排角色名和图注；开着模糊时只抽已识别的全年龄图；R 换一张；「放映今天的 20 张」。
+- **今日一枚** `DailyPlate`（SEL-9）：按日期种子每天抽一张大图版，右侧竖排角色名和图注；开着模糊时只抽已识别的全年龄图；R 换一张；「放映今天的 20 张」。抽到之前按上次有没有图版（localStorage 里一个标记）先放同尺寸的占位，下面几块不被顶下去。
 - **待处理** `TriageCards`：未识别（等你确认的张数，另写「另有 N 本待整理」，汇总接口的 `triage`）、重复、能对上 Danbooru 的自建角色，按实际情况自适应，清空的显示「已清空」而不是隐藏。
 - **最近 30 天在收**：圆头像行（`AvatarTile`）；30 天内没有新图时换成「收得最多」（`CharacterCover` overlay）。
 - **最新入库** `LatestImages`，**别册** `AnnexIndex`（五类别册各一格，最后一格是「动图 · 筛选」，见「动图」）。
@@ -227,23 +227,25 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 目的：浏览全部插画，批量整理。
 
 - **头部**（sticky）：kicker「第一册 · 插画」，标题「图库」，副标题「6,147 张插画 · 另有 2,806 张在别册 →」。下面是类型目次 `KindIndex`（和别册共用）：「全部 N」· 插画 · 别册各类（类型印 + 斜体数字）·（细线）筛选 · 动图（D5，见「动图」），默认只显示插画，选「全部」写进 `usePrefs.galleryKinds`（D2，偏好里不认识的类型会去掉），当前看的类型一直写在 URL 的 `?kind=` 里（P5）；分类第一次生效后有一条可关闭的提示。再下面一行工具条：
-  - 左：`SearchInput`（搜文件名 / 标签，防抖 250ms，写入 `?q=`）
+  - 左：`SearchInput`（搜文件名 / 标签，防抖 250ms，写入 `?q=`；拼音没上屏时不写，上屏马上写，`lib/useDebounced.ts`）
   - 中：筛选 chip——分级（全年龄 / 轻微 / 较敏感 / 限制级，可多选）、方向（竖 / 横 / 方）、动图（`?anim=1`，在当前类型里只看动图）、画面（腿·足 / 胸 / 泳装 / 兽耳 / 女仆·和服 / 多人，T34e）、只看收藏
   - 右：排序 `Menu`（最近添加 / 修改时间 / 文件名 / 体积 / 随机）、升降序、行高 `Slider`（120–400，存 `usePrefs.gridRowHeight`）
 - **网格**：`ImageGrid`，`selectionScope="gallery"`，`useImagesInfinite(query)`。
 - **多选操作栏**：有选中时，底部居中浮起一条墨色胶囊工具栏（`fixed bottom-6`，`animate-rise`）：「已选 N 张」· 归到角色…（弹出角色搜索）· 收藏 · 设分级 · 排除 · 移到回收站 · 取消选择（Esc）。全选当前已加载（Ctrl+A）。调用 `api.bulkImages`。
-- 快捷键：Esc 取消选择，Ctrl+A 全选，E 排除选中，F 收藏选中。
+- 快捷键：Esc 取消选择，Ctrl+A 全选，E 排除选中，F 收藏选中，Delete 移到回收站（和按钮同一个动作，可撤销）。
+- 收藏是乐观更新（`useMutate` 的 `optimistic` + `lib/optimisticImages.ts` 的 `patchImages`）：先改缓存里的那几张，失败了改回去；会让图离开列表的动作不做乐观。做完就清空选择的动作，请求一回来选择栏就能接着用，不等整轮刷新（`lib/actionLock.ts`）。
+- 格子（`ImageGrid` 的 `Tile`、`CardGrid` 的 `Card`）是 `memo` 的，动作走 `useTileActions` 的固定引用；缩略图档位按实际像素选，留了余量（`lib/thumbTier.ts`：> 720 用 960，> 288 用 480）。有悬停的设备上滚动期间网格不吃指针。
 
 ### 看图器（`components/media/Lightbox.tsx`，归这个页面的实现者）
 
 全局组件，已有最小版本，需要做完整：
 
-- 全屏深色 scrim，图片居中 `object-contain`；先显示 960 宽缩略图（`imageUrl.thumb(id, 960)`）再换原图，避免白屏。
+- 全屏深色 scrim，图片居中 `object-contain`；先显示缩略图（垫一层网格里现成的 480，再叠 `imageUrl.thumb(id, 960)`）再换原图，避免白屏。
 - 右侧可折叠信息面板（320px，按 `I` 切换）：文件名、尺寸、体积、格式、入库时间、来源（pixiv 链接等）、分级（可改）、类型（六枚类型印，动图另起一行写依据，见「动图」）、角色（chip 列表，可移除，可添加——带搜索的弹出框，调用 `api.updateImage`）、tagger 建议（`characterSuggestions`，一键采纳）、标签（按 category 分组，score 用细进度条表示）、操作：收藏（F）、在资源管理器中显示、排除（E）、移到回收站。
-- 顶部：`index / total`、关闭。左右方向键切换，滚轮 / 双击放大（简单的 transform scale + 拖动即可）。
+- 顶部：`index / total`、关闭。左右方向键切换（空格 / PageDown 下一张，Shift+空格 / PageUp 上一张，Home 第一张，End 最后一张——整个列表载入完才有；用 Tab 把焦点停在按钮上时这几个键归按钮，`lightbox/keys.ts`），Delete 移到回收站，滚轮 / 双击放大（简单的 transform scale + 拖动即可）。
 - 触屏（A1）：左右滑切换、下滑关闭、捏合 / 双击缩放、放大后拖动平移、单击切换界面（翻页和缩放是 `lib/pager`，和阅读器同一份）；窄屏（< 840）信息面板是贴底的 `InfoSheet`（平时只露出操作那一排，上拉展开），不显示胶片条。
 - 敏感图片默认模糊，中间一个「显示」按钮（只对当前这张生效）。
-- 切换图片时预加载下一张。
+- 原图和详情按「停没停稳」加载：换图后 200 ms 没再换才算停稳，停稳了当前张和前进方向的那一张才挂原图（超过 2000 万像素的只在当前位挂），挂上就留着；按住方向键快翻时路过的图只有缩略图（`lightbox/cache.ts` 的 `wantsFull`、`preloadSettled`）。
 
 ## 3. 角色 `/characters`（`features/characters/CharactersPage.tsx`）★ 核心页面
 
@@ -294,7 +296,7 @@ import { DURATION, EASE_OUT, SPRING } from '@/lib/motion';
 
 ## 7. 重复 `/duplicates`（`features/duplicates`）
 
-- 头部：标题「重复」，副标题「36 组 · 可释放 1.2 GB」（除推荐保留外其余图片体积之和）。`Segmented`：待处理 / 已处理。右侧「重新查找」（`startJob('dedupe')`）。
+- 头部：标题「重复」，副标题「36 组 · 可释放 1.2 GB」（除推荐保留外其余图片体积之和）。`Segmented`：待处理 / 已处理。右侧「重新查找」（`startJob('dedupe')`）。已处理的列表（真实库 8 MB 多）切到那个视图才取，和待处理一样分批显示。
 - 每组一张卡：顶部一行「文件相同」「画面相同」或「疑似缩放 / 压缩副本」Badge（旧候选显示「疑似重复」，不再显示哈希百分比） + 组内张数；下面横排该组全部图片（等高，按比例），每张图下方是对比信息：尺寸、体积、格式、文件夹路径（截断）、入库时间；**最好的值用朱色高亮**（分辨率最高、体积最大）。推荐保留的那张有「建议保留」角标并默认勾选。点击图片切换保留 / 删除（删除的变灰 + 删除线）。
 - 卡片底部操作：「保留选中，其余移到回收站」（主按钮）、「不是重复」（ghost）。
 - 键盘：J/K 在组间移动，Enter 按推荐处理当前组。

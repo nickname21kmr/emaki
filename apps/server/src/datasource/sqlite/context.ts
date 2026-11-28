@@ -4,6 +4,7 @@ import type { MutationResult } from '@emaki/shared';
 import { done, type UndoStack } from '../../core/undo.ts';
 import type { Db, Statement } from '../../db/connection.ts';
 import type { Actor } from '../../propagation/actor.ts';
+import { EVERYTHING_SCOPE, type CacheScope } from '../../propagation/cacheScope.ts';
 import type { Change } from '../../propagation/changes.ts';
 import { Propagation } from '../../propagation/registry.ts';
 import { UndoRecorder } from './undo.ts';
@@ -25,10 +26,10 @@ export interface SqliteContext {
   /** 变化集和反应注册表 */
   readonly propagation: Propagation;
   /**
-   * 让派生缓存失效。只由变更传播的提交后反应调用（按 actor 决定强 / 弱），
-   * 其他地方声明变化即可（test/architecture/sideEffects.test.ts 检查）
+   * 让缓存失效。只由变更传播的提交后反应调用（按 actor 决定强 / 弱，按这次提交声明的变化决定范围，propagation/cacheScope.ts），
+   * 其他地方声明变化即可（test/architecture/sideEffects.test.ts 检查）。scope 不给或 'all' = 全部
    */
-  invalidate(scope?: 'all' | 'stats' | 'entities', opts?: { soft?: boolean }): void;
+  invalidate(scope?: 'all' | CacheScope, opts?: { soft?: boolean }): void;
   /** 预编译语句缓存：同一段 SQL 只 prepare 一次 */
   stmt(sql: string): Statement;
   /** 声明一条变化。只能在 mutate / apply 里调用 */
@@ -44,7 +45,7 @@ export interface SqliteContext {
   apply<T>(fn: () => T, opts?: { actor?: Actor }): T;
 }
 
-export type InvalidateListener = (scope: 'all' | 'stats' | 'entities', opts: { soft?: boolean }) => void;
+export type InvalidateListener = (scope: CacheScope, opts: { soft?: boolean }) => void;
 
 export function createContext(init: {
   db: Db;
@@ -61,8 +62,9 @@ export function createContext(init: {
   const ctx: SqliteContext & { onInvalidate(listener: InvalidateListener): void } = {
     ...init,
     propagation: new Propagation(() => ctx),
-    invalidate(scope: 'all' | 'stats' | 'entities' = 'all', opts: { soft?: boolean } = {}) {
-      for (const l of listeners) l(scope, opts);
+    invalidate(scope: 'all' | CacheScope = 'all', opts: { soft?: boolean } = {}) {
+      const s = scope === 'all' ? EVERYTHING_SCOPE : scope;
+      for (const l of listeners) l(s, opts);
     },
     stmt(sql: string): Statement {
       let s = statements.get(sql);

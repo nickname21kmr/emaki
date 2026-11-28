@@ -155,6 +155,8 @@ export interface ImageItem {
   addedAt: ISODate;
   /** 文件修改时间 */
   modifiedAt: ISODate;
+  /** 缩略图地址里的版本（文件内容 sha 的前 16 位）：内容变了地址就变，浏览器才能放心长期缓存 */
+  fileVersion?: string;
   rating: Rating;
   /** 被排除了（「已排除」页才列出来） */
   excluded: boolean;

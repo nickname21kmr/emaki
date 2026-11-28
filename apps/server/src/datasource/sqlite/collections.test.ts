@@ -306,4 +306,46 @@ describe('合集按需读：和全读一遍的结果一样', () => {
       group: counts.group.count,
     });
   });
+
+  it('只要摘要时的角色命中（固定从本子出发找页）：被排除、进了回收站、丢了的页不算，和全读一样', async () => {
+    const ds = demo.ds;
+    const db = ds.ctx.db;
+    const cq = ds.collectionQueries as unknown as { loadAll(scope: { cast: boolean; works: boolean }): Map<number, Full> };
+    // 靠角色命中才不待整理的那本本子：把有角色的页都弄成不计入统计，它就没有出场角色了，该变成待整理
+    const book = [...full.values()].find(
+      (l) => l.summary.kind === 'doujin' && !l.summary.pending && l.cast.length > 0 && l.cast.every((c) => !c.manual) && l.works.every((w) => !w.manual),
+    )!;
+    const id = Number(book.summary.id);
+    const withChar = db
+      .prepare('SELECT DISTINCT i.id FROM images i JOIN image_characters ic ON ic.image_id = i.id WHERE i.collection_id = ? ORDER BY i.id')
+      .pluck()
+      .all(id) as number[];
+    expect(withChar.length).toBeGreaterThanOrEqual(3);
+    expect(withChar.length).toBeLessThan(book.summary.pageCount);
+    const before = db
+      .prepare('SELECT id, excluded_by, trashed_at, missing FROM images WHERE id IN (SELECT value FROM json_each(?))')
+      .all(JSON.stringify(withChar)) as { id: number; excluded_by: number | null; trashed_at: string | null; missing: number }[];
+    const rule = Number(db.prepare("INSERT INTO exclusions (kind, target, label, created_at) VALUES ('tag', 'zz', 'zz', 'x')").run().lastInsertRowid);
+    withChar.forEach((image, k) => {
+      if (k % 3 === 0) db.prepare('UPDATE images SET excluded_by = ? WHERE id = ?').run(rule, image);
+      else if (k % 3 === 1) db.prepare("UPDATE images SET trashed_at = '2026-11-01' WHERE id = ?").run(image);
+      else db.prepare('UPDATE images SET missing = 1 WHERE id = ?').run(image);
+    });
+    const kept = full;
+    try {
+      full = cq.loadAll({ cast: true, works: true });
+      expect(full.get(id)!.cast).toEqual([]);
+      expect(full.get(id)!.summary.pending).toBe(true);
+      for (const q of [{}, { kind: 'doujin' }, { kind: ['doujin', 'artbook'] }, { pending: true }, { pending: false }] as ListCollectionsQuery[]) {
+        expect(await ds.listCollections(q), JSON.stringify(q)).toEqual(expected(q));
+      }
+      expect((await ds.listCollections({ kind: 'doujin' })).find((c) => c.id === String(id))!.pending).toBe(true);
+    } finally {
+      const restore = db.prepare('UPDATE images SET excluded_by = @excluded_by, trashed_at = @trashed_at, missing = @missing WHERE id = @id');
+      for (const row of before) restore.run(row);
+      db.prepare('DELETE FROM exclusions WHERE id = ?').run(rule);
+      full = kept;
+    }
+    expect(await ds.listCollections({})).toEqual(expected({}));
+  });
 });

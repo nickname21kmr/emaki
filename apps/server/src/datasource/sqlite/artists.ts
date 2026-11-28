@@ -136,3 +136,33 @@ export function listArtists(db: Db): Artist[] {
   }
   return out.sort((a, b) => b.imageCount - a.imageCount || a.tag.localeCompare(b.tag));
 }
+
+/**
+ * 画师表有没有被绕过变更传播的写入动过。「识别画师」任务和 Danbooru 同步的画师资料是直接写库的，不声明变化，
+ * 结果缓存不会因为它们失效；只靠缓存的话，任务跑完再打开画师页，看到的还是任务开始前的列表（最长 5 分钟）。
+ * 三个数合起来，这两处每写一次至少变一个，读一次不到 1 毫秒：
+ * - 等着补画师的张数：任务每处理一张图都会给它记上跑过（artist_checked_at），走只含待补图的部分索引；
+ * - 认出的画师行数；
+ * - 画师资料的条数和最近一次查询的时间。
+ */
+function artistsStamp(db: Db): string {
+  const pending = db.prepare('SELECT COUNT(*) FROM images WHERE artist_checked_at IS NULL').pluck().get() as number;
+  const rows = db.prepare('SELECT COUNT(*) FROM image_artists').pluck().get() as number;
+  const meta = db.prepare('SELECT COUNT(*) AS n, MAX(fetched_at) AS at FROM danbooru_artists').get() as { n: number; at: string | null };
+  return `${pending}|${rows}|${meta.n}|${meta.at ?? ''}`;
+}
+
+/**
+ * 画师列表，走结果缓存：每次现算要把画师标签和全部插画连起来分组、挑封面（大库上约 0.1 秒）。
+ * cached 是结果缓存里 'artists' 那一格（库里有变化时整格丢掉）；格子里另记着算的时候的 artistsStamp，对不上就重算。
+ * 命中时返回的是同一个数组，HTTP 层的序列化结果也跟着复用
+ */
+export function listArtistsCached(db: Db, cached: (compute: () => unknown) => unknown): Artist[] {
+  const stamp = artistsStamp(db);
+  const memo = cached(() => ({ stamp, list: listArtists(db) })) as { stamp: string; list: Artist[] };
+  if (memo.stamp !== stamp) {
+    memo.list = listArtists(db);
+    memo.stamp = stamp;
+  }
+  return memo.list;
+}

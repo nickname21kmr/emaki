@@ -95,6 +95,7 @@ export function hydrateImages(db: Db, rows: ImageRow[]): ImageItem[] {
       format: r.format,
       addedAt: r.added_at,
       modifiedAt: r.modified_at,
+      fileVersion: r.sha256.slice(0, 16),
       rating: r.rating,
       excluded: r.excluded_by != null,
       tagged: r.tagged_at !== null,

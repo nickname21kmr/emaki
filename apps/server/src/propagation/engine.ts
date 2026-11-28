@@ -8,6 +8,7 @@
 import type { EventBus } from '../core/events.ts';
 import type { DomainChange, LibraryChangedReason } from '@emaki/shared';
 import { changedReason, currentCall, isInteractive, type Actor } from './actor.ts';
+import { cacheScope } from './cacheScope.ts';
 import { ALL_CHANGES, publicChanges } from './changes.ts';
 import type { Reaction } from './registry.ts';
 import { markWork } from './work.ts';
@@ -211,14 +212,15 @@ export function engineReactions(hooks: EngineHooks, events: ChangeEvents): { que
       },
     },
     {
-      // 附录 #20、#21：缓存失效和事件只在这里。用户和助手强刷新，后台任务和启动修补弱刷新（旧结果最多再用 10 秒），事件节流
+      // 附录 #20、#21：缓存失效和事件只在这里。用户和助手强刷新，后台任务和启动修补弱刷新（旧结果最多再用 10 秒），事件节流。
+      // 失效的范围看这次提交声明了哪些变化（cacheScope.ts）：收藏、分级、放下这类只清受影响的那几样，其余照旧全部清
       name: 'invalidateCaches',
       on: ALL_CHANGES,
       phase: 'after',
       always: true,
       run({ ctx, actor, all }) {
         const soft = !isInteractive(actor);
-        ctx.invalidate('all', { soft });
+        ctx.invalidate(cacheScope(all.list), { soft });
         events.emit(actor, publicChanges(all.list), soft);
       },
     },

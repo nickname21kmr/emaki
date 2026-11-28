@@ -262,3 +262,69 @@ it('HTTP replacement returns the same ID and updated bytes, size and conditional
     expect(newFile.headers['cache-control']).toBe('private, no-cache');
   } finally {await app.close();}
 });
+
+const LONG='private, max-age=2592000, immutable',REVALIDATE='private, no-cache';
+
+it('HTTP thumbnails are stored for long only at a URL that carries the current file version',async()=>{
+  const original=item(await run([{path:await source()}])),id=original.imageId,app=Fastify();registryRoutes(app,ds.registry);
+  const thumb=(query:string,headers:Record<string,string>={})=>app.inject({url:`/api/images/${id}/thumb?${query}`,headers});
+  const version=async()=>encodeURIComponent((await app.inject({url:`/api/images/${id}`})).json().fileVersion);
+  try {
+    // Distinct mtime even on filesystems with coarse timestamp precision.
+    const {utimes}=await import('node:fs/promises');
+    await utimes(original.absPath,new Date('2026-01-01T00:00:00Z'),new Date('2026-01-01T00:00:00Z'));
+    ds.ctx.db.prepare('UPDATE images SET modified_at=? WHERE id=?').run((await stat(original.absPath)).mtime.toISOString(),id);
+    ds.ctx.invalidate('all'); // 测试直接写了库：手动让缓存失效
+    const v1=await version();
+    // 不带版本、版本不是现在的：和以前一样，每次回来问
+    const bare=await thumb('w=480');
+    expect(bare.statusCode).toBe(200);expect(bare.headers['cache-control']).toBe(REVALIDATE);
+    expect((await thumb('w=480&v=2000-01-01T00%3A00%3A00.000Z')).headers['cache-control']).toBe(REVALIDATE);
+    // 版本写得不对（带了两个）：当作没带，照样出图
+    const twice=await thumb(`w=480&v=${v1}&v=${v1}`);
+    expect(twice.statusCode).toBe(200);expect(twice.headers['cache-control']).toBe(REVALIDATE);
+    // 带着现在的版本：长缓存。不认识的参数（前端的 tv、重试的 r）不影响
+    const pinned=await thumb(`w=480&tv=1&v=${v1}&r=2`);
+    expect(pinned.statusCode).toBe(200);expect(pinned.headers['cache-control']).toBe(LONG);
+    expect(pinned.headers.etag).toBe(bare.headers.etag);expect(pinned.rawPayload).toEqual(bare.rawPayload);
+    // 到期后浏览器带 ETag 回来问：304，缓存头照给，续上
+    const renewed=await thumb(`w=480&v=${v1}`,{'if-none-match':String(pinned.headers.etag)});
+    expect(renewed.statusCode).toBe(304);expect(renewed.headers['cache-control']).toBe(LONG);
+    // 替换之后：旧版本的地址给出去的已经是新图，不能长缓存；新版本的地址才长缓存
+    const result=await ds.replaceImage(id,{path:await source('hd.png',await sharp(image).resize(24,28).png().toBuffer())});
+    const v2=await version();
+    expect(v2).not.toBe(v1);
+    const stale=await thumb(`w=480&v=${v1}`,{'if-none-match':String(pinned.headers.etag)});
+    expect(stale.statusCode).toBe(200);expect(stale.headers['cache-control']).toBe(REVALIDATE);
+    expect(stale.headers.etag).not.toBe(pinned.headers.etag);
+    const current=await thumb(`w=480&v=${v2}`);
+    expect(current.headers['cache-control']).toBe(LONG);expect(current.rawPayload).toEqual(stale.rawPayload);
+    expect(await sharp(current.rawPayload).metadata()).toMatchObject({width:24,height:28});
+    // 撤销替换：版本回到旧值，旧地址对应的又是旧图（浏览器里按旧地址存着的那份没有错）
+    await ds.undo(result.undoToken!);
+    expect(await version()).toBe(v1);
+    const restored=await thumb(`w=480&v=${v1}`);
+    expect(restored.headers['cache-control']).toBe(LONG);expect(restored.rawPayload).toEqual(pinned.rawPayload);
+    expect((await thumb(`w=480&v=${v2}`)).headers['cache-control']).toBe(REVALIDATE);
+  } finally {await app.close();}
+});
+
+it('HTTP thumbnails that fall back to another size are labelled as that size and never stored for long',async()=>{
+  const original=item(await run([{path:await source()}])),id=original.imageId,app=Fastify();registryRoutes(app,ds.registry);
+  const thumb=(query:string,headers:Record<string,string>={})=>app.inject({url:`/api/images/${id}/thumb?${query}`,headers});
+  try {
+    const v=encodeURIComponent((await ds.getImage(id))!.fileVersion!);
+    const small=await thumb(`w=480&v=${v}`);
+    expect(small.headers['cache-control']).toBe(LONG);expect(String(small.headers.etag)).toMatch(/-480"$/);
+    // 原图不在了（盘没接上）：要 960 只能给缓存里的 480，ETag 写 480，每次回来问
+    await rename(original.absPath,original.absPath+'.away');
+    const fallback=await thumb(`w=960&v=${v}`);
+    expect(fallback.statusCode).toBe(200);expect(fallback.rawPayload).toEqual(small.rawPayload);
+    expect(fallback.headers.etag).toBe(small.headers.etag);expect(fallback.headers['cache-control']).toBe(REVALIDATE);
+    // 原图回来了：同一个地址带着刚才的 ETag 回来问，拿到的是现做的 960，这时才长缓存
+    await rename(original.absPath+'.away',original.absPath);
+    const full=await thumb(`w=960&v=${v}`,{'if-none-match':String(fallback.headers.etag)});
+    expect(full.statusCode).toBe(200);expect(String(full.headers.etag)).toMatch(/-960"$/);
+    expect(full.headers['cache-control']).toBe(LONG);
+  } finally {await app.close();}
+});

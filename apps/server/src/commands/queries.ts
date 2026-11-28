@@ -29,8 +29,8 @@ import { access } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.ts';
 import { describeKindReason, hydrateImages, IMAGE_COLS, type ImageRow } from '../datasource/sqlite/hydrate.ts';
-import { imageArtists, listArtists } from '../datasource/sqlite/artists.ts';
-import { listImages } from '../datasource/sqlite/queries/listImages.ts';
+import { imageArtists, listArtistsCached } from '../datasource/sqlite/artists.ts';
+import { listImages, type TextMatch } from '../datasource/sqlite/queries/listImages.ts';
 import { MIME, parseId, toId } from '../datasource/sqlite/sql.ts';
 import { loadSuggestions } from '../datasource/sqlite/suggestions.ts';
 import { NotFoundError } from '../http/errors.ts';
@@ -139,26 +139,40 @@ function fileRow(e: Engine, id: ID): ImageFileRow | null {
   return (
     (e.ctx
       .stmt(
-        `SELECT i.id, i.sha256, i.format, i.width, i.height, i.file_name, i.rel_path, i.dominant_color, r.path AS root_path
+        `SELECT i.id, i.sha256, i.format, i.width, i.height, i.file_name, i.rel_path, i.dominant_color, i.modified_at, r.path AS root_path
          FROM images i JOIN library_roots r ON r.id = i.root_id WHERE i.id = ?`,
       )
       .get(n) as ImageFileRow | undefined) ?? null
   );
 }
 
-export async function getThumbnail(e: Engine, id: ID, width: ThumbWidth): Promise<FileResponse | null> {
+/**
+ * 地址带版本、而且对得上的缩略图让浏览器缓存多久：30 天。地址里已经带着文件版本，时长只在出错时有意义
+ * （外部工具改了文件内容却没动修改时间，地址不变），短一点兜底；到期后浏览器带 ETag 回来问一次（304）就续上
+ */
+const THUMB_MAX_AGE = 30 * 24 * 3600;
+
+/**
+ * 图片 id 稳定（文件内容变了 id 不变），单凭 id 不能让浏览器长期缓存：缺省是按内容 sha 的 ETag + no-cache，每次都回来问。
+ * 地址里带了文件版本（version，前端 imageUrl.thumb 的 v = modifiedAt）、和这一行现在的对得上、给出去的又正是请求的那一档时，
+ * 这个地址的内容不会再变（换了文件 modifiedAt 就变，地址跟着变），才回长缓存，浏览器之后直接用，不再发请求。
+ * - 版本对不上的不算：列表还是旧数据时拿旧版本来要，给出去的已经是新文件，不能缓存在旧地址下（撤销替换以后旧地址还会用到）；
+ * - 退回别的档的不算（原图不在，要 960 只有 480）：盘接回来以后要能换成清晰的。ETag 一律按实际给出的档写
+ */
+export async function getThumbnail(e: Engine, id: ID, width: ThumbWidth, version?: string): Promise<FileResponse | null> {
   const row = fileRow(e, id);
   if (!row) return null;
   if (e.ports.imageFiles) return e.ports.imageFiles.thumbnail(row, width);
-  const file = await e.thumbs.ensure(row, width);
-  if (!file) return null;
-  // 图片 id 稳定（内容变了 id 不变），所以不能用 immutable，按内容 sha 做 ETag
+  const thumb = await e.thumbs.ensure(row, width);
+  if (!thumb) return null;
+  // 版本按文件内容认（sha）：图片 id 会被重新分配（删掉一个图库文件夹后新导入的图接着用那些 id），修改时间也常常一样（压缩包里解出来的页）
+  const pinned = version === row.sha256.slice(0, 16) && thumb.width === width;
   return {
     kind: 'path',
     contentType: 'image/webp',
-    filePath: file,
-    etag: `"${row.sha256.slice(0, 20)}-${width}"`,
-    cacheControl: 'private, no-cache',
+    filePath: thumb.file,
+    etag: `"${row.sha256.slice(0, 20)}-${thumb.width}"`,
+    cacheControl: pinned ? `private, max-age=${THUMB_MAX_AGE}, immutable` : 'private, no-cache',
   };
 }
 
@@ -301,7 +315,8 @@ export const queries = [
     input: EmptyInput,
     scope: 'read',
     http: [{ method: 'GET', path: '/api/artists' }],
-    run: (e) => listArtists(e.ctx.db),
+    // 每次现算约 0.1 秒、结果 800 KB：和重复组一样放进结果缓存（键 'artists'），库里有变化才重算
+    run: (e) => listArtistsCached(e.ctx.db, (compute) => e.results.get('artists', compute)),
   }),
   defineQuery({
     name: 'search.all',
@@ -367,7 +382,13 @@ export const queries = [
     run(e, q) {
       // 按姿势类别筛选（实验）：姿势检索关着时 403
       if (q.poseClass || q.posewearPose) requirePose(e);
-      return listImages(e.ctx.db, q, (key, compute) => e.results.get('count:' + key, compute) as number);
+      return listImages(
+        e.ctx.db,
+        q,
+        (key, compute) => e.results.get('count:' + key, compute) as number,
+        // 文字搜索命中的标签、角色、作品：同一个词翻页、重拉时不用每个请求都把标签表扫一遍
+        (key, compute) => e.results.get('qtext:' + key, compute) as TextMatch,
+      );
     },
   }),
   defineQuery({
@@ -384,7 +405,7 @@ export const queries = [
     input: ThumbInput,
     scope: 'read',
     http: [{ method: 'GET', path: '/api/images/:id/thumb' }],
-    run: async (e, q) => found(await getThumbnail(e, q.id, nearestThumbWidth(q.w ?? 480)), '缩略图'),
+    run: async (e, q) => found(await getThumbnail(e, q.id, nearestThumbWidth(q.w ?? 480), q.v), '缩略图'),
   }),
   defineQuery({
     name: 'images.original',

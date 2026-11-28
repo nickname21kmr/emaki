@@ -32,6 +32,77 @@ describe('getStats 近 7 天分桶（本地时区）', () => {
   });
 });
 
+describe('别册首页：每类最新 3 张', () => {
+  it('一类一条 LIMIT 3 的写法，和整表开窗取每类前 3 逐项相同', async () => {
+    const dataDir = makeTmpDir('kinds-latest');
+    const ds = await SqliteDataSource.open(new EventBus(), dataDir, { memory: true, autoJobs: false, importDict: false });
+    const db = ds.ctx.db;
+    db.exec(`INSERT INTO library_roots (id, path, enabled) VALUES (1, 'D:/a', 1), (2, 'D:/b', 0);
+      INSERT INTO exclusions (id, kind, target, label, created_at) VALUES (1, 'tag', 'x', 'x', 'x');`);
+    let next = 1;
+    const add = (kind: string, at: string, extra: { root?: number; excluded?: boolean; trashed?: boolean; missing?: boolean } = {}) => {
+      const id = next++;
+      db.prepare(
+        `INSERT INTO images (id, root_id, rel_path, file_name, width, height, bytes, format, sha256, added_at, modified_at,
+           content_kind, rating, dominant_color, excluded_by, trashed_at, missing)
+         VALUES (@id, @root, @path, 'a.png', @w, 10, 1, 'png', @sha, @at, 'x', @kind, @rating, @color, @ex, @trashed, @missing)`,
+      ).run({
+        id,
+        root: extra.root ?? 1,
+        path: `${id}.png`,
+        w: 10 + id,
+        sha: `s${id}`,
+        at,
+        kind,
+        rating: id % 2 ? 'general' : 'explicit',
+        color: id % 3 ? '#112233' : null,
+        ex: extra.excluded ? 1 : null,
+        trashed: extra.trashed ? 'x' : null,
+        missing: extra.missing ? 1 : 0,
+      });
+    };
+    // 插画 5 张可见（两张同一时刻入库：并列按 id 倒序），最新的几张被排除、进了回收站、丢了、在停用的文件夹里，都不算
+    for (const at of ['2026-01-01', '2026-01-03', '2026-01-03', '2026-01-02', '2026-01-04']) add('illustration', at);
+    add('illustration', '2026-02-01', { excluded: true });
+    add('illustration', '2026-02-02', { trashed: true });
+    add('illustration', '2026-02-03', { missing: true });
+    add('illustration', '2026-02-04', { root: 2 });
+    // 漫画 1 张；截图 0 张；文字 5 张全是同一时刻；照片 2 张、其中新的那张被排除；表情只在停用的文件夹里有
+    add('comic', '2026-01-05');
+    for (let k = 0; k < 5; k++) add('text', '2026-01-06');
+    add('photo', '2026-01-07');
+    add('photo', '2026-01-08', { excluded: true });
+    add('meme', '2026-01-09', { root: 2 });
+    ds.ctx.invalidate();
+
+    const old = db
+      .prepare(
+        `SELECT k, id, rating, color, width, height FROM (
+           SELECT content_kind AS k, id, rating, dominant_color AS color, width, height,
+                  ROW_NUMBER() OVER (PARTITION BY content_kind ORDER BY added_at DESC, id DESC) AS rn
+           FROM v_counted_images) WHERE rn <= 3 ORDER BY k, rn`,
+      )
+      .all() as { k: string; id: number; rating: string; color: string | null; width: number; height: number }[];
+    const got = await ds.listContentKinds();
+    expect(got.map((x) => x.kind)).toEqual(['illustration', 'comic', 'screenshot', 'text', 'photo', 'meme']);
+    for (const x of got) {
+      const want = old
+        .filter((o) => o.k === x.kind)
+        .map((o) => ({ id: String(o.id), rating: o.rating, dominantColor: o.color ?? '#d9d4cc', width: o.width, height: o.height }));
+      expect(x.previews, x.kind).toEqual(want);
+    }
+    const ids = (kind: string) => got.find((x) => x.kind === kind)!.previews.map((p) => Number(p.id));
+    expect(ids('illustration')).toEqual([5, 3, 2]);
+    expect(ids('comic')).toEqual([10]);
+    expect(ids('screenshot')).toEqual([]);
+    expect(ids('text')).toEqual([15, 14, 13]);
+    expect(ids('photo')).toEqual([16]);
+    expect(ids('meme')).toEqual([]);
+    await ds.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+});
+
 describe('getStats 角色数 / 作品数', () => {
   it('只数有插画的角色和作品，和派生缓存口径一致，且不触发派生缓存重建', async () => {
     const dataDir = makeTmpDir('stats-counts');

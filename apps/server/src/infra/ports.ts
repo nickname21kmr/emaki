@@ -29,6 +29,8 @@ export interface ImageFileRow {
   rel_path: string;
   root_path: string;
   dominant_color: string | null;
+  /** 文件的修改时间，也就是 ImageItem.modifiedAt：缩略图地址里带的版本和它对得上才长缓存（commands/queries.ts 的 getThumbnail） */
+  modified_at: string;
 }
 
 /** 图片文件的读取：缩略图和原图（看图器、AI 助手看图都走这里）。返回 null = 404 */

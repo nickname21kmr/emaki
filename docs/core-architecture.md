@@ -293,7 +293,7 @@ decideAuto(image: ImageFacts, evidence: Evidence[], current: Decisions, settings
 | `refreshAllCollections` | `root.*`、`library.opened` | 提交后（全量） | 文件夹启停、漫画设置变化后的手工全量重算。P4a：启动（`library.opened`）只在合集判定的版本变了、或者有没做完的延后重算时全量重判（附录 #23） |
 | `recomputeCustomMatches` | `catalog.*` | 提交后 | 5 处手动调用 |
 | `notifySettings`、`notifyRoots` | `settings.changed`；`root.*` | 提交后 | 设置和文件夹监听的手工通知 |
-| `invalidateCaches` + 推送事件 | 任何写入 | 提交后 | 现在 `touch` 有 21 处调用，强刷新 / 弱刷新约定被后台路径破坏（附录 #20、#21）。P6 起推的是带类型、带 id 的 `changed` 事件（第 9 节） |
+| `invalidateCaches` + 推送事件 | 任何写入（失效范围按提交里的变化类型定，见 `propagation/cacheScope.ts`；没有规则的类型照旧全部失效） | 提交后 | 现在 `touch` 有 21 处调用，强刷新 / 弱刷新约定被后台路径破坏（附录 #20、#21）。P6 起推的是带类型、带 id 的 `changed` 事件（第 9 节） |
 
 和最初设计的出入：`reevaluateAuto`（第 4.2 节）P3b 才加上（在 `dropStalePixivEvidence` 之后、`reevaluateExclusions` 之前）；`recomputeCustomMatches` 只订阅 `catalog.*`（它只看自建角色和标签，图上的角色变化不影响它）；
 P4a 把 `reclassifyByPath` 扩成分析唯一的事务内入口 `analyze`，前面加了 `staleFileEvidence`（文件内容变了时先把识别标成过期，`analyze` 才按「还没识别」重算主题、画质分）；

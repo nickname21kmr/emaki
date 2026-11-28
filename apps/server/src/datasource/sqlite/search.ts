@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 /**
  * ⌘K 搜索（T20）：角色、作品、标签三类，规则：searchKey 子串匹配，每类有名额。标签也按中文名和别名搜。
  * 角色 / 作品来自 Derived 缓存；标签用 tags.image_count 缓存（图库有变化只标记过期，下次搜索时再刷新）。
@@ -15,12 +16,23 @@ import { stripZhQualifier } from '../../services/i18n/humanize.ts';
 import { buildPhraseDict, parseTagPhrase, type PhraseDict } from '../../services/search/tagPhrase.ts';
 import type { Db } from '../../db/connection.ts';
 import type { CharacterCatalog } from '../../domain/catalog/characterCatalog.ts';
+import { ASSIGN_CANDIDATES_KEY } from '../../propagation/cacheScope.ts';
 import type { Derived } from './derived.ts';
 import { toCharacter, toWork } from './library.ts';
 
 import { refreshTagCounts } from '../../domain/evidence/tagCounts.ts';
 
 export { refreshTagCounts };
+
+export interface SearchOptions {
+  /**
+   * 后台任务写库让标签张数过期时，距上次重数不到这么久就继续用旧的（重数一次要沿 300 多万行的索引走一遍，约半秒；
+   * 这个数只用来挑候选和 ⌘K 里标签那一行的张数，联想里显示的张数另外现数）。不给 = 不等
+   */
+  countsSoftMs?: () => number;
+  /** 结果缓存（SqliteDataSource.results）里的一格：归类弹窗的候选放这里，什么时候失效见 propagation/cacheScope.ts。不给 = 每次现算 */
+  cached?: <T>(key: string, compute: () => T) => T;
+}
 
 export class SearchQueries {
   /** 标签联想用：库里有的一般标签 + 中文名 / 别名的搜索键 */
@@ -29,31 +41,51 @@ export class SearchQueries {
   private phraseDict: { dict: PhraseDict; byTag: Map<string, SuggestEntry> } | null = null;
   /** tags.image_count 过期了（进程刚启动也算）：下次搜索 / 联想时同步刷新一次 */
   private stale = true;
+  /** 后台任务写库引起的过期：过了 countsSoftMs 才重数 */
+  private softStale = false;
+  private refreshedAt = 0;
 
   constructor(
     private readonly db: Db,
     private readonly derived: Derived,
+    private readonly opts: SearchOptions = {},
   ) {}
 
   refreshNow(): void {
     refreshTagCounts(this.db);
     this.stale = false;
+    this.softStale = false;
+    this.refreshedAt = performance.now();
+    this.dropKeys();
+  }
+
+  /**
+   * 搜索键（标签名、中文名、别名）和已经数过的达标张数：每次有写入都清，下次用到时重建（一条一万多行的查询）。
+   * 中文词库换了也要重建，而词库的导入不一定声明变化，所以不按变化类型挑
+   */
+  dropKeys(): void {
     this.suggest = null;
     this.phraseDict = null;
   }
 
   /**
-   * 图库有变化（排除、回收站、扫描、识别……）：只记一笔，等真的搜索时再刷新。
-   * 不用计时器在后台刷：刷新是同步的，扫描 / 识别期间每几秒一次会让整个服务一次卡一秒以上
+   * 标签张数过期了：图的标签变了（识别），或者图计不计入变了（排除、回收站、丢失、文件夹停用）。只记一笔，等真的搜索时再重数。
+   * 收藏、分级、归类、放下都改不到它，不会走到这里（propagation/cacheScope.ts）。
+   * 不用计时器在后台刷：重数是同步的，扫描 / 识别期间每几秒一次会让整个服务一次卡半秒以上；
+   * 后台任务引起的（soft）另有时间窗，见 SearchOptions.countsSoftMs
    */
-  markStale(): void {
-    this.stale = true;
-    this.suggest = null;
-    this.phraseDict = null;
+  markCountsStale(soft = false): void {
+    if (soft) this.softStale = true;
+    else this.stale = true;
+  }
+
+  /** 后台任务结束：软过期的张数下次一定重数 */
+  settleSoft(): void {
+    if (this.softStale) this.stale = true;
   }
 
   private suggestEntries(): SuggestEntry[] {
-    if (this.stale) this.refreshNow();
+    if (this.stale || (this.softStale && performance.now() - this.refreshedAt >= (this.opts.countsSoftMs?.() ?? 0))) this.refreshNow();
     this.suggest ??= (
       this.db
         .prepare(
@@ -133,6 +165,33 @@ export class SearchQueries {
     };
   }
 
+  /**
+   * 归类弹窗里还没建档的候选：证据里有、但对不上任何角色的标签，带张数和可以搜到它的名字。
+   * 和搜的词无关，整份放进结果缓存：现算要对每个标签查一遍角色、作品、别名（真实库约 0.2 秒），而弹窗里每敲一个字就是一个请求。
+   * 顺序是标签名的顺序（同一个规范化标签有几个写法时，并列的取先出现的）
+   */
+  private assignCandidates(catalog: CharacterCatalog): AssignCandidate[] {
+    const compute = (): AssignCandidate[] => {
+      const tags = this.db.prepare(`
+        SELECT s.danbooru_tag AS tag, COUNT(*) AS count
+        FROM v_character_suggestions s JOIN v_counted_images i ON i.id=s.image_id
+        WHERE s.character_id IS NULL AND s.danbooru_tag NOT LIKE 'emaki:%'
+        GROUP BY s.danbooru_tag
+      `).all() as { tag: string; count: number }[];
+      const out: AssignCandidate[] = [];
+      for (const { tag, count } of tags) {
+        if (catalog.resolveCharacterId(tag) !== null) continue;
+        const canonical = catalog.normalizeTag(tag);
+        const { name, workName } = catalog.describeTag(tag);
+        const names = catalog.namesForTag(canonical, name);
+        if (canonical !== tag) names.push(tag);
+        out.push({ tag, count, canonical, name, workName, workKey: workName ? searchKey(workName) : null, names, keys: names.map(searchKey) });
+      }
+      return out;
+    };
+    return this.opts.cached ? this.opts.cached(ASSIGN_CANDIDATES_KEY, compute) : compute();
+  }
+
   search(query: SearchQuery, catalog?: CharacterCatalog): SearchHit[] {
     const limit = query.limit ?? 20;
     const k = searchKey(query.q.trim());
@@ -143,7 +202,6 @@ export class SearchQueries {
       const rankKey = (key: string) => {
         return key === k ? 0 : key.startsWith(k) ? 1 : key.includes(k) ? 2 : 3;
       };
-      const rank = (name: string) => rankKey(searchKey(name));
       type Match = { hit: SearchHit; rank: number; count: number };
       const rows: Match[] = [];
       for (const c of d.characters.values()) {
@@ -153,22 +211,17 @@ export class SearchQueries {
           hit: { type: 'character', character: toCharacter(c), workName }, rank: nameRank, count: c.imageCount,
         });
       }
-      const tags = this.db.prepare(`
-        SELECT s.danbooru_tag AS tag, COUNT(*) AS count
-        FROM v_character_suggestions s JOIN v_counted_images i ON i.id=s.image_id
-        WHERE s.character_id IS NULL AND s.danbooru_tag NOT LIKE 'emaki:%'
-        GROUP BY s.danbooru_tag
-      `).all() as { tag: string; count: number }[];
       const candidates = new Map<string, Match>();
-      for (const { tag, count } of tags) {
-        if (catalog.resolveCharacterId(tag) !== null) continue;
-        const canonical = catalog.normalizeTag(tag);
-        const { name, workName } = catalog.describeTag(tag);
-        const names = catalog.namesForTag(canonical, name);
-        if (canonical !== tag) names.push(tag);
-        const best = Math.min(...names.map(rank));
-        if (best === 3 && (!workName || rank(workName) === 3)) continue;
-        const matchedName = names.filter(n => n !== name && rank(n) < 3).sort((a, b) => rank(a) - rank(b))[0];
+      for (const { tag, count, canonical, name, workName, workKey, names, keys } of this.assignCandidates(catalog)) {
+        const ranks = keys.map(rankKey);
+        const best = Math.min(...ranks);
+        if (best === 3 && (workKey === null || rankKey(workKey) === 3)) continue;
+        // 命中的别的名字里排得最靠前的那个（并列取先出现的）
+        let matched = -1;
+        names.forEach((n, i) => {
+          if (n !== name && ranks[i]! < 3 && (matched < 0 || ranks[i]! < ranks[matched]!)) matched = i;
+        });
+        const matchedName = matched < 0 ? undefined : names[matched];
         const prev = candidates.get(canonical);
         if (prev && prev.rank <= best) { prev.count += count; continue; }
         candidates.set(canonical, {
@@ -200,6 +253,22 @@ export class SearchQueries {
       .map((e) => ({ type: 'tag', tag: e.tag, name: e.name, imageCount: e.cached }));
     return [...chars, ...works, ...tags].slice(0, limit);
   }
+}
+
+interface AssignCandidate {
+  tag: string;
+  /** 有这条证据的图数 */
+  count: number;
+  /** 规范化之后的标签（改名、服装变体归到同一个） */
+  canonical: string;
+  name: string;
+  workName: string | null;
+  /** searchKey(workName) */
+  workKey: string | null;
+  /** 可以搜到它的名字：显示名、标签、别名 */
+  names: string[];
+  /** names 各自的 searchKey */
+  keys: string[];
 }
 
 interface SuggestEntry {

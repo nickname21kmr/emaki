@@ -12,7 +12,7 @@ import { closeDatabase, openDatabase, type Db } from '../../db/connection.ts';
 import { OfflineCharacterIndex } from '../../services/catalog/offlineCharacters.ts';
 import { migrate } from '../../db/migrate.ts';
 import { refreshPlannerStats } from '../../db/plannerStats.ts';
-import { SoftCache } from './softCache.ts';
+import { localDay, SoftCache } from './softCache.ts';
 import { consolidateCatalog } from '../../domain/catalog/consolidate.ts';
 import { BadRequestError, NotFoundError } from '../../http/errors.ts';
 import { ThumbnailService } from '../../services/image/ThumbnailService.ts';
@@ -416,7 +416,11 @@ export class SqliteDataSource {
     );
     this.ctx = createContext({ db, bus, dataDir, clock: this.ports.clock, undo: new UndoStack(), jobs });
     this.events = new ChangeEvents(bus);
-    this.ctx.propagation.onJobFinished((kind) => this.events.flush(kind, jobActor(kind)));
+    this.ctx.propagation.onJobFinished((kind) => {
+      this.derived.settleSoft();
+      this.searchQueries.settleSoft();
+      this.events.flush(kind, jobActor(kind));
+    });
     // 扫描、缩略图任务在 apply 里写库并声明变化
     const changes = { apply: <T,>(fn: (emit: (c: Change) => void) => T): T => this.ctx.apply(() => fn((c) => this.ctx.changed(c))) };
     this.thumbs = new ThumbnailService({ db, thumbsRoot: path.join(dataDir, 'thumbs', 'v1'), now: this.ctx.clock, changes });
@@ -442,8 +446,13 @@ export class SqliteDataSource {
     });
     // 后台任务写库后，统计类结果最多晚 10 秒更新（T22）；测试（内存库）里不延迟
     const softMs = opts.memory ? 0 : 10_000;
-    this.results = new SoftCache<unknown>({ softMs, maxMs: 5 * 60_000, max: 200 });
-    this.derived = new Derived(this.ctx, softMs);
+    // 有后台任务在跑或排着队时，重建一次要大半秒的那两样多用一会儿旧的：角色 / 作品聚合 30 秒，搜索的标签张数 60 秒。
+    // 任务都结束了就不再多等（聚合回到 10 秒，标签张数下次搜索就重数）：最后那次刷新拿到的是最终的数
+    const busy = () => this.ctx.jobs.list().some((j) => j.status === 'running' || j.status === 'queued');
+    const whileBusy = (ms: number, idle: number) => (opts.memory ? () => 0 : () => (busy() ? ms : idle));
+    // 「本周新收」「最近 30 天」按天算：结果最多用 1 小时，本地日期变了也重算（以前一律 5 分钟，没人写库也每 5 分钟整批重算一遍）
+    this.results = new SoftCache<unknown>({ softMs, maxMs: 60 * 60_000, max: 200, epoch: () => localDay(this.ctx.clock()) });
+    this.derived = new Derived(this.ctx, whileBusy(30_000, softMs));
     this.collections = new CollectionService(db, this.ctx.clock);
     this.collectionQueries = new CollectionQueries(this.ctx, this.collections, this.derived, () => this.makeCatalog().catalog);
     this.library = new LibraryQueries(this.ctx, this.derived, () => this.collectionQueries.stats());
@@ -454,7 +463,10 @@ export class SqliteDataSource {
     this.changes = new ChangeLog(this.ctx);
     this.access = new Access({ db, bus, dataDir, clock: this.ctx.clock });
     this.duplicates = new DuplicateQueries(this.ctx, this.pendingTrash);
-    this.searchQueries = new SearchQueries(db, this.derived);
+    this.searchQueries = new SearchQueries(db, this.derived, {
+      countsSoftMs: whileBusy(60_000, 0),
+      cached: <T,>(key: string, compute: () => T) => this.results.get(key, compute) as T,
+    });
     this.dedupe = new DedupeService({
       db,
       clock: this.ctx.clock,
@@ -462,19 +474,24 @@ export class SqliteDataSource {
       onChanged: () => this.ctx.apply(() => this.ctx.changed({ type: 'duplicates.changed', ids: [] })),
       onFinished: (at) => patchSettingsInternal(db, 'dedupe', { lastRunAt: at }),
     });
-    // 缓存只由变更传播的提交后反应让它失效：用户和助手的操作硬失效，后台任务和启动修补软失效（附录 #20、#21）
-    this.ctx.onInvalidate((_scope, o) => {
-      this.derived.invalidate(o.soft);
-      this.unrecognized.invalidate(o.soft);
-      this.results.invalidate(o.soft);
-      this.searchQueries.markStale();
+    // 缓存只由变更传播的提交后反应让它失效：用户和助手的操作硬失效，后台任务和启动修补软失效（附录 #20、#21）。
+    // 范围按这次提交声明的变化定（propagation/cacheScope.ts）：没有专门规则的照旧全部失效
+    this.ctx.onInvalidate((scope, o) => {
+      const soft = !!o.soft;
+      this.derived.narrow(scope.derived, soft);
+      if (scope.unrecognized) this.unrecognized.invalidate(soft);
+      if (scope.everything) this.results.invalidate(soft);
+      else this.results.invalidateWhere((key) => scope.drops(key), soft);
+      this.searchQueries.dropKeys();
+      if (scope.tagCounts) this.searchQueries.markCountsStale(soft);
     });
     this.registerReactions();
     this.registry = createRegistry(this);
     // 扫描 / 识别跑完后行数可能变了很多（首次导入）：查询统计过期会让列表走错计划（T22）
     bus.subscribe((e) => {
       if (e.type !== 'job') return;
-      if (e.job.status === 'done' && (e.job.kind === 'scan' || e.job.kind === 'tag')) refreshPlannerStats(db);
+      // 扫描不产生标签：不用精确数 image_tags（330 万行，冷缓存下 2 秒多），识别跑完和每小时那次照常数
+      if (e.job.status === 'done' && (e.job.kind === 'scan' || e.job.kind === 'tag')) refreshPlannerStats(db, { skipImageTags: e.job.kind === 'scan' });
       // 审计记录：后台任务每跑完一轮记一行（actor job:<任务>），在「谁改的」里查得到
       if ((e.job.status === 'done' || e.job.status === 'failed' || e.job.status === 'cancelled') && db.open) {
         const who = jobActor(e.job.kind);

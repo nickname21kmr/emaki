@@ -52,6 +52,14 @@ if (!skipInstall) {
 }
 rmSync(zip, { force: true });
 
+// 启动要用的几个文件必须在包里。打的是已提交的代码：新加的文件（比如启动页）忘了提交，包里就没有，这里先拦住
+for (const f of ['start.bat', 'scripts/start.mjs', 'scripts/splash-server.mjs', 'scripts/splash.html']) {
+  if (!existsSync(path.join(stage, f))) {
+    console.error(`包里缺 ${f}（还没提交？）`);
+    process.exit(1);
+  }
+}
+
 // 3. 便携包里用不到的文件
 // taste-profile is a runtime skill shared by the assistant harnesses.
 for (const p of ['.github', '.claude/launch.json', 'docs', 'apps/web/src', 'apps/web/public', 'apps/server/test', 'vitest.config.ts', '.editorconfig', '.prettierrc']) {

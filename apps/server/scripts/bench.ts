@@ -44,6 +44,8 @@ const topWork = one(
   `SELECT cw.work_id FROM character_works cw JOIN image_characters ic ON ic.character_id = cw.character_id GROUP BY cw.work_id ORDER BY count(*) DESC LIMIT 1`,
 );
 const someImage = one(`SELECT id FROM images WHERE trashed_at IS NULL AND missing = 0 ORDER BY id DESC LIMIT 1`);
+/** 命中很少的搜索词：最新一张图的文件名（去掉扩展名）。只拿来发请求，不打印出来 */
+const rareWord = one(`SELECT file_name FROM images WHERE trashed_at IS NULL AND missing = 0 ORDER BY id DESC LIMIT 1`).replace(/\.[^.]+$/, '');
 
 /** 沿 nextCursor 翻 n 页，返回第 n+1 页的 url */
 async function deepUrl(base: string, pages: number) {
@@ -57,6 +59,7 @@ async function deepUrl(base: string, pages: number) {
 }
 
 const L = 'limit=120';
+const U = 'limit=120&collapseCollections=auto';
 type Scenario = { name: string; budget: number; url: string | (() => Promise<string>) };
 const scenarios: Scenario[] = [
   { name: 'images 首页', budget: 60, url: `/api/images?${L}` },
@@ -74,6 +77,15 @@ const scenarios: Scenario[] = [
   { name: 'images sort=fileName', budget: 60, url: `/api/images?${L}&sort=fileName` },
   { name: 'images sort=bytes asc', budget: 60, url: `/api/images?${L}&sort=bytes&order=asc` },
   { name: 'images random', budget: 60, url: `/api/images?${L}&sort=random&seed=7` },
+  // 网页实际发的参数：图库列表都带 collapseCollections=auto（结果超过 300 张就把组图收成一格）。
+  // 上面那些不带收拢的场景量不到收拢这条路，随机 + 收拢曾经每页 0.4 秒也没被发现
+  { name: 'images 首页（收拢）', budget: 60, url: `/api/images?${L}&collapseCollections=auto` },
+  { name: 'images random（收拢）', budget: 100, url: `/api/images?${L}&sort=random&seed=7&collapseCollections=auto` },
+  { name: 'images random（收拢）第 4 页', budget: 100, url: () => deepUrl(`/api/images?${L}&sort=random&seed=7&collapseCollections=auto`, 3) },
+  { name: 'images q=girl（收拢）', budget: 60, url: `/api/images?${L}&q=girl&collapseCollections=auto` },
+  { name: 'images q=girl（收拢）第 4 页', budget: 60, url: () => deepUrl(`/api/images?${L}&q=girl&collapseCollections=auto`, 3) },
+  // 命中很少的词：翻页要沿排序索引把全库探一遍、每张都调一次 search_key，是文字搜索最慢的情况（PERF.md 的待办：加 name_key 列）
+  { name: 'images q=（命中很少的词）', budget: 400, url: `/api/images?${L}&q=${encodeURIComponent(rareWord)}&collapseCollections=auto` },
   { name: 'image 详情', budget: 30, url: `/api/images/${someImage}` },
   { name: 'characters 首页', budget: 50, url: '/api/characters?limit=60' },
   { name: 'characters q=mi', budget: 50, url: '/api/characters?limit=60&q=mi' },
@@ -87,8 +99,14 @@ const scenarios: Scenario[] = [
   { name: 'content-kinds', budget: 50, url: '/api/content-kinds' },
   { name: 'unrecognized 首页', budget: 80, url: '/api/unrecognized?limit=60' },
   { name: 'unrecognized 汇总', budget: 80, url: '/api/unrecognized/summary' },
-  { name: 'unrecognized 没认出', budget: 80, url: '/api/unrecognized?limit=60&bucket=untagged' },
+  { name: 'unrecognized 待识别', budget: 80, url: '/api/unrecognized?limit=60&bucket=untagged' },
   { name: 'unrecognized 别册', budget: 80, url: '/api/unrecognized?limit=60&area=annex' },
+  // 网页实际发的参数：一页 120 张、collapseCollections=auto（队列超过 300 张就收拢）
+  { name: 'unrecognized 首页（收拢 120）', budget: 60, url: `/api/unrecognized?${U}` },
+  { name: 'unrecognized 第 4 页（收拢 120）', budget: 60, url: () => deepUrl(`/api/unrecognized?${U}`, 3) },
+  { name: 'unrecognized 没认出（收拢 120）', budget: 60, url: `/api/unrecognized?${U}&bucket=unsure` },
+  { name: 'unrecognized 没认出·腿足（收拢 120）', budget: 80, url: `/api/unrecognized?${U}&bucket=unsure&theme=legs` },
+  { name: 'unrecognized 别册（收拢 120）', budget: 60, url: `/api/unrecognized?${U}&area=annex` },
   { name: 'duplicates', budget: 80, url: '/api/duplicates?limit=20' },
   { name: 'exclusions', budget: 50, url: '/api/exclusions' },
   { name: 'collections', budget: 50, url: '/api/collections' },
@@ -137,6 +155,29 @@ if (!ONLY || 'PATCH'.includes(ONLY)) {
     after.push({ name, ms: ms[Math.floor(ms.length / 2)]!, budget: 500 });
   }
   // 还原收藏状态：上面最后一次是 favorite=true（i=4），原值在第一次之前
+}
+
+// ---------------------------------------------------------------- 整理一张之后的未识别列表（汇总重算 + 整个队列重新读进内存）
+if (!ONLY || '放下后 unrecognized'.includes(ONLY)) {
+  const url = `/api/unrecognized?${U}`;
+  const first = ((await get(url)).json() as { items: { image: { id: string } }[] }).items[0]?.image.id;
+  if (first) {
+    const shelve = async (value: boolean) => {
+      const r = await app.inject({ method: 'POST', url: '/api/images/bulk', payload: { ids: [first], action: { type: 'shelve', value } } });
+      if (r.statusCode !== 200) throw new Error(`放下 → ${r.statusCode}`);
+    };
+    const ms: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      await shelve(i % 2 === 0);
+      const t = performance.now();
+      await get(url);
+      ms.push(performance.now() - t);
+    }
+    // 放回去：上面最后一次是放下
+    await shelve(false);
+    ms.sort((a, b) => a - b);
+    after.push({ name: '放下后 unrecognized（收拢 120）', ms: ms[Math.floor(ms.length / 2)]!, budget: 400 });
+  }
 }
 
 const f = (n: number) => n.toFixed(1).padStart(7);

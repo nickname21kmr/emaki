@@ -536,7 +536,11 @@ export const ListImagesInput = z.object({
   cursor: z.string().optional(),
   limit: qNumber.min(1).max(200).optional(),
 });
-export const ThumbInput = z.object({ id: Id, w: qNumber.optional() });
+/**
+ * v：这张图的文件版本（ImageItem.fileVersion，内容 sha 的前 16 位）。带了而且和库里现在的对得上，缩略图才让浏览器长期缓存；不带、对不上的每次都回来问。
+ * 它只是给缓存用的，写得不对（比如地址里带了两个）当作没带，不报 400：以前这个参数会被丢掉，这样的地址一直是能出图的
+ */
+export const ThumbInput = z.object({ id: Id, w: qNumber.optional(), v: z.string().optional().catch(undefined) });
 export const ListWorksInput = z.object({ sort: z.enum(['imageCount', 'recent', 'name']).optional() });
 const workFilter = z.string().min(1).optional();
 export const ListCharactersInput = z.object({

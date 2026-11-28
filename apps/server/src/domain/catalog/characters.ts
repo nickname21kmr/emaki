@@ -11,7 +11,7 @@ import type { DanbooruCatalog } from '../../services/danbooru/catalog.ts';
 import type { SqliteContext } from '../../datasource/sqlite/context.ts';
 import type { Derived } from '../../datasource/sqlite/derived.ts';
 import { toCharacter } from '../../datasource/sqlite/library.ts';
-import { iso, parseId } from '../../datasource/sqlite/sql.ts';
+import { DAY, iso, parseId, RECENT_DAYS } from '../../datasource/sqlite/sql.ts';
 import { UndoRecorder } from '../../datasource/sqlite/undo.ts';
 import { recordChange, type AssociatePayload } from '../../datasource/sqlite/changeLog.ts';
 import { moveCharacterLinks } from '../curation/links.ts';
@@ -205,10 +205,20 @@ export class CharacterMutations {
 
   markSeen(idStr: ID): void {
     const { id } = this.requireCharacter(idStr);
-    if ((this.derived.get().characters.get(id)?.newCount ?? 0) === 0) return; // 没有新图：不发事件
+    // 没有新图：不发事件。按这个角色现查，不看派生缓存：后台导入时缓存可能软过期，读到旧的 0 就清不掉「+N」
+    const cutoff = iso(this.ctx.clock() - RECENT_DAYS * DAY);
+    const fresh = this.db
+      .prepare(
+        `SELECT EXISTS (SELECT 1 FROM image_characters ic JOIN v_illust_images i ON i.id = ic.image_id JOIN characters c ON c.id = ic.character_id
+                        WHERE ic.character_id = ? AND i.added_at > COALESCE(c.last_seen_at, ?))`,
+      )
+      .pluck()
+      .get(id, cutoff);
+    if (!fresh) return;
     this.ctx.apply(() => {
       this.db.prepare('UPDATE characters SET last_seen_at = ? WHERE id = ?').run(iso(this.ctx.clock()), id);
-      this.ctx.changed({ type: 'catalog.characterChanged', characterIds: [id], ids: [] });
+      // 只动了「上次看过」：声明成 characterSeen（对外还是角色变了），缓存只重算这个角色的「+N」，不整份清空
+      this.ctx.changed({ type: 'catalog.characterSeen', characterIds: [id], ids: [] });
     });
   }
 
